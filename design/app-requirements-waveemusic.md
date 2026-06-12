@@ -38,7 +38,7 @@ Four corrected overclaims gate the verdict: (a) **phases 6–13 are 0-managed-al
 
 ## 3. THE FOUR NEW / EXTENDED SUBSYSTEMS
 
-Each subsystem below states **the requirement → the design (key types + Wavee-dev hooks + DrawList/RHI/PAL deltas + 13-phase placement + assembly) → the zero-alloc/off-thread story → worst-case behavior.** The two genuinely new portable assemblies are **`FluentGpu.Media`** (image/residency/video-registry/lyrics-layout) and **`FluentGpu.Theme`** (palette extraction + brush derivation); both depend only on `Foundation` (+ RHI/Text *interfaces*), preserving P4 acyclicity, and are referenced only by `Hosting`. Virtualization adds **no new assembly** (it lands in the portable `Layout`/`Scene`/`Hooks`/`Reconciler`).
+Each subsystem below states **the requirement → the design (key types + Wavee-dev hooks + DrawList/RHI/PAL deltas + 13-phase placement + assembly) → the zero-alloc/off-thread story → worst-case behavior.** The two genuinely new portable subsystems are the **Media subsystem** (`FluentGpu.Engine/Media/` — image/residency/video-registry/lyrics-layout) and **`FluentGpu.Theme`** (palette extraction + brush derivation); both depend only on `Foundation` (+ RHI/Text *interfaces*), preserving P4 acyclicity, and are referenced only by `Hosting`. Virtualization adds **no new folder** (it lands in the portable `Engine/Layout/`, `Engine/Scene/`, `Engine/Hooks/`, `Engine/Reconciler/`).
 
 ---
 
@@ -51,7 +51,7 @@ Each subsystem below states **the requirement → the design (key types + Wavee-
 The linchpin (KEEP, verbatim from the Image design, blessed by its critique): `DrawImageCmd` references an **`ImageHandle` → `ImageRealization`** indirection (a Foundation slab `ImageRefTable`, content-epoch-stamped), *never* a raw `TextureHandle` — exactly mirroring `GlyphRunRealization` so the §4.5 clean-span rule (`valid IFF every handle IsLive AND its realization content-epoch is unchanged`) reuses **its existing machinery** with no batcher special-casing.
 
 ```csharp
-// FluentGpu.Foundation — ImageRefTable : SlabAllocator<ImageRealization>, HandleKind.ImageRef
+// FluentGpu.Engine/Foundation — ImageRefTable : SlabAllocator<ImageRealization>, HandleKind.ImageRef
 public readonly record struct ImageHandle(Handle H);
 public enum ImageState : byte { Placeholder, Decoding, Resident, Failed, Evicted }
 public struct ImageRealization {
@@ -66,7 +66,7 @@ public struct ImageRealization {
 
 **Amended opcode (DrawList).** `DrawImageCmd` gains the indirection + `CornerRadius4 Radii` (circle/rounded art is everywhere) + `float CrossFade` + `byte Stretch` (`UniformToFill|Uniform|None`) + `ClipHandle`. If `State != Resident`, the record-walk emits a `FillRoundRectCmd` with `PlaceholderRGBA` (one quad, zero texture bind); on upload completion `ContentEpoch` bumps → one-node re-record → cross-fade. **Small images (≤128px) pack into a shared `BGRA8` image-atlas page** — this is `gpu-renderer.md` `OQ-4` ("small-image atlasing", a *future* optimization) **promoted to v1** because it is the only thing that hits the "shelf row = 1–2 draws" target. The batcher's UV-resolve gains an `ImageRef` branch (resolve atlas UVs at batch time like glyphs — never baked into the command, reconciling the §9 image-brush "TextureHandle baked" path).
 
-**Hooks the Wavee dev calls** (`FluentGpu.Media` thin `UseRef`/`UseMemo`/`UseEffect` compositions, `DepKey`-span deps):
+**Hooks the Wavee dev calls** (`FluentGpu.Engine/Media/` thin `UseRef`/`UseMemo`/`UseEffect` compositions, `DepKey`-span deps):
 
 ```csharp
 ImageBinding UseImage(StringId src, int decodePx, Vector4 placeholderTint = default);  // → ImageHandle + State + NaturalSize
@@ -75,9 +75,9 @@ MosaicBinding UseMosaic(StringId mosaicUri);            // 4 independent ImageBi
 
 `UseImage` does one cache probe (`ImageCache.GetOrRequest(src, bucket)` returns an `ImageHandle` **synchronously** in `Placeholder` — alloc only on cache-miss slot creation, mount-time). **Decision: mosaic = Grid of 4 `UseImage`, no `DrawMosaicCmd`** — *but* (folding the critique) the four tiles share **one `MosaicGroup` residency unit**: one pin, one priority, one cancel ticket, decoded as a single coalesced worker job → the channel-drop policy drops the whole group or none, so there is never a permanent 3-of-4 broken mosaic.
 
-**The decode/residency subsystem** (`FluentGpu.Media`, Hosting owns the worker pool):
+**The decode/residency subsystem** (`FluentGpu.Engine/Media/`, Hosting owns the worker pool):
 
-- `DecodeScheduler` — bounded `Channel<DecodeRequest>` → N=min(4,cores) workers → `Channel<UploadRequest>`. Workers fetch (disk `wavee-artwork://`, HTTPS `i.scdn.co`), **constrained-decode to the bucket size** via the `IImageCodec` leaf (`Media.Codecs.Wic`, behind the portable interface), into a **recycled CPU staging slab** (`SlabAllocator<StagingBlock>`). Each request carries a **per-binding request-epoch** (see zero-alloc story) and `Priority {Visible,Overscan,Prefetch}`. `Cancel(ticket)` on row-recycle/unmount; channel overflow drops lowest-priority off-screen requests.
+- `DecodeScheduler` — bounded `Channel<DecodeRequest>` → N=min(4,cores) workers → `Channel<UploadRequest>`. Workers fetch (disk `wavee-artwork://`, HTTPS `i.scdn.co`), **constrained-decode to the bucket size** via the `IImageCodec` leaf (`FluentGpu.Windows/Wic/`, behind the portable interface), into a **recycled CPU staging slab** (`SlabAllocator<StagingBlock>`). Each request carries a **per-binding request-epoch** (see zero-alloc story) and `Priority {Visible,Overscan,Prefetch}`. `Cancel(ticket)` on row-recycle/unmount; channel overflow drops lowest-priority off-screen requests.
 - `ResidencyManager` — LRU by `LastUsedFrame`, **pins protected, eviction runs at frame START** (phase 1), mirroring the glyph-atlas rule. Decision: **LRU, not LFU** (scroll working sets are recency-dominated). Soft budget 192MB / 1024 count, hard 384MB. **Pin-before-admit**: the just-uploaded entry is pinned *before* the trim sweep runs (the documented WaveeMusic self-eviction race, fixed here in the contract). Eviction bumps `ContentEpoch`, sets `Evicted`, and frees the GPU texture through the **existing deferred-delete ring keyed by in-flight fence** (§4.7).
 
 **The RHI delta (REQUIRED, not a fold).** The seam has *no* texture upload. ADD:
@@ -85,7 +85,7 @@ MosaicBinding UseMosaic(StringId mosaicUri);            // 4 independent ImageBi
 ```csharp
 // ICommandEncoder (Rhi iface) — NEW
 void CopyBufferToTexture(BufferHandle staging, TextureHandle dst, in TextureRegion region);
-// + a dedicated texture-staging ring in Rhi.D3D12, MB-sized, fence-gated reset (NOT the instance UploadRing).
+// + a dedicated texture-staging ring in FluentGpu.Windows/D3D12/, MB-sized, fence-gated reset (NOT the instance UploadRing).
 ```
 
 And — folding the fourth critique's CreateTexture-in-hot-window catch — **pre-allocate a pool of textures per bucket at startup**; phase 13 only does `CopyBufferToTexture` into a recycled bucket texture + `ContentEpoch++`. `CreateTexture` (which allocates a `HandleTable` slot + a `ComPtr` root — a managed allocation) **never runs in phases 6–13 steady state**; it is cold-path pool growth only. Texture-pool budget is stated explicitly (Σ bucket² × 4 × pool-depth), so the phase-13 row in the loop table is *honestly* 0-alloc.
@@ -148,7 +148,7 @@ void UseVisibleRange(VirtualHandle v, Action<Range> onChange, ReadOnlySpan<DepKe
 | T1 live system | `ISystemColors` PAL seam (accent + HC palette) | OS change | `Pal`+`Hosting` | ADD §below |
 | T2 dynamic palette | album-art extraction → derived brush families | per track | **`FluentGpu.Theme`** | ADD |
 
-**T1 — PAL `ISystemColors`** (ADD; `Pal.Windows` reads `HKCU\…\Personalize` + `SPI_GETHIGHCONTRAST` + accent registry, once at startup + per `WM_SETTINGCHANGE("ImmersiveColorSet")`, bumping `uint Epoch`). The reactive context is **`Context<uint>` over `Epoch`** (DepKey-projectable, boxless) — **not** `Context<SystemTint>` (folded: a 112B fat struct cannot project into a 16B `DepKey`; that would box). `UseSystemColors()` reads the fat snapshot by value from the stable `ISystemColors` instance; the re-render trigger is the Epoch context change. Flow reuses the existing `WM_SETTINGCHANGE → ThemeChanged WindowEvent → dirty-everything` path; no new phase.
+**T1 — PAL `ISystemColors`** (ADD; `FluentGpu.Windows/Pal/` reads `HKCU\…\Personalize` + `SPI_GETHIGHCONTRAST` + accent registry, once at startup + per `WM_SETTINGCHANGE("ImmersiveColorSet")`, bumping `uint Epoch`). The reactive context is **`Context<uint>` over `Epoch`** (DepKey-projectable, boxless) — **not** `Context<SystemTint>` (folded: a 112B fat struct cannot project into a 16B `DepKey`; that would box). `UseSystemColors()` reads the fat snapshot by value from the stable `ISystemColors` instance; the re-render trigger is the Epoch context change. Flow reuses the existing `WM_SETTINGCHANGE → ThemeChanged WindowEvent → dirty-everything` path; no new phase.
 
 **T2 — `FluentGpu.Theme`** (ADD, portable, deps `Foundation` only): `PaletteExtractor` (worker), `BrushDeriver` (UI thread), `PaletteCache` + `BrushCache`. **Palette model (folded):** *not* a 2-color `{Primary,Accent}` — that throws away the per-theme tier the real `PaletteGradientCompositor`/`RightPanelThemeResolver` need (they use `BackgroundTinted`, and a *Light-tuned and Dark-tuned* tier, to avoid the "collapses to muddy near-black at partial alpha on dark covers" bug `TintColorHelper` exists to dodge). ADD an 80B `Palette {BackgroundDark, BackgroundTintedDark, BackgroundLight, BackgroundTintedLight, Accent}`, both tiers extracted on the worker. Extraction runs on the asset worker off the **CPU staging block** (`stackalloc` is wrong here — the real accumulator is 5 longs × 4096 buckets ≈ 160KB → use a **worker-thread-pooled `long[]`**, reused, off the frame loop). `BrushDeriver` evaluates POD `BrushRecipe` × `Palette` × theme → `BrushHandle` (hero 4-stop gradient baked as one atlas row; pill-foreground = luma>0.63?Black:White; HC → `sys.HcHotlight`, bypassing palette). Recipes are hand-authored `static readonly` POD (AOT-clean).
 
@@ -170,7 +170,7 @@ void UseVisibleRange(VirtualHandle v, Action<Range> onChange, ReadOnlySpan<DepKe
 
 **Design.** Separate the three meanings of "backdrop" hard (KEEP — verified correct):
 
-1. **Window Mica/Acrylic = PAL, not our pixels.** ADD `IBackdropSource.SetWindowBackdrop(NativeHandle, HostBackdropKind, tint)` (`Pal.Windows` → `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE)` / a DComp backdrop sibling visual below our swapchain visual). Our root clears transparent (premul 0); DWM composes Mica through. **Zero renderer change.** HC → `None` + opaque fill. macOS → `NSVisualEffectView`.
+1. **Window Mica/Acrylic = PAL, not our pixels.** ADD `IBackdropSource.SetWindowBackdrop(NativeHandle, HostBackdropKind, tint)` (`FluentGpu.Windows/Pal/` → `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE)` / a DComp backdrop sibling visual below our swapchain visual). Our root clears transparent (premul 0); DWM composes Mica through. **Zero renderer change.** HC → `None` + opaque fill. macOS → `NSVisualEffectView`.
 
 2. **Editorial baked backdrop = persistent baked surface, NOT the per-frame LayerPool** (folded). ADD `UseImageBackdrop(src, palette, sizePx, in BackdropRecipe) → ImageHandle` whose texture is baked via the `IEffectRunner` chain (D2D1 Gaussian + our gradient/SDF passes + the **optional** `Effects.D2D1` ComputeSharp noise shader — flagged as the optional non-portable leaf, carrying the documented straight-vs-premul-alpha trap). Give it its **own small persistent-RT cache** (LRU **cap 2**, bake **downscaled ~0.5×** then upsample — blur is low-frequency), so it cannot starve the shared LayerPool's group-opacity/clip RTs. **Cache the blurred SOURCE separately, keyed `(uri,sizeBucket)`** — a track *recolor that keeps the same art* recomposites only the 5 cheap procedural quads over the already-blurred source; only a genuine **art change** pays the expensive 60-DIP blur. Bake job has a `BakeTicket` with `Cancel`/`SetPriority`; rapid track-changes debounce to one bake. If RT alloc fails → flat dominant-color fill (not the spec's "visually-wrong per-instance alpha").
 
@@ -184,7 +184,7 @@ void UseVisibleRange(VirtualHandle v, Action<Range> onChange, ReadOnlySpan<DepKe
 **Synced lyrics** (over the Text seam, in `FluentGpu.Media.LyricsLayoutEngine`): line layout via `ITextShaper` → cached `GlyphRunRealization`. **Per-syllable color = per-INSTANCE glyph color written by the phase-7 AnimTrack into the instance data at batch time** (folded — *not* a `BrushHandle` re-bake, which would mint a new handle every tick and break the clean-span invariant, nor a gradient-atlas row lerp, which needs the missing texture-upload path). The active line is **PaintDirty + re-records its single glyph run every frame** (trivially within budget — drop the "clean-span reuse for the active line" framing; caching applies to *shaping*, not per-frame instance emission). Line scroll = `LocalTransform` translate-Y. Backdrop = `UseImageBackdrop`. 3D fan = `PushLayer{Effect=Transform3D}` via the optional effects leaf (perspective is out of core 2.5D scope).
 
 **Video — the present-tree redesign (ADD; NOT a fold onto §5.1).** §5.1 builds **one** opaque swapchain visual (`CreateVisual → SetContent(swapchain) → SetRoot`). Video needs a **multi-visual DComp tree**. ADD:
-- **PAL `IVideoPresenter`** (`Pal.Windows` → DComp; POD `VideoSurfaceId`): `CreateSurface`, `Place(id, deviceRect, opacity, z)`, `SetVisible`, `Destroy`, `GetMediaPlayerSink` (the app binds its `MediaPlayer`/`MediaPlayerElement` to this). FluentGpu **never touches video pixels** (KEEP — the single best decision: the heaviest continuous work is off our single thread by construction, turning v1's worst limitation into a non-issue).
+- **PAL `IVideoPresenter`** (`FluentGpu.Windows/Pal/` → DComp; POD `VideoSurfaceId`): `CreateSurface`, `Place(id, deviceRect, opacity, z)`, `SetVisible`, `Destroy`, `GetMediaPlayerSink` (the app binds its `MediaPlayer`/`MediaPlayerElement` to this). FluentGpu **never touches video pixels** (KEEP — the single best decision: the heaviest continuous work is off our single thread by construction, turning v1's worst limitation into a non-issue).
 - **Present-tree amendment to §5.1:** root visual with N children — the **UI swapchain visual z-above a video child visual** whose content is the external surface. **Transparency protocol:** the UI back buffer is **cleared transparent (premul 0) in the `DrawVideoCmd.Dst` region** (a hole-punch), so the video child shows through; scrim/transport/rounded-PiP-corners are normal DrawList quads in the topmost UI visual, composited over by z-order. ADD `DrawVideoCmd {VideoSurfaceId Surface; RectF Dst; ImageHandle PosterBlur, AlbumArt; float VideoReady}` with its **own sortkey PassClass ordering the alpha-punch BELOW all chrome**. Art/poster lower layers + the 3-layer crossfade (180/220ms) are phase-7 composition animations.
 - **`UseVideoSurface(owner, priority)`** + `VideoSurfaceRegistry` (portable port of `ActiveVideoSurfaceService`: priority-arbitrated single surface, atomic handoff = no black frame; theatre>PiP>sidebar). PiP drag moves the DComp child visual off-loop via `Place`, **with the canvas-RT hole committed in lockstep in the same phase-11 DComp Commit** (folded — the two-clock tear at the PiP edge). Partial present: **re-punch the hole whenever any node overlapping the video rect is in the damage set** (inflate the video node's damage to its own rect).
 
@@ -274,7 +274,7 @@ sealed class NowPlaying : Component {
 References are to `architecture-spec.md` (arch), `subsystems/gpu-renderer.md` (rend), `subsystems/reconciler-hooks.md` (hooks), `foundations.md` (found).
 
 **New assemblies (arch §3 module graph):**
-- ADD **`FluentGpu.Media`** (portable; deps Foundation + Rhi/Text iface) — `ImageCache`, `DecodeScheduler`, `ResidencyManager`, `VideoSurfaceRegistry`, `LyricsLayoutEngine`. New leaf **`Media.Codecs.Wic`** behind portable `IImageCodec`.
+- ADD **Media subsystem** (portable, in `FluentGpu.Engine/Media/`; deps Foundation + Rhi/Text iface) — `ImageCache`, `DecodeScheduler`, `ResidencyManager`, `VideoSurfaceRegistry`, `LyricsLayoutEngine`. New Windows leaf **`FluentGpu.Windows/Wic/`** behind portable `IImageCodec`.
 - ADD **`FluentGpu.Theme`** (portable; deps Foundation) — `PaletteExtractor`, `BrushDeriver`, `PaletteCache`, `BrushCache`.
 - Both referenced **only by `Hosting`**; acyclicity preserved.
 
@@ -293,7 +293,7 @@ References are to `architecture-spec.md` (arch), `subsystems/gpu-renderer.md` (r
 - AMEND to: *valid IFF every handle IsLive AND, for `GlyphRunRef` and `ImageRef` handles, the backing realization `ContentEpoch` is unchanged.* This is new clean-span-validator + batcher code, not a verbatim reuse.
 
 **RHI seam (arch §4.7) — REQUIRED:**
-- ADD `ICommandEncoder.CopyBufferToTexture(BufferHandle staging, TextureHandle dst, in TextureRegion)` + a dedicated MB-sized **texture-staging ring** in `Rhi.D3D12`, fence-gated. Stop claiming texture upload rides the instance `UploadRing` (UploadRing = instance/vertex/index only).
+- ADD `ICommandEncoder.CopyBufferToTexture(BufferHandle staging, TextureHandle dst, in TextureRegion)` + a dedicated MB-sized **texture-staging ring** in `FluentGpu.Windows/D3D12/`, fence-gated. Stop claiming texture upload rides the instance `UploadRing` (UploadRing = instance/vertex/index only).
 - ADD a **startup-allocated per-bucket texture pool**; phase-13 does only `CopyBufferToTexture` into recycled textures (no `CreateTexture` in 6–13).
 
 **PAL seams (arch §4.7 / §5.1):**

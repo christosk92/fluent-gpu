@@ -1,0 +1,226 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Rhi.ISwapchain
+  commentId: T:FluentGpu.Rhi.ISwapchain
+  id: ISwapchain
+  parent: FluentGpu.Rhi
+  children:
+  - FluentGpu.Rhi.ISwapchain.Present
+  - FluentGpu.Rhi.ISwapchain.Resize(FluentGpu.Foundation.Size2)
+  - FluentGpu.Rhi.ISwapchain.SizePx
+  langs:
+  - csharp
+  - vb
+  name: ISwapchain
+  nameWithType: ISwapchain
+  fullName: FluentGpu.Rhi.ISwapchain
+  type: Interface
+  source:
+    remote:
+      path: src/FluentGpu.Rhi/Rhi.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ISwapchain
+    path: ../../src/FluentGpu.Rhi/Rhi.cs
+    startLine: 34
+  assemblies:
+  - FluentGpu.Rhi
+  namespace: FluentGpu.Rhi
+  syntax:
+    content: 'public interface ISwapchain : IDisposable'
+    content.vb: Public Interface ISwapchain Inherits IDisposable
+  derivedClasses:
+  - FluentGpu.Rhi.D3D12.D3D12Swapchain
+  inheritedMembers:
+  - System.IDisposable.Dispose
+- uid: FluentGpu.Rhi.ISwapchain.SizePx
+  commentId: P:FluentGpu.Rhi.ISwapchain.SizePx
+  id: SizePx
+  parent: FluentGpu.Rhi.ISwapchain
+  langs:
+  - csharp
+  - vb
+  name: SizePx
+  nameWithType: ISwapchain.SizePx
+  fullName: FluentGpu.Rhi.ISwapchain.SizePx
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Rhi/Rhi.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SizePx
+    path: ../../src/FluentGpu.Rhi/Rhi.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Rhi
+  namespace: FluentGpu.Rhi
+  syntax:
+    content: Size2 SizePx { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Size2
+    content.vb: ReadOnly Property SizePx As Size2
+  overload: FluentGpu.Rhi.ISwapchain.SizePx*
+- uid: FluentGpu.Rhi.ISwapchain.Resize(FluentGpu.Foundation.Size2)
+  commentId: M:FluentGpu.Rhi.ISwapchain.Resize(FluentGpu.Foundation.Size2)
+  id: Resize(FluentGpu.Foundation.Size2)
+  parent: FluentGpu.Rhi.ISwapchain
+  langs:
+  - csharp
+  - vb
+  name: Resize(Size2)
+  nameWithType: ISwapchain.Resize(Size2)
+  fullName: FluentGpu.Rhi.ISwapchain.Resize(FluentGpu.Foundation.Size2)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Rhi/Rhi.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Resize
+    path: ../../src/FluentGpu.Rhi/Rhi.cs
+    startLine: 37
+  assemblies:
+  - FluentGpu.Rhi
+  namespace: FluentGpu.Rhi
+  syntax:
+    content: void Resize(Size2 px)
+    parameters:
+    - id: px
+      type: FluentGpu.Foundation.Size2
+    content.vb: Sub Resize(px As Size2)
+  overload: FluentGpu.Rhi.ISwapchain.Resize*
+- uid: FluentGpu.Rhi.ISwapchain.Present
+  commentId: M:FluentGpu.Rhi.ISwapchain.Present
+  id: Present
+  parent: FluentGpu.Rhi.ISwapchain
+  langs:
+  - csharp
+  - vb
+  name: Present()
+  nameWithType: ISwapchain.Present()
+  fullName: FluentGpu.Rhi.ISwapchain.Present()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Rhi/Rhi.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Present
+    path: ../../src/FluentGpu.Rhi/Rhi.cs
+    startLine: 38
+  assemblies:
+  - FluentGpu.Rhi
+  namespace: FluentGpu.Rhi
+  syntax:
+    content: void Present()
+    content.vb: Sub Present()
+  overload: FluentGpu.Rhi.ISwapchain.Present*
+references:
+- uid: FluentGpu.Rhi
+  commentId: N:FluentGpu.Rhi
+  href: FluentGpu.html
+  name: FluentGpu.Rhi
+  nameWithType: FluentGpu.Rhi
+  fullName: FluentGpu.Rhi
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Rhi
+    name: Rhi
+    href: FluentGpu.Rhi.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Rhi
+    name: Rhi
+    href: FluentGpu.Rhi.html
+- uid: System.IDisposable.Dispose
+  commentId: M:System.IDisposable.Dispose
+  parent: System.IDisposable
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  name: Dispose()
+  nameWithType: IDisposable.Dispose()
+  fullName: System.IDisposable.Dispose()
+  spec.csharp:
+  - uid: System.IDisposable.Dispose
+    name: Dispose
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.IDisposable.Dispose
+    name: Dispose
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  - name: (
+  - name: )
+- uid: System.IDisposable
+  commentId: T:System.IDisposable
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.idisposable
+  name: IDisposable
+  nameWithType: IDisposable
+  fullName: System.IDisposable
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Rhi.ISwapchain.SizePx*
+  commentId: Overload:FluentGpu.Rhi.ISwapchain.SizePx
+  href: FluentGpu.Rhi.ISwapchain.html#FluentGpu_Rhi_ISwapchain_SizePx
+  name: SizePx
+  nameWithType: ISwapchain.SizePx
+  fullName: FluentGpu.Rhi.ISwapchain.SizePx
+- uid: FluentGpu.Foundation.Size2
+  commentId: T:FluentGpu.Foundation.Size2
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Size2.html
+  name: Size2
+  nameWithType: Size2
+  fullName: FluentGpu.Foundation.Size2
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Rhi.ISwapchain.Resize*
+  commentId: Overload:FluentGpu.Rhi.ISwapchain.Resize
+  href: FluentGpu.Rhi.ISwapchain.html#FluentGpu_Rhi_ISwapchain_Resize_FluentGpu_Foundation_Size2_
+  name: Resize
+  nameWithType: ISwapchain.Resize
+  fullName: FluentGpu.Rhi.ISwapchain.Resize
+- uid: FluentGpu.Rhi.ISwapchain.Present*
+  commentId: Overload:FluentGpu.Rhi.ISwapchain.Present
+  href: FluentGpu.Rhi.ISwapchain.html#FluentGpu_Rhi_ISwapchain_Present
+  name: Present
+  nameWithType: ISwapchain.Present
+  fullName: FluentGpu.Rhi.ISwapchain.Present

@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Class Diag | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Class Diag | FluentGpu Developer Docs ">
+      
+      <meta name="description" content="The standardized, reusable engine-wide diagnostics facility. Every subsystem instruments through it the same way: Diag.Count(&amp;quot;text.glyph&amp;quot;,&amp;quot;rasterized&amp;quot;), Diag.Set(&amp;quot;d3d12&amp;quot;,&amp;quot;glyphInstances&amp;quot;, n), Diag.Event(&amp;quot;rhi&amp;quot;,&amp;quot;device-lost&amp;quot;), using (Diag.Time(&amp;quot;frame&amp;quot;,&amp;quot;record&amp;quot;)) { … }. COST MODEL: the recording methods are [Conditional(&amp;quot;DEBUG&amp;quot;), Conditional(&amp;quot;FLUENTGPU_DIAG&amp;quot;)], so on a Release build (with neither symbol defined) the compiler removes the call site AND the argument evaluation entirely — a Diag.Set(&amp;quot;text.atlas&amp;quot;,&amp;quot;nonZero&amp;quot;, ExpensiveScan()) costs literally nothing in production. Define FLUENTGPU_DIAG to keep diagnostics in a Release build; toggle at runtime with the AppContext switch &amp;quot;FluentGpu.Diagnostics&amp;quot; or by setting . Route output by setting .">
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/new/feat/prop-unification/apiSpec/new?filename=FluentGpu_Foundation_Diag.md&amp;value=---%0Auid%3A%20FluentGpu.Foundation.Diag%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="ManagedReference">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="FluentGpu.Foundation.Diag">
+
+
+
+  <h1 id="FluentGpu_Foundation_Diag" data-uid="FluentGpu.Foundation.Diag" class="text-break">
+Class Diag  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Foundation/Diag.cs/#L18"><i class="bi bi-code-slash"></i></a>
+  </h1>
+
+  <div class="facts text-secondary">
+    <dl><dt>Namespace</dt><dd><a class="xref" href="FluentGpu.html">FluentGpu</a>.<a class="xref" href="FluentGpu.Foundation.html">Foundation</a></dd></dl>
+  <dl><dt>Assembly</dt><dd>FluentGpu.Foundation.dll</dd></dl>
+  </div>
+
+  <div class="markdown summary"><p>The standardized, reusable engine-wide diagnostics facility. Every subsystem instruments through it the same way:
+<code>Diag.Count(&quot;text.glyph&quot;,&quot;rasterized&quot;)</code>, <code>Diag.Set(&quot;d3d12&quot;,&quot;glyphInstances&quot;, n)</code>,
+<code>Diag.Event(&quot;rhi&quot;,&quot;device-lost&quot;)</code>, <code>using (Diag.Time(&quot;frame&quot;,&quot;record&quot;)) { … }</code>.</p>
+<p>COST MODEL: the recording methods are <code>[Conditional(&quot;DEBUG&quot;), Conditional(&quot;FLUENTGPU_DIAG&quot;)]</code>, so on a Release
+build (with neither symbol defined) the compiler removes the call site AND the argument evaluation entirely — a
+<code>Diag.Set(&quot;text.atlas&quot;,&quot;nonZero&quot;, ExpensiveScan())</code> costs literally nothing in production. Define
+<code>FLUENTGPU_DIAG</code> to keep diagnostics in a Release build; toggle at runtime with the AppContext switch
+<code>&quot;FluentGpu.Diagnostics&quot;</code> or by setting <a class="xref" href="FluentGpu.Foundation.Diag.html#FluentGpu_Foundation_Diag_Enabled">Enabled</a>. Route output by setting <a class="xref" href="FluentGpu.Foundation.Diag.html#FluentGpu_Foundation_Diag_Sink">Sink</a>.</p>
+</div>
+  <div class="markdown conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static class Diag</code></pre>
+  </div>
+
+
+
+
+  <dl class="typelist inheritance">
+    <dt>Inheritance</dt>
+    <dd>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></div>
+      <div><span class="xref">Diag</span></div>
+    </dd>
+  </dl>
+
+
+
+  <dl class="typelist inheritedMembers">
+    <dt>Inherited Members</dt>
+    <dd>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)">object.Equals(object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)">object.Equals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gethashcode">object.GetHashCode()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gettype">object.GetType()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone">object.MemberwiseClone()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.referenceequals">object.ReferenceEquals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.tostring">object.ToString()</a>
+    </div>
+  </dd></dl>
+
+
+
+
+
+
+  <h2 class="section" id="fields">Fields
+</h2>
+
+
+
+  <h3 id="FluentGpu_Foundation_Diag_CompiledIn" data-uid="FluentGpu.Foundation.Diag.CompiledIn">
+  CompiledIn
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Foundation/Diag.cs/#L23"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const bool CompiledIn = false</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Foundation_Diag_Enabled" data-uid="FluentGpu.Foundation.Diag.Enabled">
+  Enabled
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Foundation/Diag.cs/#L27"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Runtime gate (only consulted when compiled in). Defaults off unless FG_DIAG is set; AppContext switch overrides.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static bool Enabled</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Foundation_Diag_Sink" data-uid="FluentGpu.Foundation.Diag.Sink">
+  Sink
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Foundation/Diag.cs/#L30"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Where <a class="xref" href="FluentGpu.Foundation.Diag.html#FluentGpu_Foundation_Diag_Event_System_String_System_String_">Event(string, string)</a>/<a class="xref" href="FluentGpu.Foundation.Diag.html#FluentGpu_Foundation_Diag_Dump_System_String_">Dump(string?)</a> output goes (e.g. Console.WriteLine, the devtools panel, a log).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static Action&lt;string&gt;? Sink</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action-1">Action</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+  <h2 class="section" id="methods">Methods
+</h2>
+
+
+  <a id="FluentGpu_Foundation_Diag_Count_" data-uid="FluentGpu.Foundation.Diag.Count*"></a>
+
+  <h3 id="FluentGpu_Foundation_Diag_Count_System_String_System_String_System_Int64_" data-uid="FluentGpu.Foundation.Diag.Count(System.String,System.String,System.Int64)">
+  Count(string, string, long)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Foundation/Diag.cs/#L51"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">[Conditional(&quot;DEBUG&quot;)]
+[Conditional(&quot;FLUENTGPU_DIAG&quot;)]
+public static void Count(string category, string key, long delta = 1)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>category</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>key</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>delta</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int64">long</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Foundation_Diag_Dump_" data-uid="FluentGpu.Foundation.Diag.Dump*"></a>
+
+  <h3 id="FluentGpu_Foundation_Diag_Dump_System_String_" data-uid="FluentGpu.Foundation.Diag.Dump(System.String)">
+  Dump(string?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Foundation/Diag.cs/#L89"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">[Conditional(&quot;DEBUG&quot;)]
+[Conditional(&quot;FLUENTGPU_DIAG&quot;)]
+public static void Dump(string? header = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>header</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Foundation_Diag_EnvFlag_" data-uid="FluentGpu.Foundation.Diag.EnvFlag*"></a>
+
+  <h3 id="FluentGpu_Foundation_Diag_EnvFlag_System_String_" data-uid="FluentGpu.Foundation.Diag.EnvFlag(System.String)">
+  EnvFlag(string)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Foundation/Diag.cs/#L41"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static bool EnvFlag(string name)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>name</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Foundation_Diag_Event_" data-uid="FluentGpu.Foundation.Diag.Event*"></a>
+
+  <h3 id="FluentGpu_Foundation_Diag_Event_System_String_System_String_" data-uid="FluentGpu.Foundation.Diag.Event(System.String,System.String)">
+  Event(string, string)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Foundation/Diag.cs/#L66"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">[Conditional(&quot;DEBUG&quot;)]
+[Conditional(&quot;FLUENTGPU_DIAG&quot;)]
+public static void Event(string category, string message)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>category</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>message</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Foundation_Diag_Reset_" data-uid="FluentGpu.Foundation.Diag.Reset*"></a>
+
+  <h3 id="FluentGpu_Foundation_Diag_Reset" data-uid="FluentGpu.Foundation.Diag.Reset">
+  Reset()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Foundation/Diag.cs/#L97"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">[Conditional(&quot;DEBUG&quot;)]
+[Conditional(&quot;FLUENTGPU_DIAG&quot;)]
+public static void Reset()</code></pre>
+  </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Foundation_Diag_Set_" data-uid="FluentGpu.Foundation.Diag.Set*"></a>
+
+  <h3 id="FluentGpu_Foundation_Diag_Set_System_String_System_String_System_Object_" data-uid="FluentGpu.Foundation.Diag.Set(System.String,System.String,System.Object)">
+  Set(string, string, object?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Foundation/Diag.cs/#L59"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">[Conditional(&quot;DEBUG&quot;)]
+[Conditional(&quot;FLUENTGPU_DIAG&quot;)]
+public static void Set(string category, string key, object? value)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>category</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>key</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>value</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Foundation_Diag_Snapshot_" data-uid="FluentGpu.Foundation.Diag.Snapshot*"></a>
+
+  <h3 id="FluentGpu_Foundation_Diag_Snapshot" data-uid="FluentGpu.Foundation.Diag.Snapshot">
+  Snapshot()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Foundation/Diag.cs/#L77"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Aggregate snapshot of all values + counters (for the devtools panel / a dump).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static string Snapshot()</code></pre>
+  </div>
+
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Foundation_Diag_Time_" data-uid="FluentGpu.Foundation.Diag.Time*"></a>
+
+  <h3 id="FluentGpu_Foundation_Diag_Time_System_String_System_String_" data-uid="FluentGpu.Foundation.Diag.Time(System.String,System.String)">
+  Time(string, string)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Foundation/Diag.cs/#L74"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Scoped timing: <code>using (Diag.Time(&quot;layout&quot;,&quot;run&quot;)) { … }</code>. Internals elide on Release (const-false branch).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static DiagScope Time(string category, string key)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>category</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>key</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Foundation.DiagScope.html">DiagScope</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+</article>
+
+
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

@@ -1,0 +1,2641 @@
+using FluentGpu.Foundation;
+using FluentGpu.Pal;
+using FluentGpu.Scene;
+using FluentGpu.Text;
+
+namespace FluentGpu.Input;
+
+/// <summary>Directional focus movement for roving/XY keyboard navigation (arrow keys in lists, grids, menus).</summary>
+public enum FocusDirection : byte { Left, Right, Up, Down }
+
+/// <summary>
+/// Phase 2 (input dispatch): hit-tests the committed scene and routes pointer + keyboard. Pointer down→up over the
+/// same node fires the click handler and focuses the nearest focusable self-or-ancestor (a WinUI IsTabStop=False part
+/// never takes pointer focus; nothing focusable in the chain → focus unchanged); keyboard routes to the focused node and bubbles up ancestors
+/// (Handled stops it); Tab moves focus through focusable nodes; Enter/Space activates a focused clickable (the
+/// "one declaration, three modalities" contract). The full engine adds tunnel(Preview), gesture arena, XY-focus.
+/// </summary>
+public sealed class InputDispatcher
+{
+    private readonly SceneStore _scene;
+    private readonly List<NodeHandle> _focusables = new();
+    private readonly List<NodeHandle> _scoped = new();   // reused buffer for scoped (within-a-root) focus collection
+    // ── per-pointer interaction (the contact-keyed scalars; cap 10 concurrent contacts) ───────────────
+    // Multi-touch capture: each contact (PointerId — mouse/pen/headless default = 0; touch = the OS id) owns its OWN
+    // down/drag/scrollbar-drag/context/middle press targets, plus its single-recognizer touch pan + velocity sampler.
+    // The fields below are the WORKING SET for the contact whose event is being processed: SlotIn loads the contact's
+    // saved slot into them at the top of each pointer event, SlotOut stores it back at the end. For a lone mouse (id 0)
+    // that is a round-trip of one slot, so every existing mouse path stays bit-identical (WinUI's per-PointerId
+    // PointerInputProcessor capture, generalized to N contacts). Hover stays a mouse/pen-only single field (touch never
+    // latches a resting hover); pressed is a single field driven by mouse/pen AND touch (Phase 2 — a contact owns it
+    // while _pressed == _down), released on up/cancel/pan-claim back to Normal, never PointerOver (touch has no cursor).
+    private NodeHandle _down;
+    private NodeHandle _focused;
+    private NodeHandle _hovered;
+    private NodeHandle _pressed;
+    private NodeHandle _dragTarget;
+    private NodeHandle _scrollHovered;
+    private NodeHandle _scrollDragNode;
+    private float _scrollDragGrab;
+    private NodeHandle _contextDown;   // right-button press target — context menu fires on release over the same chain
+    private NodeHandle _middleDown;    // middle-button press target — delivered on release over the same node (TabView close)
+    // Single-recognizer touch pan/tap (Phase 1, no arena): the contact's press anchor, the scroll target it drives once
+    // the gesture claims a pan, and the velocity sampler seeded for the fling hand-off. Inactive (null target) for a
+    // below-slop tap, which falls through to the existing click path.
+    private NodeHandle _panTarget;     // the Scrollable this contact's touch-down landed over (the pan candidate/claim)
+    private bool _panClaimed;          // the candidate crossed slop → the pan owns the contact (the press was cancelled)
+    private Point2 _panAnchorPx;       // window-space press point — pan delta measures from here
+    private float _panAnchorOffset;    // the scroll offset captured at the press (drives SetScrollOffset(anchor − delta))
+    private bool _panAxisX;            // the scroll axis of _panTarget (Orientation == 1) — pan tracks this axis only
+    private TouchVelocity _panVel;     // per-contact EMA velocity sampler (cloned from DragController.UpdateVelocity)
+    // §7A drag-reorder-over-touch: the contact enrolled a DragReorder member (a CanDrag chain under the press) whose
+    // axis-locked vote competes with Pan in the arena. The reorder's item axis (the source row's parent-container main
+    // axis); when the arena resolves DragReorder, _touchReorder latches and the contact DRIVES Input.DragController
+    // (arena-governed: YieldsToPan bypassed) until up/cancel, exactly as _panClaimed latches the pan.
+    private NodeHandle _reorderTarget; // the CanDrag node a DragReorder member is enrolled on (null = none for this contact)
+    private bool _touchReorder;        // the arena resolved DragReorder → this contact drives DragController (capture)
+    private bool _reorderAxisX;        // the item's reorder axis (parent container Direction==0 row ⇒ horizontal item-drag)
+    // §7A cross-axis content-pan (SwipeControl row swipe / FlipView page drag — a DragYieldsToPan OnDrag node): unlike the
+    // Slider/EditableText eager OnDrag capture, this drag does NOT own the contact on press — it enrolls an axis-locked Drag
+    // member (its own main axis) that COMPETES with the enclosing scroller's Pan, so a along-axis swipe wins and a cross-axis
+    // drag yields (the list scrolls). On its arena win the contact captures it into _dragTarget and drives OnDrag, exactly as
+    // the eager path would have (the declarative DragController.YieldsToPan; the two-arbitration-models risk stays gone).
+    private NodeHandle _swipeDrag;     // a DragYieldsToPan OnDrag node hit on this contact (null = none — the eager OnDrag path)
+    private bool _swipeAxisX;          // the swipe's own axis (the node's Direction==0 row ⇒ horizontal swipe) — its slop axis
+    private NodeHandle _gesturePanNode;// a UseGesture(Pan) member's node (null = none) — voted RAW (any-axis) in the arena
+    private NodeHandle _keyArmed;      // focused clickable held via Space/Enter — pressed while held, activates on key-UP
+    private int _keyArmedKey;          // which key armed it (Space or Enter) — any OTHER key-down cancels without firing
+    private bool _accessKeyMode;       // Alt tapped → the next letter invokes a matching AccessKey mnemonic
+    private bool _altPending;          // Alt is down with no intervening key (candidate for access-key-mode toggle)
+    private readonly List<NodeHandle> _focusScopes = new();
+    // Double/triple-click tracking (platform timestamps; slop + window per Win32 defaults, capped at 3).
+    private uint _lastDownMs;
+    private Point2 _lastDownPos;
+    private int _lastDownButton = -1;
+    private byte _clickCount = 1;
+    private CursorId _lastCursor = CursorId.Arrow;
+    // Read-only text selection (rtb-02 — WinUI TextSelectionManager, default-on for RichTextBlock,
+    // RichTextBlock.cpp:1730): the SelectableTextBit node owning the current selection + the drag anchor index.
+    private NodeHandle _selText;
+    private int _selAnchor;
+    private bool _selDragging;
+
+    public const float ClickSlopPx = 4f;
+    public const uint DoubleClickMs = 500;
+
+    /// <summary>Touch pan claim distance, tested per-axis (the Windows drag box <c>SM_CXDRAG</c>/<c>SM_CYDRAG</c> default
+    /// = 4, the same threshold <see cref="DragController.DragThresholdPx"/> uses; a portable const because the OS metric
+    /// is unavailable off-Windows). Below it a touch down→up is a tap; crossing it on the scroll axis claims the pan and
+    /// cancels the press candidate (WinUI Pressed→Canceled, never Released — PointerInputProcessor.cpp:397/423).</summary>
+    public const float PanSlopPx = 4f;
+
+    /// <summary>Below this speed a touch-up after a pan starts NO fling — the contact came to rest (WinUI treats a
+    /// near-zero release velocity as a settle, not a flick). px/s.</summary>
+    public const float FlingMinVelocityPxPerS = 50f;
+
+    private const float ScrollbarSize = 12f;
+    private const float ScrollbarMinExpandedThumb = 30f;
+    private const float ScrollbarMinCollapsedThumb = 32f;
+    private const float ScrollbarSmallChange = 48f;
+
+    /// <summary>Concurrent-contact cap (the per-PointerId capture map): mouse/pen + up to this many simultaneous touch
+    /// points. An 11th concurrent contact is ignored deterministically — no growth, zero allocation after construction
+    /// (orchestrator ruling: 10 contacts, 11th dropped). Idle slots are reclaimed when a contact ends.</summary>
+    private const int MaxContacts = 10;
+
+    /// <summary>Per-contact capture + touch-gesture state, indexed by an id→slot linear probe. A slot is LIVE between
+    /// the contact's first event and its up/cancel; once every target/anchor is clear and the velocity is idle it is
+    /// recycled (so a fresh contact reusing the OS id, and the steady mouse, never run the table out).</summary>
+    private struct PointerSlot
+    {
+        public uint Id;
+        public bool Used;
+        public NodeHandle Down, DragTarget, ScrollDragNode, ContextDown, MiddleDown;
+        public float ScrollDragGrab;
+        public NodeHandle PanTarget;
+        public bool PanClaimed;
+        public Point2 PanAnchorPx;
+        public float PanAnchorOffset;
+        public bool PanAxisX;
+        public TouchVelocity PanVel;
+        public NodeHandle ReorderTarget;   // §7A DragReorder member's CanDrag node (null = no reorder candidate)
+        public bool TouchReorder;          // the arena resolved DragReorder → this contact drives DragController
+        public bool ReorderAxisX;          // the item's reorder axis (parent row ⇒ horizontal item-drag)
+        public NodeHandle SwipeDrag;       // §7A cross-axis content-pan Drag member's DragYieldsToPan node (null = none)
+        public bool SwipeAxisX;            // the swipe's own axis (node Direction==0 row ⇒ horizontal swipe)
+        public NodeHandle GesturePanNode;  // §13 UseGesture(Pan) member's node (raw any-axis vote)
+        public int ArenaSlot;   // the §7A arena this contact opened (-1 = none: a mouse/pen contact, or a route with no gestures)
+    }
+
+    /// <summary>Exponential-moving-average pointer-velocity sampler (px/s, ~50ms horizon) — the
+    /// <see cref="DragController.UpdateVelocity"/> shape, per-contact for the touch fling hand-off. 0/duplicate platform
+    /// timestamps (the headless default) leave the velocity unchanged, so a 0-stamp gesture measures zero velocity
+    /// (a vacuous fling — the harness uses monotonic stamps to exercise inertia).</summary>
+    private struct TouchVelocity
+    {
+        private Point2 _lastAbs;
+        private uint _lastMs;
+        private float _vx, _vy;
+
+        public float Vx => _vx;
+        public float Vy => _vy;
+
+        public void Reset(Point2 abs, uint timestampMs)
+        {
+            _lastAbs = abs;
+            _lastMs = timestampMs;
+            _vx = 0f; _vy = 0f;
+        }
+
+        public void Sample(Point2 abs, uint timestampMs)
+        {
+            uint dt = timestampMs - _lastMs;
+            if (timestampMs != 0 && _lastMs != 0 && dt > 0 && dt < 1000)
+            {
+                float instX = (abs.X - _lastAbs.X) * 1000f / dt;
+                float instY = (abs.Y - _lastAbs.Y) * 1000f / dt;
+                float alpha = dt / (dt + 50f);
+                _vx += (instX - _vx) * alpha;
+                _vy += (instY - _vy) * alpha;
+            }
+            if (timestampMs != 0) _lastMs = timestampMs;
+            _lastAbs = abs;
+        }
+    }
+
+    private readonly PointerSlot[] _slots = new PointerSlot[MaxContacts];
+    private uint _activeSlotId;        // the contact whose event is being processed (its slot is loaded into the scalars)
+    private bool _activeSlotValid;     // false when the contact was ignored (table full) — SlotOut then discards it
+
+    // ── the gesture arena (§7A) + the per-(PointerId,recognizer) FSM bank (§7B) ──────────────────────────────
+    // The touch path opens one arena per contact on TouchDown and enrolls members innermost-first along the hit route
+    // (§7A.1): a Scrollable ancestor → Pan, an OnDrag/_dragTarget node → Drag, a CanDrag chain → DragReorder, a clickable
+    // → Tap (+ DoubleTap on a double-click consumer, bound under a SELECTION TEAM §7A.3 for editable text), a hold-handler
+    // → Hold, and a UseGesture(§13) node → its declared Tap/Hold/Pan. The arena owns WHICH recognizer wins; the proven
+    // Phase-1/2 scalar machinery (SetScrollOffset pan, the click path, the OnDrag capture, the thumb-drag) executes the
+    // winner — so the single-recognizer common case stays observably identical (§7A.5: one member → synchronous accept →
+    // same-frame capture/click/drag, the explicit fast-path below). Two consumer surfaces close on the arena's verdict:
+    // a DragReorder win drives Input.DragController arena-governed (its YieldsToPan heuristic SUBSUMED — the arena's
+    // axis-locked Pan-vs-DragReorder vote is the single arbiter, replacing the two-models risk), and a winning
+    // UseGesture member routes its event to the handler (RouteGestureWin via OnMemberWon). The FSM bank is index-parallel
+    // to the arena's member backing store (reached by ArenaMember.FsmSlot); a swept loser is reset to Idle through
+    // OnMemberRejected (the synthetic GestureRejected). All fixed storage — zero per-frame heap.
+    private readonly GestureArena _arena = new();
+    private readonly PointerFsm[] _fsms = new PointerFsm[GestureArena.MaxArenas * GestureArena.MaxMembersPerArena];
+    private int _activeArenaSlot = -1;   // the arena slot of the contact being processed (loaded by SlotIn, stored by SlotOut)
+    private long _arenaClockUs;          // monotonic µs clock for the §7A timer resolutions (Hold long-press): synced
+                                         // forward to the latest event stamp in Dispatch, advanced by dt in TickGestureArenas
+
+    public InputDispatcher(SceneStore scene)
+    {
+        _scene = scene;
+        Drag = new DragController(scene, () => RequestRerender());
+        DragDrop = new DragDropContext(scene, () => RequestRerender()) { ScrollBy = AutoScrollBy };
+        // The arena drives the FSM bank: a swept loser resets to Idle (emits nothing, §7A.5); the winner is granted hard
+        // capture and lets its FSM emit. The DRAG-REORDER / pan / click EXECUTION stays on the scalar path (so the
+        // single-recognizer common case is observably identical), but the win sink now ROUTES a UseGesture declaration
+        // (§13): when the winning member's node declared a matching Tap/Hold/Pan handler, it fires with the gesture
+        // payload. Instance lambdas captured ONCE in the ctor (no per-event closure): the reject sink only needs the
+        // FsmSlot; the win sink reads the member's Node/Kind (via the arena) + the per-event gesture context fields.
+        _arena.OnMemberRejected = slot => { if ((uint)slot < (uint)_fsms.Length) _fsms[slot].Reset(); };
+        _arena.OnMemberWon = RouteGestureWin;
+    }
+
+    // Per-event gesture-routing context (set right before a Resolve* so the OnMemberWon sink reports the right point):
+    // the window-space position the win is reported at, the device kind, and the end-velocity (filled on the Pan-end up).
+    // Zero alloc — plain fields, no closure. The reused GestureEventArgs is filled per invocation (handlers copy keeps).
+    private Point2 _gestureWinPos;
+    private PointerKind _gestureWinPointer = PointerKind.Touch;
+    private Point2 _gestureWinVel;
+    private readonly GestureEventArgs _gestureArgs = new();
+
+    /// <summary>The §7A win sink (input-a11y.md §13): if the winning member's node declared a <c>UseGesture</c> handler
+    /// for the won kind, fire it. Tap/Hold report the gesture point (the up / down position); a Pan win reports the
+    /// claim sample (the pan-start, velocity 0). The Pan-END velocity is delivered by <see cref="FireGesturePanEnd"/> on
+    /// touch-up. Reserved kinds (DoubleTap/RightTap/Drag/Pinch) have no Phase-3 handler slot, so this no-ops for them.
+    /// Zero alloc (gated on <c>HasGestureSubs</c>; the reused args struct is filled per invocation).</summary>
+    private void RouteGestureWin(int fsmSlot)
+    {
+        if (!_scene.HasGestureSubs) return;   // no UseGesture anywhere in the scene → skip (the common case)
+        if ((uint)fsmSlot >= (uint)_fsms.Length) return;
+        ref ArenaMember m = ref _arena.MemberAt(fsmSlot);
+        GestureType gt = m.Kind switch
+        {
+            GestureKind.Tap => GestureType.Tap,
+            GestureKind.Hold => GestureType.Hold,
+            GestureKind.Pan => GestureType.Pan,
+            _ => (GestureType)255,   // reserved/unrouted kind
+        };
+        if ((byte)gt == 255) return;
+        var handler = _scene.GetGestureHandler(m.Node, gt);
+        if (handler is null) return;
+        _gestureArgs.Kind = gt;
+        _gestureArgs.Position = _gestureWinPos;
+        _gestureArgs.Velocity = gt == GestureType.Pan ? _gestureWinVel : Point2.Zero;
+        _gestureArgs.Pointer = _gestureWinPointer;
+        handler.Invoke(_gestureArgs);
+    }
+
+    /// <summary>Deliver a final <see cref="GestureType.Pan"/> event with the sampled end-velocity on touch-up, when this
+    /// contact's arena resolved a UseGesture(Pan) member on <see cref="_gesturePanNode"/> (§13). The velocity is the
+    /// per-contact sampler's flick speed (px/s) — the same one the scroller fling uses. Zero alloc (reused args). A
+    /// gesture-pan that never crossed slop (no win) fires nothing.</summary>
+    private void FireGesturePanEnd(in InputEvent e)
+    {
+        if (_gesturePanNode.IsNull || _activeArenaSlot < 0 || !_arena.IsArenaOpen(_activeArenaSlot)) return;
+        int winner = _arena.ArenaAt(_activeArenaSlot).WinnerSlot;
+        if (winner < 0) return;
+        ref ArenaMember w = ref _arena.MemberAt(winner);
+        if (w.Kind != GestureKind.Pan || w.Node != _gesturePanNode) return;
+        var handler = _scene.GetGestureHandler(_gesturePanNode, GestureType.Pan);
+        if (handler is null) return;
+        _panVel.Sample(e.PositionPx, e.TimestampMs);
+        _gestureArgs.Kind = GestureType.Pan;
+        _gestureArgs.Position = e.PositionPx;
+        _gestureArgs.Velocity = new Point2(_panVel.Vx, _panVel.Vy);
+        _gestureArgs.Pointer = e.Pointer;
+        handler.Invoke(_gestureArgs);
+    }
+
+    public NodeHandle Focused => _focused;
+
+    /// <summary>The gesture-arena coordinator driving the touch path (§7A). Internal — exposed for the validation.md
+    /// §12.6 arena-determinism gate, which attaches a <see cref="GestureArenaRecorder"/> to <see cref="GestureArena.Recorder"/>
+    /// before a scripted sequence and reads its <see cref="GestureArena.CaptureIsTentative"/> mid-gesture. No production
+    /// surface is widened (the type and its members are <c>internal</c>); the host never touches this.</summary>
+    internal GestureArena Arena => _arena;
+
+    /// <summary>The drag-reorder gesture engine (E5-L1): armed by a press on a <c>CanDrag</c> chain, promoted past the
+    /// 4px drag box, owning the pointer until release/Escape. Constructed with the dispatcher so every host gets
+    /// item-drag without wiring; the host hooks <see cref="DragController.OnSettle"/> for the FLIP drop-glide.</summary>
+    public DragController Drag { get; }
+
+    /// <summary>The typed drag-drop context (E5-L2, the Flutter Draggable/DragTarget + rbd model): a promoted L1 drag
+    /// whose chain carries a <c>BoxEl.Draggable</c> opens THE <see cref="DragSession"/> here; per move the nearest
+    /// accepting <c>BoxEl.DropTarget</c> under the pointer gets Enter/Over/Leave, release over it gets OnDrop, and
+    /// the engine edge auto-scroll arms when the pointer drags near an overflowing viewport's edge (host-ticked).</summary>
+    public DragDropContext DragDrop { get; }
+
+    /// <summary>Edge auto-scroll write for <see cref="DragDropContext"/>: immediate clamped offset move on a viewport
+    /// (the SetScrollOffset path — content transform + virtual re-realize + scrollbar reveal). False at the boundary.</summary>
+    private bool AutoScrollBy(NodeHandle n, float delta)
+    {
+        if (n.IsNull || !_scene.IsLive(n) || !_scene.HasScroll(n)) return false;
+        ref ScrollState sc = ref _scene.ScrollRef(n);
+        float old = sc.Orientation == 1 ? sc.OffsetX : sc.OffsetY;
+        return SetScrollOffset(n, old + delta);
+    }
+
+    /// <summary>Absolute scroll-offset write seam for the <c>ScrollAnimator</c> Fling integrator (wired in the host to
+    /// <c>ScrollAnimator.ScrollWrite</c>, the <see cref="AutoScrollBy"/> precedent that hands the private
+    /// <c>SetScrollOffset</c> chokepoint to another assembly without making it public). Returns whether the viewport
+    /// moved — a false (a clamp boundary, or no change) ends the fling. <c>SetScrollOffset</c> itself stays private.</summary>
+    public bool WriteScrollOffset(NodeHandle n, float offset)
+    {
+        if (n.IsNull || !_scene.IsLive(n) || !_scene.HasScroll(n)) return false;
+        return SetScrollOffset(n, offset);
+    }
+
+    /// <summary>The active contact's sampled flick velocity (px/s, window space; the ~50ms-EMA the touch fling uses). The
+    /// working scalars are loaded for the contact whose event is being dispatched, so a control reading this from its
+    /// <c>OnClick</c> commit edge (the release of a DragYieldsToPan swipe — SwipeControl/FlipView) gets THAT gesture's
+    /// real release speed for the WinUI snap (100px open / 31px/s close; FlipView flick-navigate). Zero between gestures
+    /// and for a mouse/0-stamp stream (the vacuous-fling guard). Wired to the InputHooks seam in AppHost (the
+    /// <c>GetNodeRect</c>/<c>OnFlingStarted</c> delegate-seam precedent — no per-call allocation).</summary>
+    public Point2 PointerVelocity => new(_panVel.Vx, _panVel.Vy);
+
+    /// <summary>Set by the host: a virtual list crossing an item boundary on scroll requests the next render.</summary>
+    public Action RequestRerender { get; set; } = static () => { };
+
+    /// <summary>Set by the host: notified when a node gains/loses hover or press, so the interaction animator can ease
+    /// the brush transition (kept as delegates to keep Input decoupled from the Animation assembly).</summary>
+    public Action<NodeHandle, bool>? OnHoverChanged;
+    public Action<NodeHandle, bool>? OnPressChanged;
+
+    /// <summary>When true, a wheel sets the scroll TARGET and the ScrollAnimator eases the offset (momentum/inertia +
+    /// auto-hiding scrollbars). When false, the offset jumps immediately (the deterministic default for tests).</summary>
+    public bool SmoothScroll;
+    /// <summary>Set by the host: arm a viewport in the ScrollAnimator after a smooth-scroll wheel (decouples Input from Animation).</summary>
+    public Action<NodeHandle>? OnScrollArmed;
+    /// <summary>Set by the host: pointer is over a scrollable viewport → reveal its auto-hiding scrollbar.</summary>
+    public Action<NodeHandle, bool>? OnScrollHover;
+    public Action<NodeHandle>? OnScrollLeave;
+
+    /// <summary>Set by the host: a touch pan released with a flick speed (px/s) above <see cref="FlingMinVelocityPxPerS"/>
+    /// hands its sampled velocity off here — the Fling stage seeds the friction-decay inertia on the viewport's
+    /// ScrollAnimator from it (the <c>OnScrollArmed</c>/<c>AutoScrollBy</c> delegate-seam precedent;
+    /// <c>SetScrollOffset</c> stays private to Input). The velocity sign matches a positive scroll delta (offset
+    /// increases). Null = no fling stage wired yet — a released pan simply settles where it ended.</summary>
+    public Action<NodeHandle, float /*velocityPxPerS*/>? OnFlingStarted;
+
+    /// <summary>Set by the host: a RepeatButton was pressed (held) / released — drives the RepeatTicker auto-repeat.</summary>
+    public Action<NodeHandle>? OnRepeatArmed;
+    public Action<NodeHandle>? OnRepeatReleased;
+    /// <summary>Set by the host: the held pointer left / re-entered the armed repeat node — the ticker pauses off-node
+    /// and resumes with a FRESH initial delay on re-entry, never an immediate re-fire (RepeatButton_Partial.cpp:530-574).
+    /// Both are idempotent per move.</summary>
+    public Action<NodeHandle>? OnRepeatPaused;
+    public Action<NodeHandle>? OnRepeatResumed;
+
+    /// <summary>Set by the host: a global key preview run before focus routing (returns true = consumed). Lets a tree-level
+    /// concern (an open overlay/flyout) intercept Escape regardless of where focus is, without stealing focus.</summary>
+    public Func<int, bool>? OnKeyPreview;
+
+    /// <summary>Raised when the window loses activation: pressed/hover/drag state has been cleared; the host closes
+    /// light-dismiss overlays here (WinUI window-deactivation dismiss).</summary>
+    public Action? OnWindowBlur;
+
+    /// <summary>Raised on window activation/placement changes (WindowFocus, WindowBlur, WindowStateChanged): the host
+    /// bumps the titlebar-chrome epoch signal here so a custom TitleBar re-renders (dimming / max↔restore glyph).</summary>
+    public Action? OnWindowActivationChanged;
+
+    /// <summary>Raised when the resolved hover cursor changes — the host wires this to <c>IPlatformWindow.SetCursor</c>.</summary>
+    public Action<CursorId>? OnCursorChanged;
+
+    /// <summary>Text seam for the read-only selection/hyperlink gestures (point↔index hit-testing + selection rects —
+    /// the SAME editor queries EditableText drives). Null falls back to <see cref="TextSeam.Default"/> (set by the
+    /// font-system constructors), so hosts that predate this seam still get selection without wiring.</summary>
+    public IFontSystem? Fonts { get; set; }
+
+    /// <summary>Clipboard seam for Ctrl+C over a read-only selection (WinUI TextSelectionManager::CopySelectionToClipboard,
+    /// TextSelectionManager.cpp:30-41). Set by the host; null = copy is a no-op.</summary>
+    public IClipboard? Clipboard { get; set; }
+
+    // ── focus scopes (modal focus trap: ContentDialog / flyout) ───────────────────────────────────
+    /// <summary>Push a focus scope: Tab/Shift+Tab and arrow focus stay within <paramref name="root"/>'s subtree until popped.</summary>
+    public void PushFocusScope(NodeHandle root) => _focusScopes.Add(root);
+    public void PopFocusScope() { if (_focusScopes.Count > 0) _focusScopes.RemoveAt(_focusScopes.Count - 1); }
+    /// <summary>Remove the focus scope for <paramref name="root"/> wherever it sits in the stack (overlays can close
+    /// out of stack order - popping blindly could drop another live trap).</summary>
+    public void RemoveFocusScope(NodeHandle root)
+    {
+        for (int i = _focusScopes.Count - 1; i >= 0; i--)
+            if (_focusScopes[i] == root) { _focusScopes.RemoveAt(i); return; }
+    }
+    private NodeHandle ScopeRoot
+    {
+        get
+        {
+            for (int i = _focusScopes.Count - 1; i >= 0; i--)
+                if (_scene.IsLive(_focusScopes[i])) return _focusScopes[i];
+            return _scene.Root;
+        }
+    }
+
+    public int Dispatch(ReadOnlySpan<InputEvent> events)
+    {
+        // Drop transient state that pointed at a freed node.
+        if (!_focused.IsNull && !_scene.IsLive(_focused)) _focused = NodeHandle.Null;
+        if (!_hovered.IsNull && !_scene.IsLive(_hovered)) _hovered = NodeHandle.Null;
+        if (!_pressed.IsNull && !_scene.IsLive(_pressed)) _pressed = NodeHandle.Null;
+        if (!_keyArmed.IsNull && !_scene.IsLive(_keyArmed)) { _keyArmed = NodeHandle.Null; _keyArmedKey = 0; }
+        if (!_scrollHovered.IsNull && !_scene.IsLive(_scrollHovered)) _scrollHovered = NodeHandle.Null;
+        if (!_selText.IsNull && !_scene.IsLive(_selText)) { _selText = NodeHandle.Null; _selDragging = false; }
+        PruneDeadSlots();      // every contact's per-pointer down/drag/scroll-drag/pan target dropped if its node died
+        Drag.PruneDead();      // an armed/active drag node freed by a reconcile is abandoned (its columns are dead)
+        DragDrop.PruneDead();  // a session whose source/target/viewport died: end / drop the dead reference
+
+        int handled = 0;
+        foreach (ref readonly var e in events)
+        {
+            // Per-contact capture: load this PointerId's saved targets/anchor into the working scalars for the duration
+            // of the event, then store them back (SlotOut). PointerCancel for one id clears only that contact (the
+            // whole-reset stays the WindowBlur path). Non-pointer events (key/char/window) leave the scalars untouched.
+            bool pointerEvent = e.Kind is InputKind.PointerMove or InputKind.PointerDown or InputKind.PointerUp or InputKind.PointerCancel;
+            // Sync the arena timer clock forward to the latest touch stamp (the long-press tick runs on this clock; a
+            // non-zero stamp keeps it monotonic — a 0 stamp is the headless vacuous-time sentinel and never rewinds it).
+            if (pointerEvent && e.Pointer == PointerKind.Touch && e.TimestampMs != 0)
+            {
+                long us = ToUs(e.TimestampMs);
+                if (us > _arenaClockUs) _arenaClockUs = us;
+            }
+            if (pointerEvent)
+            {
+                SlotIn(e.PointerId);
+                if (!_activeSlotValid) continue;   // the 11th concurrent contact has no seat → ignored, no side-effects
+            }
+
+            switch (e.Kind)
+            {
+                case InputKind.PointerMove:
+                    if (e.Pointer == PointerKind.Touch) { if (TouchMove(in e)) handled++; break; }
+                    if (Drag.IsActive)   // an active item-drag owns the pointer (capture): no hover/scroll/slider routing
+                    {
+                        Drag.Move(e.PositionPx, e.Mods, e.TimestampMs);
+                        // L2: target Enter/Over/Leave transitions + edge auto-scroll on the chain under the pointer
+                        // (the lifted subtree is hit-test-transparent, so the chain sees THROUGH the moving visual).
+                        // Gated on a live session — a plain CanDrag reorder never pays the extra hit-test walk.
+                        if (DragDrop.IsActive)
+                            DragDrop.Move(HitTestAny(e.PositionPx), e.PositionPx, Drag.VelocityX, Drag.VelocityY, e.Mods);
+                        handled++;
+                        break;
+                    }
+                    if (Drag.IsArmed && Drag.Move(e.PositionPx, e.Mods, e.TimestampMs))
+                    {
+                        // Promoted on this move: the gesture is a drag now — kill the click candidate, the transient
+                        // press/hover visuals and any pending auto-repeat (WinUI: crossing the drag box cancels them).
+                        if (!_down.IsNull && (_scene.Interaction(_down).HandlerMask & InteractionInfo.RepeatBit) != 0)
+                            OnRepeatReleased?.Invoke(_down);
+                        SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
+                        SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
+                        _dragTarget = NodeHandle.Null;
+                        // L2: a chain carrying a BoxEl.Draggable opens THE session (payload resolved once at this
+                        // promotion edge) and immediately evaluates the target under the pointer.
+                        if (DragDrop.TryBegin(Drag.ActiveNode, e.PositionPx, e.Mods, e.Pointer))
+                            DragDrop.Move(HitTestAny(e.PositionPx), e.PositionPx, Drag.VelocityX, Drag.VelocityY, e.Mods);
+                        handled++;
+                        break;
+                    }
+                    SetState(ref _hovered, HitTest(e.PositionPx), NodeFlags.Hovered);
+                    // Hyperlink spans re-resolve the cursor on EVERY move over the same text node — the span boundary
+                    // crossings happen inside one node, which the on-hover-change walk alone can't see (WinUI flips to
+                    // the hand per pointer-move over an inline Hyperlink, RichTextBlock.cpp:2995 / TextBlock.cpp:3488).
+                    if (!_hovered.IsNull && _scene.IsLive(_hovered)
+                        && (_scene.Interaction(_hovered).HandlerMask & InteractionInfo.SpanLinksBit) != 0)
+                        UpdateSpanCursor(_hovered, e.PositionPx);
+                    // While a press is held WITHOUT a capture-drag (no OnDrag target / scrollbar drag), the pressed
+                    // visual tracks whether the pointer is still over the pressed node — drag-off un-presses,
+                    // drag-back re-presses (ButtonBase_Partial.cpp:629-638 IsPressed = IsValidPointerPosition). A
+                    // continuous OnDrag gesture (slider scrub) keeps its pressed state — WinUI's captured thumb does.
+                    if (!_down.IsNull && _dragTarget.IsNull && _scrollDragNode.IsNull && _scene.IsLive(_down))
+                    {
+                        var dl = PointToLocal(_down, e.PositionPx);   // scale-aware (a button inside a Viewbox)
+                        ref RectF db = ref _scene.Bounds(_down);
+                        bool overDown = dl.X >= 0f && dl.X < db.W && dl.Y >= 0f && dl.Y < db.H;
+                        SetState(ref _pressed, overDown ? _down : NodeHandle.Null, NodeFlags.Pressed);
+                        // Auto-repeat pauses off-node and resumes with a FRESH delay on re-entry — no immediate
+                        // re-fire (RepeatButton_Partial.cpp:530-548, :565-574). Idempotent per move.
+                        if ((_scene.Interaction(_down).HandlerMask & InteractionInfo.RepeatBit) != 0)
+                        {
+                            if (overDown) OnRepeatResumed?.Invoke(_down);
+                            else OnRepeatPaused?.Invoke(_down);
+                        }
+                    }
+                    // Read-only selection drag (rtb-02): the press anchored on a selectable text node — every move
+                    // extends the selection at pointer rate (the seam clamps out-of-bounds points, so the drag keeps
+                    // tracking past the box exactly like the editor's drag-select).
+                    if (_selDragging && !_selText.IsNull && _down == _selText && _scene.IsLive(_selText))
+                    {
+                        ExtendTextSelection(PointToLocal(_selText, e.PositionPx));
+                        handled++;
+                        break;
+                    }
+                    UpdateScrollHover(e.PositionPx);
+                    if (DragScrollbar(e.PositionPx))
+                    {
+                        handled++;
+                        break;
+                    }
+                    if (!_dragTarget.IsNull && _scene.IsLive(_dragTarget))   // drag updates while held (slider/scrollbar)
+                    {
+                        _scene.GetDrag(_dragTarget)?.Invoke(LocalPos(_dragTarget, e.PositionPx));
+                        handled++;
+                    }
+                    else if (!_hovered.IsNull && _scene.GetHoverMove(_hovered) is { } hm)   // bare-hover preview (RatingControl)
+                    {
+                        if (Diag.Enabled)
+                        {
+                            ref RectF hb = ref _scene.Bounds(_hovered);
+                            Diag.Event("hover", $"deliver node={_hovered.Raw.Index} box={hb.W:0}x{hb.H:0} abs=({e.PositionPx.X:0.#},{e.PositionPx.Y:0.#})");
+                        }
+                        hm(LocalPos(_hovered, e.PositionPx));
+                        handled++;
+                    }
+                    break;
+
+                case InputKind.PointerDown:
+                    if (e.Pointer == PointerKind.Touch) { if (TouchDown(in e)) handled++; break; }
+                    if (e.Button == 1)   // right button: context-menu tracking only — never presses/activates
+                    {
+                        _contextDown = HitTestAny(e.PositionPx);
+                        break;
+                    }
+                    if (e.Button == 2)   // middle button: tracked for release-over-same delivery (TabView middle-click
+                    {                    // close commits on RELEASE over the tab, TabViewItem.cpp:418-462) — no press
+                        _middleDown = HitTestAny(e.PositionPx);   // visual, no focus move, no click
+                        break;
+                    }
+                    if (e.Button != 0) break;
+
+                    if (TryScrollbarPointerDown(e.PositionPx))
+                    {
+                        SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
+                        _down = NodeHandle.Null;
+                        handled++;
+                        break;
+                    }
+
+                    TrackClickCount(in e);
+                    _down = HitTest(e.PositionPx);
+                    SetState(ref _pressed, _down, NodeFlags.Pressed);
+                    // A press anywhere OUTSIDE the selection's node dismisses it (WinUI: pointer-down resets the
+                    // text selection unless it lands back in the selectable control).
+                    if (!_selText.IsNull && _selText != _down) ClearTextSelection();
+                    if (!_down.IsNull)
+                    {
+                        // Pointer focus moves on the PRESS edge (WinUI Focus(FocusState_Pointer) + CapturePointer in
+                        // OnPointerPressed, ButtonBase_Partial.cpp:700-709), never on release. Nearest focusable
+                        // self-or-ancestor, without the focus ring; an AllowFocusOnInteraction=False node blocks the
+                        // move entirely (focus stays put — AppBarButton_themeresources.xaml:136). IsTabStop=False
+                        // parts (PasswordBox reveal / TextBox delete) still fall through to the field root.
+                        var focusTarget = NearestFocusable(_down);
+                        if (!focusTarget.IsNull &&
+                            (_scene.Interaction(focusTarget).HandlerMask & InteractionInfo.NoPointerFocusBit) == 0)
+                            SetFocus(focusTarget, visual: false);
+
+                        var local = LocalPos(_down, e.PositionPx);
+                        _scene.GetPointerDown(_down)?.Invoke(local);                 // press-to-set
+                        if ((_scene.Interaction(_down).HandlerMask & InteractionInfo.PressedBit) != 0)
+                            _scene.GetPointerPressed(_down)?.Invoke(new PointerEventArgs
+                            {
+                                Local = local, ClickCount = _clickCount, Mods = e.Mods, Button = 0, Kind = e.Pointer,
+                            });
+                        if (_scene.GetDrag(_down) is not null) _dragTarget = _down;  // begin a drag gesture
+                        else
+                            // Arm a drag-reorder candidate on the nearest CanDrag ancestor (a press on a child of a
+                            // draggable row arms the row). A continuous OnDrag press (slider) keeps its semantics.
+                            Drag.TryArm(_down, e.PositionPx, e.Pointer, e.Mods, e.TimestampMs);
+                        if ((_scene.Interaction(_down).HandlerMask & InteractionInfo.RepeatBit) != 0)
+                            OnRepeatArmed?.Invoke(_down);   // RepeatButton: fire click now, then repeat while held
+                        // Read-only selection press (rtb-02): anchor / word-select / select-all per click count
+                        // (single = caret anchor for the drag; double = word; triple = all — the RichEdit/WinUI shape).
+                        if ((_scene.Interaction(_down).HandlerMask & InteractionInfo.SelectableTextBit) != 0)
+                            BeginTextSelection(_down, PointToLocal(_down, e.PositionPx), _clickCount);
+                        if ((_scene.Interaction(_down).HandlerMask & (InteractionInfo.PointerBit | InteractionInfo.PressedBit | InteractionInfo.RepeatBit | InteractionInfo.DragBit | InteractionInfo.SelectableTextBit | InteractionInfo.SpanLinksBit)) != 0) handled++;
+                    }
+                    break;
+
+                case InputKind.PointerUp:
+                    if (e.Pointer == PointerKind.Touch) { if (TouchUp(in e)) handled++; break; }
+                    if (e.Button == 1)   // right button release → context request on the nearest handler in the chain
+                    {
+                        var ctxHit = HitTestAny(e.PositionPx);
+                        if (!ctxHit.IsNull && ctxHit == _contextDown && DispatchContextRequest(ctxHit, e.PositionPx)) handled++;
+                        _contextDown = NodeHandle.Null;
+                        break;
+                    }
+                    if (e.Button == 2)   // middle release over the same node → typed pointer args with Button=2 on the
+                    {                    // nearest OnPointerPressed in the chain (WinUI TabViewItem middle-click close
+                        var midHit = HitTestAny(e.PositionPx);   // commits on PointerReleased, TabViewItem.cpp:418-462)
+                        if (!midHit.IsNull && midHit == _middleDown && DispatchMiddleRelease(midHit, in e)) handled++;
+                        _middleDown = NodeHandle.Null;
+                        break;
+                    }
+                    if (e.Button != 0) break;
+
+                    if (Drag.IsActive)
+                    {
+                        // Release after an active item-drag: L2 drop FIRST (OnDrop reads the live session while the
+                        // visuals are still lifted), then the L1 completion; the click is SUPPRESSED (WinUI — a
+                        // finished drag never raises the item's click/Tapped). A drop on a non-reorder target
+                        // suppresses the spring-back glide (the payload was deposited there); a reorder target
+                        // (DropTargetSpec.SettleOnDrop) keeps the FLIP drop-glide into the new slot.
+                        SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
+                        bool dropped = DragDrop.TryDrop(e.PositionPx, e.Mods, out bool settleGlide);
+                        Drag.Complete(e.PositionPx, e.Mods, e.TimestampMs, suppressSettle: dropped && !settleGlide);
+                        _down = NodeHandle.Null;
+                        _dragTarget = NodeHandle.Null;
+                        handled++;
+                        break;
+                    }
+                    Drag.Disarm();   // armed but never promoted → a plain click; fall through to normal release
+
+                    if (!_scrollDragNode.IsNull)
+                    {
+                        _scrollDragNode = NodeHandle.Null;
+                        handled++;
+                        break;
+                    }
+
+                    var up = HitTest(e.PositionPx);
+                    bool wasRepeat = !_down.IsNull && (_scene.Interaction(_down).HandlerMask & InteractionInfo.RepeatBit) != 0;
+                    if (wasRepeat) OnRepeatReleased?.Invoke(_down);   // stop the auto-repeat
+                    SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);   // release
+                    _selDragging = false;   // the selection (if any) stays; the drag gesture ends with the press
+                    if (!up.IsNull && up == _down)
+                    {
+                        // Click on release-over-same (ClickMode.Release). Pointer FOCUS already moved on the press
+                        // edge (WinUI ButtonBase_Partial.cpp:700-709) — the release only fires the click.
+                        if (!wasRepeat) _scene.GetClickHandler(up)?.Invoke();   // repeat nodes already fired via the ticker
+                        // Hyperlink span click: release over the span's laid rect fires ITS action (WinUI inline
+                        // Hyperlink commits on the release over the pressed hyperlink, RichTextBlock.cpp:2996-3001).
+                        if ((_scene.Interaction(up).HandlerMask & InteractionInfo.SpanLinksBit) != 0)
+                        {
+                            int si = HitLinkSpan(up, PointToLocal(up, e.PositionPx));
+                            if (si >= 0 && _scene.TryGetSpanText(up, out var linkSpans) && (uint)si < (uint)linkSpans.Length)
+                                linkSpans[si].OnClick?.Invoke();
+                        }
+                        handled++;
+                    }
+                    else if (!_dragTarget.IsNull && _scene.IsLive(_dragTarget) &&
+                             (_scene.Flags(_dragTarget) & NodeFlags.Disabled) == 0)
+                    {
+                        // Implicit pointer capture for continuous OnDrag gestures (WinUI CapturePointer): a press that
+                        // began an OnDrag gesture (slider scrub, RatingControl sweep, ToggleSwitch knob drag) delivers
+                        // its RELEASE to that node even when the pointer ends outside it — the node's click handler is
+                        // its release/commit edge (RatingControl.cpp:875-906 capture → commit-on-release incl. the
+                        // drag-off-left clear; Slider_Partial.cpp:478-543/580-623 CapturePointer → PerformPointerUpAction).
+                        // PointerCancel still skips this (capture loss is not a commit), matching WinUI's cancel path.
+                        // (Focus moved on the press edge, like every pointer gesture.)
+                        _scene.GetClickHandler(_dragTarget)?.Invoke();
+                        handled++;
+                    }
+                    // Touch never reaches here (it routes through TouchUp, which clears its transient hover); this is the
+                    // mouse/pen release, which keeps hovering the node under the cursor.
+                    _down = NodeHandle.Null;
+                    _dragTarget = NodeHandle.Null;
+                    break;
+
+                case InputKind.Key:
+                    OnKey(in e);
+                    break;
+
+                case InputKind.KeyUp:
+                    OnKeyUp(in e);
+                    break;
+
+                case InputKind.Char:
+                    if (OnChar(e.KeyCode)) handled++;
+                    break;
+
+                case InputKind.Wheel:
+                    // Element-level wheel handlers (WinUI PointerWheelChanged) see the wheel BEFORE the viewport:
+                    // a Handled NumberBox consumes the step instead of scrolling the form (NumberBox.cpp:578-597).
+                    if (DispatchWheel(in e)) { handled++; break; }
+                    if (ScrollAt(e.PositionPx, e.ScrollDelta)) handled++;
+                    break;
+
+                case InputKind.PointerCancel:
+                    CancelPointerContact(in e);
+                    break;
+
+                case InputKind.WindowBlur:
+                    CancelPointer();
+                    CancelKeyArm(fire: false);
+                    SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
+                    _accessKeyMode = false; _altPending = false;
+                    OnWindowBlur?.Invoke();
+                    OnWindowActivationChanged?.Invoke();   // custom titlebar dims (TextTertiary / disabled glyphs)
+                    break;
+
+                case InputKind.WindowFocus:
+                    OnWindowActivationChanged?.Invoke();   // custom titlebar un-dims
+                    break;
+
+                case InputKind.WindowStateChanged:
+                    OnWindowActivationChanged?.Invoke();   // custom titlebar re-glyphs max↔restore
+                    break;
+            }
+
+            if (pointerEvent) SlotOut();   // store this contact's working scalars back into its slot (and recycle if idle)
+        }
+        return handled;
+    }
+
+    /// <summary>Clear ALL in-flight pointer interaction across every contact (window deactivated — the WindowBlur path,
+    /// no single PointerId). Each live slot's capture side-effects fire (RepeatReleased / OnPointerExit / hover clear)
+    /// then its slot is recycled.</summary>
+    private void CancelPointer()
+    {
+        DragDrop.Cancel();   // L2 first: OnLeave fires on a live target while the session still exists
+        Drag.Cancel();   // an in-flight item-drag aborts on capture loss (restores visuals, fires OnDragCanceled)
+        SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
+        for (int i = 0; i < _slots.Length; i++)
+        {
+            if (!_slots[i].Used) continue;
+            SlotIn(_slots[i].Id);
+            CancelWorkingContact(fireDragCancelEngines: false);   // Drag/DragDrop already cancelled once above
+            SlotOut();
+        }
+        _selDragging = false;   // capture lost mid-drag-select: keep the selection, end the gesture
+    }
+
+    /// <summary>Per-id capture loss (WM_POINTERCAPTURECHANGED → one contact): clear ONLY this contact's slot/state,
+    /// leaving every other live contact alone. A claimed touch pan ends with NO fling (capture loss is not a flick).
+    /// Runs inside the contact's SlotIn/SlotOut window, so it operates on the loaded working scalars.</summary>
+    private void CancelPointerContact(in InputEvent e)
+    {
+        // A captured item-drag/L2 session is single-pointer today (mouse/pen) — cancel it on this contact's loss.
+        if (Drag.IsActive || DragDrop.IsActive) { DragDrop.Cancel(); Drag.Cancel(); }
+        if (e.Pointer == PointerKind.Touch) ClearTouchHover();   // a touch contact never leaves a latched hover behind
+        // A contact lost mid-thumb-drag drops the bar's PointerOverScrollbar/PointerOver reveal so it fades (touch has no
+        // resting hover to keep it up). Captured BEFORE CancelWorkingContact nulls _scrollDragNode.
+        if (!_scrollDragNode.IsNull) OnScrollLeave?.Invoke(_scrollDragNode);
+        // Clear the pressed glyph IFF it belongs to this contact (the global singleton tracks the live mouse/pen OR touch
+        // press, which while held is always either this contact's _down or null). CancelWorkingContact's doc defers the
+        // pressed clear to the caller: the whole-window CancelPointer clears it for all contacts, this per-id path only
+        // for its own — a held contact that loses its implicit capture (WM_POINTERCAPTURECHANGED) must not leave the
+        // pressed visual latched until the next PointerDown.
+        if (_pressed == _down) SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
+        CancelWorkingContact(fireDragCancelEngines: false);
+    }
+
+    /// <summary>Abort the working contact (the SlotIn-loaded scalars): fire RepeatReleased / the captured OnDrag node's
+    /// OnPointerExit, drop a claimed touch pan (no fling), and clear every capture target. The pressed visual (mouse/pen
+    /// only) is cleared by the caller. <paramref name="fireDragCancelEngines"/> = also cancel the Drag/DragDrop engines
+    /// here (false when the caller already did).</summary>
+    private void CancelWorkingContact(bool fireDragCancelEngines)
+    {
+        if (fireDragCancelEngines) { DragDrop.Cancel(); Drag.Cancel(); }
+        if (!_down.IsNull && _scene.IsLive(_down) && (_scene.Interaction(_down).HandlerMask & InteractionInfo.RepeatBit) != 0)
+            OnRepeatReleased?.Invoke(_down);
+        // The captured OnDrag gesture owner learns its gesture died (WinUI PointerCaptureLost): controls reset the
+        // scrub/hover preview in OnPointerExit — a RatingControl alt-tabbed mid-sweep must not keep its downRef.
+        if (!_dragTarget.IsNull && _scene.IsLive(_dragTarget)) _scene.GetPointerExit(_dragTarget)?.Invoke();
+        _down = NodeHandle.Null;
+        _dragTarget = NodeHandle.Null;
+        _scrollDragNode = NodeHandle.Null;
+        _contextDown = NodeHandle.Null;
+        _middleDown = NodeHandle.Null;
+        _panTarget = NodeHandle.Null;   // a claimed pan dies with the contact — no fling on capture loss
+        _panClaimed = false;
+        _reorderTarget = NodeHandle.Null;   // a claimed drag-reorder dies with the contact (Drag.Cancel above restored the visuals)
+        _touchReorder = false;
+        _swipeDrag = NodeHandle.Null;       // a cross-axis swipe dies with the contact (no OnClick commit on capture loss)
+        _swipeAxisX = false;
+        _gesturePanNode = NodeHandle.Null;
+        // The contact's arena force-closes (§7A.5 PointerCaptureLost: the provisional winner wins, the rest reject — pure
+        // cleanup here, no further execution) and frees its seat: the scalar cancel above already aborted the gesture.
+        if (_activeArenaSlot >= 0) { _arena.ForceClose(_activeArenaSlot); _arena.CloseAndFree(_activeArenaSlot); _activeArenaSlot = -1; }
+    }
+
+    // ── per-contact capture slab (cap MaxContacts; the 11th concurrent contact is ignored deterministically) ────────
+
+    /// <summary>Load <paramref name="id"/>'s saved capture/pan state into the working scalars (find-or-allocate its
+    /// slot). When the slab is full of distinct LIVE contacts the new id gets no slot — the working scalars are zeroed
+    /// and <see cref="_activeSlotValid"/> is false, so the event runs harmlessly and <see cref="SlotOut"/> discards it.</summary>
+    private void SlotIn(uint id)
+    {
+        int slot = FindOrAllocSlot(id);
+        _activeSlotId = id;
+        _activeSlotValid = slot >= 0;
+        if (slot < 0) { ClearWorkingScalars(); return; }
+        ref PointerSlot s = ref _slots[slot];
+        _down = s.Down; _dragTarget = s.DragTarget; _scrollDragNode = s.ScrollDragNode;
+        _scrollDragGrab = s.ScrollDragGrab; _contextDown = s.ContextDown; _middleDown = s.MiddleDown;
+        _panTarget = s.PanTarget; _panClaimed = s.PanClaimed; _panAnchorPx = s.PanAnchorPx;
+        _panAnchorOffset = s.PanAnchorOffset; _panAxisX = s.PanAxisX; _panVel = s.PanVel;
+        _reorderTarget = s.ReorderTarget; _touchReorder = s.TouchReorder; _reorderAxisX = s.ReorderAxisX;
+        _swipeDrag = s.SwipeDrag; _swipeAxisX = s.SwipeAxisX;
+        _gesturePanNode = s.GesturePanNode;
+        _activeArenaSlot = s.ArenaSlot;
+    }
+
+    /// <summary>Store the working scalars back into the active contact's slot, then RECYCLE the slot if the contact is
+    /// fully idle (no capture target, no pan) so a finished contact frees its seat for the next id (the steady mouse
+    /// idles its slot between gestures, keeping the 10-seat table from filling).</summary>
+    private void SlotOut()
+    {
+        if (!_activeSlotValid) return;
+        int slot = FindSlot(_activeSlotId);
+        if (slot < 0) return;
+        ref PointerSlot s = ref _slots[slot];
+        s.Down = _down; s.DragTarget = _dragTarget; s.ScrollDragNode = _scrollDragNode;
+        s.ScrollDragGrab = _scrollDragGrab; s.ContextDown = _contextDown; s.MiddleDown = _middleDown;
+        s.PanTarget = _panTarget; s.PanClaimed = _panClaimed; s.PanAnchorPx = _panAnchorPx;
+        s.PanAnchorOffset = _panAnchorOffset; s.PanAxisX = _panAxisX; s.PanVel = _panVel;
+        s.ReorderTarget = _reorderTarget; s.TouchReorder = _touchReorder; s.ReorderAxisX = _reorderAxisX;
+        s.SwipeDrag = _swipeDrag; s.SwipeAxisX = _swipeAxisX;
+        s.GesturePanNode = _gesturePanNode;
+        s.ArenaSlot = _activeArenaSlot;
+        if (s.Down.IsNull && s.DragTarget.IsNull && s.ScrollDragNode.IsNull && s.ContextDown.IsNull
+            && s.MiddleDown.IsNull && s.PanTarget.IsNull && s.ReorderTarget.IsNull && s.SwipeDrag.IsNull)
+        {
+            // Idle contact: free its arena seat too (the contact ended — a resolved/unused arena is reclaimed so the
+            // cap-10 table never fills) before reclaiming the slot. CloseAndFree is idempotent on an already-free slot.
+            if (_activeArenaSlot >= 0) { _arena.CloseAndFree(_activeArenaSlot); _activeArenaSlot = -1; s.ArenaSlot = -1; }
+            s.Used = false;   // idle contact: reclaim the seat
+        }
+    }
+
+    private void ClearWorkingScalars()
+    {
+        _down = NodeHandle.Null; _dragTarget = NodeHandle.Null; _scrollDragNode = NodeHandle.Null;
+        _scrollDragGrab = 0f; _contextDown = NodeHandle.Null; _middleDown = NodeHandle.Null;
+        _panTarget = NodeHandle.Null; _panClaimed = false; _panAnchorPx = default; _panAnchorOffset = 0f;
+        _panAxisX = false; _panVel = default;
+        _reorderTarget = NodeHandle.Null; _touchReorder = false; _reorderAxisX = false;
+        _swipeDrag = NodeHandle.Null; _swipeAxisX = false;
+        _gesturePanNode = NodeHandle.Null;
+        _activeArenaSlot = -1;
+    }
+
+    private int FindSlot(uint id)
+    {
+        for (int i = 0; i < _slots.Length; i++)
+            if (_slots[i].Used && _slots[i].Id == id) return i;
+        return -1;
+    }
+
+    private int FindOrAllocSlot(uint id)
+    {
+        int free = -1;
+        for (int i = 0; i < _slots.Length; i++)
+        {
+            if (_slots[i].Used) { if (_slots[i].Id == id) return i; }
+            else if (free < 0) free = i;
+        }
+        if (free < 0) return -1;   // table full of distinct live contacts: ignore this id deterministically
+        _slots[free] = default;
+        _slots[free].Used = true;
+        _slots[free].Id = id;
+        _slots[free].ArenaSlot = -1;   // no arena until TouchDown opens one (default(int)==0 is a VALID arena slot, so -1 explicitly)
+        return free;
+    }
+
+    /// <summary>Drop any contact's capture target whose node was freed by a reconcile (the per-slot analogue of the
+    /// single-pointer dead-node pruning at the top of <see cref="Dispatch"/>).</summary>
+    private void PruneDeadSlots()
+    {
+        for (int i = 0; i < _slots.Length; i++)
+        {
+            if (!_slots[i].Used) continue;
+            ref PointerSlot s = ref _slots[i];
+            if (!s.Down.IsNull && !_scene.IsLive(s.Down)) s.Down = NodeHandle.Null;
+            if (!s.DragTarget.IsNull && !_scene.IsLive(s.DragTarget)) s.DragTarget = NodeHandle.Null;
+            if (!s.ScrollDragNode.IsNull && !_scene.IsLive(s.ScrollDragNode)) s.ScrollDragNode = NodeHandle.Null;
+            if (!s.ContextDown.IsNull && !_scene.IsLive(s.ContextDown)) s.ContextDown = NodeHandle.Null;
+            if (!s.MiddleDown.IsNull && !_scene.IsLive(s.MiddleDown)) s.MiddleDown = NodeHandle.Null;
+            if (!s.PanTarget.IsNull && !_scene.IsLive(s.PanTarget)) { s.PanTarget = NodeHandle.Null; s.PanClaimed = false; }
+            if (!s.ReorderTarget.IsNull && !_scene.IsLive(s.ReorderTarget)) { s.ReorderTarget = NodeHandle.Null; s.TouchReorder = false; }
+            if (!s.SwipeDrag.IsNull && !_scene.IsLive(s.SwipeDrag)) s.SwipeDrag = NodeHandle.Null;
+            if (!s.GesturePanNode.IsNull && !_scene.IsLive(s.GesturePanNode)) s.GesturePanNode = NodeHandle.Null;
+            if (s.Down.IsNull && s.DragTarget.IsNull && s.ScrollDragNode.IsNull && s.ContextDown.IsNull
+                && s.MiddleDown.IsNull && s.PanTarget.IsNull && s.ReorderTarget.IsNull && s.SwipeDrag.IsNull)
+            {
+                if (s.ArenaSlot >= 0) { _arena.CloseAndFree(s.ArenaSlot); s.ArenaSlot = -1; }   // the contact's targets all died → free its arena
+                s.Used = false;
+            }
+        }
+    }
+
+    /// <summary>Clear the down (click) candidate of every contact AND the working scalar — used by the keyboard
+    /// Escape-cancels-drag path, which has no PointerId. The item-drag is single-pointer, so this only ever clears the
+    /// one captured contact's candidate; idle slots are recycled.</summary>
+    private void ClearDownEverywhere()
+    {
+        _down = NodeHandle.Null;
+        for (int i = 0; i < _slots.Length; i++)
+        {
+            if (!_slots[i].Used) continue;
+            ref PointerSlot s = ref _slots[i];
+            s.Down = NodeHandle.Null;
+            if (s.DragTarget.IsNull && s.ScrollDragNode.IsNull && s.ContextDown.IsNull
+                && s.MiddleDown.IsNull && s.PanTarget.IsNull)
+            {
+                if (s.ArenaSlot >= 0) { _arena.CloseAndFree(s.ArenaSlot); s.ArenaSlot = -1; }
+                s.Used = false;
+            }
+        }
+    }
+
+    // ── single-recognizer touch pan/tap (Phase 1, no arena) ──────────────────────────────────────────
+    // One recognizer per contact: a touch-down records a press candidate AND, when it lands over a Scrollable, a pan
+    // candidate. Below the pan slop a down→up over the same node is a TAP — the existing click path (focus-on-press +
+    // click-on-release). Crossing the slop on the scroll axis CLAIMS the pan: the press candidate is cancelled (WinUI
+    // Pressed→Canceled, never Released — PointerInputProcessor.cpp:397/423) and each subsequent move drives the
+    // viewport through SetScrollOffset (clamp + virtual re-realize). Touch never latches hover/pressed visuals.
+
+    /// <summary>Touch down: a press landing on the conscious overlay scrollbar's lane/thumb drives the per-PointerId
+    /// <c>_scrollDragNode</c> thumb-drag (or a lane page-step) and reveals/expands the bar for the contact — tested
+    /// BEFORE the pan-claim, exactly as the mouse PointerDown prioritizes the scrollbar (so a touch on the bar drags the
+    /// thumb instead of panning content). Otherwise hit-test the press candidate (the tap target), drive the pressed
+    /// visual like a mouse press (<see cref="OnPressChanged"/> → the InteractionAnimator's PressT — WinUI shows Pressed on
+    /// touch down; released on up/cancel/pan-claim, returning to Normal, NOT PointerOver, since touch has no cursor), and
+    /// if the contact sits under a Scrollable record the pan anchor + seed the velocity sampler (no claim until the slop
+    /// is crossed). Fires the same press-edge handlers a click does — pointer focus moves on press,
+    /// OnPointerDown/OnPointerPressed fire — but arms no item-drag (single recognizer).</summary>
+    private bool TouchDown(in InputEvent e)
+    {
+        // Scrollbar lane/thumb FIRST (mirror the mouse PointerDown order, lines feeding TryScrollbarPointerDown): the
+        // scrollbar owns the contact — no content pan, no pressed visual, no press/click handlers; the per-PointerId
+        // _scrollDragNode (and the bar's PointerOverScrollbar reveal) is set by TryScrollbarPointerDown and rides the slot.
+        if (TryScrollbarPointerDown(e.PositionPx))
+        {
+            _down = NodeHandle.Null;
+            // A touch lane PAGE-STEP (TryScrollbarPointerDown returned true but grabbed no thumb ⇒ _scrollDragNode null)
+            // can't hold the lane reveal a resting mouse cursor does — drop the PointerOver/PointerOverScrollbar it set so
+            // the bar fades on the idle timer instead of latching forever (no touch move ever clears it). A thumb grab
+            // keeps the reveal via _scrollDragNode and releases it in TouchUp.
+            if (_scrollDragNode.IsNull)
+            {
+                var lane = ScrollableUnder(e.PositionPx);
+                if (!lane.IsNull) OnScrollLeave?.Invoke(lane);
+            }
+            return true;
+        }
+
+        bool handled = false;
+        _down = HitTest(e.PositionPx);
+        // Click-count synthesis is pointer-kind-AGNOSTIC (the shared _lastDown* tracker): a touch double-tap inside the
+        // slop window + DoubleClickMs promotes _clickCount to 2 (then 3), so an editor/selectable text leaf word-selects
+        // on a double-tap exactly like a mouse double-click (the press args below carry the live count). Tracked here on
+        // the touch down edge, mirroring the mouse PointerDown — without it every tap delivered ClickCount=1.
+        TrackClickCount(in e);
+        // A press anywhere outside the selection's node dismisses a live (mouse/pen) selection, same as a mouse press.
+        if (!_selText.IsNull && _selText != _down) ClearTextSelection();
+        // Pressed visual on touch down, exactly like a mouse press (WinUI: touch shows the Pressed state). Released on
+        // PointerUp / PointerCancel / pan-claim — the contact owns the shared _pressed singleton while _pressed == _down.
+        SetState(ref _pressed, _down, NodeFlags.Pressed);
+
+        // OnDrag implicit-capture (WinUI CapturePointer in OnPointerPressed) ON the touch path, identical to the mouse
+        // PointerDown: a press landing on an OnDrag node (Slider track scrub, EditableText drag-select) makes THAT node
+        // the capture target the move drives — and OWNS the contact, so the content-pan candidate below is skipped. This
+        // is the single-recognizer arbitration the spec calls for: the editor's/slider's drag wins on a touch that
+        // starts on it; a touch that starts on non-drag chrome inside the same scroller still becomes a pan candidate.
+        // (No item-drag arm: that is the §7A arena's Phase-3 work — single recognizer here.)
+        // A DragYieldsToPan OnDrag node (SwipeControl/FlipView) is the EXCEPTION: it must NOT eager-capture, so the Pan
+        // candidate below is still set and the two compete axis-locked in the arena (§7A). Record it as the swipe candidate
+        // + its own axis (the node's main Direction); the arena's Drag-vs-Pan vote captures it into _dragTarget on a win.
+        if (!_down.IsNull && _scene.GetDrag(_down) is not null)
+        {
+            if ((_scene.Flags(_down) & NodeFlags.DragYieldsToPan) != 0)
+            {
+                _swipeDrag = _down;
+                _swipeAxisX = _scene.Layout(_down).Direction == 0;   // 0 = row box ⇒ horizontal swipe
+                _panAnchorPx = e.PositionPx;
+                _panVel.Reset(e.PositionPx, e.TimestampMs);           // seed velocity for the snap (works without a scroller too)
+                handled = true;
+            }
+            else _dragTarget = _down;   // Slider/EditableText: the eager OnDrag implicit capture (single recognizer)
+        }
+
+        NodeHandle scrollable = NodeHandle.Null;
+        if (_dragTarget.IsNull)
+        {
+            scrollable = ScrollableUnder(e.PositionPx);
+            if (!scrollable.IsNull)
+            {
+                ref ScrollState sc = ref _scene.ScrollRef(scrollable);
+                _panTarget = scrollable;
+                _panClaimed = false;
+                _panAxisX = sc.Orientation == 1;
+                _panAnchorOffset = _panAxisX ? sc.OffsetX : sc.OffsetY;
+                _panAnchorPx = e.PositionPx;
+                if (_swipeDrag.IsNull) _panVel.Reset(e.PositionPx, e.TimestampMs);   // (the swipe path already seeded it above)
+                handled = true;   // a pan candidate owns this contact's potential scroll even before the claim
+            }
+        }
+
+        if (!_down.IsNull)
+        {
+            // Pointer focus moves on the press edge (WinUI Focus(FocusState_Pointer)), exactly like a mouse press —
+            // a NoPointerFocusBit node blocks the move, IsTabStop=False parts fall through to the focusable root.
+            var focusTarget = NearestFocusable(_down);
+            if (!focusTarget.IsNull &&
+                (_scene.Interaction(focusTarget).HandlerMask & InteractionInfo.NoPointerFocusBit) == 0)
+                SetFocus(focusTarget, visual: false);
+
+            var local = LocalPos(_down, e.PositionPx);
+            _scene.GetPointerDown(_down)?.Invoke(local);                 // press-to-set
+            if ((_scene.Interaction(_down).HandlerMask & InteractionInfo.PressedBit) != 0)
+                _scene.GetPointerPressed(_down)?.Invoke(new PointerEventArgs
+                {
+                    Local = local, ClickCount = _clickCount, Mods = e.Mods, Button = 0, Kind = e.Pointer,
+                });
+            if ((_scene.Interaction(_down).HandlerMask & (InteractionInfo.PointerBit | InteractionInfo.PressedBit | InteractionInfo.ClickBit | InteractionInfo.DragBit)) != 0) handled = true;
+        }
+
+        // Open this contact's gesture arena (§7A.1) and enroll members innermost-first along the hit route, MIRRORING the
+        // scalar facts just computed (the OnDrag/_dragTarget node → Drag, the Scrollable → Pan, the clickable _down → Tap,
+        // the CanDrag chain → DragReorder, a hold/context chain → Hold). The arena owns WHICH recognizer wins; the proven
+        // scalar machinery above/below still EXECUTES it (so the common case is observably identical — §7A.5 fast-path). A
+        // route with no gesture-advertising node opens no arena (nothing to arbitrate) and the contact keeps pre-arena flow.
+        EnrollTouchArena(in e, scrollable);
+        return handled;
+    }
+
+    /// <summary>Touch move: drive a captured OnDrag gesture (slider scrub / editor drag-select), a claimed scrollbar
+    /// thumb-drag, a claimed content pan, or test the pan candidate against the slop and claim it on the first axis
+    /// crossing. The velocity sampler runs on every move so the release has a flick speed to hand off. Hover is transient
+    /// (never latched): a pre-claim move tracks the node under the finger, a drag/scrollbar-drag/pan-claim suppresses it,
+    /// and the up/cancel clears it — so a touch gesture never leaves a stuck hover behind (the WinUI no-resting-touch-hover).</summary>
+    private bool TouchMove(in InputEvent e)
+    {
+        // A captured OnDrag node (the press landed on a Slider track / EditableText — _dragTarget set in TouchDown, the
+        // mouse PointerMove's _dragTarget drive) owns the contact: each move scrubs/extends-selects it, exactly like the
+        // mouse, with NO content pan and NO touch hover. The pan candidate is never armed alongside it (TouchDown gates
+        // the pan on _dragTarget.IsNull), so this branch is the single recognizer the spec wants: the editor's/slider's
+        // drag wins on a touch that started on it.
+        if (!_dragTarget.IsNull && _scene.IsLive(_dragTarget))
+        {
+            // A claimed cross-axis swipe (DragYieldsToPan, captured into _dragTarget by ClaimTouchSwipe) keeps sampling
+            // velocity so its release has a real flick speed to snap on (SwipeControl 31px/s close / FlipView flick). The
+            // eager Slider/EditableText drag samples nothing extra (the sampler is unused on that path).
+            if (_dragTarget == _swipeDrag) _panVel.Sample(e.PositionPx, e.TimestampMs);
+            _scene.GetDrag(_dragTarget)?.Invoke(LocalPos(_dragTarget, e.PositionPx));
+            return true;
+        }
+
+        // A scrollbar-drag contact (touch grabbed the thumb on down) drives DragScrollbar via its per-PointerId
+        // _scrollDragNode — track-fraction → SetScrollOffset, exactly like the mouse drag — and never sets a touch hover.
+        if (!_scrollDragNode.IsNull) { DragScrollbar(e.PositionPx); return true; }
+
+        // A claimed touch drag-reorder (the arena resolved DragReorder for this contact, §7A) owns the move: drive
+        // DragController arena-governed (its YieldsToPan bypassed). The reorder visual / live-reorder runs exactly as the
+        // mouse path; no content pan, no touch hover. The list does NOT scroll (Pan was swept).
+        if (_touchReorder)
+        {
+            if (_scene.IsLive(_reorderTarget) && Drag.IsActive) Drag.Move(e.PositionPx, e.Mods, e.TimestampMs, arenaGoverned: true);
+            return true;
+        }
+
+        if (_panClaimed)   // a driven pan suppresses hover visuals — finger-down scrolling never hovers
+        {
+            _panVel.Sample(e.PositionPx, e.TimestampMs);
+            float panDelta = _panAxisX ? (e.PositionPx.X - _panAnchorPx.X) : (e.PositionPx.Y - _panAnchorPx.Y);
+            SetScrollOffset(_panTarget, _panAnchorOffset - panDelta);   // content follows the finger (scroll axis only)
+            return true;
+        }
+
+        // Test the movement candidates against the slop FIRST so the claim move never sets a transient hover it must
+        // immediately clear (no enter+exit churn on the claiming move). The CLAIM is routed through the arena: the Pan
+        // member (scroll-axis-locked) and the DragReorder member (item-axis-locked) both vote on this move (§7B), then
+        // ResolveStep decides (§7A.2) — whichever crosses its OWN axis slop first eager-wins. The Pan claim fires on the
+        // SAME PanSlopPx on the SAME axis as the old raw `axisTravel >= PanSlopPx` test (observably identical, §7A.5); a
+        // DragReorder win instead drives the reorder (StepTouchArena → ClaimTouchReorder); a cross-axis swipe win drives
+        // OnDrag (StepTouchArena → ClaimTouchSwipe, capturing it into _dragTarget). A contact has a movement candidate when
+        // it set a pan target OR a reorder target OR a swipe-drag target OR a UseGesture(Pan) member.
+        if (!_panTarget.IsNull || !_reorderTarget.IsNull || !_swipeDrag.IsNull || !_gesturePanNode.IsNull)
+        {
+            _panVel.Sample(e.PositionPx, e.TimestampMs);
+            if (_activeArenaSlot >= 0)
+            {
+                if (StepTouchArena(in e)) return true;   // arena claimed pan OR reorder (and already drove it / pinned the pan)
+                if (_panClaimed)   // a just-claimed pan: drive the first content move (StepTouchArena gates the claim, not the drive)
+                {
+                    float delta = _panAxisX ? (e.PositionPx.X - _panAnchorPx.X) : (e.PositionPx.Y - _panAnchorPx.Y);
+                    SetScrollOffset(_panTarget, _panAnchorOffset - delta);
+                    return true;
+                }
+            }
+            else if (!_panTarget.IsNull)
+            {
+                // No arena for this contact (the cap-10 arena table was full at enrollment): fall back to the pre-arena
+                // raw axis-slop pan claim so the pan still works deterministically (the capture slab let this contact in,
+                // so it must remain usable). DragReorder is arena-only on touch (it never existed pre-arena), so a full
+                // table simply skips the reorder — a bounded-overflow narrowing, not a regression to a prior behavior.
+                float axisTravel = _panAxisX ? MathF.Abs(e.PositionPx.X - _panAnchorPx.X) : MathF.Abs(e.PositionPx.Y - _panAnchorPx.Y);
+                if (axisTravel >= PanSlopPx && !_panClaimed) ClaimTouchPan();
+                if (_panClaimed)
+                {
+                    float delta = _panAxisX ? (e.PositionPx.X - _panAnchorPx.X) : (e.PositionPx.Y - _panAnchorPx.Y);
+                    SetScrollOffset(_panTarget, _panAnchorOffset - delta);
+                    return true;
+                }
+            }
+        }
+
+        SetState(ref _hovered, HitTest(e.PositionPx), NodeFlags.Hovered);   // transient touch hover (cleared on up/cancel)
+        return false;
+    }
+
+    /// <summary>Claim the pan for this contact: cancel the press candidate the same way capture-loss does (so a node
+    /// that saw the down sees one consistent cancel, never a click), suppress its pressed visual, and end any in-flight
+    /// (mouse/pen) text-selection drag. After this the contact is a pure scroll driver until its up/cancel.</summary>
+    private void ClaimTouchPan()
+    {
+        _panClaimed = true;
+        SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);   // suppress hover visuals while panning (fires the
+                                                                      // hover-leave/PointerExit on the hovered node, once)
+        if (!_down.IsNull)
+        {
+            // Cancel the press candidate the same way capture-loss does (CancelWorkingContact): the pressed visual is
+            // released (the contact owns the _pressed singleton while _pressed == _down — clear it through SetState so the
+            // NodeFlags.Pressed flag drops AND OnPressChanged(...,false) eases PressT back) and a repeat is stopped, so the
+            // node sees a cancel — never a Released/click (the WinUI Pressed→Canceled contract). A captured OnDrag node
+            // would also get OnPointerExit, but touch arms none in Phase 1, and the hover-clear above already delivered
+            // the exit to the node the finger was over.
+            if (_pressed == _down) SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
+            if (_scene.IsLive(_down) && (_scene.Interaction(_down).HandlerMask & InteractionInfo.RepeatBit) != 0)
+                OnRepeatReleased?.Invoke(_down);
+            _down = NodeHandle.Null;   // the eventual touch-up must NOT fire a click
+        }
+        _selDragging = false;
+    }
+
+    // ── gesture-arena wiring for the touch path (§7A.1/§7A.4/§7A.5) ───────────────────────────────────────────
+    // Enrollment mirrors the scalar facts TouchDown computed: the OnDrag/_dragTarget node → Drag (innermost, on the hit
+    // node), the CanDrag chain → DragReorder (executed by DragController; enrolled so the arena sees the candidacy), the
+    // Scrollable ancestor → Pan (outermost), the clickable _down → Tap (+ DoubleTap only where the node consumes double-
+    // clicks, e.g. selectable text), a context/hold chain → Hold. The arena owns WHICH wins; the scalar machinery still
+    // executes the winner, so the single-recognizer common case is byte-identical (the explicit fast-path: an arena with
+    // one member is last-standing immediately). FSMs live in _fsms[member.FsmSlot]; each is Init'd to its kind and fed
+    // OnDown here so a deferred resolution reports the DOWN position (§7A.5). Zero per-frame heap (fixed slab + the
+    // ctor-captured sinks). The §7A.5 tentative-capture shift only manifests with ≥2 genuinely-competing recognizers;
+    // the cases the scalar path already arbitrates (OnDrag-vs-pan, tap-vs-pan) resolve identically under the arena.
+
+    /// <summary>µs clock for the FSMs from the event's ms platform stamp (the FSM keeps µs for the long-press; its
+    /// VelocitySampler reprojects to ms). A 0 stamp stays 0 (the vacuous-fling / no-prior-down sentinel, §7B).</summary>
+    private static long ToUs(uint timestampMs) => (long)timestampMs * 1000;
+
+    /// <summary>Bind member slot <paramref name="ms"/>'s FSM to <paramref name="kind"/> and feed the DOWN (Init + OnDown +
+    /// the opening vote into the arena). Idempotent storage — the slot is reused from the cap-10 slab.</summary>
+    private void ArmMemberFsm(int ms, GestureKind kind, Point2 abs, long timeUs)
+    {
+        if ((uint)ms >= (uint)_fsms.Length) return;
+        ref PointerFsm f = ref _fsms[ms];
+        f.Init(kind);
+        f.OnDown(abs, timeUs);
+        _arena.SetVote(ms, f.Vote);
+    }
+
+    /// <summary>Open the contact's arena (§7A.1) and enroll members innermost-first along the hit route, mirroring the
+    /// scalar facts. A route with no gesture-advertising node opens NO arena (<see cref="_activeArenaSlot"/> stays -1) and
+    /// the contact keeps the pre-arena scalar flow. Called at the end of <see cref="TouchDown"/>.</summary>
+    private void EnrollTouchArena(in InputEvent e, NodeHandle scrollable)
+    {
+        // Nothing advertises a gesture ⇒ no arena (the scrollbar-drag path already returned before this; a bare hit with
+        // no Drag/Pan/clickable is just a press that taps-or-nothing — pre-arena behavior, no arbitration needed).
+        bool hasDrag = !_dragTarget.IsNull;
+        bool hasSwipe = !_swipeDrag.IsNull;   // a DragYieldsToPan OnDrag node (cross-axis content pan) competing with Pan
+        bool hasPan = !scrollable.IsNull;
+        bool clickable = !_down.IsNull && _scene.IsLive(_down)
+                         && (_scene.Interaction(_down).HandlerMask
+                             & (InteractionInfo.ClickBit | InteractionInfo.PointerBit | InteractionInfo.PressedBit)) != 0;
+        NodeHandle dragReorder = (hasDrag || hasSwipe) ? NodeHandle.Null : NearestCanDrag(_down);   // DragController arms only off non-OnDrag chains
+        NodeHandle holdChain = NearestContextOrHold(_down);
+        // UseGesture (§13): the nearest self-or-ancestor that declared a gesture hook. Only probed when the scene has ANY
+        // gesture subscription (HasGestureSubs) — the common case pays nothing. Its declared Tap/Hold/Pan kinds enroll as
+        // arena members below; the arena WINNER routes to the handler (RouteGestureWin via OnMemberWon).
+        NodeHandle gestureNode = _scene.HasGestureSubs ? NearestGesture(_down) : NodeHandle.Null;
+        // A fresh down ⇒ a fresh arena: free any stale arena this contact's slot still carries (a prior gesture that
+        // resolved but whose seat lingered), so OpenArena never re-enrolls members onto a half-used arena.
+        if (_activeArenaSlot >= 0) { _arena.CloseAndFree(_activeArenaSlot); _activeArenaSlot = -1; }
+        _reorderTarget = NodeHandle.Null; _touchReorder = false;   // fresh down: no resolved reorder yet (set below if enrolled)
+        _gesturePanNode = NodeHandle.Null;                          // fresh down: no UseGesture(Pan) member yet
+        if (!hasDrag && !hasSwipe && !hasPan && !clickable && dragReorder.IsNull && holdChain.IsNull && gestureNode.IsNull) return;
+
+        long timeUs = ToUs(e.TimestampMs);
+        int slot = _arena.OpenArena(e.PointerId, timeUs);
+        if (slot < 0) { _activeArenaSlot = -1; return; }   // cap-10 arenas full: no arena (matches the capture-slab policy)
+        _activeArenaSlot = slot;
+
+        // Innermost-first (§7A.1): the hit node's own recognizers (Drag/Tap/DoubleTap) get the earliest claim (lowest
+        // Priority → they win ties); the CanDrag/scrollable ancestors enroll after; Pan (outermost viewport) last.
+        int m;
+        int eagerDragSlot = -1;                                   // the eager OnDrag (Slider/EditableText) member, for the §7A.5 fast-path
+        int selDragSlot = -1, selTapSlot = -1, selDblSlot = -1;   // the selection team's members (§7A.3), captured below
+        bool selectable = clickable && (_scene.Interaction(_down).HandlerMask & InteractionInfo.SelectableTextBit) != 0;
+        if (hasDrag)
+        {
+            m = _arena.Enroll(slot, _dragTarget, GestureKind.Drag);
+            if (m >= 0) { ArmMemberFsm(m, GestureKind.Drag, e.PositionPx, timeUs); eagerDragSlot = m; if (selectable && _dragTarget == _down) selDragSlot = m; }
+        }
+        else if (hasSwipe)
+        {
+            // The cross-axis content-pan Drag member (SwipeControl/FlipView), innermost so it claims before Pan on an
+            // along-axis tie. Axis-locked in StepTouchArena (projected onto _swipeAxisX) so it eager-wins ONLY along its
+            // own axis and yields to the (scroll-axis-locked) Pan when the gesture is cross-axis. Found later by Kind==Drag.
+            m = _arena.Enroll(slot, _swipeDrag, GestureKind.Drag);
+            if (m >= 0) ArmMemberFsm(m, GestureKind.Drag, e.PositionPx, timeUs);
+        }
+        if (clickable)
+        {
+            m = _arena.Enroll(slot, _down, GestureKind.Tap);
+            if (m >= 0) { ArmMemberFsm(m, GestureKind.Tap, e.PositionPx, timeUs); if (selectable) selTapSlot = m; }
+            // DoubleTap ONLY where the node consumes double-clicks (selectable/editable text word-select); a plain button
+            // gets Tap only (no inter-tap Held window to keep its arena open across taps).
+            if (selectable)
+            {
+                m = _arena.Enroll(slot, _down, GestureKind.DoubleTap);
+                if (m >= 0) { ArmMemberFsm(m, GestureKind.DoubleTap, e.PositionPx, timeUs); selDblSlot = m; }
+            }
+        }
+        if (!dragReorder.IsNull)
+        {
+            // The DragReorder member competes with Pan via an AXIS-LOCKED vote (§7A): its FSM is driven on every move
+            // with the position projected onto the item's reorder axis (the source row's parent-container main axis —
+            // a row container ⇒ horizontal item-drag), so it eager-wins only on travel ALONG that axis. A cross-axis
+            // drag leaves it Pending and the (scroll-axis-locked) Pan eager-wins instead. This replaces the
+            // DragController.YieldsToPan(dx,dy) heuristic with the arena's deterministic resolution (the
+            // two-arbitration-models risk is gone); the WINNER drives DragController, arena-governed.
+            m = _arena.Enroll(slot, dragReorder, GestureKind.DragReorder);
+            if (m >= 0)
+            {
+                ArmMemberFsm(m, GestureKind.DragReorder, e.PositionPx, timeUs);
+                _reorderTarget = dragReorder;
+                var rp = _scene.Parent(dragReorder);
+                _reorderAxisX = !rp.IsNull && _scene.Layout(rp).Direction == 0;   // 0 = row container ⇒ horizontal item-drag
+            }
+        }
+        if (!holdChain.IsNull)
+        {
+            m = _arena.Enroll(slot, holdChain, GestureKind.Hold);
+            if (m >= 0) ArmMemberFsm(m, GestureKind.Hold, e.PositionPx, timeUs);
+        }
+        if (hasPan)
+        {
+            m = _arena.Enroll(slot, scrollable, GestureKind.Pan);
+            if (m >= 0) ArmMemberFsm(m, GestureKind.Pan, e.PositionPx, timeUs);
+        }
+        // UseGesture (§13) members on the declaring node. A Tap/Hold member is enrolled only when not ALREADY covered by
+        // the clickable-Tap / holdChain enrollment on the SAME node (the routing keys on the winner's node, so one member
+        // suffices — RouteGestureWin fires the handler regardless of which path enrolled it). A UseGesture(Pan) member is
+        // enrolled on the gesture node and voted RAW (any-axis) in StepTouchArena (the gesture pan is not scroll-axis-locked).
+        if (!gestureNode.IsNull)
+        {
+            if (_scene.WantsGesture(gestureNode, GestureType.Tap) && !(clickable && _down == gestureNode))
+            {
+                m = _arena.Enroll(slot, gestureNode, GestureKind.Tap);
+                if (m >= 0) ArmMemberFsm(m, GestureKind.Tap, e.PositionPx, timeUs);
+            }
+            if (_scene.WantsGesture(gestureNode, GestureType.Hold) && gestureNode != holdChain)
+            {
+                m = _arena.Enroll(slot, gestureNode, GestureKind.Hold);
+                if (m >= 0) ArmMemberFsm(m, GestureKind.Hold, e.PositionPx, timeUs);
+            }
+            if (_scene.WantsGesture(gestureNode, GestureType.Pan))
+            {
+                m = _arena.Enroll(slot, gestureNode, GestureKind.Pan);
+                if (m >= 0)
+                {
+                    ArmMemberFsm(m, GestureKind.Pan, e.PositionPx, timeUs);
+                    _gesturePanNode = gestureNode;   // marks the raw-voted (any-axis) gesture pan for StepTouchArena
+                }
+            }
+        }
+
+        // The §7A.3 selection TEAM: the editor/selectable-text node's tap (caret-place), double-tap (word-select) and
+        // drag-extend recognizers present ONE arena entry under a captain so they don't reject each other before the
+        // slop decides which it is (Flutter GestureArenaTeam; the canonical selection use). The captain is the Tap
+        // member; on a team win it decides which internal recognizer fires by tap-count + movement — REALIZED by the
+        // editor's existing ClickCount (single→caret, double→word) + OnDrag (drag→extend) mechanics, which the
+        // OnDrag implicit-capture already executes. This FORMALIZES the Phase-2 flat enrollment (gate.touch2.caret-and-
+        // select stays observably identical): the members were already independent (a loser only rejects via a winner's
+        // sweep, never each other pre-slop), so grouping them under a captain changes the structure, not the behavior.
+        if (selTapSlot >= 0)
+        {
+            int teamStart = selDragSlot >= 0 ? selDragSlot : selTapSlot;   // the Drag (drag-extend) member is innermost when present
+            int teamEnd = selDblSlot >= 0 ? selDblSlot : selTapSlot;       // members enroll contiguously: drag → tap → dbltap
+            _arena.EnrollTeam(slot, captainSlot: selTapSlot, memberOffset: teamStart, memberLen: teamEnd - teamStart + 1);
+        }
+
+        // §7A.5 single-recognizer FAST-PATH: an eager OnDrag capture (Slider scrub / EditableText drag — _dragTarget set
+        // in TouchDown, NOT a DragYieldsToPan swipe) is the canonical "one recognizer → immediate accept → synchronous
+        // capture" case. The scalar path ALREADY took hard capture into _dragTarget (TouchMove drives OnDrag the same
+        // frame, bypassing StepTouchArena's vote loop and never feeding this Drag member a move); resolve the arena to
+        // MATCH so capture is hard — NOT tentative (CaptureIsTentative is false the instant the press lands). The eager
+        // Drag EagerAccept-wins and sweeps any incidental co-members (a Slider's own Tap/Pressed Tap member; a selectable
+        // editor's tap/double-tap team): those are EXECUTED by the editor's/slider's scalar OnDrag + ClickCount mechanics
+        // regardless of the arena winner, so the sweep changes the arena bookkeeping, not the observable caret/scrub
+        // behavior (gate.touch2.caret-and-select / 47t stay identical). This fast-path is suppressed for a DragYieldsToPan
+        // swipe (hasSwipe) and for a Pan/DragReorder contact (no _dragTarget) — those genuinely compete and stay tentative
+        // until the slop resolves them (the §7A.5 semantics shift, which only manifests with ≥2 competing recognizers).
+        if (eagerDragSlot >= 0 && !hasSwipe)
+        {
+            _arena.SetVote(eagerDragSlot, ArenaVote.EagerAccept);
+            _arena.ResolveStep(slot);   // the eager OnDrag wins immediately → hard capture, no tentative window (§7A.5 fast-path)
+        }
+    }
+
+    /// <summary>Nearest self-or-ancestor of <paramref name="from"/> that declared ANY <c>UseGesture</c> handler (§13), or
+    /// null. Only called when <c>SceneStore.HasGestureSubs</c> is set, so the common gesture-free scene never walks here.</summary>
+    private NodeHandle NearestGesture(NodeHandle from)
+    {
+        for (var n = from; !n.IsNull; n = _scene.Parent(n))
+            if (_scene.IsLive(n) && (_scene.Flags(n) & NodeFlags.Disabled) == 0
+                && (_scene.WantsGesture(n, GestureType.Tap) || _scene.WantsGesture(n, GestureType.Hold) || _scene.WantsGesture(n, GestureType.Pan)))
+                return n;
+        return NodeHandle.Null;
+    }
+
+    /// <summary>Feed this move to the contact's arena (§7A.2/§7A.4) and resolve a step. Returns true when the move is
+    /// FULLY handled in here — i.e. the arena resolved DragReorder and <see cref="ClaimTouchReorder"/> already drove the
+    /// controller. A pan claim sets <see cref="_panClaimed"/> (the caller drives the content scroll, gated on the claim);
+    /// false also when neither crossed slop yet.
+    ///
+    /// Both movement recognizers are AXIS-LOCKED and voted here: the Pan member crosses the SCROLL-axis slop, the
+    /// DragReorder member crosses the ITEM-axis slop (each FSM driven with the position PROJECTED onto its axis so its
+    /// generic Near-slop reduces to the single-axis test). Whichever crosses its own axis first eager-wins and sweeps
+    /// the rest (§7A.2 rule 1) — this IS the drag-reorder-vs-pan arbitration, deterministic and via votes, REPLACING
+    /// <c>DragController.YieldsToPan</c> on the touch path: a reorder drag along the item axis beats the scroller's pan;
+    /// a cross-axis drag leaves DragReorder Pending and Pan eager-wins. The Pan claim stays gated on the Pan FSM actually
+    /// crossing slop (not on a lone-Pan last-standing resolution), so the Pan-only observable is identical to Phase 1.
+    /// Tap/DoubleTap members are not move-voted: an eager-win sweeps them (the synthetic GestureRejected == the scalar
+    /// press-cancel), so a tap dies at the claim, not on any-axis slop.</summary>
+    private bool StepTouchArena(in InputEvent e)
+    {
+        int slot = _activeArenaSlot;
+        if (slot < 0 || !_arena.IsArenaOpen(slot)) return false;
+        long timeUs = ToUs(e.TimestampMs);
+
+        ReadOnlySpan<ArenaMember> members = _arena.Members(slot);
+        int memberOffset = _arena.ArenaAt(slot).MemberOffset;
+        int panMember = -1, reorderMember = -1, swipeMember = -1;
+        ArenaVote panVote = ArenaVote.Pending, reorderVote = ArenaVote.Pending, swipeVote = ArenaVote.Pending;
+        for (int i = 0; i < members.Length; i++)
+        {
+            int ms = memberOffset + i;
+            switch (members[i].Kind)
+            {
+                case GestureKind.Drag when members[i].Node == _swipeDrag:
+                    // The cross-axis content-pan Drag member (SwipeControl/FlipView): projected onto its OWN axis
+                    // (_swipeAxisX) so it eager-wins only on along-axis travel and yields to the (scroll-axis-locked) Pan on
+                    // a cross-axis drag — the same axis-locked rule the DragReorder member uses, driving OnDrag not the
+                    // reorder controller. (The eager Slider/EditableText Drag never reaches here — _swipeDrag is null then.)
+                    swipeMember = ms;
+                    swipeVote = _fsms[ms].OnMove(
+                        _swipeAxisX ? new Point2(e.PositionPx.X, _panAnchorPx.Y) : new Point2(_panAnchorPx.X, e.PositionPx.Y),
+                        timeUs);
+                    _arena.SetVote(ms, swipeVote);
+                    break;
+                case GestureKind.Pan:
+                    // A UseGesture(Pan) member (its node == _gesturePanNode) is voted RAW (any-axis Near-slop — a gesture
+                    // pan is not scroll-axis-locked); the scroller Pan member is projected onto the scroll axis (the
+                    // single-axis WinUI pan). The gesture-pan does NOT claim a continuous content drive (no _panTarget) —
+                    // its eager-win just routes the §13 handler (RouteGestureWin in ResolveStep below).
+                    if (members[i].Node == _gesturePanNode)
+                    {
+                        _fsms[ms].OnMove(e.PositionPx, timeUs);
+                        _arena.SetVote(ms, _fsms[ms].Vote);
+                    }
+                    else
+                    {
+                        panMember = ms;
+                        panVote = _fsms[ms].OnMove(
+                            _panAxisX ? new Point2(e.PositionPx.X, _panAnchorPx.Y) : new Point2(_panAnchorPx.X, e.PositionPx.Y),
+                            timeUs);
+                        _arena.SetVote(ms, panVote);
+                    }
+                    break;
+                case GestureKind.DragReorder:
+                    reorderMember = ms;
+                    // Project onto the ITEM axis (the source row's parent main axis) so the reorder eager-wins only on
+                    // along-axis travel — the YieldsToPan axis rule, now a vote. _reorderAxisX true ⇒ item drags along X.
+                    reorderVote = _fsms[ms].OnMove(
+                        _reorderAxisX ? new Point2(e.PositionPx.X, _panAnchorPx.Y) : new Point2(_panAnchorPx.X, e.PositionPx.Y),
+                        timeUs);
+                    _arena.SetVote(ms, reorderVote);
+                    break;
+            }
+        }
+
+        // Resolve: the first axis-slop eager-win sweeps the rest. Innermost priority (DragReorder enrolls before Pan, so
+        // a lower Priority) wins a same-move tie — but a clean cross-axis drag only crosses ONE axis, so ties are rare.
+        // A UseGesture(Pan) member that wins reports THIS sample's position (the §13 routing fires inside ResolveStep).
+        _gestureWinPos = e.PositionPx; _gestureWinPointer = e.Pointer; _gestureWinVel = Point2.Zero;
+        _arena.ResolveStep(slot);
+        int winner = _arena.ArenaAt(slot).WinnerSlot;
+
+        // Execute the winner. The claim is gated on the winning FSM having EAGER-ACCEPTED this move (crossed its slop),
+        // not merely on resolution (a lone member is last-standing immediately, but content/reorder must not start until
+        // slop — exactly Phase 1's gating). DragReorder drives DragController (arena-governed: YieldsToPan bypassed).
+        if (!_touchReorder && reorderMember >= 0 && winner == reorderMember && reorderVote == ArenaVote.EagerAccept)
+            ClaimTouchReorder(e);
+        else if (_dragTarget.IsNull && swipeMember >= 0 && winner == swipeMember && swipeVote == ArenaVote.EagerAccept)
+            ClaimTouchSwipe(e);
+        else if (!_panClaimed && panMember >= 0 && winner == panMember && panVote == ArenaVote.EagerAccept)
+            ClaimTouchPan();
+        // A swipe claim is fully driven in here (the first OnDrag move ran); the subsequent moves go through the
+        // _dragTarget branch in TouchMove, so return true to consume this move. A reorder is likewise fully driven.
+        return _touchReorder || (!_dragTarget.IsNull && _dragTarget == _swipeDrag);
+    }
+
+    /// <summary>The arena resolved the cross-axis content-pan Drag for this contact (§7A — SwipeControl/FlipView): the
+    /// along-axis swipe beat the scroller's Pan. Capture it into <see cref="_dragTarget"/> (so the rest of the gesture
+    /// drives <c>OnDrag</c> through the existing capture branch, exactly as the eager OnDrag path would), cancel the press
+    /// candidate the capture-loss way (Pressed→Canceled, never a click), and drive THIS move's <c>OnDrag</c> immediately so
+    /// the content follows from the first claimed sample. The Pan member was swept by the eager-win, so the list will not
+    /// scroll. Velocity keeps sampling on the captured moves (TouchMove's _dragTarget branch) for the release snap.</summary>
+    private void ClaimTouchSwipe(in InputEvent e)
+    {
+        if (_swipeDrag.IsNull || !_scene.IsLive(_swipeDrag)) return;
+        // Cancel the press the same way ClaimTouchPan does (CancelWorkingContact shape): release the pressed visual + any
+        // auto-repeat and null _down so the eventual up fires NO click on the down chain (the swipe's own OnClick release
+        // edge still fires via the _dragTarget branch in TouchUp).
+        SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
+        if (!_down.IsNull)
+        {
+            if (_pressed == _down) SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
+            if (_scene.IsLive(_down) && (_scene.Interaction(_down).HandlerMask & InteractionInfo.RepeatBit) != 0)
+                OnRepeatReleased?.Invoke(_down);
+            _down = NodeHandle.Null;
+        }
+        _selDragging = false;
+        _panTarget = NodeHandle.Null; _panClaimed = false;   // the swipe won — the scroller pan is off for this contact
+        _dragTarget = _swipeDrag;                            // capture: subsequent moves drive OnDrag via the _dragTarget branch
+        _scene.GetDrag(_dragTarget)?.Invoke(LocalPos(_dragTarget, e.PositionPx));   // drive the first claimed sample
+    }
+
+    /// <summary>The arena resolved DragReorder for this contact (§7A): latch the reorder, cancel the press candidate the
+    /// way capture-loss does (the Pressed→Canceled contract, never a click), and ARM + drive <see cref="DragController"/>
+    /// arena-governed (its <c>YieldsToPan</c> bypassed — the arena already arbitrated). The drag-reorder is a singleton
+    /// engine, so a second concurrent contact landing on a CanDrag row simply doesn't claim (Drag already active); its
+    /// arena still resolves but the execution no-ops — deterministic, no second drag.</summary>
+    private void ClaimTouchReorder(in InputEvent e)
+    {
+        if (_reorderTarget.IsNull || !_scene.IsLive(_reorderTarget)) return;
+        if (Drag.IsActive || Drag.IsArmed) return;   // the singleton reorder engine is busy with another contact
+        // Cancel the press the same way ClaimTouchPan does (CancelWorkingContact shape): release the pressed visual and
+        // any auto-repeat, and null _down so the eventual up fires NO click (the lifted row never clicks — WinUI).
+        SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
+        if (!_down.IsNull)
+        {
+            if (_pressed == _down) SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
+            if (_scene.IsLive(_down) && (_scene.Interaction(_down).HandlerMask & InteractionInfo.RepeatBit) != 0)
+                OnRepeatReleased?.Invoke(_down);
+            _down = NodeHandle.Null;
+        }
+        _selDragging = false;
+        _touchReorder = true;
+        // Arm from the press anchor (the gesture's down position, so TotalDx/Dy measure from there) and immediately drive
+        // the current move so the controller promotes this frame (arena-governed ⇒ no YieldsToPan re-arbitration).
+        Drag.TryArm(_reorderTarget, _panAnchorPx, e.Pointer, e.Mods, e.TimestampMs);
+        Drag.Move(e.PositionPx, e.Mods, e.TimestampMs, arenaGoverned: true);
+    }
+
+    /// <summary>Pointer-up sweep (§7A.2 rule 4) for the contact's arena: the clean-tap resolution. Feeds OnUp to the Tap/
+    /// DoubleTap members so a within-slop release votes Accept, then <c>ResolveUp</c> picks the highest-priority survivor.
+    /// The scalar <see cref="TouchUp"/> still fires the actual click on the winner; this keeps the arena state correct
+    /// (and frees the seat). A claimed-pan or captured-OnDrag contact never reaches here (those branches return earlier).</summary>
+    private void UpSweepTouchArena(in InputEvent e)
+    {
+        int slot = _activeArenaSlot;
+        if (slot < 0 || !_arena.IsArenaOpen(slot)) return;
+        long timeUs = ToUs(e.TimestampMs);
+        ReadOnlySpan<ArenaMember> members = _arena.Members(slot);
+        for (int i = 0; i < members.Length; i++)
+        {
+            GestureKind k = members[i].Kind;
+            if (k is GestureKind.Tap or GestureKind.RightTap or GestureKind.DoubleTap)
+            {
+                int ms = _arena.ArenaAt(slot).MemberOffset + i;
+                ArenaVote v = _fsms[ms].OnUp(e.PositionPx, timeUs);
+                _arena.SetVote(ms, v);
+            }
+        }
+        // A UseGesture(Tap) member that wins the up-sweep reports the UP position (the §13 routing fires in ResolveUp).
+        _gestureWinPos = e.PositionPx; _gestureWinPointer = e.Pointer; _gestureWinVel = Point2.Zero;
+        _arena.ResolveUp(slot);
+    }
+
+    /// <summary>Nearest <c>CanDrag</c> (drag-reorder source, <see cref="InteractionInfo.DragBit"/>) self-or-ancestor of
+    /// <paramref name="from"/>, or null. Mirrors <see cref="DragController.TryArm"/>'s chain walk so the DragReorder
+    /// member is enrolled exactly where the controller would arm.</summary>
+    private NodeHandle NearestCanDrag(NodeHandle from)
+    {
+        for (var n = from; !n.IsNull; n = _scene.Parent(n))
+            if (_scene.IsLive(n) && (_scene.Interaction(n).HandlerMask & InteractionInfo.DragBit) != 0
+                && (_scene.Flags(n) & NodeFlags.Disabled) == 0)
+                return n;
+        return NodeHandle.Null;
+    }
+
+    /// <summary>Nearest enabled context-request (<see cref="InteractionInfo.ContextBit"/>) self-or-ancestor of
+    /// <paramref name="from"/>, or null — the chain a touch long-press (Hold → context flyout) would target. Touch has no
+    /// right button, so the Hold member is the only path to a context request on the touch surface.</summary>
+    private NodeHandle NearestContextOrHold(NodeHandle from)
+    {
+        for (var n = from; !n.IsNull; n = _scene.Parent(n))
+            if (_scene.IsLive(n) && (_scene.Interaction(n).HandlerMask & InteractionInfo.ContextBit) != 0
+                && (_scene.Flags(n) & NodeFlags.Disabled) == 0)
+                return n;
+        return NodeHandle.Null;
+    }
+
+    /// <summary>The §7A "OnFrameEnd" timer tick (§7A.4): advance the arena clock by the frame's <paramref name="dtMs"/>
+    /// and promote any Hold member whose long-press window elapsed (its FSM votes <see cref="ArenaVote.EagerAccept"/>),
+    /// then resolve a step so the Hold can win. Wired from the host's phase-7 tick block (alongside the Repeat/Drag ticks),
+    /// the existing per-frame end hook the plan points at. Hold EXECUTION (a context flyout on long-press) is a later
+    /// feature, so a Hold win is arena bookkeeping today (the win sink is a no-op); the tick keeps the timer alive on
+    /// idle-held frames (no events) so the determinism stage's recorder sees the same promotion. Zero per-frame heap:
+    /// it scans the fixed slab only while arenas are open. No-op when nothing is open.</summary>
+    public void TickGestureArenas(float dtMs)
+    {
+        if (_arena.OpenArenaCount == 0) return;
+        if (dtMs > 0f) _arenaClockUs += (long)(dtMs * 1000f);   // advance even with no events this frame (idle-held finger)
+        for (int slot = 0; slot < GestureArena.MaxArenas; slot++)
+        {
+            if (!_arena.IsArenaOpen(slot) || _arena.ArenaAt(slot).WinnerSlot >= 0) continue;
+            ReadOnlySpan<ArenaMember> members = _arena.Members(slot);
+            bool promoted = false;
+            Point2 holdStart = default;
+            for (int i = 0; i < members.Length; i++)
+            {
+                if (members[i].Kind != GestureKind.Hold) continue;
+                int ms = _arena.ArenaAt(slot).MemberOffset + i;
+                ArenaVote v = _fsms[ms].OnFrameTick(_arenaClockUs);
+                if (v != _arena.VoteOf(ms)) { _arena.SetVote(ms, v); promoted = true; holdStart = _fsms[ms].Start; }
+            }
+            if (promoted)
+            {
+                // A UseGesture(Hold) win reports the DOWN position (no current move in a timer tick — the FSM buffered it).
+                _gestureWinPos = holdStart; _gestureWinPointer = PointerKind.Touch; _gestureWinVel = Point2.Zero;
+                _arena.ResolveStep(slot);
+            }
+        }
+    }
+
+    /// <summary>Touch up: a captured OnDrag gesture (slider scrub / editor drag-select) delivers its release to that node
+    /// — its click handler is the commit edge (WinUI capture-to-release, even when the finger ends outside the node); a
+    /// claimed scrollbar thumb-drag releases its per-PointerId <c>_scrollDragNode</c> and lets the bar fade (touch has no
+    /// resting hover, so the contact-duration reveal ends here); a claimed pan hands its sampled velocity to the fling
+    /// stage (gated by <see cref="FlingMinVelocityPxPerS"/>); otherwise a below-slop down→up over the same node is a tap
+    /// (the existing click + hyperlink-span path) and releases the pressed visual. Either way the contact's touch-set
+    /// hover is cleared (no resting touch hover).</summary>
+    private bool TouchUp(in InputEvent e)
+    {
+        // Resolve the contact's arena on the up-sweep (§7A.2 rule 4): a within-slop Tap/RightTap/DoubleTap votes Accept and
+        // the highest-priority survivor wins — the clean-tap resolution. This is arena bookkeeping (the win/reject sinks
+        // are a no-op / an FSM reset this stage); the scalar branches below still fire the actual click / fling / commit,
+        // so the observable is unchanged. A claimed-pan or captured-OnDrag contact resolved earlier (or resolves here to
+        // its Pan/Drag survivor) — harmless either way; SlotOut frees the seat once the scalar targets all clear.
+        UpSweepTouchArena(in e);
+        FireGesturePanEnd(in e);   // §13: a resolved UseGesture(Pan) gets its end-velocity on up (before the seat frees)
+        bool handled = false;
+        if (_touchReorder)
+        {
+            // The contact was driving a drag-reorder (the arena resolved DragReorder, §7A): complete it exactly like the
+            // mouse PointerUp Drag.IsActive branch — Complete fires OnDragCompleted (the app commits the reorder), suppresses
+            // the click (the lifted row never clicks — already enforced by the nulled _down at claim), and hands OnSettle the
+            // drop→resting rects for the FLIP glide. arena-governed needs no flag here (the gesture is over).
+            if (Drag.IsActive) Drag.Complete(e.PositionPx, e.Mods, e.TimestampMs);
+            else Drag.Disarm();   // armed-but-never-promoted safety (shouldn't reach: the claim promotes on the same move)
+            _reorderTarget = NodeHandle.Null;
+            _touchReorder = false;
+            handled = true;
+        }
+        else if (!_dragTarget.IsNull)
+        {
+            // The press captured an OnDrag gesture (Slider scrub / EditableText drag-select) — deliver the release to it,
+            // exactly like the mouse PointerUp _dragTarget branch: its click handler is its commit edge (Slider Ranged
+            // CloseTip; EditableText has none, so this is a harmless null call), and it fires even if the finger lifted
+            // off the node (implicit capture). A PointerCancel still skips this (capture loss is not a commit — the
+            // CancelWorkingContact path clears _dragTarget without firing). No content pan was ever armed alongside it.
+            // A claimed cross-axis swipe samples its release velocity FIRST so its OnClick commit edge (SwipeControl
+            // ReleaseOrTap / FlipView CommitPan) can read the real flick speed off PointerVelocity for the WinUI snap
+            // (100px open / 31px/s close; FlipView flick-navigate).
+            if (_dragTarget == _swipeDrag) _panVel.Sample(e.PositionPx, e.TimestampMs);
+            if (_scene.IsLive(_dragTarget) && (_scene.Flags(_dragTarget) & NodeFlags.Disabled) == 0)
+                _scene.GetClickHandler(_dragTarget)?.Invoke();
+            _dragTarget = NodeHandle.Null;
+            _panTarget = NodeHandle.Null;
+            _swipeDrag = NodeHandle.Null;
+            handled = true;
+        }
+        else if (!_scrollDragNode.IsNull)
+        {
+            // Touch lifted off the thumb: release the drag and drop the bar's PointerOverScrollbar/PointerOver reveal so
+            // it fades on the idle timer (no mouse cursor rests over it to keep it up — the contact-duration reveal ends).
+            var dragged = _scrollDragNode;
+            _scrollDragNode = NodeHandle.Null;
+            OnScrollLeave?.Invoke(dragged);
+            handled = true;
+        }
+        else if (_panClaimed)
+        {
+            _panVel.Sample(e.PositionPx, e.TimestampMs);
+            float v = _panAxisX ? _panVel.Vx : _panVel.Vy;
+            // The viewport scrolls -delta as the finger moves +axis, so the fling (in offset space) carries -velocity.
+            if (!_panTarget.IsNull && MathF.Abs(v) >= FlingMinVelocityPxPerS) OnFlingStarted?.Invoke(_panTarget, -v);
+            _panTarget = NodeHandle.Null;
+            _panClaimed = false;
+            handled = true;
+        }
+        else if (!_down.IsNull)
+        {
+            var up = HitTest(e.PositionPx);
+            if (up == _down)
+            {
+                _scene.GetClickHandler(up)?.Invoke();   // tap = release-over-same click
+                if ((_scene.Interaction(up).HandlerMask & InteractionInfo.SpanLinksBit) != 0)
+                {
+                    int si = HitLinkSpan(up, PointToLocal(up, e.PositionPx));
+                    if (si >= 0 && _scene.TryGetSpanText(up, out var linkSpans) && (uint)si < (uint)linkSpans.Length)
+                        linkSpans[si].OnClick?.Invoke();
+                }
+                handled = true;
+            }
+            _panTarget = NodeHandle.Null;   // an un-claimed pan candidate ends with the tap
+        }
+        else _panTarget = NodeHandle.Null;
+
+        // Release the pressed visual the down set (the contact owns the _pressed singleton while _pressed == _down). On a
+        // tap this fires AFTER the click, so the handler runs while still Pressed, then the node settles back to Normal —
+        // NOT PointerOver (touch has no cursor; the hover-clear below removes any transient touch hover too).
+        if (_pressed == _down) SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
+        _down = NodeHandle.Null;
+        _swipeDrag = NodeHandle.Null;   // an un-claimed swipe candidate ends with the contact (a below-slop tap took the tap branch)
+        _selDragging = false;
+        ClearTouchHover();   // lifting the finger never leaves a latched hover (touch has no resting hover)
+        return handled;
+    }
+
+    /// <summary>Clear the single hover field if it is non-null and live — a touch contact must never latch hover, so its
+    /// up/cancel fires OnHoverChanged(node,false) symmetric with a mouse leave (the hover field is mouse/pen-owned, so
+    /// this is a no-op unless a stray path set it).</summary>
+    private void ClearTouchHover() => SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
+
+    /// <summary>Promote consecutive same-button presses inside the slop window into double/triple clicks (capped at 3).</summary>
+    private void TrackClickCount(in InputEvent e)
+    {
+        bool chained = _lastDownButton == e.Button
+                       && e.TimestampMs - _lastDownMs <= DoubleClickMs
+                       && MathF.Abs(e.PositionPx.X - _lastDownPos.X) <= ClickSlopPx
+                       && MathF.Abs(e.PositionPx.Y - _lastDownPos.Y) <= ClickSlopPx;
+        _clickCount = chained ? (byte)Math.Min(_clickCount + 1, 3) : (byte)1;
+        _lastDownMs = e.TimestampMs;
+        _lastDownPos = e.PositionPx;
+        _lastDownButton = e.Button;
+    }
+
+    /// <summary>Walk up from <paramref name="node"/> for the first enabled ContextBit handler and invoke it (local coords).</summary>
+    private bool DispatchContextRequest(NodeHandle node, Point2 abs)
+    {
+        for (var n = node; !n.IsNull; n = _scene.Parent(n))
+        {
+            if ((_scene.Flags(n) & NodeFlags.Disabled) != 0) continue;
+            if ((_scene.Interaction(n).HandlerMask & InteractionInfo.ContextBit) == 0) continue;
+            _scene.GetContextRequested(n)?.Invoke(LocalPos(n, abs));
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>Middle-button release over the press target: typed pointer args (Button=2) on the nearest enabled
+    /// <c>OnPointerPressed</c> in the chain — the WinUI commit-on-release middle-click (TabViewItem.cpp:418-462).</summary>
+    private bool DispatchMiddleRelease(NodeHandle node, in InputEvent e)
+    {
+        for (var n = node; !n.IsNull; n = _scene.Parent(n))
+        {
+            if ((_scene.Flags(n) & NodeFlags.Disabled) != 0) continue;
+            if ((_scene.Interaction(n).HandlerMask & InteractionInfo.PressedBit) == 0) continue;
+            _scene.GetPointerPressed(n)?.Invoke(new PointerEventArgs
+            {
+                Local = LocalPos(n, e.PositionPx), ClickCount = 1, Mods = e.Mods, Button = 2, Kind = e.Pointer,
+            });
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>Element-level wheel routing (WinUI PointerWheelChanged bubbling): every enabled WheelBit handler up the
+    /// chain sees the event until one sets Handled — which also stops the enclosing viewport from scrolling.</summary>
+    private bool DispatchWheel(in InputEvent e)
+    {
+        WheelEventArgs? args = null;
+        for (var n = HitTestAny(e.PositionPx); !n.IsNull; n = _scene.Parent(n))
+        {
+            if ((_scene.Flags(n) & NodeFlags.Disabled) != 0) continue;
+            if ((_scene.Interaction(n).HandlerMask & InteractionInfo.WheelBit) == 0) continue;
+            args ??= new WheelEventArgs { Delta = e.ScrollDelta, Mods = e.Mods };
+            args.Local = LocalPos(n, e.PositionPx);
+            _scene.GetPointerWheel(n)?.Invoke(args);
+            if (args.Handled) return true;
+        }
+        return false;
+    }
+
+    // ── scrolling (layout-free: write the content's -ScrollOffset transform; never relayout) ──
+
+    /// <summary>Scroll the nearest scrollable ancestor under the pointer; bubbles to an outer scroller at the edge.</summary>
+    /// <summary>The nearest scrollable viewport under the pointer (for revealing its scrollbar on hover).</summary>
+    private NodeHandle ScrollableUnder(Point2 p)
+    {
+        for (var n = HitTestAny(p); !n.IsNull; n = _scene.Parent(n))
+            if ((_scene.Flags(n) & NodeFlags.Scrollable) != 0) return n;
+        return NodeHandle.Null;
+    }
+
+    private void UpdateScrollHover(Point2 p)
+    {
+        if (OnScrollHover is null && OnScrollLeave is null) return;
+
+        var next = ScrollableUnder(p);
+        if (next != _scrollHovered)
+        {
+            if (!_scrollHovered.IsNull && _scene.IsLive(_scrollHovered))
+                OnScrollLeave?.Invoke(_scrollHovered);
+            _scrollHovered = next;
+        }
+
+        if (!next.IsNull)
+            OnScrollHover?.Invoke(next, PointerInScrollbarLane(next, p));
+    }
+
+    private bool PointerInScrollbarLane(NodeHandle n, Point2 p)
+    {
+        if (!TryGetScrollbarMetrics(n, out var m)) return false;
+        var local = new Point2(p.X - m.Bounds.X, p.Y - m.Bounds.Y);
+        return InScrollbarLane(local, in m);
+    }
+
+    private bool ScrollAt(Point2 p, float delta)
+    {
+        var node = HitTestAny(p);
+        for (var n = node; !n.IsNull; n = _scene.Parent(n))
+        {
+            if ((_scene.Flags(n) & NodeFlags.Scrollable) == 0) continue;
+            if (TryScrollNode(n, delta)) return true;   // consumed; else (at the edge) climb to an outer scroller
+        }
+        return false;
+    }
+
+    private bool TryScrollNode(NodeHandle n, float delta)
+    {
+        return ScrollBy(n, delta, SmoothScroll);
+    }
+
+    private bool ScrollBy(NodeHandle n, float delta, bool smooth)
+    {
+        ref ScrollState sc = ref _scene.ScrollRef(n);
+        bool horizontal = sc.Orientation == 1;
+        float max = horizontal ? MathF.Max(0f, sc.ContentW - sc.ViewportW) : MathF.Max(0f, sc.ContentH - sc.ViewportH);
+
+        if (smooth)
+        {
+            // Set the target; the ScrollAnimator eases the live offset toward it (+ virtualization re-realize + fade).
+            float curTarget = horizontal ? sc.TargetX : sc.TargetY;
+            float nextTarget = Math.Clamp(curTarget + delta, 0f, max);
+            if (nextTarget == curTarget) return false;   // at the edge → bubble to an outer scroller
+            if (horizontal) sc.TargetX = nextTarget; else sc.TargetY = nextTarget;
+            sc.IdleMs = 0f;
+            OnScrollArmed?.Invoke(n);
+            return true;
+        }
+
+        float old = horizontal ? sc.OffsetX : sc.OffsetY;
+        return SetScrollOffset(n, old + delta);
+    }
+
+    private bool SetScrollOffset(NodeHandle n, float offset)
+    {
+        ref ScrollState sc = ref _scene.ScrollRef(n);
+        bool horizontal = sc.Orientation == 1;
+        float max = horizontal ? MathF.Max(0f, sc.ContentW - sc.ViewportW) : MathF.Max(0f, sc.ContentH - sc.ViewportH);
+        float old = horizontal ? sc.OffsetX : sc.OffsetY;
+        float next = Math.Clamp(offset, 0f, max);
+        float target = horizontal ? sc.TargetX : sc.TargetY;
+        if (next == old && target == next) return false;
+        if (horizontal) { sc.OffsetX = next; sc.TargetX = next; }
+        else { sc.OffsetY = next; sc.TargetY = next; }
+        sc.IdleMs = 0f;
+        // A SYNCHRONOUS offset move (touch content-pan, scrollbar thumb-drag, drag-edge auto-scroll, non-smooth wheel) sets
+        // Offset == Target, so the ScrollAnimator can't infer motion from |Target − Offset|. Pulse ScrollMoved so the next
+        // Tick reveals the thin indicator for this frame (the WinUI TouchIndicator that shows THROUGHOUT a manipulation, not
+        // only the post-lift fling) — FadeT only, never PointerOver/ExpandT, so the bar idle-hides once the move stops.
+        if (next != old) sc.ScrollMoved = true;
+        ApplyScrollPosition(n, ref sc, horizontal, next);
+        OnScrollArmed?.Invoke(n);
+        return true;
+    }
+
+    private void ApplyScrollPosition(NodeHandle n, ref ScrollState sc, bool horizontal, float next)
+    {
+        // Layout-free scroll: the -ScrollOffset is the content child's LocalTransform (TransformDirty only).
+        var content = sc.ContentNode;
+        if (!content.IsNull && _scene.IsLive(content))
+        {
+            ref NodePaint cp = ref _scene.Paint(content);
+            cp.LocalTransform = Affine2D.Translation(horizontal ? -next : 0f, horizontal ? 0f : -next);
+            _scene.Mark(content, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+        }
+
+        // Virtualization: keep transform-only scroll while the visible band remains inside the realized guard band.
+        if (sc.ItemCount > 0)
+        {
+            int visibleFirst, visibleLast;
+            float vp = horizontal ? sc.ViewportW : sc.ViewportH;
+            if (sc.Layout is not null)   // fixed-geometry (stack/grid/custom)
+            {
+                float cross = horizontal ? sc.ViewportH : sc.ViewportW;
+                sc.Layout.Window(sc.ItemCount, cross, vp, next, 0, out visibleFirst, out visibleLast);
+            }
+            else if (_scene.TryGetExtents(n, out var t) && t is not null)   // variable (extent table)
+            {
+                visibleFirst = t.IndexAt(next);
+                visibleLast = Math.Min(sc.ItemCount, t.IndexAt(next + vp) + 1);
+            }
+            else { visibleFirst = visibleLast = 0; }
+            if (VirtualWindowing.NeedsRealize(in sc, visibleFirst, visibleLast)) { _scene.Mark(n, NodeFlags.VirtualRangeDirty); RequestRerender(); }
+        }
+    }
+
+    private bool TryScrollbarPointerDown(Point2 p)
+    {
+        var n = ScrollableUnder(p);
+        if (n.IsNull || !TryGetScrollbarMetrics(n, out var m)) return false;
+
+        var local = new Point2(p.X - m.Bounds.X, p.Y - m.Bounds.Y);
+        if (!InScrollbarLane(local, in m)) return false;
+
+        ref ScrollState sc = ref _scene.ScrollRef(n);
+        sc.PointerOver = true;
+        sc.PointerOverScrollbar = true;
+        sc.IdleMs = 0f;
+        if (sc.FadeT < 0.2f) sc.FadeT = 0.2f;
+        OnScrollArmed?.Invoke(n);
+
+        float axis = AxisPos(local, in m);
+        if (axis >= m.ThumbStart && axis <= m.ThumbStart + m.ThumbLen)
+        {
+            _scrollDragNode = n;
+            _scrollDragGrab = Math.Clamp(axis - m.ThumbStart, 0f, m.ThumbLen);
+            return true;
+        }
+
+        float delta;
+        if (m.Button > 1f && axis < m.Button) delta = -ScrollbarSmallChange;
+        else if (m.Button > 1f && axis >= m.Axis - m.Button) delta = ScrollbarSmallChange;
+        else
+        {
+            float page = MathF.Max(ScrollbarSmallChange, m.Viewport * 0.875f);
+            delta = axis < m.ThumbStart ? -page : page;
+        }
+        ScrollBy(n, delta, SmoothScroll);
+        return true;
+    }
+
+    private bool DragScrollbar(Point2 p)
+    {
+        if (_scrollDragNode.IsNull) return false;
+        if (!TryGetScrollbarMetrics(_scrollDragNode, out var m))
+        {
+            _scrollDragNode = NodeHandle.Null;
+            return false;
+        }
+
+        var local = new Point2(p.X - m.Bounds.X, p.Y - m.Bounds.Y);
+        float axis = AxisPos(local, in m);
+        float thumbStart = Math.Clamp(axis - _scrollDragGrab, m.TrackStart, m.TrackStart + m.Travel);
+        float fraction = Math.Clamp((thumbStart - m.TrackStart) / MathF.Max(1f, m.Travel), 0f, 1f);
+        SetScrollOffset(_scrollDragNode, fraction * m.Max);
+
+        ref ScrollState sc = ref _scene.ScrollRef(_scrollDragNode);
+        sc.PointerOver = true;
+        sc.PointerOverScrollbar = true;
+        sc.IdleMs = 0f;
+        return true;
+    }
+
+    private bool TryGetScrollbarMetrics(NodeHandle n, out ScrollbarMetrics m)
+    {
+        m = default;
+        if (n.IsNull || !_scene.HasScroll(n)) return false;
+
+        ref ScrollState sc = ref _scene.ScrollRef(n);
+        bool horizontal = sc.Orientation == 1;
+        float content = horizontal ? sc.ContentW : sc.ContentH;
+        float viewport = horizontal ? sc.ViewportW : sc.ViewportH;
+        float max = MathF.Max(0f, content - viewport);
+        if (max <= 0.5f) return false;
+
+        var bounds = _scene.AbsoluteRect(n);
+        float axis = horizontal ? bounds.W : bounds.H;
+        float cross = horizontal ? bounds.H : bounds.W;
+        if (axis <= 1f || cross <= 1f) return false;
+
+        float expand = Math.Clamp(sc.ExpandT, 0f, 1f);
+        float button = ScrollbarSize * expand;
+        float trackStart = button;
+        float trackLen = MathF.Max(1f, axis - 2f * button);
+        float fraction = Math.Clamp(viewport / content, 0.08f, 1f);
+        float minThumb = ScrollbarMinCollapsedThumb + (ScrollbarMinExpandedThumb - ScrollbarMinCollapsedThumb) * expand;
+        float thumbLen = MathF.Min(trackLen, MathF.Max(minThumb, fraction * trackLen));
+        float travel = MathF.Max(1f, trackLen - thumbLen);
+        float off = horizontal ? sc.OffsetX : sc.OffsetY;
+        float thumbStart = trackStart + Math.Clamp(off / MathF.Max(max, 1f), 0f, 1f) * travel;
+
+        m = new ScrollbarMetrics
+        {
+            Bounds = bounds,
+            Horizontal = horizontal,
+            Axis = axis,
+            Cross = cross,
+            Viewport = viewport,
+            Max = max,
+            Button = button,
+            TrackStart = trackStart,
+            ThumbStart = thumbStart,
+            ThumbLen = thumbLen,
+            Travel = travel,
+        };
+        return true;
+    }
+
+    private static bool InScrollbarLane(Point2 local, in ScrollbarMetrics m)
+    {
+        float cross = m.Horizontal ? local.Y : local.X;
+        float laneStart = m.Cross - ScrollbarSize;
+        return cross >= laneStart && cross < m.Cross;
+    }
+
+    private static float AxisPos(Point2 local, in ScrollbarMetrics m) => m.Horizontal ? local.X : local.Y;
+
+    private struct ScrollbarMetrics
+    {
+        public RectF Bounds;
+        public bool Horizontal;
+        public float Axis, Cross, Viewport, Max;
+        public float Button, TrackStart, ThumbStart, ThumbLen, Travel;
+    }
+
+    /// <summary>Move a single-node interaction flag (hover/pressed) from the old node to <paramref name="next"/>.</summary>
+    private void SetState(ref NodeHandle slot, NodeHandle next, NodeFlags flag)
+    {
+        if (slot == next) return;
+        NodeHandle prev = slot;
+        if (!prev.IsNull && _scene.IsLive(prev)) _scene.Flags(prev) &= ~flag;
+        slot = next;
+        if (!next.IsNull) _scene.Flags(next) |= flag;
+        Notify(flag, prev, on: false);
+        Notify(flag, next, on: true);
+    }
+
+    private void Notify(NodeFlags flag, NodeHandle node, bool on)
+    {
+        if (flag == NodeFlags.Hovered && on) UpdateCursor(node);   // resolve even for null (back to arrow)
+        if (node.IsNull) return;
+        if (flag == NodeFlags.Hovered)
+        {
+            OnHoverChanged?.Invoke(node, on);
+            if (!on && _scene.IsLive(node)) _scene.GetPointerExit(node)?.Invoke();   // pointer left → reset hover preview
+        }
+        else if (flag == NodeFlags.Pressed) OnPressChanged?.Invoke(node, on);
+    }
+
+    /// <summary>Resolve the cursor for the hover chain — the nearest enabled node with an EXPLICIT <c>Cursor</c>
+    /// (CursorBit) wins and stops the walk, so a child's Arrow masks an ancestor I-beam/hand (WinUI's forced
+    /// SetCursor(MouseCursorArrow) on TextBox's delete button, TextBox_Partial.cpp:884). No explicit cursor anywhere
+    /// in the chain ⇒ system arrow — clickability does NOT imply the hand (WinUI: only HyperlinkButton shows it).</summary>
+    private void UpdateCursor(NodeHandle hover) => PublishCursor(ResolveCursorWalk(hover));
+
+    private CursorId ResolveCursorWalk(NodeHandle hover)
+    {
+        for (var n = hover; !n.IsNull; n = _scene.Parent(n))
+        {
+            if (!_scene.IsLive(n)) break;
+            ref InteractionInfo ii = ref _scene.Interaction(n);
+            if ((ii.HandlerMask & InteractionInfo.CursorBit) != 0 && (_scene.Flags(n) & NodeFlags.Disabled) == 0) return ii.Cursor;
+        }
+        return CursorId.Arrow;
+    }
+
+    private void PublishCursor(CursorId resolved)
+    {
+        if (resolved == _lastCursor) return;
+        _lastCursor = resolved;
+        OnCursorChanged?.Invoke(resolved);
+    }
+
+    // ── read-only text selection + hyperlink spans (rtb-01/rtb-02) ───────────────────────────────
+    // The dispatcher OWNS the gestures for SelectableTextBit / SpanLinksBit text leaves: it queries the text seam
+    // (the SAME editor queries EditableText drives — point↔index, range rects) and publishes the visuals through the
+    // EXISTING TextEditState/SetTextEditRects machinery, so the recorder paints read-only selection with the editor's
+    // brushes unchanged. WinUI equivalent: TextSelectionManager on CRichTextBlock/CTextBlock (RichTextBlock.cpp:1730).
+
+    private IFontSystem? ResolveFonts() => Fonts ?? TextSeam.Default;
+
+    private string SelectableTextOf(NodeHandle node) => _scene.Strings?.Resolve(_scene.Paint(node).Text) ?? "";
+
+    /// <summary>The seam wrap width for a text leaf's queries — the node's laid width when the style wraps, else
+    /// unbounded (the EditableText.QueryMaxWidth convention; matches the recorder's DrawGlyphRun Bounds.W).</summary>
+    private float QueryMaxWidth(NodeHandle node)
+    {
+        ref LayoutInput li = ref _scene.Layout(node);
+        return li.TextStyle.Wrap != TextWrap.NoWrap ? MathF.Max(1f, _scene.Bounds(node).W) : float.PositiveInfinity;
+    }
+
+    /// <summary>Press on a selectable text leaf: single click anchors the drag (no selection yet — unless it lands on
+    /// a hyperlink span, which keeps the press a clean link click); double-click selects the word under the press;
+    /// triple selects all (the RichEdit/WinUI TextSelectionManager click ladder).</summary>
+    private void BeginTextSelection(NodeHandle node, Point2 local, int clickCount)
+    {
+        if (ResolveFonts() is not { } fonts) return;
+        if (!_selText.IsNull && _selText != node) ClearTextSelection();
+        string text = SelectableTextOf(node);
+        if (text.Length == 0) return;
+        if (clickCount == 1 && HitLinkSpan(node, local) >= 0) return;   // a link press never starts a selection
+        int idx = fonts.HitTestText(text, _scene.Layout(node).TextStyle, QueryMaxWidth(node), local, out _);
+        _selText = node;
+        switch (clickCount)
+        {
+            case 1:
+                _selAnchor = idx;
+                _selDragging = true;
+                ApplyTextSelection(node, idx, idx);   // empty until the drag extends it
+                break;
+            case 2:
+            {
+                int ws = idx, we = idx;
+                while (ws > 0 && !char.IsWhiteSpace(text[ws - 1])) ws--;
+                while (we < text.Length && !char.IsWhiteSpace(text[we])) we++;
+                _selAnchor = ws;
+                _selDragging = true;   // WinUI keeps extending by drag after a double-click
+                ApplyTextSelection(node, ws, we);
+                break;
+            }
+            default:
+                _selAnchor = 0;
+                _selDragging = false;
+                ApplyTextSelection(node, 0, text.Length);
+                break;
+        }
+    }
+
+    private void ExtendTextSelection(Point2 local)
+    {
+        if (ResolveFonts() is not { } fonts) return;
+        var node = _selText;
+        string text = SelectableTextOf(node);
+        if (text.Length == 0) return;
+        int idx = fonts.HitTestText(text, _scene.Layout(node).TextStyle, QueryMaxWidth(node), local, out _);
+        ApplyTextSelection(node, Math.Min(_selAnchor, idx), Math.Max(_selAnchor, idx));
+    }
+
+    /// <summary>Commit a selection range: store it (Ctrl+C reads it back), flag the node's text-edit row
+    /// SelectionActive, and publish the seam's range rects through the pooled slab the recorder already draws
+    /// (selection highlight under the run + on-accent recolor — SceneRecorder's editor path, reused verbatim).</summary>
+    private void ApplyTextSelection(NodeHandle node, int start, int end)
+    {
+        _scene.SetTextSelection(node, start, end);
+        ref TextEditState tes = ref _scene.TextEditRef(node);
+        if (end > start) tes.Flags |= TextEditState.SelectionActive;
+        else tes.Flags &= unchecked((byte)~TextEditState.SelectionActive);
+
+        Span<RectF> rects = stackalloc RectF[32];
+        int n = 0;
+        if (end > start && ResolveFonts() is { } fonts)
+        {
+            string text = SelectableTextOf(node);
+            n = fonts.GetRangeRects(text, _scene.Layout(node).TextStyle, QueryMaxWidth(node), start, end, rects);
+        }
+        _scene.SetTextEditRects(node, rects[..n], default);
+        _scene.Mark(node, NodeFlags.PaintDirty);
+        RequestRerender();
+    }
+
+    private void ClearTextSelection()
+    {
+        var node = _selText;
+        _selText = NodeHandle.Null;
+        _selDragging = false;
+        if (node.IsNull || !_scene.IsLive(node)) return;
+        _scene.ClearTextSelection(node);
+        ref TextEditState tes = ref _scene.TextEditRef(node);
+        tes.Flags &= unchecked((byte)~TextEditState.SelectionActive);
+        _scene.SetTextEditRects(node, default, default);
+        _scene.Mark(node, NodeFlags.PaintDirty);
+        RequestRerender();
+    }
+
+    /// <summary>The hyperlink span index under a node-local point, or −1. Hit-tests the seam-published span LINK
+    /// rects (SpanRunRects on the node's span run — laid at measure, no font-seam touch here), then verifies the
+    /// span actually carries an action.</summary>
+    private int HitLinkSpan(NodeHandle node, Point2 local)
+    {
+        int runId = _scene.Layout(node).TextStyle.SpanRunId;
+        if (runId == 0 || SpanRunTable.Shared.Resolve(runId) is not { } run || run.Rects is not { } rects) return -1;
+        if (!_scene.TryGetSpanText(node, out var spans)) return -1;
+        var arts = rects.Rects;
+        for (int i = 0; i < arts.Length; i++)
+        {
+            if (arts[i].Kind != SpanStyle.LinkBit) continue;
+            var rr = arts[i].Rect;
+            if (local.X >= rr.X && local.X < rr.X + rr.W && local.Y >= rr.Y && local.Y < rr.Y + rr.H)
+            {
+                int si = arts[i].Span;
+                if ((uint)si < (uint)spans.Length && spans[si].OnClick is not null) return si;
+            }
+        }
+        return -1;
+    }
+
+    /// <summary>Per-move cursor over a span-text node: Hand over a hyperlink span's laid rect (WinUI
+    /// RichTextBlock.cpp:2995 SetCursor(MouseCursorHand)), else whatever the normal explicit-cursor walk resolves
+    /// (I-beam when selectable, arrow otherwise).</summary>
+    private void UpdateSpanCursor(NodeHandle node, Point2 abs)
+    {
+        var local = PointToLocal(node, abs);
+        PublishCursor(HitLinkSpan(node, local) >= 0 ? CursorId.Hand : ResolveCursorWalk(node));
+    }
+
+    private void OnKey(in InputEvent e)
+    {
+        int key = e.KeyCode;
+
+        // Gamepad translation (WinUI XYFocus): DPad/left-stick → directional focus, A → activate, B → cancel/Escape.
+        switch (key)
+        {
+            case Keys.GamepadDPadLeft or Keys.GamepadLeftThumbLeft: MoveFocusArrow(FocusDirection.Left); return;
+            case Keys.GamepadDPadRight or Keys.GamepadLeftThumbRight: MoveFocusArrow(FocusDirection.Right); return;
+            case Keys.GamepadDPadUp or Keys.GamepadLeftThumbUp: MoveFocusArrow(FocusDirection.Up); return;
+            case Keys.GamepadDPadDown or Keys.GamepadLeftThumbDown: MoveFocusArrow(FocusDirection.Down); return;
+            case Keys.GamepadA: key = Keys.Enter; break;
+            case Keys.GamepadB: key = Keys.Escape; break;
+        }
+
+        // An active item-drag is the most-modal gesture: Escape cancels it before any other routing (WinUI drag
+        // cancel). The pointer is still down — kill the click candidate so the eventual release does NOT click. A
+        // keyboard event carries no PointerId, but the item-drag is single-pointer, so clear the down candidate in
+        // EVERY slot (the captured contact's slot included — its later release then falls through without a click).
+        if (key == Keys.Escape && Drag.IsActive)
+        {
+            DragDrop.Cancel();   // L2 first: OnLeave fires on a live target, no drop
+            Drag.Cancel();
+            SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
+            ClearDownEverywhere();
+            return;
+        }
+
+        // Alt access-key bookkeeping: a bare Alt tap (down with nothing in between, then up) toggles access-key mode;
+        // a letter while Alt is held invokes the mnemonic directly (the WM_SYSKEYDOWN chord path).
+        if (key == Keys.Alt) { _altPending = !e.IsRepeat; return; }
+        _altPending = false;
+
+        if ((e.Mods & KeyModifiers.Alt) != 0 && Keys.IsAccessKeyCandidate(key))
+        {
+            if (InvokeAccessKey((char)key)) return;
+        }
+        if (_accessKeyMode)
+        {
+            _accessKeyMode = false;
+            if (Keys.IsAccessKeyCandidate(key) && InvokeAccessKey((char)key)) return;
+            if (key == Keys.Escape) return;   // Escape only exits access-key mode
+        }
+
+        if (OnKeyPreview is not null && OnKeyPreview(key)) return;   // an open overlay can swallow Escape here
+
+        // ANY other key while a Space/Enter press is held cancels it without firing, and the new key then routes
+        // normally (ButtonBaseKeyProcess.h:64-70). Escape is handled below as the explicit, CONSUMED cancel.
+        if (!_keyArmed.IsNull && key != _keyArmedKey && key != Keys.Escape) CancelKeyArm(fire: false);
+
+        if (key == Keys.Tab)
+        {
+            MoveFocus(forward: (e.Mods & KeyModifiers.Shift) == 0);
+            return;
+        }
+
+        // Escape cancels a held Space/Enter-activation without firing (WinUI button semantics).
+        if (key == Keys.Escape && !_keyArmed.IsNull) { CancelKeyArm(fire: false); return; }
+
+        // Context-menu key (VK_APPS) / Shift+F10 → context request on the focused node (keyboard passes its centre).
+        if ((key == Keys.Apps || (key == Keys.F10 && (e.Mods & KeyModifiers.Shift) != 0)) && !_focused.IsNull)
+        {
+            var r = _scene.AbsoluteRect(_focused);
+            if (DispatchContextRequest(_focused, new Point2(r.X + r.W / 2f, r.Y + r.H / 2f))) return;
+        }
+
+        if (!_focused.IsNull)
+        {
+            bool clickable = (_scene.Flags(_focused) & NodeFlags.Disabled) == 0 &&
+                             (_scene.Interaction(_focused).HandlerMask & InteractionInfo.ClickBit) != 0;
+
+            // Modality 2 — keyboard activation with WinUI ButtonBase semantics (ButtonBaseKeyProcess.h): the FIRST
+            // Space/Enter key-down arms the press (pressed visual); held-key auto-repeats are ignored, so a held key
+            // yields exactly ONE activation; the click fires on key-UP (ClickMode.Release reentrancy rule,
+            // ButtonBase_Partial.cpp:475-483). A RepeatButton is ClickMode.Press (RepeatButton_Partial.cpp:29): its
+            // click fires on the DOWN edge — Space additionally arms the engine repeat timer (never the OS key-repeat
+            // rate), Enter never repeats (RepeatButton_Partial.cpp:212-217). Space-only controls (CheckBox/
+            // RadioButton/ToggleSwitch — NoEnterActivateBit) let Enter fall through to normal key routing.
+            if ((key == Keys.Space || key == Keys.Enter) && clickable &&
+                (key == Keys.Space || (_scene.Interaction(_focused).HandlerMask & InteractionInfo.NoEnterActivateBit) == 0))
+            {
+                if (e.IsRepeat || !_keyArmed.IsNull) return;   // held key / second activation key: one press only
+                _keyArmed = _focused;
+                _keyArmedKey = key;
+                _scene.Flags(_focused) |= NodeFlags.Pressed;
+                OnPressChanged?.Invoke(_focused, true);
+                if ((_scene.Interaction(_focused).HandlerMask & InteractionInfo.RepeatBit) != 0)
+                {
+                    if (key == Keys.Space) OnRepeatArmed?.Invoke(_focused);   // fires once now + repeats while held
+                    else _scene.GetClickHandler(_focused)?.Invoke();          // Enter: exactly one click, down edge
+                }
+                return;
+            }
+
+            // Route to the focused node and bubble up ancestors until Handled (disabled nodes don't receive keys).
+            var args = new KeyEventArgs(key, e.Mods, e.IsRepeat);
+            for (var n = _focused; !n.IsNull; n = _scene.Parent(n))
+            {
+                if ((_scene.Flags(n) & NodeFlags.Disabled) == 0) _scene.GetKeyHandler(n)?.Invoke(args);
+                if (args.Handled) return;
+            }
+        }
+
+        // Ctrl+C over a read-only selection (rtb-02): copy the focused selectable node's selected text through the
+        // clipboard seam (WinUI TextSelectionManager::CopySelectionToClipboard — TextSelectionManager.cpp:30-41).
+        // After focused routing: an editor's own Ctrl+C (EditableText) already consumed the chord above.
+        if (key == 'C' && (e.Mods & KeyModifiers.Ctrl) != 0 && !_focused.IsNull && _scene.IsLive(_focused)
+            && (_scene.Interaction(_focused).HandlerMask & InteractionInfo.SelectableTextBit) != 0
+            && _scene.TryGetTextSelection(_focused, out int selS, out int selE) && selE > selS)
+        {
+            string selDoc = SelectableTextOf(_focused);
+            if (selE <= selDoc.Length) Clipboard?.SetText(selDoc.Substring(selS, selE - selS));
+            return;
+        }
+
+        // Keyboard accelerators (WinUI ProcessKeyboardAccelerators order: after focused routing leaves it unhandled).
+        if ((e.Mods & (KeyModifiers.Ctrl | KeyModifiers.Alt)) != 0 || (key >= Keys.F1 && key <= Keys.F12))
+        {
+            var owner = _scene.FindAccelerator(key, e.Mods);
+            if (!owner.IsNull) _scene.GetClickHandler(owner)?.Invoke();
+        }
+    }
+
+    private void OnKeyUp(in InputEvent e)
+    {
+        int key = e.KeyCode;
+        // The gamepad A/B translation must mirror OnKey's, or a GamepadA-armed press would never release.
+        if (key == Keys.GamepadA) key = Keys.Enter;
+        else if (key == Keys.GamepadB) key = Keys.Escape;
+
+        if (key == Keys.Alt)
+        {
+            if (_altPending) _accessKeyMode = !_accessKeyMode;   // bare Alt tap toggles access-key mode
+            _altPending = false;
+            return;
+        }
+        if ((key == Keys.Space || key == Keys.Enter) && !_keyArmed.IsNull && key == _keyArmedKey)
+        {
+            // Released over the armed node → activate (ClickMode.Release). Repeat nodes already fired on the down
+            // edge (Enter) or through the ticker (Space) — their release only clears the press, never re-fires.
+            bool repeats = _scene.IsLive(_keyArmed) &&
+                           (_scene.Interaction(_keyArmed).HandlerMask & InteractionInfo.RepeatBit) != 0;
+            CancelKeyArm(fire: !repeats);
+        }
+    }
+
+    /// <summary>Release a held Space/Enter-activation: clear the pressed visual, stop a keyboard-armed repeat ticker;
+    /// <paramref name="fire"/> = invoke the click (key-up over the armed node).</summary>
+    private void CancelKeyArm(bool fire)
+    {
+        var node = _keyArmed;
+        int key = _keyArmedKey;
+        _keyArmed = NodeHandle.Null;
+        _keyArmedKey = 0;
+        if (node.IsNull || !_scene.IsLive(node)) return;
+        if (key == Keys.Space && (_scene.Interaction(node).HandlerMask & InteractionInfo.RepeatBit) != 0)
+            OnRepeatReleased?.Invoke(node);
+        _scene.Flags(node) &= ~NodeFlags.Pressed;
+        OnPressChanged?.Invoke(node, false);
+        if (fire && node == _focused && (_scene.Flags(node) & NodeFlags.Disabled) == 0)
+            _scene.GetClickHandler(node)?.Invoke();
+    }
+
+    private bool InvokeAccessKey(char key)
+    {
+        var owner = _scene.FindAccessKey(key);
+        if (owner.IsNull) return false;
+        _accessKeyMode = false;
+        _scene.GetClickHandler(owner)?.Invoke();
+        return true;
+    }
+
+    /// <summary>Route a text (character) codepoint to the focused node, bubbling up ancestors until Handled.</summary>
+    private bool OnChar(int codepoint)
+    {
+        if (_focused.IsNull) return false;
+        var args = new CharEventArgs(codepoint);   // cold path: only allocates while the user is typing
+        for (var n = _focused; !n.IsNull; n = _scene.Parent(n))
+        {
+            if ((_scene.Flags(n) & NodeFlags.Disabled) == 0 &&
+                (_scene.Interaction(n).HandlerMask & InteractionInfo.CharBit) != 0)
+            {
+                _scene.GetCharHandler(n)?.Invoke(args);
+                if (args.Handled) return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>Move focus to the next/previous focusable node in tab order (TabIndex, then document order; cycles).
+    /// Constrained to the active focus scope when one is pushed (dialog/flyout focus trap).</summary>
+    public void MoveFocus(bool forward)
+    {
+        _focusables.Clear();
+        Collect(ScopeRoot, _focusables);
+        StableSortByTabIndex(_focusables);
+        if (_focusables.Count == 0) { SetFocus(NodeHandle.Null); return; }
+
+        int idx = _focusables.IndexOf(_focused);
+        int n = _focusables.Count;
+        int next = idx < 0 ? (forward ? 0 : n - 1) : (forward ? (idx + 1) % n : (idx - 1 + n) % n);
+        SetFocus(_focusables[next], visual: true);   // keyboard focus → show the focus ring
+    }
+
+    /// <summary>Directional (arrow/XY) focus movement: from the focused node, pick the nearest focusable in
+    /// <paramref name="dir"/> (primary-axis distance dominates; cross-axis breaks ties). For roving lists/grids.</summary>
+    public void MoveFocusArrow(FocusDirection dir)
+    {
+        if (_focused.IsNull) { MoveFocus(forward: true); return; }
+        _focusables.Clear();
+        Collect(ScopeRoot, _focusables);
+        if (_focusables.Count == 0) return;
+
+        var cur = _scene.AbsoluteRect(_focused);
+        float cx = cur.X + cur.W * 0.5f, cy = cur.Y + cur.H * 0.5f;
+        NodeHandle best = NodeHandle.Null;
+        float bestScore = float.MaxValue;
+        bool horizontal = dir is FocusDirection.Left or FocusDirection.Right;
+        foreach (var n in _focusables)
+        {
+            if (n == _focused) continue;
+            var r = _scene.AbsoluteRect(n);
+            float dx = (r.X + r.W * 0.5f) - cx, dy = (r.Y + r.H * 0.5f) - cy;
+            bool inDir = dir switch
+            {
+                FocusDirection.Left => dx < -1f,
+                FocusDirection.Right => dx > 1f,
+                FocusDirection.Up => dy < -1f,
+                FocusDirection.Down => dy > 1f,
+                _ => false,
+            };
+            if (!inDir) continue;
+            float primary = horizontal ? MathF.Abs(dx) : MathF.Abs(dy);
+            float cross = horizontal ? MathF.Abs(dy) : MathF.Abs(dx);
+            float score = primary + cross * 2f;   // bias toward staying on the same row/column
+            if (score < bestScore) { bestScore = score; best = n; }
+        }
+        if (!best.IsNull) SetFocus(best, visual: true);
+    }
+
+    /// <summary>First focusable within <paramref name="root"/>'s subtree (tab order) — for focus-trap entry / menus.</summary>
+    public NodeHandle FirstFocusableIn(NodeHandle root)
+    {
+        _scoped.Clear();
+        Collect(root, _scoped);
+        StableSortByTabIndex(_scoped);
+        return _scoped.Count > 0 ? _scoped[0] : NodeHandle.Null;
+    }
+
+    /// <summary>Last focusable within <paramref name="root"/>'s subtree (tab order) — for Shift-Tab focus-trap wrap.</summary>
+    public NodeHandle LastFocusableIn(NodeHandle root)
+    {
+        _scoped.Clear();
+        Collect(root, _scoped);
+        StableSortByTabIndex(_scoped);
+        return _scoped.Count > 0 ? _scoped[^1] : NodeHandle.Null;
+    }
+
+    /// <summary>Next/previous focusable within <paramref name="root"/>, cycling — roving-tabindex within a list/menu/overlay.</summary>
+    public NodeHandle NextFocusableIn(NodeHandle root, NodeHandle current, bool forward = true)
+    {
+        _scoped.Clear();
+        Collect(root, _scoped);
+        StableSortByTabIndex(_scoped);
+        if (_scoped.Count == 0) return NodeHandle.Null;
+        int idx = _scoped.IndexOf(current);
+        int n = _scoped.Count;
+        int next = idx < 0 ? (forward ? 0 : n - 1) : (forward ? (idx + 1) % n : (idx - 1 + n) % n);
+        return _scoped[next];
+    }
+
+    // Stable insertion sort by effective TabIndex (explicit positive indices first ascending; default 0/unset keep
+    // document order at the end). Stable + in-place + alloc-free; the focusable count is small (cold Tab/arrow path).
+    private void StableSortByTabIndex(List<NodeHandle> list)
+    {
+        for (int i = 1; i < list.Count; i++)
+        {
+            var node = list[i];
+            int key = TabKey(node);
+            int j = i - 1;
+            while (j >= 0 && TabKey(list[j]) > key) { list[j + 1] = list[j]; j--; }
+            list[j + 1] = node;
+        }
+    }
+
+    private int TabKey(NodeHandle n) { int t = _scene.Interaction(n).TabIndex; return t > 0 ? t : int.MaxValue; }
+
+    /// <summary>Move focus. <paramref name="visual"/> = show the focus ring (keyboard/Tab); pointer focus passes false.
+    /// Focus-visual transitions mark the affected nodes PaintDirty and request a frame — the ring is paint state.
+    /// When focus actually MOVES, the old node's <c>OnFocusChanged</c> handler fires with false and the new node's with
+    /// true (WinUI LostFocus → GotFocus order), AFTER all flag updates — so a GotFocus handler can read
+    /// <see cref="NodeFlags.FocusVisual"/> to distinguish keyboard focus (select-all) from pointer focus.</summary>
+    public void SetFocus(NodeHandle node, bool visual = false)
+    {
+        if (!node.IsNull && (_scene.Flags(node) & NodeFlags.Disabled) != 0) return;   // can't focus a disabled node — keep current focus
+        if (!_keyArmed.IsNull && node != _keyArmed) CancelKeyArm(fire: false);  // focus moved while Space/Enter held → no activation
+        var prev = _focused;
+        bool repaint = false;
+        if (!_focused.IsNull && _scene.IsLive(_focused))
+        {
+            if ((_scene.Flags(_focused) & NodeFlags.FocusVisual) != 0)
+            {
+                _scene.Mark(_focused, NodeFlags.PaintDirty);   // the old ring must disappear
+                repaint = true;
+            }
+            _scene.Flags(_focused) &= ~(NodeFlags.Focused | NodeFlags.FocusVisual);
+        }
+        _focused = node;
+        if (!node.IsNull)
+        {
+            _scene.Flags(node) |= NodeFlags.Focused;
+            if (visual)
+            {
+                _scene.Flags(node) |= NodeFlags.FocusVisual;
+                _scene.Mark(node, NodeFlags.PaintDirty);
+                repaint = true;
+            }
+            else _scene.Flags(node) &= ~NodeFlags.FocusVisual;
+        }
+        if (prev != node)
+        {
+            // WinUI GotFocus/LostFocus are ROUTED (bubbling) events: an ancestor with an OnFocusChanged handler hears
+            // focus ENTERING/LEAVING its SUBTREE, fired only on boundary crossings. The focused node itself keeps the
+            // exact pre-existing self semantics. ToolTipService's keyboard-focus trigger hangs off this
+            // (microsoft-ui-xaml ToolTipService_Partial.cpp:1635 OnOwnerGotFocus on the OWNER element).
+            if (!prev.IsNull && _scene.IsLive(prev))
+            {
+                if ((_scene.Interaction(prev).HandlerMask & InteractionInfo.FocusBit) != 0)
+                    _scene.GetFocusChanged(prev)?.Invoke(false);
+                for (var n = _scene.Parent(prev); !n.IsNull; n = _scene.Parent(n))
+                    if ((_scene.Interaction(n).HandlerMask & InteractionInfo.FocusBit) != 0 && !IsSelfOrAncestorOf(n, node))
+                        _scene.GetFocusChanged(n)?.Invoke(false);
+            }
+            if (!node.IsNull && _scene.IsLive(node) && node == _focused)   // a LostFocus handler may have re-moved focus
+            {
+                if ((_scene.Interaction(node).HandlerMask & InteractionInfo.FocusBit) != 0)
+                    _scene.GetFocusChanged(node)?.Invoke(true);
+                for (var n = _scene.Parent(node); !n.IsNull && node == _focused; n = _scene.Parent(n))
+                    if ((_scene.Interaction(n).HandlerMask & InteractionInfo.FocusBit) != 0 && !IsSelfOrAncestorOf(n, prev))
+                        _scene.GetFocusChanged(n)?.Invoke(true);
+            }
+        }
+        if (repaint) RequestRerender();
+    }
+
+    /// <summary>Resolve a pointer-activation focus target: the nearest self-or-ancestor carrying
+    /// <see cref="NodeFlags.Focusable"/> (the Reconciler keeps that flag mirrored from <c>InteractionInfo.Focusable</c> =
+    /// <c>TabStop ?? (Focusable || OnClick != null)</c>). WinUI <c>Control.IsTabStop=False</c> parts cannot receive
+    /// focus at all — pointer included — so a click on them lands focus on the focusable control root above (the
+    /// PasswordBox RevealButton / TextBox DeleteButton keep the FIELD focused; PasswordBox_themeresources.xaml:193 +
+    /// TextBox_themeresources.xaml:339, both IsTabStop=False). Null = nothing focusable in the chain — the caller must
+    /// leave focus unchanged. Disabled nodes are skipped (they cannot take focus); the chain is already visible
+    /// (hit-testing requires Visible on every ancestor).</summary>
+    private NodeHandle NearestFocusable(NodeHandle node)
+    {
+        for (var n = node; !n.IsNull && _scene.IsLive(n); n = _scene.Parent(n))
+            if ((_scene.Flags(n) & (NodeFlags.Focusable | NodeFlags.Disabled)) == NodeFlags.Focusable) return n;
+        return NodeHandle.Null;
+    }
+
+    /// <summary>True if <paramref name="root"/> is <paramref name="node"/> or one of its ancestors — i.e. focus stayed
+    /// inside <paramref name="root"/>'s subtree, so no enter/leave boundary was crossed for it.</summary>
+    private bool IsSelfOrAncestorOf(NodeHandle root, NodeHandle node)
+    {
+        if (node.IsNull || !_scene.IsLive(node)) return false;
+        for (var n = node; !n.IsNull; n = _scene.Parent(n))
+            if (n == root) return true;
+        return false;
+    }
+
+    private void Collect(NodeHandle node, List<NodeHandle> into)
+    {
+        if (node.IsNull) return;
+        ref InteractionInfo ii = ref _scene.Interaction(node);
+        if (ii.Focusable && (_scene.Flags(node) & (NodeFlags.Visible | NodeFlags.Disabled)) == NodeFlags.Visible) into.Add(node);
+        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) Collect(c, into);
+    }
+
+    /// <summary>Event position (window space) → the node's MODEL-LOCAL coords, clamped to its box (slider/scrollbar
+    /// drag). Inverse-maps through every ancestor transform (scale-aware: a slider inside a Viewbox scrubs true).</summary>
+    private Point2 LocalPos(NodeHandle node, Point2 abs)
+    {
+        var l = PointToLocal(node, abs);
+        return new Point2(Math.Clamp(l.X, 0f, _scene.Bounds(node).W), Math.Clamp(l.Y, 0f, _scene.Bounds(node).H));
+    }
+
+    private readonly List<NodeHandle> _chain = new();   // reused root→node buffer for PointToLocal (0 steady alloc)
+
+    /// <summary>Window-space point → <paramref name="node"/>'s model-local space, undoing every ancestor's frame the
+    /// way the recorder composes it (translate(bounds) ∘ origin-conjugated LocalTransform, counter-scale about the
+    /// centre) — the inverse of SceneRecorder.Walk's world transform.</summary>
+    private Point2 PointToLocal(NodeHandle node, Point2 abs)
+    {
+        _chain.Clear();
+        for (var n = node; !n.IsNull; n = _scene.Parent(n)) _chain.Add(n);
+        var q = abs;
+        float sx = 1f, sy = 1f;
+        for (int i = _chain.Count - 1; i >= 0; i--)
+            if (!StepIntoNode(_chain[i], ref q, ref sx, ref sy)) return q;   // degenerate scale: best-effort
+        return q;
+    }
+
+    /// <summary>Undo ONE node's frame: parent-content point → this node's model-local point, mirroring the recorder's
+    /// composition (translate(b) ∘ [T(o)∘L∘T(−o)] then the counter-scale block). Updates the running net scale the
+    /// children inherit. Interaction hover/press grow is deliberately NOT mirrored — the hit target keeps its model
+    /// box while a thumb visually grows (matches the previous engine behavior and WinUI's layout-driven hit testing).</summary>
+    private bool StepIntoNode(NodeHandle node, ref Point2 q, ref float netSx, ref float netSy)
+    {
+        ref RectF b = ref _scene.Bounds(node);
+        ref NodePaint np = ref _scene.Paint(node);
+        float lx = q.X - b.X, ly = q.Y - b.Y;
+        if (!np.LocalTransform.IsIdentity)
+        {
+            float ox = b.W * np.OriginX, oy = b.H * np.OriginY;
+            // forward: l' = L(l − o) + o  ⇒  l = L⁻¹(l' − o) + o
+            if (!np.LocalTransform.TryInverseTransform(new Point2(lx - ox, ly - oy), out var inv))
+            {
+                q = new Point2(float.MinValue, float.MinValue);   // zero-scale renders nothing: miss everything
+                return false;
+            }
+            lx = inv.X + ox; ly = inv.Y + oy;
+        }
+        // Counter-scaled node (drag-lift label …): the recorder un-scales it about its centre by the PARENT net scale
+        // (SceneRecorder counter block) — the inverse re-applies that scale to the point.
+        if ((_scene.Flags(node) & NodeFlags.CounterScaled) != 0 && (netSx != 1f || netSy != 1f))
+        {
+            float cx = b.W * 0.5f, cy = b.H * 0.5f;
+            lx = (lx - cx) * netSx + cx;
+            ly = (ly - cy) * netSy + cy;
+            netSx = 1f; netSy = 1f;
+        }
+        netSx *= np.LocalTransform.M11;
+        netSy *= np.LocalTransform.M22;
+        q = new Point2(lx, ly);
+        return true;
+    }
+
+    private Point2 _hitAbs;   // the window-space point of the in-flight hit walk (pass-through rect checks)
+
+    public NodeHandle HitTest(Point2 p)
+    {
+        if (_scene.Root.IsNull) return NodeHandle.Null;
+        _hitAbs = p;
+        return Hit(_scene.Root, p, 1f, 1f);
+    }
+
+    /// <summary>Deepest visible node containing the point, regardless of click handler (used to find a scroll target).</summary>
+    private NodeHandle HitTestAny(Point2 p)
+    {
+        if (_scene.Root.IsNull) return NodeHandle.Null;
+        _hitAbs = p;
+        return HitAny(_scene.Root, p, 1f, 1f);
+    }
+
+    /// <summary>WinUI <c>OverlayInputPassThroughElement</c>: a light-dismiss scrim yields the hit when the pointer is
+    /// over its registered pass-through subtree — input falls through to the content beneath (the MenuBar keeps
+    /// hover-switching titles with a menu open, FlyoutBase_Partial.cpp:3922-3938).</summary>
+    private bool YieldsToPassThrough(NodeHandle node)
+    {
+        if (!_scene.TryGetHitTestPassThrough(node, out var pass) || pass.IsNull || !_scene.IsLive(pass)) return false;
+        var pr = _scene.AbsoluteRect(pass);
+        return _hitAbs.X >= pr.X && _hitAbs.X < pr.X + pr.W && _hitAbs.Y >= pr.Y && _hitAbs.Y < pr.Y + pr.H;
+    }
+
+    // Both walks descend the POINT through each node's inverse transform (scale-aware — WinUI hit-tests the rendered
+    // geometry, so a button inside a 2× Viewbox is clickable across its whole rendered extent), mirroring the
+    // recorder's world composition exactly. q is the point in the node's PARENT-content space.
+
+    private NodeHandle HitAny(NodeHandle node, Point2 q, float netSx, float netSy)
+    {
+        var flags = _scene.Flags(node);
+        if ((flags & (NodeFlags.Visible | NodeFlags.HitTestVisible)) != (NodeFlags.Visible | NodeFlags.HitTestVisible))
+            return NodeHandle.Null;
+
+        ref RectF b = ref _scene.Bounds(node);
+        var local = q;
+        if (!StepIntoNode(node, ref local, ref netSx, ref netSy)) return NodeHandle.Null;
+        bool inside = local.X >= 0f && local.X < b.W && local.Y >= 0f && local.Y < b.H;
+        if ((flags & NodeFlags.ClipsToBounds) != 0 && !inside) return NodeHandle.Null;
+
+        NodeHandle result = NodeHandle.Null;
+        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
+        {
+            var r = HitAny(c, local, netSx, netSy);
+            if (!r.IsNull) result = r;
+        }
+        if (result.IsNull && inside && !YieldsToPassThrough(node))
+            result = node;
+        return result;
+    }
+
+    private NodeHandle Hit(NodeHandle node, Point2 q, float netSx, float netSy)
+    {
+        var flags = _scene.Flags(node);
+        if ((flags & (NodeFlags.Visible | NodeFlags.HitTestVisible)) != (NodeFlags.Visible | NodeFlags.HitTestVisible))
+            return NodeHandle.Null;
+
+        ref RectF b = ref _scene.Bounds(node);
+        var local = q;
+        if (!StepIntoNode(node, ref local, ref netSx, ref netSy)) return NodeHandle.Null;
+        bool inside = local.X >= 0f && local.X < b.W && local.Y >= 0f && local.Y < b.H;
+        if ((flags & NodeFlags.ClipsToBounds) != 0 && !inside) return NodeHandle.Null;
+
+        NodeHandle result = NodeHandle.Null;
+        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
+        {
+            var r = Hit(c, local, netSx, netSy);
+            if (!r.IsNull) result = r;
+        }
+
+        if (result.IsNull)
+        {
+            ref InteractionInfo ii = ref _scene.Interaction(node);
+            // CursorBit makes a node hover-resolvable in its own right (WinUI: SetCursor applies on direct hover of
+            // any hit-testable element — XAML hit-testing is background-gated, not handler-gated), so an editing
+            // surface's own padding/gaps still show its I-beam. Harmless for clicks: no handler ⇒ nothing fires.
+            // SelectableText/SpanLinks text leaves hit-test too (drag-select anchoring; hyperlink hover/click —
+            // WinUI's selectable/hyperlink text is hit-testable, RichTextBlock.cpp:2988-3001).
+            if ((flags & NodeFlags.Disabled) == 0 &&   // disabled nodes don't hit-test (gates click/pointer/drag/repeat)
+                (ii.HandlerMask & (InteractionInfo.ClickBit | InteractionInfo.PointerBit | InteractionInfo.PressedBit | InteractionInfo.DragBit | InteractionInfo.CursorBit | InteractionInfo.SelectableTextBit | InteractionInfo.SpanLinksBit | InteractionInfo.GestureBit)) != 0 &&
+                inside && !YieldsToPassThrough(node))
+            {
+                result = node;
+            }
+        }
+        return result;
+    }
+}

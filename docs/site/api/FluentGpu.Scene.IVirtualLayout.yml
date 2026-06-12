@@ -1,0 +1,314 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Scene.IVirtualLayout
+  commentId: T:FluentGpu.Scene.IVirtualLayout
+  id: IVirtualLayout
+  parent: FluentGpu.Scene
+  children:
+  - FluentGpu.Scene.IVirtualLayout.ContentExtent(System.Int32,System.Single)
+  - FluentGpu.Scene.IVirtualLayout.ItemRect(System.Int32,System.Single)
+  - FluentGpu.Scene.IVirtualLayout.Window(System.Int32,System.Single,System.Single,System.Single,System.Int32,System.Int32@,System.Int32@)
+  langs:
+  - csharp
+  - vb
+  name: IVirtualLayout
+  nameWithType: IVirtualLayout
+  fullName: FluentGpu.Scene.IVirtualLayout
+  type: Interface
+  source:
+    remote:
+      path: src/FluentGpu.Scene/VirtualLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IVirtualLayout
+    path: ../../src/FluentGpu.Scene/VirtualLayout.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    A pluggable virtualizing layout: PURE, ALLOCATION-FREE arithmetic mapping (itemCount, viewport, scrollOffset) to
+
+    the realize window + per-item content-space rects. The engine calls it ONLY on realize/arrange frames (a steady
+
+    in-window scroll is transform-only and never touches it), and the methods return structs / via out-params — so a
+
+    custom layout costs zero per-frame managed allocation, honoring the engine's core contract. Implement this to make
+
+    any virtualized layout (lists, card grids, staggered walls, …). Built-ins: <xref href="FluentGpu.Scene.StackVirtualLayout" data-throw-if-not-resolved="false"></xref>,
+
+    <xref href="FluentGpu.Scene.GridVirtualLayout" data-throw-if-not-resolved="false"></xref>, <xref href="FluentGpu.Scene.HorizontalGridVirtualLayout" data-throw-if-not-resolved="false"></xref>, <xref href="FluentGpu.Scene.LinedFlowLayout" data-throw-if-not-resolved="false"></xref>,
+
+    <xref href="FluentGpu.Scene.SpanningGridVirtualLayout" data-throw-if-not-resolved="false"></xref>. Variable-extent (measured) layouts implement the widened seam
+
+    <xref href="FluentGpu.Scene.IMeasuredVirtualLayout" data-throw-if-not-resolved="false"></xref> — same contract plus estimate-then-correct feedback.
+  example: []
+  syntax:
+    content: public interface IVirtualLayout
+    content.vb: Public Interface IVirtualLayout
+  derivedClasses:
+  - FluentGpu.Scene.GridVirtualLayout
+  - FluentGpu.Scene.GroupedListVirtualLayout
+  - FluentGpu.Scene.HorizontalGridVirtualLayout
+  - FluentGpu.Scene.LinedFlowLayout
+  - FluentGpu.Scene.MeasuredStackVirtualLayout
+  - FluentGpu.Scene.SpanningGridVirtualLayout
+  - FluentGpu.Scene.StackVirtualLayout
+- uid: FluentGpu.Scene.IVirtualLayout.ContentExtent(System.Int32,System.Single)
+  commentId: M:FluentGpu.Scene.IVirtualLayout.ContentExtent(System.Int32,System.Single)
+  id: ContentExtent(System.Int32,System.Single)
+  parent: FluentGpu.Scene.IVirtualLayout
+  langs:
+  - csharp
+  - vb
+  name: ContentExtent(int, float)
+  nameWithType: IVirtualLayout.ContentExtent(int, float)
+  fullName: FluentGpu.Scene.IVirtualLayout.ContentExtent(int, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/VirtualLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ContentExtent
+    path: ../../src/FluentGpu.Scene/VirtualLayout.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: Total scroll-axis extent (the published ContentSize) for <code class="paramref">itemCount</code> items.
+  example: []
+  syntax:
+    content: float ContentExtent(int itemCount, float crossSize)
+    parameters:
+    - id: itemCount
+      type: System.Int32
+    - id: crossSize
+      type: System.Single
+    return:
+      type: System.Single
+    content.vb: Function ContentExtent(itemCount As Integer, crossSize As Single) As Single
+  overload: FluentGpu.Scene.IVirtualLayout.ContentExtent*
+  nameWithType.vb: IVirtualLayout.ContentExtent(Integer, Single)
+  fullName.vb: FluentGpu.Scene.IVirtualLayout.ContentExtent(Integer, Single)
+  name.vb: ContentExtent(Integer, Single)
+- uid: FluentGpu.Scene.IVirtualLayout.Window(System.Int32,System.Single,System.Single,System.Single,System.Int32,System.Int32@,System.Int32@)
+  commentId: M:FluentGpu.Scene.IVirtualLayout.Window(System.Int32,System.Single,System.Single,System.Single,System.Int32,System.Int32@,System.Int32@)
+  id: Window(System.Int32,System.Single,System.Single,System.Single,System.Int32,System.Int32@,System.Int32@)
+  parent: FluentGpu.Scene.IVirtualLayout
+  langs:
+  - csharp
+  - vb
+  name: Window(int, float, float, float, int, out int, out int)
+  nameWithType: IVirtualLayout.Window(int, float, float, float, int, out int, out int)
+  fullName: FluentGpu.Scene.IVirtualLayout.Window(int, float, float, float, int, out int, out int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/VirtualLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Window
+    path: ../../src/FluentGpu.Scene/VirtualLayout.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: The [first,last) item range to realize for <code class="paramref">scrollOffset</code> (incl. <code class="paramref">overscan</code>).
+  example: []
+  syntax:
+    content: void Window(int itemCount, float crossSize, float viewportExtent, float scrollOffset, int overscan, out int first, out int last)
+    parameters:
+    - id: itemCount
+      type: System.Int32
+    - id: crossSize
+      type: System.Single
+    - id: viewportExtent
+      type: System.Single
+    - id: scrollOffset
+      type: System.Single
+    - id: overscan
+      type: System.Int32
+    - id: first
+      type: System.Int32
+    - id: last
+      type: System.Int32
+    content.vb: Sub Window(itemCount As Integer, crossSize As Single, viewportExtent As Single, scrollOffset As Single, overscan As Integer, first As Integer, last As Integer)
+  overload: FluentGpu.Scene.IVirtualLayout.Window*
+  nameWithType.vb: IVirtualLayout.Window(Integer, Single, Single, Single, Integer, Integer, Integer)
+  fullName.vb: FluentGpu.Scene.IVirtualLayout.Window(Integer, Single, Single, Single, Integer, Integer, Integer)
+  name.vb: Window(Integer, Single, Single, Single, Integer, Integer, Integer)
+- uid: FluentGpu.Scene.IVirtualLayout.ItemRect(System.Int32,System.Single)
+  commentId: M:FluentGpu.Scene.IVirtualLayout.ItemRect(System.Int32,System.Single)
+  id: ItemRect(System.Int32,System.Single)
+  parent: FluentGpu.Scene.IVirtualLayout
+  langs:
+  - csharp
+  - vb
+  name: ItemRect(int, float)
+  nameWithType: IVirtualLayout.ItemRect(int, float)
+  fullName: FluentGpu.Scene.IVirtualLayout.ItemRect(int, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/VirtualLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ItemRect
+    path: ../../src/FluentGpu.Scene/VirtualLayout.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: Content-space rect of item <code class="paramref">index</code> (LOCAL to the scroll content origin).
+  example: []
+  syntax:
+    content: RectF ItemRect(int index, float crossSize)
+    parameters:
+    - id: index
+      type: System.Int32
+    - id: crossSize
+      type: System.Single
+    return:
+      type: FluentGpu.Foundation.RectF
+    content.vb: Function ItemRect(index As Integer, crossSize As Single) As RectF
+  overload: FluentGpu.Scene.IVirtualLayout.ItemRect*
+  nameWithType.vb: IVirtualLayout.ItemRect(Integer, Single)
+  fullName.vb: FluentGpu.Scene.IVirtualLayout.ItemRect(Integer, Single)
+  name.vb: ItemRect(Integer, Single)
+references:
+- uid: FluentGpu.Scene.StackVirtualLayout
+  commentId: T:FluentGpu.Scene.StackVirtualLayout
+  href: FluentGpu.Scene.StackVirtualLayout.html
+  name: StackVirtualLayout
+  nameWithType: StackVirtualLayout
+  fullName: FluentGpu.Scene.StackVirtualLayout
+- uid: FluentGpu.Scene.GridVirtualLayout
+  commentId: T:FluentGpu.Scene.GridVirtualLayout
+  href: FluentGpu.Scene.GridVirtualLayout.html
+  name: GridVirtualLayout
+  nameWithType: GridVirtualLayout
+  fullName: FluentGpu.Scene.GridVirtualLayout
+- uid: FluentGpu.Scene.HorizontalGridVirtualLayout
+  commentId: T:FluentGpu.Scene.HorizontalGridVirtualLayout
+  href: FluentGpu.Scene.HorizontalGridVirtualLayout.html
+  name: HorizontalGridVirtualLayout
+  nameWithType: HorizontalGridVirtualLayout
+  fullName: FluentGpu.Scene.HorizontalGridVirtualLayout
+- uid: FluentGpu.Scene.LinedFlowLayout
+  commentId: T:FluentGpu.Scene.LinedFlowLayout
+  href: FluentGpu.Scene.LinedFlowLayout.html
+  name: LinedFlowLayout
+  nameWithType: LinedFlowLayout
+  fullName: FluentGpu.Scene.LinedFlowLayout
+- uid: FluentGpu.Scene.SpanningGridVirtualLayout
+  commentId: T:FluentGpu.Scene.SpanningGridVirtualLayout
+  href: FluentGpu.Scene.SpanningGridVirtualLayout.html
+  name: SpanningGridVirtualLayout
+  nameWithType: SpanningGridVirtualLayout
+  fullName: FluentGpu.Scene.SpanningGridVirtualLayout
+- uid: FluentGpu.Scene.IMeasuredVirtualLayout
+  commentId: T:FluentGpu.Scene.IMeasuredVirtualLayout
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.IMeasuredVirtualLayout.html
+  name: IMeasuredVirtualLayout
+  nameWithType: IMeasuredVirtualLayout
+  fullName: FluentGpu.Scene.IMeasuredVirtualLayout
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: FluentGpu.Scene.IVirtualLayout.ContentExtent*
+  commentId: Overload:FluentGpu.Scene.IVirtualLayout.ContentExtent
+  href: FluentGpu.Scene.IVirtualLayout.html#FluentGpu_Scene_IVirtualLayout_ContentExtent_System_Int32_System_Single_
+  name: ContentExtent
+  nameWithType: IVirtualLayout.ContentExtent
+  fullName: FluentGpu.Scene.IVirtualLayout.ContentExtent
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Scene.IVirtualLayout.Window*
+  commentId: Overload:FluentGpu.Scene.IVirtualLayout.Window
+  href: FluentGpu.Scene.IVirtualLayout.html#FluentGpu_Scene_IVirtualLayout_Window_System_Int32_System_Single_System_Single_System_Single_System_Int32_System_Int32__System_Int32__
+  name: Window
+  nameWithType: IVirtualLayout.Window
+  fullName: FluentGpu.Scene.IVirtualLayout.Window
+- uid: FluentGpu.Scene.IVirtualLayout.ItemRect*
+  commentId: Overload:FluentGpu.Scene.IVirtualLayout.ItemRect
+  href: FluentGpu.Scene.IVirtualLayout.html#FluentGpu_Scene_IVirtualLayout_ItemRect_System_Int32_System_Single_
+  name: ItemRect
+  nameWithType: IVirtualLayout.ItemRect
+  fullName: FluentGpu.Scene.IVirtualLayout.ItemRect
+- uid: FluentGpu.Foundation.RectF
+  commentId: T:FluentGpu.Foundation.RectF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.RectF.html
+  name: RectF
+  nameWithType: RectF
+  fullName: FluentGpu.Foundation.RectF
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html

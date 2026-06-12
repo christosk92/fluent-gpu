@@ -1,0 +1,995 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Class SplitButton | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Class SplitButton | FluentGpu Developer Docs ">
+      
+      <meta name="description" content="A WinUI 3 SplitButton: a primary action button joined to a secondary dropdown half, sharing one rounded chrome with a 1px divider between them. The two halves are independently interactive — the primary half runs  (the Click event / OnClickPrimary), the secondary half opens a  anchored below the whole control (OnClickSecondary → OpenFlyout). Each half carries its own hover/press fill + foreground ramp; the inner corner where each half meets the divider is squared so the pair reads as one control (WinUI PrimaryButtonBorder 4,0,0,4 / SecondaryButtonBorder 0,4,4,0). Source of truth: microsoft-ui-xaml/controls/dev/SplitButton/SplitButton.xaml (+ _themeresources.xaml, SplitButton.cpp). Tokens, sizes, padding, corners and the state matrix are 1:1 with that template.">
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/new/feat/prop-unification/apiSpec/new?filename=FluentGpu_Controls_SplitButton.md&amp;value=---%0Auid%3A%20FluentGpu.Controls.SplitButton%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="ManagedReference">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="FluentGpu.Controls.SplitButton">
+
+
+
+  <h1 id="FluentGpu_Controls_SplitButton" data-uid="FluentGpu.Controls.SplitButton" class="text-break">
+Class SplitButton  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/SplitButton.cs/#L19"><i class="bi bi-code-slash"></i></a>
+  </h1>
+
+  <div class="facts text-secondary">
+    <dl><dt>Namespace</dt><dd><a class="xref" href="FluentGpu.html">FluentGpu</a>.<a class="xref" href="FluentGpu.Controls.html">Controls</a></dd></dl>
+  <dl><dt>Assembly</dt><dd>FluentGpu.Controls.dll</dd></dl>
+  </div>
+
+  <div class="markdown summary"><p>A WinUI 3 <code>SplitButton</code>: a primary action button joined to a secondary dropdown half, sharing one rounded
+chrome with a 1px divider between them. The two halves are <b>independently</b> interactive — the primary half runs
+<a class="xref" href="FluentGpu.Controls.SplitButton.html#FluentGpu_Controls_SplitButton_OnInvoke">OnInvoke</a> (the <code>Click</code> event / <code>OnClickPrimary</code>), the secondary half opens a
+<a class="xref" href="FluentGpu.Controls.MenuFlyout.html">MenuFlyout</a> anchored below the whole control (<code>OnClickSecondary → OpenFlyout</code>). Each half carries
+its own hover/press fill + foreground ramp; the inner corner where each half meets the divider is squared so the
+pair reads as one control (WinUI PrimaryButtonBorder <code>4,0,0,4</code> / SecondaryButtonBorder <code>0,4,4,0</code>).</p>
+<p>Source of truth: <code>microsoft-ui-xaml/controls/dev/SplitButton/SplitButton.xaml</code> (+ <code>_themeresources.xaml</code>,
+<code>SplitButton.cpp</code>). Tokens, sizes, padding, corners and the state matrix are 1:1 with that template.</p>
+</div>
+  <div class="markdown conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public sealed class SplitButton : Component</code></pre>
+  </div>
+
+
+
+
+  <dl class="typelist inheritance">
+    <dt>Inheritance</dt>
+    <dd>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></div>
+      <div><a class="xref" href="FluentGpu.Hooks.Component.html">Component</a></div>
+      <div><span class="xref">SplitButton</span></div>
+    </dd>
+  </dl>
+
+
+
+  <dl class="typelist inheritedMembers">
+    <dt>Inherited Members</dt>
+    <dd>
+    <div>
+      <a class="xref" href="FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Context">Component.Context</a>
+    </div>
+    <div>
+      <a class="xref" href="FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RunsOnce">Component.RunsOnce</a>
+    </div>
+    <div>
+      <a class="xref" href="FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks">Component.RenderWithHooks()</a>
+    </div>
+    <div>
+      <a class="xref" href="FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount">Component.Unmount()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)">object.Equals(object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)">object.Equals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gethashcode">object.GetHashCode()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gettype">object.GetType()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.referenceequals">object.ReferenceEquals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.tostring">object.ToString()</a>
+    </div>
+  </dd></dl>
+
+  <dl class="typelist extensionMethods">
+    <dt>Extension Methods</dt>
+    <dd>
+  <div>
+      <a class="xref" href="FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_">MotionHooks.UseEntrance(Component, float, object?)</a>
+  </div>
+  <div>
+      <a class="xref" href="FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_">MotionHooks.UseHoverScale(Component, bool, float)</a>
+  </div>
+  </dd></dl>
+
+
+
+
+
+  <h2 class="section" id="fields">Fields
+</h2>
+
+
+
+  <h3 id="FluentGpu_Controls_SplitButton_ChevronGlyphSize" data-uid="FluentGpu.Controls.SplitButton.ChevronGlyphSize">
+  ChevronGlyphSize
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/SplitButton.cs/#L44"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float ChevronGlyphSize = 8</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_SplitButton_ChevronSize" data-uid="FluentGpu.Controls.SplitButton.ChevronSize">
+  ChevronSize
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/SplitButton.cs/#L43"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float ChevronSize = 12</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_SplitButton_ControlHeight" data-uid="FluentGpu.Controls.SplitButton.ControlHeight">
+  ControlHeight
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/SplitButton.cs/#L39"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float ControlHeight = 32</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_SplitButton_CornerRadius" data-uid="FluentGpu.Controls.SplitButton.CornerRadius">
+  CornerRadius
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/SplitButton.cs/#L45"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float CornerRadius = 4</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_SplitButton_DividerHeight" data-uid="FluentGpu.Controls.SplitButton.DividerHeight">
+  DividerHeight
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/SplitButton.cs/#L41"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float DividerHeight = 32</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_SplitButton_DividerWidth" data-uid="FluentGpu.Controls.SplitButton.DividerWidth">
+  DividerWidth
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/SplitButton.cs/#L40"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float DividerWidth = 1</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_SplitButton_FontSize" data-uid="FluentGpu.Controls.SplitButton.FontSize">
+  FontSize
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/SplitButton.cs/#L42"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float FontSize = 14</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_SplitButton_Glyph" data-uid="FluentGpu.Controls.SplitButton.Glyph">
+  Glyph
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/SplitButton.cs/#L50"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public string? Glyph</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_SplitButton_IsEnabled" data-uid="FluentGpu.Controls.SplitButton.IsEnabled">
+  IsEnabled
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/SplitButton.cs/#L54"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool IsEnabled</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_SplitButton_Items" data-uid="FluentGpu.Controls.SplitButton.Items">
+  Items
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/SplitButton.cs/#L53"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public IReadOnlyList&lt;MenuFlyoutItem&gt; Items</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1">IReadOnlyList</a>&lt;<a class="xref" href="FluentGpu.Controls.MenuFlyoutItem.html">MenuFlyoutItem</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_SplitButton_Label" data-uid="FluentGpu.Controls.SplitButton.Label">
+  Label
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/SplitButton.cs/#L49"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public string Label</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_SplitButton_OnInvoke" data-uid="FluentGpu.Controls.SplitButton.OnInvoke">
+  OnInvoke
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/SplitButton.cs/#L52"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Action? OnInvoke</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action">Action</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_SplitButton_OpenOnMount" data-uid="FluentGpu.Controls.SplitButton.OpenOnMount">
+  OpenOnMount
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/SplitButton.cs/#L55"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool OpenOnMount</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_SplitButton_PartChevron" data-uid="FluentGpu.Controls.SplitButton.PartChevron">
+  PartChevron
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/SplitButton.cs/#L34"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The 12×12 chevron box inside the dropdown half (the AnimatedIcon column). Owned: none.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartChevron = &quot;Chevron&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_SplitButton_PartDivider" data-uid="FluentGpu.Controls.SplitButton.PartDivider">
+  PartDivider
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/SplitButton.cs/#L32"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The 1px divider between the halves (WinUI DividerBackgroundGrid). Owned: none.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartDivider = &quot;Divider&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_SplitButton_PartPrimaryButton" data-uid="FluentGpu.Controls.SplitButton.PartPrimaryButton">
+  PartPrimaryButton
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/SplitButton.cs/#L28"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The primary half (WinUI PrimaryButton). Owned: OnClick (<a class="xref" href="FluentGpu.Controls.SplitButton.html#FluentGpu_Controls_SplitButton_OnInvoke">OnInvoke</a>), Role,
+Children (the <a class="xref" href="FluentGpu.Controls.SplitButton.html#FluentGpu_Controls_SplitButton_PrimaryContent">PrimaryContent</a> slot).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartPrimaryButton = &quot;PrimaryButton&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_SplitButton_PartRoot" data-uid="FluentGpu.Controls.SplitButton.PartRoot">
+  PartRoot
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/SplitButton.cs/#L25"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The joined chrome (WinUI RootGrid + Border): fill, border, corners, clip. Owned: OnKeyDown (the
+Space/Enter/Down/F4 chords), OnRealized (flyout anchor capture, chained), Children.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartRoot = &quot;Root&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_SplitButton_PartSecondaryButton" data-uid="FluentGpu.Controls.SplitButton.PartSecondaryButton">
+  PartSecondaryButton
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/SplitButton.cs/#L30"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The dropdown half (WinUI SecondaryButton). Owned: OnClick (the flyout toggle), Role, Children.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartSecondaryButton = &quot;SecondaryButton&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_SplitButton_Parts" data-uid="FluentGpu.Controls.SplitButton.Parts">
+  Parts
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/SplitButton.cs/#L58"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Lightweight per-part styling (CSS ::part): modifiers keyed by the <code>PartXxx</code> consts; see
+<a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a> for the contract.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public TemplateParts? Parts</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_SplitButton_PrimaryButtonMinWidth" data-uid="FluentGpu.Controls.SplitButton.PrimaryButtonMinWidth">
+  PrimaryButtonMinWidth
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/SplitButton.cs/#L37"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float PrimaryButtonMinWidth = 35</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_SplitButton_PrimaryContent" data-uid="FluentGpu.Controls.SplitButton.PrimaryContent">
+  PrimaryContent
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/SplitButton.cs/#L51"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Element? PrimaryContent</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.Element.html">Element</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_SplitButton_SecondaryButtonSize" data-uid="FluentGpu.Controls.SplitButton.SecondaryButtonSize">
+  SecondaryButtonSize
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/SplitButton.cs/#L38"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float SecondaryButtonSize = 35</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+  <h2 class="section" id="methods">Methods
+</h2>
+
+
+  <a id="FluentGpu_Controls_SplitButton_Create_" data-uid="FluentGpu.Controls.SplitButton.Create*"></a>
+
+  <h3 id="FluentGpu_Controls_SplitButton_Create_FluentGpu_Dsl_Element_System_Action_System_Collections_Generic_IReadOnlyList_FluentGpu_Controls_MenuFlyoutItem__System_Boolean_" data-uid="FluentGpu.Controls.SplitButton.Create(FluentGpu.Dsl.Element,System.Action,System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem},System.Boolean)">
+  Create(Element, Action, IReadOnlyList&lt;MenuFlyoutItem&gt;, bool)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/SplitButton.cs/#L63"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static Element Create(Element primaryContent, Action onInvoke, IReadOnlyList&lt;MenuFlyoutItem&gt; items, bool isEnabled = true)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>primaryContent</code> <a class="xref" href="FluentGpu.Dsl.Element.html">Element</a></dt>
+    <dd></dd>
+    <dt><code>onInvoke</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action">Action</a></dt>
+    <dd></dd>
+    <dt><code>items</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1">IReadOnlyList</a>&lt;<a class="xref" href="FluentGpu.Controls.MenuFlyoutItem.html">MenuFlyoutItem</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>isEnabled</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.Element.html">Element</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_SplitButton_Create_" data-uid="FluentGpu.Controls.SplitButton.Create*"></a>
+
+  <h3 id="FluentGpu_Controls_SplitButton_Create_System_String_System_Action_System_Collections_Generic_IReadOnlyList_FluentGpu_Controls_MenuFlyoutItem__System_String_System_Boolean_" data-uid="FluentGpu.Controls.SplitButton.Create(System.String,System.Action,System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem},System.String,System.Boolean)">
+  Create(string, Action, IReadOnlyList&lt;MenuFlyoutItem&gt;, string?, bool)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/SplitButton.cs/#L60"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static Element Create(string label, Action onInvoke, IReadOnlyList&lt;MenuFlyoutItem&gt; items, string? glyph = null, bool isEnabled = true)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>label</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>onInvoke</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action">Action</a></dt>
+    <dd></dd>
+    <dt><code>items</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1">IReadOnlyList</a>&lt;<a class="xref" href="FluentGpu.Controls.MenuFlyoutItem.html">MenuFlyoutItem</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>glyph</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>isEnabled</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.Element.html">Element</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_SplitButton_Render_" data-uid="FluentGpu.Controls.SplitButton.Render*"></a>
+
+  <h3 id="FluentGpu_Controls_SplitButton_Render" data-uid="FluentGpu.Controls.SplitButton.Render">
+  Render()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/SplitButton.cs/#L66"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public override Element Render()</code></pre>
+  </div>
+
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.Element.html">Element</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+</article>
+
+
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

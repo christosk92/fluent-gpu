@@ -1,0 +1,627 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.CaptionButton.Style
+  commentId: T:FluentGpu.Controls.CaptionButton.Style
+  id: CaptionButton.Style
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.CaptionButton.Style.Fill
+  - FluentGpu.Controls.CaptionButton.Style.Foreground
+  - FluentGpu.Controls.CaptionButton.Style.HoverFill
+  - FluentGpu.Controls.CaptionButton.Style.HoverForeground
+  - FluentGpu.Controls.CaptionButton.Style.InactiveForeground
+  - FluentGpu.Controls.CaptionButton.Style.PressedFill
+  - FluentGpu.Controls.CaptionButton.Style.PressedForeground
+  langs:
+  - csharp
+  - vb
+  name: CaptionButton.Style
+  nameWithType: CaptionButton.Style
+  fullName: FluentGpu.Controls.CaptionButton.Style
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CaptionButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Style
+    path: ../../src/FluentGpu.Controls/CaptionButton.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: 'public sealed record CaptionButton.Style : IEquatable<CaptionButton.Style>'
+    content.vb: Public NotInheritable Class CaptionButton.Style Implements IEquatable(Of CaptionButton.Style)
+  inheritance:
+  - System.Object
+  implements:
+  - System.IEquatable{FluentGpu.Controls.CaptionButton.Style}
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.CaptionButton.Style.Fill
+  commentId: P:FluentGpu.Controls.CaptionButton.Style.Fill
+  id: Fill
+  parent: FluentGpu.Controls.CaptionButton.Style
+  langs:
+  - csharp
+  - vb
+  name: Fill
+  nameWithType: CaptionButton.Style.Fill
+  fullName: FluentGpu.Controls.CaptionButton.Style.Fill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CaptionButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Fill
+    path: ../../src/FluentGpu.Controls/CaptionButton.cs
+    startLine: 24
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF Fill { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property Fill As ColorF
+  overload: FluentGpu.Controls.CaptionButton.Style.Fill*
+- uid: FluentGpu.Controls.CaptionButton.Style.HoverFill
+  commentId: P:FluentGpu.Controls.CaptionButton.Style.HoverFill
+  id: HoverFill
+  parent: FluentGpu.Controls.CaptionButton.Style
+  langs:
+  - csharp
+  - vb
+  name: HoverFill
+  nameWithType: CaptionButton.Style.HoverFill
+  fullName: FluentGpu.Controls.CaptionButton.Style.HoverFill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CaptionButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HoverFill
+    path: ../../src/FluentGpu.Controls/CaptionButton.cs
+    startLine: 25
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF HoverFill { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property HoverFill As ColorF
+  overload: FluentGpu.Controls.CaptionButton.Style.HoverFill*
+- uid: FluentGpu.Controls.CaptionButton.Style.PressedFill
+  commentId: P:FluentGpu.Controls.CaptionButton.Style.PressedFill
+  id: PressedFill
+  parent: FluentGpu.Controls.CaptionButton.Style
+  langs:
+  - csharp
+  - vb
+  name: PressedFill
+  nameWithType: CaptionButton.Style.PressedFill
+  fullName: FluentGpu.Controls.CaptionButton.Style.PressedFill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CaptionButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PressedFill
+    path: ../../src/FluentGpu.Controls/CaptionButton.cs
+    startLine: 26
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF PressedFill { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property PressedFill As ColorF
+  overload: FluentGpu.Controls.CaptionButton.Style.PressedFill*
+- uid: FluentGpu.Controls.CaptionButton.Style.Foreground
+  commentId: P:FluentGpu.Controls.CaptionButton.Style.Foreground
+  id: Foreground
+  parent: FluentGpu.Controls.CaptionButton.Style
+  langs:
+  - csharp
+  - vb
+  name: Foreground
+  nameWithType: CaptionButton.Style.Foreground
+  fullName: FluentGpu.Controls.CaptionButton.Style.Foreground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CaptionButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Foreground
+    path: ../../src/FluentGpu.Controls/CaptionButton.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF Foreground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property Foreground As ColorF
+  overload: FluentGpu.Controls.CaptionButton.Style.Foreground*
+- uid: FluentGpu.Controls.CaptionButton.Style.HoverForeground
+  commentId: P:FluentGpu.Controls.CaptionButton.Style.HoverForeground
+  id: HoverForeground
+  parent: FluentGpu.Controls.CaptionButton.Style
+  langs:
+  - csharp
+  - vb
+  name: HoverForeground
+  nameWithType: CaptionButton.Style.HoverForeground
+  fullName: FluentGpu.Controls.CaptionButton.Style.HoverForeground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CaptionButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HoverForeground
+    path: ../../src/FluentGpu.Controls/CaptionButton.cs
+    startLine: 28
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF HoverForeground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property HoverForeground As ColorF
+  overload: FluentGpu.Controls.CaptionButton.Style.HoverForeground*
+- uid: FluentGpu.Controls.CaptionButton.Style.PressedForeground
+  commentId: P:FluentGpu.Controls.CaptionButton.Style.PressedForeground
+  id: PressedForeground
+  parent: FluentGpu.Controls.CaptionButton.Style
+  langs:
+  - csharp
+  - vb
+  name: PressedForeground
+  nameWithType: CaptionButton.Style.PressedForeground
+  fullName: FluentGpu.Controls.CaptionButton.Style.PressedForeground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CaptionButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PressedForeground
+    path: ../../src/FluentGpu.Controls/CaptionButton.cs
+    startLine: 29
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF PressedForeground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property PressedForeground As ColorF
+  overload: FluentGpu.Controls.CaptionButton.Style.PressedForeground*
+- uid: FluentGpu.Controls.CaptionButton.Style.InactiveForeground
+  commentId: P:FluentGpu.Controls.CaptionButton.Style.InactiveForeground
+  id: InactiveForeground
+  parent: FluentGpu.Controls.CaptionButton.Style
+  langs:
+  - csharp
+  - vb
+  name: InactiveForeground
+  nameWithType: CaptionButton.Style.InactiveForeground
+  fullName: FluentGpu.Controls.CaptionButton.Style.InactiveForeground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CaptionButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InactiveForeground
+    path: ../../src/FluentGpu.Controls/CaptionButton.cs
+    startLine: 31
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Glyph color while the window is deactivated (the shell dims caption GLYPHS, never fills).
+  example: []
+  syntax:
+    content: public ColorF InactiveForeground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property InactiveForeground As ColorF
+  overload: FluentGpu.Controls.CaptionButton.Style.InactiveForeground*
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.IEquatable{FluentGpu.Controls.CaptionButton.Style}
+  commentId: T:System.IEquatable{FluentGpu.Controls.CaptionButton.Style}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<CaptionButton.Style>
+  nameWithType: IEquatable<CaptionButton.Style>
+  fullName: System.IEquatable<FluentGpu.Controls.CaptionButton.Style>
+  nameWithType.vb: IEquatable(Of CaptionButton.Style)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.CaptionButton.Style)
+  name.vb: IEquatable(Of CaptionButton.Style)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.CaptionButton
+    name: CaptionButton
+    href: FluentGpu.Controls.CaptionButton.html
+  - name: .
+  - uid: FluentGpu.Controls.CaptionButton.Style
+    name: Style
+    href: FluentGpu.Controls.CaptionButton.Style.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.CaptionButton
+    name: CaptionButton
+    href: FluentGpu.Controls.CaptionButton.html
+  - name: .
+  - uid: FluentGpu.Controls.CaptionButton.Style
+    name: Style
+    href: FluentGpu.Controls.CaptionButton.Style.html
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.CaptionButton.Style.Fill*
+  commentId: Overload:FluentGpu.Controls.CaptionButton.Style.Fill
+  href: FluentGpu.Controls.CaptionButton.Style.html#FluentGpu_Controls_CaptionButton_Style_Fill
+  name: Fill
+  nameWithType: CaptionButton.Style.Fill
+  fullName: FluentGpu.Controls.CaptionButton.Style.Fill
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Controls.CaptionButton.Style.HoverFill*
+  commentId: Overload:FluentGpu.Controls.CaptionButton.Style.HoverFill
+  href: FluentGpu.Controls.CaptionButton.Style.html#FluentGpu_Controls_CaptionButton_Style_HoverFill
+  name: HoverFill
+  nameWithType: CaptionButton.Style.HoverFill
+  fullName: FluentGpu.Controls.CaptionButton.Style.HoverFill
+- uid: FluentGpu.Controls.CaptionButton.Style.PressedFill*
+  commentId: Overload:FluentGpu.Controls.CaptionButton.Style.PressedFill
+  href: FluentGpu.Controls.CaptionButton.Style.html#FluentGpu_Controls_CaptionButton_Style_PressedFill
+  name: PressedFill
+  nameWithType: CaptionButton.Style.PressedFill
+  fullName: FluentGpu.Controls.CaptionButton.Style.PressedFill
+- uid: FluentGpu.Controls.CaptionButton.Style.Foreground*
+  commentId: Overload:FluentGpu.Controls.CaptionButton.Style.Foreground
+  href: FluentGpu.Controls.CaptionButton.Style.html#FluentGpu_Controls_CaptionButton_Style_Foreground
+  name: Foreground
+  nameWithType: CaptionButton.Style.Foreground
+  fullName: FluentGpu.Controls.CaptionButton.Style.Foreground
+- uid: FluentGpu.Controls.CaptionButton.Style.HoverForeground*
+  commentId: Overload:FluentGpu.Controls.CaptionButton.Style.HoverForeground
+  href: FluentGpu.Controls.CaptionButton.Style.html#FluentGpu_Controls_CaptionButton_Style_HoverForeground
+  name: HoverForeground
+  nameWithType: CaptionButton.Style.HoverForeground
+  fullName: FluentGpu.Controls.CaptionButton.Style.HoverForeground
+- uid: FluentGpu.Controls.CaptionButton.Style.PressedForeground*
+  commentId: Overload:FluentGpu.Controls.CaptionButton.Style.PressedForeground
+  href: FluentGpu.Controls.CaptionButton.Style.html#FluentGpu_Controls_CaptionButton_Style_PressedForeground
+  name: PressedForeground
+  nameWithType: CaptionButton.Style.PressedForeground
+  fullName: FluentGpu.Controls.CaptionButton.Style.PressedForeground
+- uid: FluentGpu.Controls.CaptionButton.Style.InactiveForeground*
+  commentId: Overload:FluentGpu.Controls.CaptionButton.Style.InactiveForeground
+  href: FluentGpu.Controls.CaptionButton.Style.html#FluentGpu_Controls_CaptionButton_Style_InactiveForeground
+  name: InactiveForeground
+  nameWithType: CaptionButton.Style.InactiveForeground
+  fullName: FluentGpu.Controls.CaptionButton.Style.InactiveForeground

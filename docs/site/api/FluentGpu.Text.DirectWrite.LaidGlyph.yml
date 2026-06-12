@@ -1,0 +1,572 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Text.DirectWrite.LaidGlyph
+  commentId: T:FluentGpu.Text.DirectWrite.LaidGlyph
+  id: LaidGlyph
+  parent: FluentGpu.Text.DirectWrite
+  children:
+  - FluentGpu.Text.DirectWrite.LaidGlyph.#ctor(System.UInt16,System.IntPtr,System.Single,System.Single,System.Single,System.Int16)
+  - FluentGpu.Text.DirectWrite.LaidGlyph.Face
+  - FluentGpu.Text.DirectWrite.LaidGlyph.Gid
+  - FluentGpu.Text.DirectWrite.LaidGlyph.Size
+  - FluentGpu.Text.DirectWrite.LaidGlyph.Span
+  - FluentGpu.Text.DirectWrite.LaidGlyph.X
+  - FluentGpu.Text.DirectWrite.LaidGlyph.Y
+  langs:
+  - csharp
+  - vb
+  name: LaidGlyph
+  nameWithType: LaidGlyph
+  fullName: FluentGpu.Text.DirectWrite.LaidGlyph
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LaidGlyph
+    path: ../../src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Text.DirectWrite
+  namespace: FluentGpu.Text.DirectWrite
+  summary: >-
+    One laid-out glyph: post-shaping glyph id, the DWrite face it belongs to (as <code>nint</code>), and its pen
+        position in DIP — X within the paragraph (line-relative origin folded in), Y = its line baseline from the top.
+        <xref href="FluentGpu.Text.DirectWrite.LaidGlyph.Size" data-throw-if-not-resolved="false"></xref> is the DIP em size the glyph was shaped at (spans may override the base size) and
+        <xref href="FluentGpu.Text.DirectWrite.LaidGlyph.Span" data-throw-if-not-resolved="false"></xref> the index of the <xref href="FluentGpu.Foundation.SpanStyle" data-throw-if-not-resolved="false"></xref> it belongs to (−1 = the base style) — the renderer
+        rasterizes at <xref href="FluentGpu.Text.DirectWrite.LaidGlyph.Size" data-throw-if-not-resolved="false"></xref> and tints per span (rtb-01 inline runs).
+  example: []
+  syntax:
+    content: public readonly struct LaidGlyph
+    content.vb: Public Structure LaidGlyph
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Text.DirectWrite.LaidGlyph.Gid
+  commentId: F:FluentGpu.Text.DirectWrite.LaidGlyph.Gid
+  id: Gid
+  parent: FluentGpu.Text.DirectWrite.LaidGlyph
+  langs:
+  - csharp
+  - vb
+  name: Gid
+  nameWithType: LaidGlyph.Gid
+  fullName: FluentGpu.Text.DirectWrite.LaidGlyph.Gid
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Gid
+    path: ../../src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Text.DirectWrite
+  namespace: FluentGpu.Text.DirectWrite
+  syntax:
+    content: public readonly ushort Gid
+    return:
+      type: System.UInt16
+    content.vb: Public ReadOnly Gid As UShort
+- uid: FluentGpu.Text.DirectWrite.LaidGlyph.Face
+  commentId: F:FluentGpu.Text.DirectWrite.LaidGlyph.Face
+  id: Face
+  parent: FluentGpu.Text.DirectWrite.LaidGlyph
+  langs:
+  - csharp
+  - vb
+  name: Face
+  nameWithType: LaidGlyph.Face
+  fullName: FluentGpu.Text.DirectWrite.LaidGlyph.Face
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Face
+    path: ../../src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Text.DirectWrite
+  namespace: FluentGpu.Text.DirectWrite
+  syntax:
+    content: public readonly nint Face
+    return:
+      type: System.IntPtr
+    content.vb: Public ReadOnly Face As IntPtr
+- uid: FluentGpu.Text.DirectWrite.LaidGlyph.X
+  commentId: F:FluentGpu.Text.DirectWrite.LaidGlyph.X
+  id: X
+  parent: FluentGpu.Text.DirectWrite.LaidGlyph
+  langs:
+  - csharp
+  - vb
+  name: X
+  nameWithType: LaidGlyph.X
+  fullName: FluentGpu.Text.DirectWrite.LaidGlyph.X
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: X
+    path: ../../src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Text.DirectWrite
+  namespace: FluentGpu.Text.DirectWrite
+  syntax:
+    content: public readonly float X
+    return:
+      type: System.Single
+    content.vb: Public ReadOnly X As Single
+- uid: FluentGpu.Text.DirectWrite.LaidGlyph.Y
+  commentId: F:FluentGpu.Text.DirectWrite.LaidGlyph.Y
+  id: Y
+  parent: FluentGpu.Text.DirectWrite.LaidGlyph
+  langs:
+  - csharp
+  - vb
+  name: Y
+  nameWithType: LaidGlyph.Y
+  fullName: FluentGpu.Text.DirectWrite.LaidGlyph.Y
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Y
+    path: ../../src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Text.DirectWrite
+  namespace: FluentGpu.Text.DirectWrite
+  syntax:
+    content: public readonly float Y
+    return:
+      type: System.Single
+    content.vb: Public ReadOnly Y As Single
+- uid: FluentGpu.Text.DirectWrite.LaidGlyph.Size
+  commentId: F:FluentGpu.Text.DirectWrite.LaidGlyph.Size
+  id: Size
+  parent: FluentGpu.Text.DirectWrite.LaidGlyph
+  langs:
+  - csharp
+  - vb
+  name: Size
+  nameWithType: LaidGlyph.Size
+  fullName: FluentGpu.Text.DirectWrite.LaidGlyph.Size
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Size
+    path: ../../src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Text.DirectWrite
+  namespace: FluentGpu.Text.DirectWrite
+  syntax:
+    content: public readonly float Size
+    return:
+      type: System.Single
+    content.vb: Public ReadOnly Size As Single
+- uid: FluentGpu.Text.DirectWrite.LaidGlyph.Span
+  commentId: F:FluentGpu.Text.DirectWrite.LaidGlyph.Span
+  id: Span
+  parent: FluentGpu.Text.DirectWrite.LaidGlyph
+  langs:
+  - csharp
+  - vb
+  name: Span
+  nameWithType: LaidGlyph.Span
+  fullName: FluentGpu.Text.DirectWrite.LaidGlyph.Span
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Span
+    path: ../../src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Text.DirectWrite
+  namespace: FluentGpu.Text.DirectWrite
+  syntax:
+    content: public readonly short Span
+    return:
+      type: System.Int16
+    content.vb: Public ReadOnly Span As Short
+- uid: FluentGpu.Text.DirectWrite.LaidGlyph.#ctor(System.UInt16,System.IntPtr,System.Single,System.Single,System.Single,System.Int16)
+  commentId: M:FluentGpu.Text.DirectWrite.LaidGlyph.#ctor(System.UInt16,System.IntPtr,System.Single,System.Single,System.Single,System.Int16)
+  id: '#ctor(System.UInt16,System.IntPtr,System.Single,System.Single,System.Single,System.Int16)'
+  parent: FluentGpu.Text.DirectWrite.LaidGlyph
+  langs:
+  - csharp
+  - vb
+  name: LaidGlyph(ushort, nint, float, float, float, short)
+  nameWithType: LaidGlyph.LaidGlyph(ushort, nint, float, float, float, short)
+  fullName: FluentGpu.Text.DirectWrite.LaidGlyph.LaidGlyph(ushort, nint, float, float, float, short)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Text.DirectWrite
+  namespace: FluentGpu.Text.DirectWrite
+  syntax:
+    content: public LaidGlyph(ushort gid, nint face, float x, float y, float size, short span)
+    parameters:
+    - id: gid
+      type: System.UInt16
+    - id: face
+      type: System.IntPtr
+    - id: x
+      type: System.Single
+    - id: y
+      type: System.Single
+    - id: size
+      type: System.Single
+    - id: span
+      type: System.Int16
+    content.vb: Public Sub New(gid As UShort, face As IntPtr, x As Single, y As Single, size As Single, span As Short)
+  overload: FluentGpu.Text.DirectWrite.LaidGlyph.#ctor*
+  nameWithType.vb: LaidGlyph.New(UShort, IntPtr, Single, Single, Single, Short)
+  fullName.vb: FluentGpu.Text.DirectWrite.LaidGlyph.New(UShort, System.IntPtr, Single, Single, Single, Short)
+  name.vb: New(UShort, IntPtr, Single, Single, Single, Short)
+references:
+- uid: FluentGpu.Text.DirectWrite.LaidGlyph.Size
+  commentId: F:FluentGpu.Text.DirectWrite.LaidGlyph.Size
+  href: FluentGpu.Text.DirectWrite.LaidGlyph.html#FluentGpu_Text_DirectWrite_LaidGlyph_Size
+  name: Size
+  nameWithType: LaidGlyph.Size
+  fullName: FluentGpu.Text.DirectWrite.LaidGlyph.Size
+- uid: FluentGpu.Text.DirectWrite.LaidGlyph.Span
+  commentId: F:FluentGpu.Text.DirectWrite.LaidGlyph.Span
+  href: FluentGpu.Text.DirectWrite.LaidGlyph.html#FluentGpu_Text_DirectWrite_LaidGlyph_Span
+  name: Span
+  nameWithType: LaidGlyph.Span
+  fullName: FluentGpu.Text.DirectWrite.LaidGlyph.Span
+- uid: FluentGpu.Foundation.SpanStyle
+  commentId: T:FluentGpu.Foundation.SpanStyle
+  href: FluentGpu.Foundation.SpanStyle.html
+  name: SpanStyle
+  nameWithType: SpanStyle
+  fullName: FluentGpu.Foundation.SpanStyle
+- uid: FluentGpu.Text.DirectWrite
+  commentId: N:FluentGpu.Text.DirectWrite
+  href: FluentGpu.html
+  name: FluentGpu.Text.DirectWrite
+  nameWithType: FluentGpu.Text.DirectWrite
+  fullName: FluentGpu.Text.DirectWrite
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+  - name: .
+  - uid: FluentGpu.Text.DirectWrite
+    name: DirectWrite
+    href: FluentGpu.Text.DirectWrite.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+  - name: .
+  - uid: FluentGpu.Text.DirectWrite
+    name: DirectWrite
+    href: FluentGpu.Text.DirectWrite.html
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.UInt16
+  commentId: T:System.UInt16
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.uint16
+  name: ushort
+  nameWithType: ushort
+  fullName: ushort
+  nameWithType.vb: UShort
+  fullName.vb: UShort
+  name.vb: UShort
+- uid: System.IntPtr
+  commentId: T:System.IntPtr
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.intptr
+  name: nint
+  nameWithType: nint
+  fullName: nint
+  nameWithType.vb: IntPtr
+  fullName.vb: System.IntPtr
+  name.vb: IntPtr
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System.Int16
+  commentId: T:System.Int16
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int16
+  name: short
+  nameWithType: short
+  fullName: short
+  nameWithType.vb: Short
+  fullName.vb: Short
+  name.vb: Short
+- uid: FluentGpu.Text.DirectWrite.LaidGlyph.#ctor*
+  commentId: Overload:FluentGpu.Text.DirectWrite.LaidGlyph.#ctor
+  href: FluentGpu.Text.DirectWrite.LaidGlyph.html#FluentGpu_Text_DirectWrite_LaidGlyph__ctor_System_UInt16_System_IntPtr_System_Single_System_Single_System_Single_System_Int16_
+  name: LaidGlyph
+  nameWithType: LaidGlyph.LaidGlyph
+  fullName: FluentGpu.Text.DirectWrite.LaidGlyph.LaidGlyph
+  nameWithType.vb: LaidGlyph.New
+  fullName.vb: FluentGpu.Text.DirectWrite.LaidGlyph.New
+  name.vb: New

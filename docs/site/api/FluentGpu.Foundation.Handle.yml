@@ -1,0 +1,881 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.Handle
+  commentId: T:FluentGpu.Foundation.Handle
+  id: Handle
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.Handle.#ctor(System.UInt32,System.UInt32)
+  - FluentGpu.Foundation.Handle.Equals(FluentGpu.Foundation.Handle)
+  - FluentGpu.Foundation.Handle.Equals(System.Object)
+  - FluentGpu.Foundation.Handle.Gen
+  - FluentGpu.Foundation.Handle.GetHashCode
+  - FluentGpu.Foundation.Handle.Index
+  - FluentGpu.Foundation.Handle.IsNull
+  - FluentGpu.Foundation.Handle.Null
+  - FluentGpu.Foundation.Handle.ToString
+  - FluentGpu.Foundation.Handle.op_Equality(FluentGpu.Foundation.Handle,FluentGpu.Foundation.Handle)
+  - FluentGpu.Foundation.Handle.op_Inequality(FluentGpu.Foundation.Handle,FluentGpu.Foundation.Handle)
+  langs:
+  - csharp
+  - vb
+  name: Handle
+  nameWithType: Handle
+  fullName: FluentGpu.Foundation.Handle
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Handles.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Handle
+    path: ../../src/FluentGpu.Foundation/Handles.cs
+    startLine: 5
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Generational handle — 8 bytes {u32 index, u32 gen}. The canonical FluentGpu handle layout.
+  example: []
+  syntax:
+    content: 'public readonly struct Handle : IEquatable<Handle>'
+    content.vb: Public Structure Handle Implements IEquatable(Of Handle)
+  implements:
+  - System.IEquatable{FluentGpu.Foundation.Handle}
+  inheritedMembers:
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Foundation.Handle.Index
+  commentId: F:FluentGpu.Foundation.Handle.Index
+  id: Index
+  parent: FluentGpu.Foundation.Handle
+  langs:
+  - csharp
+  - vb
+  name: Index
+  nameWithType: Handle.Index
+  fullName: FluentGpu.Foundation.Handle.Index
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Handles.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Index
+    path: ../../src/FluentGpu.Foundation/Handles.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public readonly uint Index
+    return:
+      type: System.UInt32
+    content.vb: Public ReadOnly Index As UInteger
+- uid: FluentGpu.Foundation.Handle.Gen
+  commentId: F:FluentGpu.Foundation.Handle.Gen
+  id: Gen
+  parent: FluentGpu.Foundation.Handle
+  langs:
+  - csharp
+  - vb
+  name: Gen
+  nameWithType: Handle.Gen
+  fullName: FluentGpu.Foundation.Handle.Gen
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Handles.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Gen
+    path: ../../src/FluentGpu.Foundation/Handles.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public readonly uint Gen
+    return:
+      type: System.UInt32
+    content.vb: Public ReadOnly Gen As UInteger
+- uid: FluentGpu.Foundation.Handle.#ctor(System.UInt32,System.UInt32)
+  commentId: M:FluentGpu.Foundation.Handle.#ctor(System.UInt32,System.UInt32)
+  id: '#ctor(System.UInt32,System.UInt32)'
+  parent: FluentGpu.Foundation.Handle
+  langs:
+  - csharp
+  - vb
+  name: Handle(uint, uint)
+  nameWithType: Handle.Handle(uint, uint)
+  fullName: FluentGpu.Foundation.Handle.Handle(uint, uint)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Handles.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/Handles.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public Handle(uint index, uint gen)
+    parameters:
+    - id: index
+      type: System.UInt32
+    - id: gen
+      type: System.UInt32
+    content.vb: Public Sub New(index As UInteger, gen As UInteger)
+  overload: FluentGpu.Foundation.Handle.#ctor*
+  nameWithType.vb: Handle.New(UInteger, UInteger)
+  fullName.vb: FluentGpu.Foundation.Handle.New(UInteger, UInteger)
+  name.vb: New(UInteger, UInteger)
+- uid: FluentGpu.Foundation.Handle.IsNull
+  commentId: P:FluentGpu.Foundation.Handle.IsNull
+  id: IsNull
+  parent: FluentGpu.Foundation.Handle
+  langs:
+  - csharp
+  - vb
+  name: IsNull
+  nameWithType: Handle.IsNull
+  fullName: FluentGpu.Foundation.Handle.IsNull
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Handles.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsNull
+    path: ../../src/FluentGpu.Foundation/Handles.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public bool IsNull { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property IsNull As Boolean
+  overload: FluentGpu.Foundation.Handle.IsNull*
+- uid: FluentGpu.Foundation.Handle.Null
+  commentId: P:FluentGpu.Foundation.Handle.Null
+  id: "Null"
+  parent: FluentGpu.Foundation.Handle
+  langs:
+  - csharp
+  - vb
+  name: "Null"
+  nameWithType: Handle.Null
+  fullName: FluentGpu.Foundation.Handle.Null
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Handles.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: "Null"
+    path: ../../src/FluentGpu.Foundation/Handles.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public static Handle Null { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Handle
+    content.vb: Public Shared ReadOnly Property Null As Handle
+  overload: FluentGpu.Foundation.Handle.Null*
+- uid: FluentGpu.Foundation.Handle.Equals(FluentGpu.Foundation.Handle)
+  commentId: M:FluentGpu.Foundation.Handle.Equals(FluentGpu.Foundation.Handle)
+  id: Equals(FluentGpu.Foundation.Handle)
+  parent: FluentGpu.Foundation.Handle
+  langs:
+  - csharp
+  - vb
+  name: Equals(Handle)
+  nameWithType: Handle.Equals(Handle)
+  fullName: FluentGpu.Foundation.Handle.Equals(FluentGpu.Foundation.Handle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Handles.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Equals
+    path: ../../src/FluentGpu.Foundation/Handles.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Indicates whether the current object is equal to another object of the same type.
+  example: []
+  syntax:
+    content: public bool Equals(Handle other)
+    parameters:
+    - id: other
+      type: FluentGpu.Foundation.Handle
+      description: An object to compare with this object.
+    return:
+      type: System.Boolean
+      description: <a href="https://learn.microsoft.com/dotnet/csharp/language-reference/builtin-types/bool">true</a> if the current object is equal to the <code class="paramref">other</code> parameter; otherwise, <a href="https://learn.microsoft.com/dotnet/csharp/language-reference/builtin-types/bool">false</a>.
+    content.vb: Public Function Equals(other As Handle) As Boolean
+  overload: FluentGpu.Foundation.Handle.Equals*
+  implements:
+  - System.IEquatable{FluentGpu.Foundation.Handle}.Equals(FluentGpu.Foundation.Handle)
+- uid: FluentGpu.Foundation.Handle.Equals(System.Object)
+  commentId: M:FluentGpu.Foundation.Handle.Equals(System.Object)
+  id: Equals(System.Object)
+  parent: FluentGpu.Foundation.Handle
+  langs:
+  - csharp
+  - vb
+  name: Equals(object?)
+  nameWithType: Handle.Equals(object?)
+  fullName: FluentGpu.Foundation.Handle.Equals(object?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Handles.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Equals
+    path: ../../src/FluentGpu.Foundation/Handles.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Indicates whether this instance and a specified object are equal.
+  example: []
+  syntax:
+    content: public override bool Equals(object? obj)
+    parameters:
+    - id: obj
+      type: System.Object
+      description: The object to compare with the current instance.
+    return:
+      type: System.Boolean
+      description: <a href="https://learn.microsoft.com/dotnet/csharp/language-reference/builtin-types/bool">true</a> if <code class="paramref">obj</code> and this instance are the same type and represent the same value; otherwise, <a href="https://learn.microsoft.com/dotnet/csharp/language-reference/builtin-types/bool">false</a>.
+    content.vb: Public Overrides Function Equals(obj As Object) As Boolean
+  overridden: System.ValueType.Equals(System.Object)
+  overload: FluentGpu.Foundation.Handle.Equals*
+  nameWithType.vb: Handle.Equals(Object)
+  fullName.vb: FluentGpu.Foundation.Handle.Equals(Object)
+  name.vb: Equals(Object)
+- uid: FluentGpu.Foundation.Handle.GetHashCode
+  commentId: M:FluentGpu.Foundation.Handle.GetHashCode
+  id: GetHashCode
+  parent: FluentGpu.Foundation.Handle
+  langs:
+  - csharp
+  - vb
+  name: GetHashCode()
+  nameWithType: Handle.GetHashCode()
+  fullName: FluentGpu.Foundation.Handle.GetHashCode()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Handles.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GetHashCode
+    path: ../../src/FluentGpu.Foundation/Handles.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Returns the hash code for this instance.
+  example: []
+  syntax:
+    content: public override int GetHashCode()
+    return:
+      type: System.Int32
+      description: A 32-bit signed integer that is the hash code for this instance.
+    content.vb: Public Overrides Function GetHashCode() As Integer
+  overridden: System.ValueType.GetHashCode
+  overload: FluentGpu.Foundation.Handle.GetHashCode*
+- uid: FluentGpu.Foundation.Handle.op_Equality(FluentGpu.Foundation.Handle,FluentGpu.Foundation.Handle)
+  commentId: M:FluentGpu.Foundation.Handle.op_Equality(FluentGpu.Foundation.Handle,FluentGpu.Foundation.Handle)
+  id: op_Equality(FluentGpu.Foundation.Handle,FluentGpu.Foundation.Handle)
+  parent: FluentGpu.Foundation.Handle
+  langs:
+  - csharp
+  - vb
+  name: operator ==(Handle, Handle)
+  nameWithType: Handle.operator ==(Handle, Handle)
+  fullName: FluentGpu.Foundation.Handle.operator ==(FluentGpu.Foundation.Handle, FluentGpu.Foundation.Handle)
+  type: Operator
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Handles.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: op_Equality
+    path: ../../src/FluentGpu.Foundation/Handles.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public static bool operator ==(Handle a, Handle b)
+    parameters:
+    - id: a
+      type: FluentGpu.Foundation.Handle
+    - id: b
+      type: FluentGpu.Foundation.Handle
+    return:
+      type: System.Boolean
+    content.vb: Public Shared Operator =(a As Handle, b As Handle) As Boolean
+  overload: FluentGpu.Foundation.Handle.op_Equality*
+  nameWithType.vb: Handle.=(Handle, Handle)
+  fullName.vb: FluentGpu.Foundation.Handle.=(FluentGpu.Foundation.Handle, FluentGpu.Foundation.Handle)
+  name.vb: =(Handle, Handle)
+- uid: FluentGpu.Foundation.Handle.op_Inequality(FluentGpu.Foundation.Handle,FluentGpu.Foundation.Handle)
+  commentId: M:FluentGpu.Foundation.Handle.op_Inequality(FluentGpu.Foundation.Handle,FluentGpu.Foundation.Handle)
+  id: op_Inequality(FluentGpu.Foundation.Handle,FluentGpu.Foundation.Handle)
+  parent: FluentGpu.Foundation.Handle
+  langs:
+  - csharp
+  - vb
+  name: operator !=(Handle, Handle)
+  nameWithType: Handle.operator !=(Handle, Handle)
+  fullName: FluentGpu.Foundation.Handle.operator !=(FluentGpu.Foundation.Handle, FluentGpu.Foundation.Handle)
+  type: Operator
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Handles.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: op_Inequality
+    path: ../../src/FluentGpu.Foundation/Handles.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public static bool operator !=(Handle a, Handle b)
+    parameters:
+    - id: a
+      type: FluentGpu.Foundation.Handle
+    - id: b
+      type: FluentGpu.Foundation.Handle
+    return:
+      type: System.Boolean
+    content.vb: Public Shared Operator <>(a As Handle, b As Handle) As Boolean
+  overload: FluentGpu.Foundation.Handle.op_Inequality*
+  nameWithType.vb: Handle.<>(Handle, Handle)
+  fullName.vb: FluentGpu.Foundation.Handle.<>(FluentGpu.Foundation.Handle, FluentGpu.Foundation.Handle)
+  name.vb: <>(Handle, Handle)
+- uid: FluentGpu.Foundation.Handle.ToString
+  commentId: M:FluentGpu.Foundation.Handle.ToString
+  id: ToString
+  parent: FluentGpu.Foundation.Handle
+  langs:
+  - csharp
+  - vb
+  name: ToString()
+  nameWithType: Handle.ToString()
+  fullName: FluentGpu.Foundation.Handle.ToString()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Handles.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ToString
+    path: ../../src/FluentGpu.Foundation/Handles.cs
+    startLine: 21
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Returns the fully qualified type name of this instance.
+  example: []
+  syntax:
+    content: public override string ToString()
+    return:
+      type: System.String
+      description: The fully qualified type name.
+    content.vb: Public Overrides Function ToString() As String
+  overridden: System.ValueType.ToString
+  overload: FluentGpu.Foundation.Handle.ToString*
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.IEquatable{FluentGpu.Foundation.Handle}
+  commentId: T:System.IEquatable{FluentGpu.Foundation.Handle}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<Handle>
+  nameWithType: IEquatable<Handle>
+  fullName: System.IEquatable<FluentGpu.Foundation.Handle>
+  nameWithType.vb: IEquatable(Of Handle)
+  fullName.vb: System.IEquatable(Of FluentGpu.Foundation.Handle)
+  name.vb: IEquatable(Of Handle)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Foundation.Handle
+    name: Handle
+    href: FluentGpu.Foundation.Handle.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.Handle
+    name: Handle
+    href: FluentGpu.Foundation.Handle.html
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.UInt32
+  commentId: T:System.UInt32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.uint32
+  name: uint
+  nameWithType: uint
+  fullName: uint
+  nameWithType.vb: UInteger
+  fullName.vb: UInteger
+  name.vb: UInteger
+- uid: FluentGpu.Foundation.Handle.#ctor*
+  commentId: Overload:FluentGpu.Foundation.Handle.#ctor
+  href: FluentGpu.Foundation.Handle.html#FluentGpu_Foundation_Handle__ctor_System_UInt32_System_UInt32_
+  name: Handle
+  nameWithType: Handle.Handle
+  fullName: FluentGpu.Foundation.Handle.Handle
+  nameWithType.vb: Handle.New
+  fullName.vb: FluentGpu.Foundation.Handle.New
+  name.vb: New
+- uid: FluentGpu.Foundation.Handle.IsNull*
+  commentId: Overload:FluentGpu.Foundation.Handle.IsNull
+  href: FluentGpu.Foundation.Handle.html#FluentGpu_Foundation_Handle_IsNull
+  name: IsNull
+  nameWithType: Handle.IsNull
+  fullName: FluentGpu.Foundation.Handle.IsNull
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Foundation.Handle.Null*
+  commentId: Overload:FluentGpu.Foundation.Handle.Null
+  href: FluentGpu.Foundation.Handle.html#FluentGpu_Foundation_Handle_Null
+  name: "Null"
+  nameWithType: Handle.Null
+  fullName: FluentGpu.Foundation.Handle.Null
+- uid: FluentGpu.Foundation.Handle
+  commentId: T:FluentGpu.Foundation.Handle
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Handle.html
+  name: Handle
+  nameWithType: Handle
+  fullName: FluentGpu.Foundation.Handle
+- uid: FluentGpu.Foundation.Handle.Equals*
+  commentId: Overload:FluentGpu.Foundation.Handle.Equals
+  href: FluentGpu.Foundation.Handle.html#FluentGpu_Foundation_Handle_Equals_FluentGpu_Foundation_Handle_
+  name: Equals
+  nameWithType: Handle.Equals
+  fullName: FluentGpu.Foundation.Handle.Equals
+- uid: System.IEquatable{FluentGpu.Foundation.Handle}.Equals(FluentGpu.Foundation.Handle)
+  commentId: M:System.IEquatable{FluentGpu.Foundation.Handle}.Equals(FluentGpu.Foundation.Handle)
+  parent: System.IEquatable{FluentGpu.Foundation.Handle}
+  definition: System.IEquatable`1.Equals(`0)
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1.equals
+  name: Equals(Handle)
+  nameWithType: IEquatable<Handle>.Equals(Handle)
+  fullName: System.IEquatable<FluentGpu.Foundation.Handle>.Equals(FluentGpu.Foundation.Handle)
+  nameWithType.vb: IEquatable(Of Handle).Equals(Handle)
+  fullName.vb: System.IEquatable(Of FluentGpu.Foundation.Handle).Equals(FluentGpu.Foundation.Handle)
+  spec.csharp:
+  - uid: System.IEquatable{FluentGpu.Foundation.Handle}.Equals(FluentGpu.Foundation.Handle)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1.equals
+  - name: (
+  - uid: FluentGpu.Foundation.Handle
+    name: Handle
+    href: FluentGpu.Foundation.Handle.html
+  - name: )
+  spec.vb:
+  - uid: System.IEquatable{FluentGpu.Foundation.Handle}.Equals(FluentGpu.Foundation.Handle)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1.equals
+  - name: (
+  - uid: FluentGpu.Foundation.Handle
+    name: Handle
+    href: FluentGpu.Foundation.Handle.html
+  - name: )
+- uid: System.IEquatable`1.Equals(`0)
+  commentId: M:System.IEquatable`1.Equals(`0)
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1.equals
+  name: Equals(T)
+  nameWithType: IEquatable<T>.Equals(T)
+  fullName: System.IEquatable<T>.Equals(T)
+  nameWithType.vb: IEquatable(Of T).Equals(T)
+  fullName.vb: System.IEquatable(Of T).Equals(T)
+  spec.csharp:
+  - uid: System.IEquatable`1.Equals(`0)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1.equals
+  - name: (
+  - name: T
+  - name: )
+  spec.vb:
+  - uid: System.IEquatable`1.Equals(`0)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1.equals
+  - name: (
+  - name: T
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: FluentGpu.Foundation.Handle.GetHashCode*
+  commentId: Overload:FluentGpu.Foundation.Handle.GetHashCode
+  href: FluentGpu.Foundation.Handle.html#FluentGpu_Foundation_Handle_GetHashCode
+  name: GetHashCode
+  nameWithType: Handle.GetHashCode
+  fullName: FluentGpu.Foundation.Handle.GetHashCode
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Foundation.Handle.op_Equality*
+  commentId: Overload:FluentGpu.Foundation.Handle.op_Equality
+  href: FluentGpu.Foundation.Handle.html#FluentGpu_Foundation_Handle_op_Equality_FluentGpu_Foundation_Handle_FluentGpu_Foundation_Handle_
+  name: operator ==
+  nameWithType: Handle.operator ==
+  fullName: FluentGpu.Foundation.Handle.operator ==
+  nameWithType.vb: Handle.=
+  fullName.vb: FluentGpu.Foundation.Handle.=
+  name.vb: =
+  spec.csharp:
+  - name: operator
+  - name: " "
+  - uid: FluentGpu.Foundation.Handle.op_Equality*
+    name: ==
+    href: FluentGpu.Foundation.Handle.html#FluentGpu_Foundation_Handle_op_Equality_FluentGpu_Foundation_Handle_FluentGpu_Foundation_Handle_
+- uid: FluentGpu.Foundation.Handle.op_Inequality*
+  commentId: Overload:FluentGpu.Foundation.Handle.op_Inequality
+  href: FluentGpu.Foundation.Handle.html#FluentGpu_Foundation_Handle_op_Inequality_FluentGpu_Foundation_Handle_FluentGpu_Foundation_Handle_
+  name: operator !=
+  nameWithType: Handle.operator !=
+  fullName: FluentGpu.Foundation.Handle.operator !=
+  nameWithType.vb: Handle.<>
+  fullName.vb: FluentGpu.Foundation.Handle.<>
+  name.vb: <>
+  spec.csharp:
+  - name: operator
+  - name: " "
+  - uid: FluentGpu.Foundation.Handle.op_Inequality*
+    name: '!='
+    href: FluentGpu.Foundation.Handle.html#FluentGpu_Foundation_Handle_op_Inequality_FluentGpu_Foundation_Handle_FluentGpu_Foundation_Handle_
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: FluentGpu.Foundation.Handle.ToString*
+  commentId: Overload:FluentGpu.Foundation.Handle.ToString
+  href: FluentGpu.Foundation.Handle.html#FluentGpu_Foundation_Handle_ToString
+  name: ToString
+  nameWithType: Handle.ToString
+  fullName: FluentGpu.Foundation.Handle.ToString
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String

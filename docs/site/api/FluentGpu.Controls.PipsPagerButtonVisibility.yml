@@ -1,0 +1,153 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.PipsPagerButtonVisibility
+  commentId: T:FluentGpu.Controls.PipsPagerButtonVisibility
+  id: PipsPagerButtonVisibility
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.PipsPagerButtonVisibility.Collapsed
+  - FluentGpu.Controls.PipsPagerButtonVisibility.Visible
+  - FluentGpu.Controls.PipsPagerButtonVisibility.VisibleOnPointerOver
+  langs:
+  - csharp
+  - vb
+  name: PipsPagerButtonVisibility
+  nameWithType: PipsPagerButtonVisibility
+  fullName: FluentGpu.Controls.PipsPagerButtonVisibility
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/PipsPager.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PipsPagerButtonVisibility
+    path: ../../src/FluentGpu.Controls/PipsPager.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>PipsPagerButtonVisibility</code> (PipsPager.idl:6-11) — how the previous/next navigation buttons
+        show. Both default to <xref href="FluentGpu.Controls.PipsPagerButtonVisibility.Collapsed" data-throw-if-not-resolved="false"></xref> (PipsPager.idl:56-59).
+  example: []
+  syntax:
+    content: 'public enum PipsPagerButtonVisibility : byte'
+    content.vb: Public Enum PipsPagerButtonVisibility As Byte
+- uid: FluentGpu.Controls.PipsPagerButtonVisibility.Visible
+  commentId: F:FluentGpu.Controls.PipsPagerButtonVisibility.Visible
+  id: Visible
+  parent: FluentGpu.Controls.PipsPagerButtonVisibility
+  langs:
+  - csharp
+  - vb
+  name: Visible
+  nameWithType: PipsPagerButtonVisibility.Visible
+  fullName: FluentGpu.Controls.PipsPagerButtonVisibility.Visible
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/PipsPager.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Visible
+    path: ../../src/FluentGpu.Controls/PipsPager.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Visible = 0
+    return:
+      type: FluentGpu.Controls.PipsPagerButtonVisibility
+- uid: FluentGpu.Controls.PipsPagerButtonVisibility.VisibleOnPointerOver
+  commentId: F:FluentGpu.Controls.PipsPagerButtonVisibility.VisibleOnPointerOver
+  id: VisibleOnPointerOver
+  parent: FluentGpu.Controls.PipsPagerButtonVisibility
+  langs:
+  - csharp
+  - vb
+  name: VisibleOnPointerOver
+  nameWithType: PipsPagerButtonVisibility.VisibleOnPointerOver
+  fullName: FluentGpu.Controls.PipsPagerButtonVisibility.VisibleOnPointerOver
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/PipsPager.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: VisibleOnPointerOver
+    path: ../../src/FluentGpu.Controls/PipsPager.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Hidden (Opacity 0, layout slot kept — PipsPager.xaml:19-23) until the pointer is over the pager or
+        keyboard focus is inside it (PipsPager.cpp:568-647).
+  example: []
+  syntax:
+    content: VisibleOnPointerOver = 1
+    return:
+      type: FluentGpu.Controls.PipsPagerButtonVisibility
+- uid: FluentGpu.Controls.PipsPagerButtonVisibility.Collapsed
+  commentId: F:FluentGpu.Controls.PipsPagerButtonVisibility.Collapsed
+  id: Collapsed
+  parent: FluentGpu.Controls.PipsPagerButtonVisibility
+  langs:
+  - csharp
+  - vb
+  name: Collapsed
+  nameWithType: PipsPagerButtonVisibility.Collapsed
+  fullName: FluentGpu.Controls.PipsPagerButtonVisibility.Collapsed
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/PipsPager.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Collapsed
+    path: ../../src/FluentGpu.Controls/PipsPager.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Collapsed = 2
+    return:
+      type: FluentGpu.Controls.PipsPagerButtonVisibility
+references:
+- uid: FluentGpu.Controls.PipsPagerButtonVisibility.Collapsed
+  commentId: F:FluentGpu.Controls.PipsPagerButtonVisibility.Collapsed
+  href: FluentGpu.Controls.PipsPagerButtonVisibility.html#FluentGpu_Controls_PipsPagerButtonVisibility_Collapsed
+  name: Collapsed
+  nameWithType: PipsPagerButtonVisibility.Collapsed
+  fullName: FluentGpu.Controls.PipsPagerButtonVisibility.Collapsed
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.PipsPagerButtonVisibility
+  commentId: T:FluentGpu.Controls.PipsPagerButtonVisibility
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.PipsPagerButtonVisibility.html
+  name: PipsPagerButtonVisibility
+  nameWithType: PipsPagerButtonVisibility
+  fullName: FluentGpu.Controls.PipsPagerButtonVisibility

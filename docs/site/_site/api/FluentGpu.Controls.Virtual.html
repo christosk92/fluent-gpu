@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Class Virtual | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Class Virtual | FluentGpu Developer Docs ">
+      
+      <meta name="description" content="Fluent factories for virtualized collections. All recycle over the slab free-list and keep a 0-alloc in-window scroll.  takes any  you implement. The returned  record lives in FluentGpu.Reconciler (the reconciler diffs it directly).">
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/new/feat/prop-unification/apiSpec/new?filename=FluentGpu_Controls_Virtual.md&amp;value=---%0Auid%3A%20FluentGpu.Controls.Virtual%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="ManagedReference">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="FluentGpu.Controls.Virtual">
+
+
+
+  <h1 id="FluentGpu_Controls_Virtual" data-uid="FluentGpu.Controls.Virtual" class="text-break">
+Class Virtual  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Virtual.cs/#L12"><i class="bi bi-code-slash"></i></a>
+  </h1>
+
+  <div class="facts text-secondary">
+    <dl><dt>Namespace</dt><dd><a class="xref" href="FluentGpu.html">FluentGpu</a>.<a class="xref" href="FluentGpu.Controls.html">Controls</a></dd></dl>
+  <dl><dt>Assembly</dt><dd>FluentGpu.Controls.dll</dd></dl>
+  </div>
+
+  <div class="markdown summary"><p>Fluent factories for virtualized collections. All recycle over the slab free-list and keep a 0-alloc
+in-window scroll. <a class="xref" href="FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_Custom_System_Int32_FluentGpu_Scene_IVirtualLayout_System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__System_Int32_System_Boolean_">Custom(int, IVirtualLayout, Func&lt;int, Element&gt;, Func&lt;int, string&gt;?, int, bool)</a> takes any <a class="xref" href="FluentGpu.Scene.IVirtualLayout.html">IVirtualLayout</a> you implement. The returned
+<a class="xref" href="FluentGpu.Reconciler.VirtualListEl.html">VirtualListEl</a> record lives in FluentGpu.Reconciler (the reconciler diffs it directly).</p>
+</div>
+  <div class="markdown conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static class Virtual</code></pre>
+  </div>
+
+
+
+
+  <dl class="typelist inheritance">
+    <dt>Inheritance</dt>
+    <dd>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></div>
+      <div><span class="xref">Virtual</span></div>
+    </dd>
+  </dl>
+
+
+
+  <dl class="typelist inheritedMembers">
+    <dt>Inherited Members</dt>
+    <dd>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)">object.Equals(object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)">object.Equals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gethashcode">object.GetHashCode()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gettype">object.GetType()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone">object.MemberwiseClone()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.referenceequals">object.ReferenceEquals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.tostring">object.ToString()</a>
+    </div>
+  </dd></dl>
+
+
+
+
+
+
+  <h2 class="section" id="methods">Methods
+</h2>
+
+
+  <a id="FluentGpu_Controls_Virtual_Custom_" data-uid="FluentGpu.Controls.Virtual.Custom*"></a>
+
+  <h3 id="FluentGpu_Controls_Virtual_Custom_System_Int32_FluentGpu_Scene_IVirtualLayout_System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__System_Int32_System_Boolean_" data-uid="FluentGpu.Controls.Virtual.Custom(System.Int32,FluentGpu.Scene.IVirtualLayout,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32,System.Boolean)">
+  Custom(int, IVirtualLayout, Func&lt;int, Element&gt;, Func&lt;int, string&gt;?, int, bool)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Virtual.cs/#L33"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>A virtualized collection with ANY custom <a class="xref" href="FluentGpu.Scene.IVirtualLayout.html">IVirtualLayout</a> you supply.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static VirtualListEl Custom(int itemCount, IVirtualLayout layout, Func&lt;int, Element&gt; renderItem, Func&lt;int, string&gt;? keyOf = null, int overscan = 4, bool horizontal = false)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>itemCount</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>layout</code> <a class="xref" href="FluentGpu.Scene.IVirtualLayout.html">IVirtualLayout</a></dt>
+    <dd></dd>
+    <dt><code>renderItem</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>, <a class="xref" href="FluentGpu.Dsl.Element.html">Element</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>keyOf</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>overscan</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>horizontal</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Reconciler.VirtualListEl.html">VirtualListEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Virtual_Grid_" data-uid="FluentGpu.Controls.Virtual.Grid*"></a>
+
+  <h3 id="FluentGpu_Controls_Virtual_Grid_System_Int32_System_Int32_System_Single_System_Single_System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__System_Int32_" data-uid="FluentGpu.Controls.Virtual.Grid(System.Int32,System.Int32,System.Single,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)">
+  Grid(int, int, float, float, Func&lt;int, Element&gt;, Func&lt;int, string&gt;?, int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Virtual.cs/#L24"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>A vertically-virtualized uniform card GRID (album/artist shelves) — virtualizes by row.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static VirtualListEl Grid(int itemCount, int columns, float itemHeight, float gap, Func&lt;int, Element&gt; renderItem, Func&lt;int, string&gt;? keyOf = null, int overscan = 2)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>itemCount</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>columns</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>itemHeight</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>gap</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>renderItem</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>, <a class="xref" href="FluentGpu.Dsl.Element.html">Element</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>keyOf</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>overscan</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Reconciler.VirtualListEl.html">VirtualListEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Virtual_GridBound_" data-uid="FluentGpu.Controls.Virtual.GridBound*"></a>
+
+  <h3 id="FluentGpu_Controls_Virtual_GridBound_System_Int32_System_Int32_System_Single_System_Single_System_Func_FluentGpu_Signals_IReadSignal_System_Int32__FluentGpu_Dsl_Element__System_Int32_" data-uid="FluentGpu.Controls.Virtual.GridBound(System.Int32,System.Int32,System.Single,System.Single,System.Func{FluentGpu.Signals.IReadSignal{System.Int32},FluentGpu.Dsl.Element},System.Int32)">
+  GridBound(int, int, float, float, Func&lt;IReadSignal&lt;int&gt;, Element&gt;, int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Virtual.cs/#L124"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Signals-first BOUND uniform card grid — <a class="xref" href="FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_ListBound_System_Int32_System_Single_System_Func_FluentGpu_Signals_IReadSignal_System_Int32__FluentGpu_Dsl_Element__System_Int32_">ListBound(int, float, Func&lt;IReadSignal&lt;int&gt;, Element&gt;, int)</a> semantics over <a class="xref" href="FluentGpu.Scene.GridVirtualLayout.html">GridVirtualLayout</a>.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static VirtualListEl GridBound(int itemCount, int columns, float itemHeight, float gap, Func&lt;IReadSignal&lt;int&gt;, Element&gt; row, int overscan = 2)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>itemCount</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>columns</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>itemHeight</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>gap</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>row</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="FluentGpu.Signals.IReadSignal-1.html">IReadSignal</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>&gt;, <a class="xref" href="FluentGpu.Dsl.Element.html">Element</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>overscan</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Reconciler.VirtualListEl.html">VirtualListEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Virtual_GroupedList_" data-uid="FluentGpu.Controls.Virtual.GroupedList*"></a>
+
+  <h3 id="FluentGpu_Controls_Virtual_GroupedList_System_Int32_System_Int32___System_Single_System_Single_System_Func_System_Int32_FluentGpu_Dsl_Element__FluentGpu_Scene_GroupedListVirtualLayout__System_Func_System_Int32_System_String__System_Int32_" data-uid="FluentGpu.Controls.Virtual.GroupedList(System.Int32,System.Int32[],System.Single,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},FluentGpu.Scene.GroupedListVirtualLayout@,System.Func{System.Int32,System.String},System.Int32)">
+  GroupedList(int, int[], float, float, Func&lt;int, Element&gt;, out GroupedListVirtualLayout, Func&lt;int, string&gt;?, int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Virtual.cs/#L81"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>A grouped flat list with measured rows + sticky-header hook (E11-L0 grouping): headers occupy flat
+indices of their own (<code class="paramref">headerIndices</code>, sorted ascending) and are rendered by the same
+<code class="paramref">renderItem</code> — a group header is just a measured item KIND. Keep a reference to the
+<a class="xref" href="FluentGpu.Scene.GroupedListVirtualLayout.html">GroupedListVirtualLayout</a> (via <code class="paramref">layout</code>) for <code>StickyHeaderIndexAt</code>.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static VirtualListEl GroupedList(int itemCount, int[] headerIndices, float headerExtent, float itemEstimate, Func&lt;int, Element&gt; renderItem, out GroupedListVirtualLayout layout, Func&lt;int, string&gt;? keyOf = null, int overscan = 4)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>itemCount</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>headerIndices</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>[]</dt>
+    <dd></dd>
+    <dt><code>headerExtent</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>itemEstimate</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>renderItem</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>, <a class="xref" href="FluentGpu.Dsl.Element.html">Element</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>layout</code> <a class="xref" href="FluentGpu.Scene.GroupedListVirtualLayout.html">GroupedListVirtualLayout</a></dt>
+    <dd></dd>
+    <dt><code>keyOf</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>overscan</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Reconciler.VirtualListEl.html">VirtualListEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Virtual_HorizontalGrid_" data-uid="FluentGpu.Controls.Virtual.HorizontalGrid*"></a>
+
+  <h3 id="FluentGpu_Controls_Virtual_HorizontalGrid_System_Int32_System_Int32_System_Single_System_Single_System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__System_Int32_" data-uid="FluentGpu.Controls.Virtual.HorizontalGrid(System.Int32,System.Int32,System.Single,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)">
+  HorizontalGrid(int, int, float, float, Func&lt;int, Element&gt;, Func&lt;int, string&gt;?, int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Virtual.cs/#L106"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>A HORIZONTALLY-scrolling uniform card grid (a shelf <code class="paramref">rows</code> cells tall) — the
+horizontal variant of <a class="xref" href="FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_Grid_System_Int32_System_Int32_System_Single_System_Single_System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__System_Int32_">Grid(int, int, float, float, Func&lt;int, Element&gt;, Func&lt;int, string&gt;?, int)</a>; virtualizes by column.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static VirtualListEl HorizontalGrid(int itemCount, int rows, float itemWidth, float gap, Func&lt;int, Element&gt; renderItem, Func&lt;int, string&gt;? keyOf = null, int overscan = 2)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>itemCount</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>rows</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>itemWidth</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>gap</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>renderItem</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>, <a class="xref" href="FluentGpu.Dsl.Element.html">Element</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>keyOf</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>overscan</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Reconciler.VirtualListEl.html">VirtualListEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Virtual_LinedFlow_" data-uid="FluentGpu.Controls.Virtual.LinedFlow*"></a>
+
+  <h3 id="FluentGpu_Controls_Virtual_LinedFlow_System_Int32_System_Single_System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_Single__System_Single_System_Single_System_Func_System_Int32_System_String__System_Int32_" data-uid="FluentGpu.Controls.Virtual.LinedFlow(System.Int32,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.Single},System.Single,System.Single,System.Func{System.Int32,System.String},System.Int32)">
+  LinedFlow(int, float, Func&lt;int, Element&gt;, Func&lt;int, float&gt;?, float, float, Func&lt;int, string&gt;?, int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Virtual.cs/#L67"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The WinUI <code>LinedFlowLayout</code> photo-wall (ItemsView's signature layout): uniform-height lines,
+per-item width = aspect × lineHeight, wrapping at the viewport edge. The layout instance is stateful — reuse
+the returned element's <a class="xref" href="FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_Layout">Layout</a> or hoist your own <a class="xref" href="FluentGpu.Scene.LinedFlowLayout.html">LinedFlowLayout</a>.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static VirtualListEl LinedFlow(int itemCount, float lineHeight, Func&lt;int, Element&gt; renderItem, Func&lt;int, float&gt;? aspectRatio = null, float lineSpacing = 0, float minItemSpacing = 0, Func&lt;int, string&gt;? keyOf = null, int overscan = 8)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>itemCount</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>lineHeight</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>renderItem</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>, <a class="xref" href="FluentGpu.Dsl.Element.html">Element</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>aspectRatio</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>lineSpacing</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>minItemSpacing</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>keyOf</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>overscan</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Reconciler.VirtualListEl.html">VirtualListEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Virtual_List_" data-uid="FluentGpu.Controls.Virtual.List*"></a>
+
+  <h3 id="FluentGpu_Controls_Virtual_List_System_Int32_System_Single_System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__System_Int32_" data-uid="FluentGpu.Controls.Virtual.List(System.Int32,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)">
+  List(int, float, Func&lt;int, Element&gt;, Func&lt;int, string&gt;?, int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Virtual.cs/#L15"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>A vertically-virtualized uniform list (the WaveeMusic track-list shape).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static VirtualListEl List(int itemCount, float itemExtent, Func&lt;int, Element&gt; renderItem, Func&lt;int, string&gt;? keyOf = null, int overscan = 4)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>itemCount</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>itemExtent</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>renderItem</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>, <a class="xref" href="FluentGpu.Dsl.Element.html">Element</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>keyOf</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>overscan</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Reconciler.VirtualListEl.html">VirtualListEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Virtual_ListBound_" data-uid="FluentGpu.Controls.Virtual.ListBound*"></a>
+
+  <h3 id="FluentGpu_Controls_Virtual_ListBound_System_Int32_System_Single_System_Func_FluentGpu_Signals_IReadSignal_System_Int32__FluentGpu_Dsl_Element__System_Int32_" data-uid="FluentGpu.Controls.Virtual.ListBound(System.Int32,System.Single,System.Func{FluentGpu.Signals.IReadSignal{System.Int32},FluentGpu.Dsl.Element},System.Int32)">
+  ListBound(int, float, Func&lt;IReadSignal&lt;int&gt;, Element&gt;, int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Virtual.cs/#L120"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Signals-first BOUND list (the recycler fast path): <code class="paramref">row</code> runs ONCE per visible slot
+with an index SIGNAL; scrolling rebinds a slot by writing its signal — zero element rebuild, zero reconcile,
+zero keys. Express anything that varies by index as a reactive bind (<code>TextBind</code>/<code>FillBind</code>/
+<code>SourceBind</code>/<code>PlaceholderBind</code>), never a captured value. The fastest path for huge uniform lists
+(the WaveeMusic 100k track list under a scrollbar thumb-drag).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static VirtualListEl ListBound(int itemCount, float itemExtent, Func&lt;IReadSignal&lt;int&gt;, Element&gt; row, int overscan = 4)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>itemCount</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>itemExtent</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>row</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="FluentGpu.Signals.IReadSignal-1.html">IReadSignal</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>&gt;, <a class="xref" href="FluentGpu.Dsl.Element.html">Element</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>overscan</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Reconciler.VirtualListEl.html">VirtualListEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Virtual_Measured_" data-uid="FluentGpu.Controls.Virtual.Measured*"></a>
+
+  <h3 id="FluentGpu_Controls_Virtual_Measured_System_Int32_FluentGpu_Scene_IMeasuredVirtualLayout_System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__System_Int32_System_Boolean_" data-uid="FluentGpu.Controls.Virtual.Measured(System.Int32,FluentGpu.Scene.IMeasuredVirtualLayout,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32,System.Boolean)">
+  Measured(int, IMeasuredVirtualLayout, Func&lt;int, Element&gt;, Func&lt;int, string&gt;?, int, bool)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Virtual.cs/#L56"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>A virtualized collection over ANY variable-extent <a class="xref" href="FluentGpu.Scene.IMeasuredVirtualLayout.html">IMeasuredVirtualLayout</a> (E11-L0): rows
+realize at the layout's estimate, correct to their measured extent on arrange, and the engine re-pins the
+scroll anchor across corrections. The layout is STATEFUL — create it once (hoist in a <code>UseMemo</code>) and
+reuse it across renders.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static VirtualListEl Measured(int itemCount, IMeasuredVirtualLayout layout, Func&lt;int, Element&gt; renderItem, Func&lt;int, string&gt;? keyOf = null, int overscan = 4, bool horizontal = false)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>itemCount</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>layout</code> <a class="xref" href="FluentGpu.Scene.IMeasuredVirtualLayout.html">IMeasuredVirtualLayout</a></dt>
+    <dd></dd>
+    <dt><code>renderItem</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>, <a class="xref" href="FluentGpu.Dsl.Element.html">Element</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>keyOf</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>overscan</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>horizontal</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Reconciler.VirtualListEl.html">VirtualListEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Virtual_SpanGrid_" data-uid="FluentGpu.Controls.Virtual.SpanGrid*"></a>
+
+  <h3 id="FluentGpu_Controls_Virtual_SpanGrid_System_Int32_System_Int32_System_Single_System_Single_System_Func_System_Int32_System_Int32__System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__System_Int32_" data-uid="FluentGpu.Controls.Virtual.SpanGrid(System.Int32,System.Int32,System.Single,System.Single,System.Func{System.Int32,System.Int32},System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)">
+  SpanGrid(int, int, float, float, Func&lt;int, int&gt;, Func&lt;int, Element&gt;, Func&lt;int, string&gt;?, int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Virtual.cs/#L95"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Uniform-row grid with ITEM SPANNING (hero-as-first-row): <code class="paramref">spanOf</code> returns each item's
+column span (clamped 1..columns); items pack row-major and wrap when a span doesn't fit.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static VirtualListEl SpanGrid(int itemCount, int columns, float rowHeight, float gap, Func&lt;int, int&gt; spanOf, Func&lt;int, Element&gt; renderItem, Func&lt;int, string&gt;? keyOf = null, int overscan = 2)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>itemCount</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>columns</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>rowHeight</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>gap</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>spanOf</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>renderItem</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>, <a class="xref" href="FluentGpu.Dsl.Element.html">Element</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>keyOf</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>overscan</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Reconciler.VirtualListEl.html">VirtualListEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Virtual_VariableList_" data-uid="FluentGpu.Controls.Virtual.VariableList*"></a>
+
+  <h3 id="FluentGpu_Controls_Virtual_VariableList_System_Int32_System_Single_System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__System_Int32_" data-uid="FluentGpu.Controls.Virtual.VariableList(System.Int32,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)">
+  VariableList(int, float, Func&lt;int, Element&gt;, Func&lt;int, string&gt;?, int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Virtual.cs/#L44"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>A vertically-virtualized list of variable-height rows (Fenwick extent table + scroll anchoring) —
+the legacy built-in variable path (<code>Layout = null</code>). The seam-shaped equivalent is
+<a class="xref" href="FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_Measured_System_Int32_FluentGpu_Scene_IMeasuredVirtualLayout_System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__System_Int32_System_Boolean_">Measured(int, IMeasuredVirtualLayout, Func&lt;int, Element&gt;, Func&lt;int, string&gt;?, int, bool)</a> with a <a class="xref" href="FluentGpu.Scene.MeasuredStackVirtualLayout.html">MeasuredStackVirtualLayout</a> (E11-L0), which custom layouts mirror.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static VirtualListEl VariableList(int itemCount, float estimatedExtent, Func&lt;int, Element&gt; renderItem, Func&lt;int, string&gt;? keyOf = null, int overscan = 4)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>itemCount</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>estimatedExtent</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>renderItem</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>, <a class="xref" href="FluentGpu.Dsl.Element.html">Element</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>keyOf</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>overscan</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Reconciler.VirtualListEl.html">VirtualListEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+</article>
+
+
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

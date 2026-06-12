@@ -1,0 +1,69 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Input
+  commentId: N:FluentGpu.Input
+  id: FluentGpu.Input
+  children:
+  - FluentGpu.Input.DragController
+  - FluentGpu.Input.DragDropContext
+  - FluentGpu.Input.FocusDirection
+  - FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: FluentGpu.Input
+  nameWithType: FluentGpu.Input
+  fullName: FluentGpu.Input
+  type: Namespace
+  assemblies:
+  - FluentGpu.Input
+references:
+- uid: FluentGpu.Input.DragController
+  commentId: T:FluentGpu.Input.DragController
+  parent: FluentGpu.Input
+  href: FluentGpu.Input.DragController.html
+  name: DragController
+  nameWithType: DragController
+  fullName: FluentGpu.Input.DragController
+- uid: FluentGpu.Input.DragDropContext
+  commentId: T:FluentGpu.Input.DragDropContext
+  parent: FluentGpu.Input
+  href: FluentGpu.Input.DragDropContext.html
+  name: DragDropContext
+  nameWithType: DragDropContext
+  fullName: FluentGpu.Input.DragDropContext
+- uid: FluentGpu.Input.FocusDirection
+  commentId: T:FluentGpu.Input.FocusDirection
+  parent: FluentGpu.Input
+  href: FluentGpu.Input.FocusDirection.html
+  name: FocusDirection
+  nameWithType: FocusDirection
+  fullName: FluentGpu.Input.FocusDirection
+- uid: FluentGpu.Input.InputDispatcher
+  commentId: T:FluentGpu.Input.InputDispatcher
+  href: FluentGpu.Input.InputDispatcher.html
+  name: InputDispatcher
+  nameWithType: InputDispatcher
+  fullName: FluentGpu.Input.InputDispatcher
+- uid: FluentGpu.Input
+  commentId: N:FluentGpu.Input
+  href: FluentGpu.html
+  name: FluentGpu.Input
+  nameWithType: FluentGpu.Input
+  fullName: FluentGpu.Input
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Input
+    name: Input
+    href: FluentGpu.Input.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Input
+    name: Input
+    href: FluentGpu.Input.html

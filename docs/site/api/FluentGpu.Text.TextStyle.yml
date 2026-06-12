@@ -1,0 +1,966 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Text.TextStyle
+  commentId: T:FluentGpu.Text.TextStyle
+  id: TextStyle
+  parent: FluentGpu.Text
+  children:
+  - FluentGpu.Text.TextStyle.#ctor(FluentGpu.Foundation.StringId,System.Single,System.UInt16,FluentGpu.Foundation.TextWrap,FluentGpu.Foundation.TextTrim,System.Int32,System.Single,System.Single,FluentGpu.Foundation.LineStacking,FluentGpu.Foundation.TextLineBounds,System.Int32)
+  - FluentGpu.Text.TextStyle.CharSpacing
+  - FluentGpu.Text.TextStyle.FontFamily
+  - FluentGpu.Text.TextStyle.LineBounds
+  - FluentGpu.Text.TextStyle.LineHeight
+  - FluentGpu.Text.TextStyle.MaxLines
+  - FluentGpu.Text.TextStyle.SizeDip
+  - FluentGpu.Text.TextStyle.SpanRunId
+  - FluentGpu.Text.TextStyle.Stacking
+  - FluentGpu.Text.TextStyle.Trim
+  - FluentGpu.Text.TextStyle.Weight
+  - FluentGpu.Text.TextStyle.Wrap
+  langs:
+  - csharp
+  - vb
+  name: TextStyle
+  nameWithType: TextStyle
+  fullName: FluentGpu.Text.TextStyle
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Text/Text.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextStyle
+    path: ../../src/FluentGpu.Text/Text.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: >-
+    The resolved style a text run is measured/shaped under. <xref href="FluentGpu.Text.TextStyle.Weight" data-throw-if-not-resolved="false"></xref> is the NUMERIC font weight
+        (WinUI FontWeight — the int IS the DWRITE_FONT_WEIGHT, 1..999; callers resolve sugar like Bold→700 before
+        constructing; 0 is treated as 400). <xref href="FluentGpu.Text.TextStyle.CharSpacing" data-throw-if-not-resolved="false"></xref> is WinUI TextElement.CharacterSpacing — tracking in
+        1/1000 em, applied per glyph after shaping. <xref href="FluentGpu.Text.TextStyle.LineHeight" data-throw-if-not-resolved="false"></xref> (DIP; NaN/≤0 = font-natural) resolves per
+        <xref href="FluentGpu.Text.TextStyle.Stacking" data-throw-if-not-resolved="false"></xref> (WinUI LineStackingStrategy), and <xref href="FluentGpu.Text.TextStyle.LineBounds" data-throw-if-not-resolved="false"></xref> (WinUI TextLineBounds) selects
+        the reported line box (Full = ascent..descent, Tight = cap-height..baseline). Record equality over ALL fields is
+        load-bearing: TextStyle is the TextMeasureCache key, so every layout-affecting input must live here.
+
+        <p><xref href="FluentGpu.Text.TextStyle.SpanRunId" data-throw-if-not-resolved="false"></xref> (0 = plain single-style run) keys a <xref href="FluentGpu.Foundation.SpanRunTable.Shared" data-throw-if-not-resolved="false"></xref> run whose
+        per-range <xref href="FluentGpu.Foundation.SpanStyle" data-throw-if-not-resolved="false"></xref> overlays (weight/size/family/color/decorations) apply over this base style — the
+        rtb-01 inline-run model: the WHOLE text still shapes as ONE flow (one wrap pass), exactly like a WinUI paragraph's
+        inline collection. Carried here (not as a separate seam argument) so every existing layout/measure/query path —
+        and every cache keyed on TextStyle — is span-aware without signature churn; a span-content change mints a fresh
+        id, so the measure cache and the shaped-run cache self-invalidate.</p>
+  example: []
+  syntax:
+    content: 'public readonly record struct TextStyle : IEquatable<TextStyle>'
+    content.vb: Public Structure TextStyle Implements IEquatable(Of TextStyle)
+  implements:
+  - System.IEquatable{FluentGpu.Text.TextStyle}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Text.TextStyle.#ctor(FluentGpu.Foundation.StringId,System.Single,System.UInt16,FluentGpu.Foundation.TextWrap,FluentGpu.Foundation.TextTrim,System.Int32,System.Single,System.Single,FluentGpu.Foundation.LineStacking,FluentGpu.Foundation.TextLineBounds,System.Int32)
+  commentId: M:FluentGpu.Text.TextStyle.#ctor(FluentGpu.Foundation.StringId,System.Single,System.UInt16,FluentGpu.Foundation.TextWrap,FluentGpu.Foundation.TextTrim,System.Int32,System.Single,System.Single,FluentGpu.Foundation.LineStacking,FluentGpu.Foundation.TextLineBounds,System.Int32)
+  id: '#ctor(FluentGpu.Foundation.StringId,System.Single,System.UInt16,FluentGpu.Foundation.TextWrap,FluentGpu.Foundation.TextTrim,System.Int32,System.Single,System.Single,FluentGpu.Foundation.LineStacking,FluentGpu.Foundation.TextLineBounds,System.Int32)'
+  parent: FluentGpu.Text.TextStyle
+  langs:
+  - csharp
+  - vb
+  name: TextStyle(StringId, float, ushort, TextWrap, TextTrim, int, float, float, LineStacking, TextLineBounds, int)
+  nameWithType: TextStyle.TextStyle(StringId, float, ushort, TextWrap, TextTrim, int, float, float, LineStacking, TextLineBounds, int)
+  fullName: FluentGpu.Text.TextStyle.TextStyle(FluentGpu.Foundation.StringId, float, ushort, FluentGpu.Foundation.TextWrap, FluentGpu.Foundation.TextTrim, int, float, float, FluentGpu.Foundation.LineStacking, FluentGpu.Foundation.TextLineBounds, int)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Text/Text.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Text/Text.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: >-
+    The resolved style a text run is measured/shaped under. <xref href="FluentGpu.Text.TextStyle.Weight" data-throw-if-not-resolved="false"></xref> is the NUMERIC font weight
+        (WinUI FontWeight — the int IS the DWRITE_FONT_WEIGHT, 1..999; callers resolve sugar like Bold→700 before
+        constructing; 0 is treated as 400). <xref href="FluentGpu.Text.TextStyle.CharSpacing" data-throw-if-not-resolved="false"></xref> is WinUI TextElement.CharacterSpacing — tracking in
+        1/1000 em, applied per glyph after shaping. <xref href="FluentGpu.Text.TextStyle.LineHeight" data-throw-if-not-resolved="false"></xref> (DIP; NaN/≤0 = font-natural) resolves per
+        <xref href="FluentGpu.Text.TextStyle.Stacking" data-throw-if-not-resolved="false"></xref> (WinUI LineStackingStrategy), and <xref href="FluentGpu.Text.TextStyle.LineBounds" data-throw-if-not-resolved="false"></xref> (WinUI TextLineBounds) selects
+        the reported line box (Full = ascent..descent, Tight = cap-height..baseline). Record equality over ALL fields is
+        load-bearing: TextStyle is the TextMeasureCache key, so every layout-affecting input must live here.
+
+        <p><xref href="FluentGpu.Text.TextStyle.SpanRunId" data-throw-if-not-resolved="false"></xref> (0 = plain single-style run) keys a <xref href="FluentGpu.Foundation.SpanRunTable.Shared" data-throw-if-not-resolved="false"></xref> run whose
+        per-range <xref href="FluentGpu.Foundation.SpanStyle" data-throw-if-not-resolved="false"></xref> overlays (weight/size/family/color/decorations) apply over this base style — the
+        rtb-01 inline-run model: the WHOLE text still shapes as ONE flow (one wrap pass), exactly like a WinUI paragraph's
+        inline collection. Carried here (not as a separate seam argument) so every existing layout/measure/query path —
+        and every cache keyed on TextStyle — is span-aware without signature churn; a span-content change mints a fresh
+        id, so the measure cache and the shaped-run cache self-invalidate.</p>
+  example: []
+  syntax:
+    content: public TextStyle(StringId FontFamily, float SizeDip, ushort Weight, TextWrap Wrap = TextWrap.NoWrap, TextTrim Trim = TextTrim.None, int MaxLines = 0, float CharSpacing = 0, float LineHeight = NaN, LineStacking Stacking = LineStacking.MaxHeight, TextLineBounds LineBounds = TextLineBounds.Full, int SpanRunId = 0)
+    parameters:
+    - id: FontFamily
+      type: FluentGpu.Foundation.StringId
+    - id: SizeDip
+      type: System.Single
+    - id: Weight
+      type: System.UInt16
+    - id: Wrap
+      type: FluentGpu.Foundation.TextWrap
+    - id: Trim
+      type: FluentGpu.Foundation.TextTrim
+    - id: MaxLines
+      type: System.Int32
+    - id: CharSpacing
+      type: System.Single
+    - id: LineHeight
+      type: System.Single
+    - id: Stacking
+      type: FluentGpu.Foundation.LineStacking
+    - id: LineBounds
+      type: FluentGpu.Foundation.TextLineBounds
+    - id: SpanRunId
+      type: System.Int32
+    content.vb: Public Sub New(FontFamily As StringId, SizeDip As Single, Weight As UShort, Wrap As TextWrap = TextWrap.NoWrap, Trim As TextTrim = TextTrim.None, MaxLines As Integer = 0, CharSpacing As Single = 0, LineHeight As Single = NaN, Stacking As LineStacking = LineStacking.MaxHeight, LineBounds As TextLineBounds = TextLineBounds.Full, SpanRunId As Integer = 0)
+  overload: FluentGpu.Text.TextStyle.#ctor*
+  nameWithType.vb: TextStyle.New(StringId, Single, UShort, TextWrap, TextTrim, Integer, Single, Single, LineStacking, TextLineBounds, Integer)
+  fullName.vb: FluentGpu.Text.TextStyle.New(FluentGpu.Foundation.StringId, Single, UShort, FluentGpu.Foundation.TextWrap, FluentGpu.Foundation.TextTrim, Integer, Single, Single, FluentGpu.Foundation.LineStacking, FluentGpu.Foundation.TextLineBounds, Integer)
+  name.vb: New(StringId, Single, UShort, TextWrap, TextTrim, Integer, Single, Single, LineStacking, TextLineBounds, Integer)
+- uid: FluentGpu.Text.TextStyle.FontFamily
+  commentId: P:FluentGpu.Text.TextStyle.FontFamily
+  id: FontFamily
+  parent: FluentGpu.Text.TextStyle
+  langs:
+  - csharp
+  - vb
+  name: FontFamily
+  nameWithType: TextStyle.FontFamily
+  fullName: FluentGpu.Text.TextStyle.FontFamily
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Text/Text.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FontFamily
+    path: ../../src/FluentGpu.Text/Text.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public StringId FontFamily { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.StringId
+    content.vb: Public Property FontFamily As StringId
+  overload: FluentGpu.Text.TextStyle.FontFamily*
+- uid: FluentGpu.Text.TextStyle.SizeDip
+  commentId: P:FluentGpu.Text.TextStyle.SizeDip
+  id: SizeDip
+  parent: FluentGpu.Text.TextStyle
+  langs:
+  - csharp
+  - vb
+  name: SizeDip
+  nameWithType: TextStyle.SizeDip
+  fullName: FluentGpu.Text.TextStyle.SizeDip
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Text/Text.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SizeDip
+    path: ../../src/FluentGpu.Text/Text.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public float SizeDip { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property SizeDip As Single
+  overload: FluentGpu.Text.TextStyle.SizeDip*
+- uid: FluentGpu.Text.TextStyle.Weight
+  commentId: P:FluentGpu.Text.TextStyle.Weight
+  id: Weight
+  parent: FluentGpu.Text.TextStyle
+  langs:
+  - csharp
+  - vb
+  name: Weight
+  nameWithType: TextStyle.Weight
+  fullName: FluentGpu.Text.TextStyle.Weight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Text/Text.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Weight
+    path: ../../src/FluentGpu.Text/Text.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public ushort Weight { get; init; }
+    parameters: []
+    return:
+      type: System.UInt16
+    content.vb: Public Property Weight As UShort
+  overload: FluentGpu.Text.TextStyle.Weight*
+- uid: FluentGpu.Text.TextStyle.Wrap
+  commentId: P:FluentGpu.Text.TextStyle.Wrap
+  id: Wrap
+  parent: FluentGpu.Text.TextStyle
+  langs:
+  - csharp
+  - vb
+  name: Wrap
+  nameWithType: TextStyle.Wrap
+  fullName: FluentGpu.Text.TextStyle.Wrap
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Text/Text.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Wrap
+    path: ../../src/FluentGpu.Text/Text.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public TextWrap Wrap { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.TextWrap
+    content.vb: Public Property Wrap As TextWrap
+  overload: FluentGpu.Text.TextStyle.Wrap*
+- uid: FluentGpu.Text.TextStyle.Trim
+  commentId: P:FluentGpu.Text.TextStyle.Trim
+  id: Trim
+  parent: FluentGpu.Text.TextStyle
+  langs:
+  - csharp
+  - vb
+  name: Trim
+  nameWithType: TextStyle.Trim
+  fullName: FluentGpu.Text.TextStyle.Trim
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Text/Text.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Trim
+    path: ../../src/FluentGpu.Text/Text.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public TextTrim Trim { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.TextTrim
+    content.vb: Public Property Trim As TextTrim
+  overload: FluentGpu.Text.TextStyle.Trim*
+- uid: FluentGpu.Text.TextStyle.MaxLines
+  commentId: P:FluentGpu.Text.TextStyle.MaxLines
+  id: MaxLines
+  parent: FluentGpu.Text.TextStyle
+  langs:
+  - csharp
+  - vb
+  name: MaxLines
+  nameWithType: TextStyle.MaxLines
+  fullName: FluentGpu.Text.TextStyle.MaxLines
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Text/Text.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MaxLines
+    path: ../../src/FluentGpu.Text/Text.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public int MaxLines { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property MaxLines As Integer
+  overload: FluentGpu.Text.TextStyle.MaxLines*
+- uid: FluentGpu.Text.TextStyle.CharSpacing
+  commentId: P:FluentGpu.Text.TextStyle.CharSpacing
+  id: CharSpacing
+  parent: FluentGpu.Text.TextStyle
+  langs:
+  - csharp
+  - vb
+  name: CharSpacing
+  nameWithType: TextStyle.CharSpacing
+  fullName: FluentGpu.Text.TextStyle.CharSpacing
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Text/Text.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CharSpacing
+    path: ../../src/FluentGpu.Text/Text.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public float CharSpacing { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property CharSpacing As Single
+  overload: FluentGpu.Text.TextStyle.CharSpacing*
+- uid: FluentGpu.Text.TextStyle.LineHeight
+  commentId: P:FluentGpu.Text.TextStyle.LineHeight
+  id: LineHeight
+  parent: FluentGpu.Text.TextStyle
+  langs:
+  - csharp
+  - vb
+  name: LineHeight
+  nameWithType: TextStyle.LineHeight
+  fullName: FluentGpu.Text.TextStyle.LineHeight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Text/Text.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LineHeight
+    path: ../../src/FluentGpu.Text/Text.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public float LineHeight { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property LineHeight As Single
+  overload: FluentGpu.Text.TextStyle.LineHeight*
+- uid: FluentGpu.Text.TextStyle.Stacking
+  commentId: P:FluentGpu.Text.TextStyle.Stacking
+  id: Stacking
+  parent: FluentGpu.Text.TextStyle
+  langs:
+  - csharp
+  - vb
+  name: Stacking
+  nameWithType: TextStyle.Stacking
+  fullName: FluentGpu.Text.TextStyle.Stacking
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Text/Text.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Stacking
+    path: ../../src/FluentGpu.Text/Text.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public LineStacking Stacking { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.LineStacking
+    content.vb: Public Property Stacking As LineStacking
+  overload: FluentGpu.Text.TextStyle.Stacking*
+- uid: FluentGpu.Text.TextStyle.LineBounds
+  commentId: P:FluentGpu.Text.TextStyle.LineBounds
+  id: LineBounds
+  parent: FluentGpu.Text.TextStyle
+  langs:
+  - csharp
+  - vb
+  name: LineBounds
+  nameWithType: TextStyle.LineBounds
+  fullName: FluentGpu.Text.TextStyle.LineBounds
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Text/Text.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LineBounds
+    path: ../../src/FluentGpu.Text/Text.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public TextLineBounds LineBounds { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.TextLineBounds
+    content.vb: Public Property LineBounds As TextLineBounds
+  overload: FluentGpu.Text.TextStyle.LineBounds*
+- uid: FluentGpu.Text.TextStyle.SpanRunId
+  commentId: P:FluentGpu.Text.TextStyle.SpanRunId
+  id: SpanRunId
+  parent: FluentGpu.Text.TextStyle
+  langs:
+  - csharp
+  - vb
+  name: SpanRunId
+  nameWithType: TextStyle.SpanRunId
+  fullName: FluentGpu.Text.TextStyle.SpanRunId
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Text/Text.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpanRunId
+    path: ../../src/FluentGpu.Text/Text.cs
+    startLine: 21
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public int SpanRunId { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property SpanRunId As Integer
+  overload: FluentGpu.Text.TextStyle.SpanRunId*
+references:
+- uid: FluentGpu.Text.TextStyle.Weight
+  commentId: P:FluentGpu.Text.TextStyle.Weight
+  href: FluentGpu.Text.TextStyle.html#FluentGpu_Text_TextStyle_Weight
+  name: Weight
+  nameWithType: TextStyle.Weight
+  fullName: FluentGpu.Text.TextStyle.Weight
+- uid: FluentGpu.Text.TextStyle.CharSpacing
+  commentId: P:FluentGpu.Text.TextStyle.CharSpacing
+  href: FluentGpu.Text.TextStyle.html#FluentGpu_Text_TextStyle_CharSpacing
+  name: CharSpacing
+  nameWithType: TextStyle.CharSpacing
+  fullName: FluentGpu.Text.TextStyle.CharSpacing
+- uid: FluentGpu.Text.TextStyle.LineHeight
+  commentId: P:FluentGpu.Text.TextStyle.LineHeight
+  href: FluentGpu.Text.TextStyle.html#FluentGpu_Text_TextStyle_LineHeight
+  name: LineHeight
+  nameWithType: TextStyle.LineHeight
+  fullName: FluentGpu.Text.TextStyle.LineHeight
+- uid: FluentGpu.Text.TextStyle.Stacking
+  commentId: P:FluentGpu.Text.TextStyle.Stacking
+  href: FluentGpu.Text.TextStyle.html#FluentGpu_Text_TextStyle_Stacking
+  name: Stacking
+  nameWithType: TextStyle.Stacking
+  fullName: FluentGpu.Text.TextStyle.Stacking
+- uid: FluentGpu.Text.TextStyle.LineBounds
+  commentId: P:FluentGpu.Text.TextStyle.LineBounds
+  href: FluentGpu.Text.TextStyle.html#FluentGpu_Text_TextStyle_LineBounds
+  name: LineBounds
+  nameWithType: TextStyle.LineBounds
+  fullName: FluentGpu.Text.TextStyle.LineBounds
+- uid: FluentGpu.Text.TextStyle.SpanRunId
+  commentId: P:FluentGpu.Text.TextStyle.SpanRunId
+  href: FluentGpu.Text.TextStyle.html#FluentGpu_Text_TextStyle_SpanRunId
+  name: SpanRunId
+  nameWithType: TextStyle.SpanRunId
+  fullName: FluentGpu.Text.TextStyle.SpanRunId
+- uid: FluentGpu.Foundation.SpanRunTable.Shared
+  commentId: F:FluentGpu.Foundation.SpanRunTable.Shared
+  href: FluentGpu.Foundation.SpanRunTable.html#FluentGpu_Foundation_SpanRunTable_Shared
+  name: Shared
+  nameWithType: SpanRunTable.Shared
+  fullName: FluentGpu.Foundation.SpanRunTable.Shared
+- uid: FluentGpu.Foundation.SpanStyle
+  commentId: T:FluentGpu.Foundation.SpanStyle
+  href: FluentGpu.Foundation.SpanStyle.html
+  name: SpanStyle
+  nameWithType: SpanStyle
+  fullName: FluentGpu.Foundation.SpanStyle
+- uid: FluentGpu.Text
+  commentId: N:FluentGpu.Text
+  href: FluentGpu.html
+  name: FluentGpu.Text
+  nameWithType: FluentGpu.Text
+  fullName: FluentGpu.Text
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+- uid: System.IEquatable{FluentGpu.Text.TextStyle}
+  commentId: T:System.IEquatable{FluentGpu.Text.TextStyle}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<TextStyle>
+  nameWithType: IEquatable<TextStyle>
+  fullName: System.IEquatable<FluentGpu.Text.TextStyle>
+  nameWithType.vb: IEquatable(Of TextStyle)
+  fullName.vb: System.IEquatable(Of FluentGpu.Text.TextStyle)
+  name.vb: IEquatable(Of TextStyle)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Text.TextStyle
+    name: TextStyle
+    href: FluentGpu.Text.TextStyle.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Text.TextStyle
+    name: TextStyle
+    href: FluentGpu.Text.TextStyle.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Text.TextStyle.#ctor*
+  commentId: Overload:FluentGpu.Text.TextStyle.#ctor
+  href: FluentGpu.Text.TextStyle.html#FluentGpu_Text_TextStyle__ctor_FluentGpu_Foundation_StringId_System_Single_System_UInt16_FluentGpu_Foundation_TextWrap_FluentGpu_Foundation_TextTrim_System_Int32_System_Single_System_Single_FluentGpu_Foundation_LineStacking_FluentGpu_Foundation_TextLineBounds_System_Int32_
+  name: TextStyle
+  nameWithType: TextStyle.TextStyle
+  fullName: FluentGpu.Text.TextStyle.TextStyle
+  nameWithType.vb: TextStyle.New
+  fullName.vb: FluentGpu.Text.TextStyle.New
+  name.vb: New
+- uid: FluentGpu.Foundation.StringId
+  commentId: T:FluentGpu.Foundation.StringId
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.StringId.html
+  name: StringId
+  nameWithType: StringId
+  fullName: FluentGpu.Foundation.StringId
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System.UInt16
+  commentId: T:System.UInt16
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.uint16
+  name: ushort
+  nameWithType: ushort
+  fullName: ushort
+  nameWithType.vb: UShort
+  fullName.vb: UShort
+  name.vb: UShort
+- uid: FluentGpu.Foundation.TextWrap
+  commentId: T:FluentGpu.Foundation.TextWrap
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.TextWrap.html
+  name: TextWrap
+  nameWithType: TextWrap
+  fullName: FluentGpu.Foundation.TextWrap
+- uid: FluentGpu.Foundation.TextTrim
+  commentId: T:FluentGpu.Foundation.TextTrim
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.TextTrim.html
+  name: TextTrim
+  nameWithType: TextTrim
+  fullName: FluentGpu.Foundation.TextTrim
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Foundation.LineStacking
+  commentId: T:FluentGpu.Foundation.LineStacking
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.LineStacking.html
+  name: LineStacking
+  nameWithType: LineStacking
+  fullName: FluentGpu.Foundation.LineStacking
+- uid: FluentGpu.Foundation.TextLineBounds
+  commentId: T:FluentGpu.Foundation.TextLineBounds
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.TextLineBounds.html
+  name: TextLineBounds
+  nameWithType: TextLineBounds
+  fullName: FluentGpu.Foundation.TextLineBounds
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Text.TextStyle.FontFamily*
+  commentId: Overload:FluentGpu.Text.TextStyle.FontFamily
+  href: FluentGpu.Text.TextStyle.html#FluentGpu_Text_TextStyle_FontFamily
+  name: FontFamily
+  nameWithType: TextStyle.FontFamily
+  fullName: FluentGpu.Text.TextStyle.FontFamily
+- uid: FluentGpu.Text.TextStyle.SizeDip*
+  commentId: Overload:FluentGpu.Text.TextStyle.SizeDip
+  href: FluentGpu.Text.TextStyle.html#FluentGpu_Text_TextStyle_SizeDip
+  name: SizeDip
+  nameWithType: TextStyle.SizeDip
+  fullName: FluentGpu.Text.TextStyle.SizeDip
+- uid: FluentGpu.Text.TextStyle.Weight*
+  commentId: Overload:FluentGpu.Text.TextStyle.Weight
+  href: FluentGpu.Text.TextStyle.html#FluentGpu_Text_TextStyle_Weight
+  name: Weight
+  nameWithType: TextStyle.Weight
+  fullName: FluentGpu.Text.TextStyle.Weight
+- uid: FluentGpu.Text.TextStyle.Wrap*
+  commentId: Overload:FluentGpu.Text.TextStyle.Wrap
+  href: FluentGpu.Text.TextStyle.html#FluentGpu_Text_TextStyle_Wrap
+  name: Wrap
+  nameWithType: TextStyle.Wrap
+  fullName: FluentGpu.Text.TextStyle.Wrap
+- uid: FluentGpu.Text.TextStyle.Trim*
+  commentId: Overload:FluentGpu.Text.TextStyle.Trim
+  href: FluentGpu.Text.TextStyle.html#FluentGpu_Text_TextStyle_Trim
+  name: Trim
+  nameWithType: TextStyle.Trim
+  fullName: FluentGpu.Text.TextStyle.Trim
+- uid: FluentGpu.Text.TextStyle.MaxLines*
+  commentId: Overload:FluentGpu.Text.TextStyle.MaxLines
+  href: FluentGpu.Text.TextStyle.html#FluentGpu_Text_TextStyle_MaxLines
+  name: MaxLines
+  nameWithType: TextStyle.MaxLines
+  fullName: FluentGpu.Text.TextStyle.MaxLines
+- uid: FluentGpu.Text.TextStyle.CharSpacing*
+  commentId: Overload:FluentGpu.Text.TextStyle.CharSpacing
+  href: FluentGpu.Text.TextStyle.html#FluentGpu_Text_TextStyle_CharSpacing
+  name: CharSpacing
+  nameWithType: TextStyle.CharSpacing
+  fullName: FluentGpu.Text.TextStyle.CharSpacing
+- uid: FluentGpu.Text.TextStyle.LineHeight*
+  commentId: Overload:FluentGpu.Text.TextStyle.LineHeight
+  href: FluentGpu.Text.TextStyle.html#FluentGpu_Text_TextStyle_LineHeight
+  name: LineHeight
+  nameWithType: TextStyle.LineHeight
+  fullName: FluentGpu.Text.TextStyle.LineHeight
+- uid: FluentGpu.Text.TextStyle.Stacking*
+  commentId: Overload:FluentGpu.Text.TextStyle.Stacking
+  href: FluentGpu.Text.TextStyle.html#FluentGpu_Text_TextStyle_Stacking
+  name: Stacking
+  nameWithType: TextStyle.Stacking
+  fullName: FluentGpu.Text.TextStyle.Stacking
+- uid: FluentGpu.Text.TextStyle.LineBounds*
+  commentId: Overload:FluentGpu.Text.TextStyle.LineBounds
+  href: FluentGpu.Text.TextStyle.html#FluentGpu_Text_TextStyle_LineBounds
+  name: LineBounds
+  nameWithType: TextStyle.LineBounds
+  fullName: FluentGpu.Text.TextStyle.LineBounds
+- uid: FluentGpu.Text.TextStyle.SpanRunId*
+  commentId: Overload:FluentGpu.Text.TextStyle.SpanRunId
+  href: FluentGpu.Text.TextStyle.html#FluentGpu_Text_TextStyle_SpanRunId
+  name: SpanRunId
+  nameWithType: TextStyle.SpanRunId
+  fullName: FluentGpu.Text.TextStyle.SpanRunId

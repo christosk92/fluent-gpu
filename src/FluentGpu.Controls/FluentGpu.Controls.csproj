@@ -2,16 +2,10 @@
   <PropertyGroup>
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
+  <!-- The portable control kit. MUST stay free of TerraFX and of any Windows-backend reference: the NativeAOT
+       zero-alloc harness (FluentGpu.VerticalSlice) and the future macOS port both consume Controls unchanged —
+       platform code reaches controls only through the Engine's seam interfaces. -->
   <ItemGroup>
-    <ProjectReference Include="..\FluentGpu.Foundation\FluentGpu.Foundation.csproj" />
-    <ProjectReference Include="..\FluentGpu.Dsl\FluentGpu.Dsl.csproj" />
-    <ProjectReference Include="..\FluentGpu.Hooks\FluentGpu.Hooks.csproj" />
-    <ProjectReference Include="..\FluentGpu.Animation\FluentGpu.Animation.csproj" />
-    <ProjectReference Include="..\FluentGpu.Scene\FluentGpu.Scene.csproj" />
-    <ProjectReference Include="..\FluentGpu.Reconciler\FluentGpu.Reconciler.csproj" />
-    <!-- TextEditCore + IFontSystem (already transitive via Scene; explicit because EditableText consumes them). -->
-    <ProjectReference Include="..\FluentGpu.Text\FluentGpu.Text.csproj" />
-    <!-- PAL seam INTERFACES only (ITextInputSink for the IME session; IClipboard / IPlatformTextInput via InputHooks). -->
-    <ProjectReference Include="..\FluentGpu.Pal\FluentGpu.Pal.csproj" />
+    <ProjectReference Include="..\FluentGpu.Engine\FluentGpu.Engine.csproj" />
   </ItemGroup>
 </Project>

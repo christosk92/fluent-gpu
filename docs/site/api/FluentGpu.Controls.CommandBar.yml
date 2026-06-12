@@ -1,0 +1,1528 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.CommandBar
+  commentId: T:FluentGpu.Controls.CommandBar
+  id: CommandBar
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.CommandBar.ClosedDisplayMode
+  - FluentGpu.Controls.CommandBar.CompactHeight
+  - FluentGpu.Controls.CommandBar.Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.AppBarCommand},System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.AppBarCommand},FluentGpu.Controls.CommandBarDisplayMode,System.Boolean,System.Action{System.Boolean})
+  - FluentGpu.Controls.CommandBar.Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.CommandBarButton})
+  - FluentGpu.Controls.CommandBar.FullSizeHeight
+  - FluentGpu.Controls.CommandBar.IsSticky
+  - FluentGpu.Controls.CommandBar.LabelsOnOpen
+  - FluentGpu.Controls.CommandBar.MinimalHeight
+  - FluentGpu.Controls.CommandBar.MoreButtonWidth
+  - FluentGpu.Controls.CommandBar.OnOpenChanged
+  - FluentGpu.Controls.CommandBar.OpenOnMount
+  - FluentGpu.Controls.CommandBar.OverflowMaxWidth
+  - FluentGpu.Controls.CommandBar.OverflowMinWidth
+  - FluentGpu.Controls.CommandBar.PartBar
+  - FluentGpu.Controls.CommandBar.PartOverflowButton
+  - FluentGpu.Controls.CommandBar.PartOverflowMenu
+  - FluentGpu.Controls.CommandBar.Parts
+  - FluentGpu.Controls.CommandBar.PrimaryCommands
+  - FluentGpu.Controls.CommandBar.Render
+  - FluentGpu.Controls.CommandBar.SecondaryCommands
+  langs:
+  - csharp
+  - vb
+  name: CommandBar
+  nameWithType: CommandBar
+  fullName: FluentGpu.Controls.CommandBar
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CommandBar
+    path: ../../src/FluentGpu.Controls/CommandBar.cs
+    startLine: 38
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A WinUI CommandBar (CommandBar_themeresources.xaml): a horizontal toolbar of primary commands with a trailing
+
+    "…" MoreButton that opens the SECONDARY commands as an overflow menu and expands the bar.
+
+
+    <ul><li><b>Closed</b> — chromeless: Background = CommandBarBackground = ControlFillColorTransparent (:9), no border;
+
+    height = AppBarThemeCompactHeight 48 (:72) in Compact mode (icon-only buttons), 24 in Minimal, 0 in Hidden.</li><li><b>Open</b> — Background swaps to CommandBarBackgroundOpen = AcrylicInAppFillColorDefault (:10) with the
+
+    ControlCornerRadius 4 + OpenBorder; primary buttons grow to the labeled 64px FullSize layout
+
+    (ContentTransform.Y → CompactVerticalDelta) and the overflow popup opens under the … button. The WinUI
+
+    DisplayModeStates storyboards run the open leg over ControlNormalAnimationDuration (250ms) and the close leg over
+
+    ControlFastAnimationDuration (167ms), both on the ControlFastOutSlowInKeySpline 0,0,0,1 (:124-247
+
+    CompactClosed↔CompactOpenUp/Down VisualTransitions) — the bar's height/label reveal rides a matching
+
+    LayoutTransition tween; the overflow popup itself is the overlay's menu reveal.</li><li><b>Overflow</b> — CommandBarOverflowPresenter: MinWidth 160 / MaxWidth 480 (:5/:7), acrylic +
+
+    transient-border chrome from the overlay's FlyoutSurface; secondary commands render as Overflow-state
+
+    AppBarButtons (icons + toggle checks + right-aligned accelerator text) with AppBarSeparator Overflow rows.</li><li><b>MoreButton</b> — Width 48 (AppBarExpandButtonThemeWidth, generic.xaml:23), E712 ellipsis, subtle fills,
+
+    inner-border margin 2,6,6,6 (AppBarEllipsisButtonInnerBorderMargin :73), FocusVisualMargin −3.</li><li><b>IsSticky</b> — a non-sticky open bar light-dismisses (click-outside/Escape closes); sticky stays open
+
+    until the … button is clicked again (WinUI AppBar sticky semantics).</li></ul>
+  example: []
+  syntax:
+    content: 'public sealed class CommandBar : Component'
+    content.vb: Public NotInheritable Class CommandBar Inherits Component
+  inheritance:
+  - System.Object
+  - FluentGpu.Hooks.Component
+  inheritedMembers:
+  - FluentGpu.Hooks.Component.Context
+  - FluentGpu.Hooks.Component.RunsOnce
+  - FluentGpu.Hooks.Component.RenderWithHooks
+  - FluentGpu.Hooks.Component.Unmount
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+  extensionMethods:
+  - FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseEntrance(System.Single,System.Object)
+  - FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseHoverScale(System.Boolean,System.Single)
+- uid: FluentGpu.Controls.CommandBar.PartBar
+  commentId: F:FluentGpu.Controls.CommandBar.PartBar
+  id: PartBar
+  parent: FluentGpu.Controls.CommandBar
+  langs:
+  - csharp
+  - vb
+  name: PartBar
+  nameWithType: CommandBar.PartBar
+  fullName: FluentGpu.Controls.CommandBar.PartBar
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartBar
+    path: ../../src/FluentGpu.Controls/CommandBar.cs
+    startLine: 44
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The bar root row (the WinUI LayoutRoot grid). Owned: Animate (the open/close height tween —
+        Bounds+Reveal on the WinUI storyboard timings), Children (the command row).
+  example: []
+  syntax:
+    content: public const string PartBar = "Bar"
+    return:
+      type: System.String
+    content.vb: Public Const PartBar As String = "Bar"
+- uid: FluentGpu.Controls.CommandBar.PartOverflowButton
+  commentId: F:FluentGpu.Controls.CommandBar.PartOverflowButton
+  id: PartOverflowButton
+  parent: FluentGpu.Controls.CommandBar
+  langs:
+  - csharp
+  - vb
+  name: PartOverflowButton
+  nameWithType: CommandBar.PartOverflowButton
+  fullName: FluentGpu.Controls.CommandBar.PartOverflowButton
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartOverflowButton
+    path: ../../src/FluentGpu.Controls/CommandBar.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The trailing … More button (WinUI MoreButton). Owned: OnClick (the open/close toggle), Role,
+        OnRealized (the overflow anchor capture, chained with any modifier-supplied handler).
+  example: []
+  syntax:
+    content: public const string PartOverflowButton = "OverflowButton"
+    return:
+      type: System.String
+    content.vb: Public Const PartOverflowButton As String = "OverflowButton"
+- uid: FluentGpu.Controls.CommandBar.PartOverflowMenu
+  commentId: F:FluentGpu.Controls.CommandBar.PartOverflowMenu
+  id: PartOverflowMenu
+  parent: FluentGpu.Controls.CommandBar
+  langs:
+  - csharp
+  - vb
+  name: PartOverflowMenu
+  nameWithType: CommandBar.PartOverflowMenu
+  fullName: FluentGpu.Controls.CommandBar.PartOverflowMenu
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartOverflowMenu
+    path: ../../src/FluentGpu.Controls/CommandBar.cs
+    startLine: 50
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The overflow popup body (the CommandBarOverflowPresenter content — popup-built each open, so
+        modifiers run inside the overlay body's render). Owned: Children (the secondary command rows).
+  example: []
+  syntax:
+    content: public const string PartOverflowMenu = "OverflowMenu"
+    return:
+      type: System.String
+    content.vb: Public Const PartOverflowMenu As String = "OverflowMenu"
+- uid: FluentGpu.Controls.CommandBar.PrimaryCommands
+  commentId: F:FluentGpu.Controls.CommandBar.PrimaryCommands
+  id: PrimaryCommands
+  parent: FluentGpu.Controls.CommandBar
+  langs:
+  - csharp
+  - vb
+  name: PrimaryCommands
+  nameWithType: CommandBar.PrimaryCommands
+  fullName: FluentGpu.Controls.CommandBar.PrimaryCommands
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PrimaryCommands
+    path: ../../src/FluentGpu.Controls/CommandBar.cs
+    startLine: 52
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public IReadOnlyList<AppBarCommand> PrimaryCommands
+    return:
+      type: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.AppBarCommand}
+    content.vb: Public PrimaryCommands As IReadOnlyList(Of AppBarCommand)
+- uid: FluentGpu.Controls.CommandBar.SecondaryCommands
+  commentId: F:FluentGpu.Controls.CommandBar.SecondaryCommands
+  id: SecondaryCommands
+  parent: FluentGpu.Controls.CommandBar
+  langs:
+  - csharp
+  - vb
+  name: SecondaryCommands
+  nameWithType: CommandBar.SecondaryCommands
+  fullName: FluentGpu.Controls.CommandBar.SecondaryCommands
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SecondaryCommands
+    path: ../../src/FluentGpu.Controls/CommandBar.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public IReadOnlyList<AppBarCommand> SecondaryCommands
+    return:
+      type: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.AppBarCommand}
+    content.vb: Public SecondaryCommands As IReadOnlyList(Of AppBarCommand)
+- uid: FluentGpu.Controls.CommandBar.ClosedDisplayMode
+  commentId: F:FluentGpu.Controls.CommandBar.ClosedDisplayMode
+  id: ClosedDisplayMode
+  parent: FluentGpu.Controls.CommandBar
+  langs:
+  - csharp
+  - vb
+  name: ClosedDisplayMode
+  nameWithType: CommandBar.ClosedDisplayMode
+  fullName: FluentGpu.Controls.CommandBar.ClosedDisplayMode
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ClosedDisplayMode
+    path: ../../src/FluentGpu.Controls/CommandBar.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public CommandBarDisplayMode ClosedDisplayMode
+    return:
+      type: FluentGpu.Controls.CommandBarDisplayMode
+    content.vb: Public ClosedDisplayMode As CommandBarDisplayMode
+- uid: FluentGpu.Controls.CommandBar.IsSticky
+  commentId: F:FluentGpu.Controls.CommandBar.IsSticky
+  id: IsSticky
+  parent: FluentGpu.Controls.CommandBar
+  langs:
+  - csharp
+  - vb
+  name: IsSticky
+  nameWithType: CommandBar.IsSticky
+  fullName: FluentGpu.Controls.CommandBar.IsSticky
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsSticky
+    path: ../../src/FluentGpu.Controls/CommandBar.cs
+    startLine: 56
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'WinUI <code>IsSticky</code>: true = the open bar does NOT light-dismiss.'
+  example: []
+  syntax:
+    content: public bool IsSticky
+    return:
+      type: System.Boolean
+    content.vb: Public IsSticky As Boolean
+- uid: FluentGpu.Controls.CommandBar.LabelsOnOpen
+  commentId: F:FluentGpu.Controls.CommandBar.LabelsOnOpen
+  id: LabelsOnOpen
+  parent: FluentGpu.Controls.CommandBar
+  langs:
+  - csharp
+  - vb
+  name: LabelsOnOpen
+  nameWithType: CommandBar.LabelsOnOpen
+  fullName: FluentGpu.Controls.CommandBar.LabelsOnOpen
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LabelsOnOpen
+    path: ../../src/FluentGpu.Controls/CommandBar.cs
+    startLine: 58
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'WinUI <code>DefaultLabelPosition.Collapsed</code> analogue for the OPEN bar: keep icon-only buttons.'
+  example: []
+  syntax:
+    content: public bool LabelsOnOpen
+    return:
+      type: System.Boolean
+    content.vb: Public LabelsOnOpen As Boolean
+- uid: FluentGpu.Controls.CommandBar.OpenOnMount
+  commentId: F:FluentGpu.Controls.CommandBar.OpenOnMount
+  id: OpenOnMount
+  parent: FluentGpu.Controls.CommandBar
+  langs:
+  - csharp
+  - vb
+  name: OpenOnMount
+  nameWithType: CommandBar.OpenOnMount
+  fullName: FluentGpu.Controls.CommandBar.OpenOnMount
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OpenOnMount
+    path: ../../src/FluentGpu.Controls/CommandBar.cs
+    startLine: 59
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool OpenOnMount
+    return:
+      type: System.Boolean
+    content.vb: Public OpenOnMount As Boolean
+- uid: FluentGpu.Controls.CommandBar.OnOpenChanged
+  commentId: F:FluentGpu.Controls.CommandBar.OnOpenChanged
+  id: OnOpenChanged
+  parent: FluentGpu.Controls.CommandBar
+  langs:
+  - csharp
+  - vb
+  name: OnOpenChanged
+  nameWithType: CommandBar.OnOpenChanged
+  fullName: FluentGpu.Controls.CommandBar.OnOpenChanged
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnOpenChanged
+    path: ../../src/FluentGpu.Controls/CommandBar.cs
+    startLine: 61
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI Opening/Closing pair, collapsed to one callback (true = opening).
+  example: []
+  syntax:
+    content: public Action<bool>? OnOpenChanged
+    return:
+      type: System.Action{System.Boolean}
+    content.vb: Public OnOpenChanged As Action(Of Boolean)
+- uid: FluentGpu.Controls.CommandBar.Parts
+  commentId: F:FluentGpu.Controls.CommandBar.Parts
+  id: Parts
+  parent: FluentGpu.Controls.CommandBar
+  langs:
+  - csharp
+  - vb
+  name: Parts
+  nameWithType: CommandBar.Parts
+  fullName: FluentGpu.Controls.CommandBar.Parts
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Parts
+    path: ../../src/FluentGpu.Controls/CommandBar.cs
+    startLine: 64
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Lightweight per-part styling (CSS ::part): modifiers keyed by the <code>PartXxx</code> consts; see
+        <xref href="FluentGpu.Dsl.TemplateParts" data-throw-if-not-resolved="false"></xref> for the contract.
+  example: []
+  syntax:
+    content: public TemplateParts? Parts
+    return:
+      type: FluentGpu.Dsl.TemplateParts
+    content.vb: Public Parts As TemplateParts
+- uid: FluentGpu.Controls.CommandBar.CompactHeight
+  commentId: F:FluentGpu.Controls.CommandBar.CompactHeight
+  id: CompactHeight
+  parent: FluentGpu.Controls.CommandBar
+  langs:
+  - csharp
+  - vb
+  name: CompactHeight
+  nameWithType: CommandBar.CompactHeight
+  fullName: FluentGpu.Controls.CommandBar.CompactHeight
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CompactHeight
+    path: ../../src/FluentGpu.Controls/CommandBar.cs
+    startLine: 67
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float CompactHeight = 48
+    return:
+      type: System.Single
+    content.vb: Public Const CompactHeight As Single = 48
+- uid: FluentGpu.Controls.CommandBar.FullSizeHeight
+  commentId: F:FluentGpu.Controls.CommandBar.FullSizeHeight
+  id: FullSizeHeight
+  parent: FluentGpu.Controls.CommandBar
+  langs:
+  - csharp
+  - vb
+  name: FullSizeHeight
+  nameWithType: CommandBar.FullSizeHeight
+  fullName: FluentGpu.Controls.CommandBar.FullSizeHeight
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FullSizeHeight
+    path: ../../src/FluentGpu.Controls/CommandBar.cs
+    startLine: 68
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float FullSizeHeight = 64
+    return:
+      type: System.Single
+    content.vb: Public Const FullSizeHeight As Single = 64
+- uid: FluentGpu.Controls.CommandBar.MinimalHeight
+  commentId: F:FluentGpu.Controls.CommandBar.MinimalHeight
+  id: MinimalHeight
+  parent: FluentGpu.Controls.CommandBar
+  langs:
+  - csharp
+  - vb
+  name: MinimalHeight
+  nameWithType: CommandBar.MinimalHeight
+  fullName: FluentGpu.Controls.CommandBar.MinimalHeight
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MinimalHeight
+    path: ../../src/FluentGpu.Controls/CommandBar.cs
+    startLine: 69
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float MinimalHeight = 24
+    return:
+      type: System.Single
+    content.vb: Public Const MinimalHeight As Single = 24
+- uid: FluentGpu.Controls.CommandBar.MoreButtonWidth
+  commentId: F:FluentGpu.Controls.CommandBar.MoreButtonWidth
+  id: MoreButtonWidth
+  parent: FluentGpu.Controls.CommandBar
+  langs:
+  - csharp
+  - vb
+  name: MoreButtonWidth
+  nameWithType: CommandBar.MoreButtonWidth
+  fullName: FluentGpu.Controls.CommandBar.MoreButtonWidth
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MoreButtonWidth
+    path: ../../src/FluentGpu.Controls/CommandBar.cs
+    startLine: 70
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float MoreButtonWidth = 48
+    return:
+      type: System.Single
+    content.vb: Public Const MoreButtonWidth As Single = 48
+- uid: FluentGpu.Controls.CommandBar.OverflowMinWidth
+  commentId: F:FluentGpu.Controls.CommandBar.OverflowMinWidth
+  id: OverflowMinWidth
+  parent: FluentGpu.Controls.CommandBar
+  langs:
+  - csharp
+  - vb
+  name: OverflowMinWidth
+  nameWithType: CommandBar.OverflowMinWidth
+  fullName: FluentGpu.Controls.CommandBar.OverflowMinWidth
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OverflowMinWidth
+    path: ../../src/FluentGpu.Controls/CommandBar.cs
+    startLine: 71
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float OverflowMinWidth = 160
+    return:
+      type: System.Single
+    content.vb: Public Const OverflowMinWidth As Single = 160
+- uid: FluentGpu.Controls.CommandBar.OverflowMaxWidth
+  commentId: F:FluentGpu.Controls.CommandBar.OverflowMaxWidth
+  id: OverflowMaxWidth
+  parent: FluentGpu.Controls.CommandBar
+  langs:
+  - csharp
+  - vb
+  name: OverflowMaxWidth
+  nameWithType: CommandBar.OverflowMaxWidth
+  fullName: FluentGpu.Controls.CommandBar.OverflowMaxWidth
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OverflowMaxWidth
+    path: ../../src/FluentGpu.Controls/CommandBar.cs
+    startLine: 72
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float OverflowMaxWidth = 480
+    return:
+      type: System.Single
+    content.vb: Public Const OverflowMaxWidth As Single = 480
+- uid: FluentGpu.Controls.CommandBar.Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.CommandBarButton})
+  commentId: M:FluentGpu.Controls.CommandBar.Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.CommandBarButton})
+  id: Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.CommandBarButton})
+  parent: FluentGpu.Controls.CommandBar
+  langs:
+  - csharp
+  - vb
+  name: Create(IReadOnlyList<CommandBarButton>)
+  nameWithType: CommandBar.Create(IReadOnlyList<CommandBarButton>)
+  fullName: FluentGpu.Controls.CommandBar.Create(System.Collections.Generic.IReadOnlyList<FluentGpu.Controls.CommandBarButton>)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/CommandBar.cs
+    startLine: 76
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Legacy shim: a static chromeless icon row (the pre-Wave-3 surface) — kept so existing call sites
+        compile; the commands map to compact AppBarButtons with a working overflow-less More button.
+  example: []
+  syntax:
+    content: public static BoxEl Create(IReadOnlyList<CommandBarButton> commands)
+    parameters:
+    - id: commands
+      type: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.CommandBarButton}
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Create(commands As IReadOnlyList(Of CommandBarButton)) As BoxEl
+  overload: FluentGpu.Controls.CommandBar.Create*
+  nameWithType.vb: CommandBar.Create(IReadOnlyList(Of CommandBarButton))
+  fullName.vb: FluentGpu.Controls.CommandBar.Create(System.Collections.Generic.IReadOnlyList(Of FluentGpu.Controls.CommandBarButton))
+  name.vb: Create(IReadOnlyList(Of CommandBarButton))
+- uid: FluentGpu.Controls.CommandBar.Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.AppBarCommand},System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.AppBarCommand},FluentGpu.Controls.CommandBarDisplayMode,System.Boolean,System.Action{System.Boolean})
+  commentId: M:FluentGpu.Controls.CommandBar.Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.AppBarCommand},System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.AppBarCommand},FluentGpu.Controls.CommandBarDisplayMode,System.Boolean,System.Action{System.Boolean})
+  id: Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.AppBarCommand},System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.AppBarCommand},FluentGpu.Controls.CommandBarDisplayMode,System.Boolean,System.Action{System.Boolean})
+  parent: FluentGpu.Controls.CommandBar
+  langs:
+  - csharp
+  - vb
+  name: Create(IReadOnlyList<AppBarCommand>, IReadOnlyList<AppBarCommand>, CommandBarDisplayMode, bool, Action<bool>?)
+  nameWithType: CommandBar.Create(IReadOnlyList<AppBarCommand>, IReadOnlyList<AppBarCommand>, CommandBarDisplayMode, bool, Action<bool>?)
+  fullName: FluentGpu.Controls.CommandBar.Create(System.Collections.Generic.IReadOnlyList<FluentGpu.Controls.AppBarCommand>, System.Collections.Generic.IReadOnlyList<FluentGpu.Controls.AppBarCommand>, FluentGpu.Controls.CommandBarDisplayMode, bool, System.Action<bool>?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/CommandBar.cs
+    startLine: 84
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static Element Create(IReadOnlyList<AppBarCommand> primaryCommands, IReadOnlyList<AppBarCommand> secondaryCommands, CommandBarDisplayMode closedDisplayMode = CommandBarDisplayMode.Compact, bool isSticky = false, Action<bool>? onOpenChanged = null)
+    parameters:
+    - id: primaryCommands
+      type: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.AppBarCommand}
+    - id: secondaryCommands
+      type: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.AppBarCommand}
+    - id: closedDisplayMode
+      type: FluentGpu.Controls.CommandBarDisplayMode
+    - id: isSticky
+      type: System.Boolean
+    - id: onOpenChanged
+      type: System.Action{System.Boolean}
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Create(primaryCommands As IReadOnlyList(Of AppBarCommand), secondaryCommands As IReadOnlyList(Of AppBarCommand), closedDisplayMode As CommandBarDisplayMode = CommandBarDisplayMode.Compact, isSticky As Boolean = False, onOpenChanged As Action(Of Boolean) = Nothing) As Element
+  overload: FluentGpu.Controls.CommandBar.Create*
+  nameWithType.vb: CommandBar.Create(IReadOnlyList(Of AppBarCommand), IReadOnlyList(Of AppBarCommand), CommandBarDisplayMode, Boolean, Action(Of Boolean))
+  fullName.vb: FluentGpu.Controls.CommandBar.Create(System.Collections.Generic.IReadOnlyList(Of FluentGpu.Controls.AppBarCommand), System.Collections.Generic.IReadOnlyList(Of FluentGpu.Controls.AppBarCommand), FluentGpu.Controls.CommandBarDisplayMode, Boolean, System.Action(Of Boolean))
+  name.vb: Create(IReadOnlyList(Of AppBarCommand), IReadOnlyList(Of AppBarCommand), CommandBarDisplayMode, Boolean, Action(Of Boolean))
+- uid: FluentGpu.Controls.CommandBar.Render
+  commentId: M:FluentGpu.Controls.CommandBar.Render
+  id: Render
+  parent: FluentGpu.Controls.CommandBar
+  langs:
+  - csharp
+  - vb
+  name: Render()
+  nameWithType: CommandBar.Render()
+  fullName: FluentGpu.Controls.CommandBar.Render()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Render
+    path: ../../src/FluentGpu.Controls/CommandBar.cs
+    startLine: 99
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  example: []
+  syntax:
+    content: public override Element Render()
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Overrides Function Render() As Element
+  overridden: FluentGpu.Hooks.Component.Render
+  overload: FluentGpu.Controls.CommandBar.Render*
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Hooks.Component
+  commentId: T:FluentGpu.Hooks.Component
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.Component.html
+  name: Component
+  nameWithType: Component
+  fullName: FluentGpu.Hooks.Component
+- uid: FluentGpu.Hooks.Component.Context
+  commentId: P:FluentGpu.Hooks.Component.Context
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Context
+  name: Context
+  nameWithType: Component.Context
+  fullName: FluentGpu.Hooks.Component.Context
+- uid: FluentGpu.Hooks.Component.RunsOnce
+  commentId: P:FluentGpu.Hooks.Component.RunsOnce
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RunsOnce
+  name: RunsOnce
+  nameWithType: Component.RunsOnce
+  fullName: FluentGpu.Hooks.Component.RunsOnce
+- uid: FluentGpu.Hooks.Component.RenderWithHooks
+  commentId: M:FluentGpu.Hooks.Component.RenderWithHooks
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  name: RenderWithHooks()
+  nameWithType: Component.RenderWithHooks()
+  fullName: FluentGpu.Hooks.Component.RenderWithHooks()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.RenderWithHooks
+    name: RenderWithHooks
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.RenderWithHooks
+    name: RenderWithHooks
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  - name: (
+  - name: )
+- uid: FluentGpu.Hooks.Component.Unmount
+  commentId: M:FluentGpu.Hooks.Component.Unmount
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  name: Unmount()
+  nameWithType: Component.Unmount()
+  fullName: FluentGpu.Hooks.Component.Unmount()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.Unmount
+    name: Unmount
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.Unmount
+    name: Unmount
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseEntrance(System.Single,System.Object)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  parent: FluentGpu.Hooks.MotionHooks
+  definition: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  name: UseEntrance(Component, float, object)
+  nameWithType: MotionHooks.UseEntrance(Component, float, object)
+  fullName: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, float, object)
+  nameWithType.vb: MotionHooks.UseEntrance(Component, Single, Object)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, Single, Object)
+  name.vb: UseEntrance(Component, Single, Object)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseHoverScale(System.Boolean,System.Single)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  parent: FluentGpu.Hooks.MotionHooks
+  definition: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  name: UseHoverScale(Component, bool, float)
+  nameWithType: MotionHooks.UseHoverScale(Component, bool, float)
+  fullName: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, bool, float)
+  nameWithType.vb: MotionHooks.UseHoverScale(Component, Boolean, Single)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, Boolean, Single)
+  name.vb: UseHoverScale(Component, Boolean, Single)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Hooks
+  commentId: N:FluentGpu.Hooks
+  href: FluentGpu.html
+  name: FluentGpu.Hooks
+  nameWithType: FluentGpu.Hooks
+  fullName: FluentGpu.Hooks
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+- uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  isExternal: true
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  name: UseEntrance(Component, float, object)
+  nameWithType: MotionHooks.UseEntrance(Component, float, object)
+  fullName: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, float, object)
+  nameWithType.vb: MotionHooks.UseEntrance(Component, Single, Object)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, Single, Object)
+  name.vb: UseEntrance(Component, Single, Object)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Hooks.MotionHooks
+  commentId: T:FluentGpu.Hooks.MotionHooks
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.MotionHooks.html
+  name: MotionHooks
+  nameWithType: MotionHooks
+  fullName: FluentGpu.Hooks.MotionHooks
+- uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  isExternal: true
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  name: UseHoverScale(Component, bool, float)
+  nameWithType: MotionHooks.UseHoverScale(Component, bool, float)
+  fullName: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, bool, float)
+  nameWithType.vb: MotionHooks.UseHoverScale(Component, Boolean, Single)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, Boolean, Single)
+  name.vb: UseHoverScale(Component, Boolean, Single)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.AppBarCommand}
+  commentId: T:System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.AppBarCommand}
+  parent: System.Collections.Generic
+  definition: System.Collections.Generic.IReadOnlyList`1
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<AppBarCommand>
+  nameWithType: IReadOnlyList<AppBarCommand>
+  fullName: System.Collections.Generic.IReadOnlyList<FluentGpu.Controls.AppBarCommand>
+  nameWithType.vb: IReadOnlyList(Of AppBarCommand)
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of FluentGpu.Controls.AppBarCommand)
+  name.vb: IReadOnlyList(Of AppBarCommand)
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - uid: FluentGpu.Controls.AppBarCommand
+    name: AppBarCommand
+    href: FluentGpu.Controls.AppBarCommand.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.AppBarCommand
+    name: AppBarCommand
+    href: FluentGpu.Controls.AppBarCommand.html
+  - name: )
+- uid: System.Collections.Generic.IReadOnlyList`1
+  commentId: T:System.Collections.Generic.IReadOnlyList`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<T>
+  nameWithType: IReadOnlyList<T>
+  fullName: System.Collections.Generic.IReadOnlyList<T>
+  nameWithType.vb: IReadOnlyList(Of T)
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of T)
+  name.vb: IReadOnlyList(Of T)
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Collections.Generic
+  commentId: N:System.Collections.Generic
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System.Collections.Generic
+  nameWithType: System.Collections.Generic
+  fullName: System.Collections.Generic
+  spec.csharp:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+  spec.vb:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+- uid: FluentGpu.Controls.CommandBarDisplayMode
+  commentId: T:FluentGpu.Controls.CommandBarDisplayMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.CommandBarDisplayMode.html
+  name: CommandBarDisplayMode
+  nameWithType: CommandBarDisplayMode
+  fullName: FluentGpu.Controls.CommandBarDisplayMode
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: System.Action{System.Boolean}
+  commentId: T:System.Action{System.Boolean}
+  parent: System
+  definition: System.Action`1
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<bool>
+  nameWithType: Action<bool>
+  fullName: System.Action<bool>
+  nameWithType.vb: Action(Of Boolean)
+  fullName.vb: System.Action(Of Boolean)
+  name.vb: Action(Of Boolean)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+- uid: System.Action`1
+  commentId: T:System.Action`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<T>
+  nameWithType: Action<T>
+  fullName: System.Action<T>
+  nameWithType.vb: Action(Of T)
+  fullName.vb: System.Action(Of T)
+  name.vb: Action(Of T)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Dsl.TemplateParts
+  commentId: T:FluentGpu.Dsl.TemplateParts
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.TemplateParts.html
+  name: TemplateParts
+  nameWithType: TemplateParts
+  fullName: FluentGpu.Dsl.TemplateParts
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Controls.CommandBar.Create*
+  commentId: Overload:FluentGpu.Controls.CommandBar.Create
+  href: FluentGpu.Controls.CommandBar.html#FluentGpu_Controls_CommandBar_Create_System_Collections_Generic_IReadOnlyList_FluentGpu_Controls_CommandBarButton__
+  name: Create
+  nameWithType: CommandBar.Create
+  fullName: FluentGpu.Controls.CommandBar.Create
+- uid: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.CommandBarButton}
+  commentId: T:System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.CommandBarButton}
+  parent: System.Collections.Generic
+  definition: System.Collections.Generic.IReadOnlyList`1
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<CommandBarButton>
+  nameWithType: IReadOnlyList<CommandBarButton>
+  fullName: System.Collections.Generic.IReadOnlyList<FluentGpu.Controls.CommandBarButton>
+  nameWithType.vb: IReadOnlyList(Of CommandBarButton)
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of FluentGpu.Controls.CommandBarButton)
+  name.vb: IReadOnlyList(Of CommandBarButton)
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - uid: FluentGpu.Controls.CommandBarButton
+    name: CommandBarButton
+    href: FluentGpu.Controls.CommandBarButton.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.CommandBarButton
+    name: CommandBarButton
+    href: FluentGpu.Controls.CommandBarButton.html
+  - name: )
+- uid: FluentGpu.Dsl.BoxEl
+  commentId: T:FluentGpu.Dsl.BoxEl
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.BoxEl.html
+  name: BoxEl
+  nameWithType: BoxEl
+  fullName: FluentGpu.Dsl.BoxEl
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: FluentGpu.Hooks.Component.Render
+  commentId: M:FluentGpu.Hooks.Component.Render
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  name: Render()
+  nameWithType: Component.Render()
+  fullName: FluentGpu.Hooks.Component.Render()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.Render
+    name: Render
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.Render
+    name: Render
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  - name: (
+  - name: )
+- uid: FluentGpu.Controls.CommandBar.Render*
+  commentId: Overload:FluentGpu.Controls.CommandBar.Render
+  href: FluentGpu.Controls.CommandBar.html#FluentGpu_Controls_CommandBar_Render
+  name: Render
+  nameWithType: CommandBar.Render
+  fullName: FluentGpu.Controls.CommandBar.Render

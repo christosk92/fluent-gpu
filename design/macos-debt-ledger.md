@@ -16,7 +16,7 @@
 | Subsystem | Windows-specific item | macOS equivalent / plan | Status | Source |
 |---|---|---|---|---|
 | Architecture/stack | Locked stack: D3D12 + DirectWrite + DComp behind PAL/RHI/Text seam | Metal + CoreText + Cocoa backend "drops in later" (seam-level) | Designed | README.md:34 |
-| Architecture/stack | Windows leaves `Rhi.D3D12`, `Pal.Windows`, `Text.DirectWrite`, `Accessibility.Uia`, `Win32.Interop` | macOS leaves `Rhi.Metal · Pal.Cocoa · Text.CoreText · Accessibility.NSAccessibility` | Designed | README.md:63; architecture-spec.md:43 |
+| Architecture/stack | Windows backend = the one `FluentGpu.Windows` library (folders D3D12/, Pal/, DirectWrite/, Uia/, Wic/, Interop/) | future `FluentGpu.Windows.Mac` (folders Metal/, Cocoa/, CoreText/, NSAccessibility/, CG/) — a **whole-backend swap**, not a 5-leaf 1:1 mirror; the PAL/RHI/Text seam stayed interface-level (Engine `Seams/`), so swappability is unchanged and `FluentGpu.Engine` never references either backend | Designed | README.md; architecture-spec.md §1.2/§3 |
 | Architecture/stack | Hand-vtable COM / CCW via `[UnmanagedCallersOnly]`+`GCHandle` (consume `lpVtbl[n]`) | No COM on macOS (Obj-C runtime); the COM machinery is Windows-only with no analog | **Unaddressed** | README.md:81; architecture-spec.md:64,1118 |
 | Architecture/stack | COM bindings harvested from winmd (`AbiHarvest` winmd × ClangSharp → `*.comabi.json`) | No macOS ABI-source plan given | **Unaddressed** | hardened-v1-plan.md:119; pal-rhi.md:290 |
 | Architecture/stack | HLSL → DXC → DXIL embedded `byte[]` shaders | `-spirv` → SPIRV-Cross → MSL; same HLSL source authored once | Designed | README.md:148,227; gpu-renderer.md:710 |
@@ -51,14 +51,14 @@
 | Input/A11y | OLE clipboard/drag-drop (`IDataObject`/`DoDragDrop`) | `NSPasteboard` / `NSDraggingSource`/`Destination` behind same seams | Designed | input-a11y.md:510; architecture-spec.md:1157 |
 | Input/A11y | Win32 input map (`WM_POINTER*`, `WM_CHAR`, `WM_INPUT` coalescing) | `NSEvent`→`InputEvent` POD; ring + coalescing portable | Designed | input-a11y.md:65 |
 | Input/A11y | focus-rect HC color via `ISystemColors` (Windows HC tokens) | macOS appearance colors via same seam | Designed | input-a11y.md:375 |
-| Text | DirectWrite leaf (~25 vtbl structs, callee CCW, `CreateAlphaTexture`, `MapCharacters`, color emoji) | `Text.CoreText`: `CTFontCreateForString`, `CTFontGetGlyphsForCharacters` (+HarfBuzz), `CTFontDrawGlyphs`→A8 — ~70% portable | Designed | text.md:351,810; architecture-spec.md:693 |
+| Text | DirectWrite/ backend (`FluentGpu.Windows`; ~25 vtbl structs, callee CCW, `CreateAlphaTexture`, `MapCharacters`, color emoji) | `FluentGpu.Windows.Mac` CoreText/: `CTFontCreateForString`, `CTFontGetGlyphsForCharacters` (+HarfBuzz), `CTFontDrawGlyphs`→A8 — ~70% portable | Designed | text.md:351,810; architecture-spec.md:693 |
 | Text | itemize (BiDi/script/line-break) via DWrite props in v1 | portable `FluentGpu.Text.Unicode` at CoreText milestone — not built | Deferred | text.md:164,832 |
 | Text | ClearType reserved v2; v1 grayscale + DWrite-gamma | CoreText "grayscale-only anyway" — unifies; ClearType moot | Designed | text.md:469,821 |
 | Text | DWrite color glyphs (COLR/CPAL/SVG/CBDT) | `kCTFontColorGlyphsAttribute`/`CTFontDrawGlyphs` | Designed | text.md:465,820 |
 | Text | editable text / caret / IME-edit = v1 follow-up (display-only) | cross-platform editing inherits the deferral; no macOS-specific editing design | Deferred | text.md:80,707 |
 | Theming | `ISystemColors`: `DwmGetColorizationColor`, `AppsUseLightTheme`, `SPI_GETHIGHCONTRAST`, `WM_SETTINGCHANGE` | `NSColor.controlAccentColor`, `effectiveAppearance`, `shouldIncreaseContrast`, KVO → Epoch++ | Designed | theming.md:241,701; pal-rhi.md:530 |
 | Media | video present `IVideoPresenter` → DComp child visual; app binds `MediaPlayer` | `AVPlayerLayer`/`CALayer` sibling under `CAMetalLayer`; hole-punch identical | Designed | media-pipeline.md:460; pal-rhi.md:477 |
-| Media | WIC codec leaf `Media.Codecs.Wic` | `Media.Codecs.CG` (`CGImageSource`) behind `IImageCodec` | Designed | media-pipeline.md:222 |
+| Media | WIC codec backend (`FluentGpu.Windows` Wic/) | `FluentGpu.Windows.Mac` CG/ (`CGImageSource`) behind `IImageCodec` | Designed | media-pipeline.md:222 |
 | Media | D3D12 placed-resource staging ring | Metal `MTLBlitCommandEncoder` | Designed | media-pipeline.md:301 |
 | Media | `IPlaybackClock` playback-ms source | app-provided seam; portable (no Windows binding) | Designed | media-pipeline.md:560 |
 

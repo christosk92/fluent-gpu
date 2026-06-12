@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Class AnnotatedScrollBar | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Class AnnotatedScrollBar | FluentGpu Developer Docs ">
+      
+      <meta name="description" content="WinUI AnnotatedScrollBar (controls\dev\AnnotatedScrollBar) — the jump-list rail: a column of right-aligned labels beside a thin accent thumb, with CLICK-TO-JUMP on the rail, thumb drag, and repeat-hold increment/decrement buttons. Template facts (AnnotatedScrollBar.xaml + _themeresources.xaml; the _perf2026 variant differs only in storyboard→setter form, identical values): • Control MinWidth = LabelsGridMinWidth 44 (xaml:4, :37) — the control hugs ~44 unless its host stretches it. • Root grid rows: increment RepeatButton on TOP (glyph EDDB, HorizontalAlignment=Right — xaml:31-39), the vertical grid (star), decrement RepeatButton on the BOTTOM (glyph EDDC — xaml:94-102). • Thumb = 30&#215;3 @ r1.5 (ThumbWidth :36 / ThumbHeight :35 / ThumbCornerRadius :41), VerticalThumbBrush = AccentFillColorDefault (:11/:21), HorizontalAlignment=Right + VerticalAlignment=Top at the scroll position (xaml:84-92). • Ghost thumb = same geometry in AccentFillColorDisabled (PART_VerticalThumbGhost xaml:74-83) — the hover preview of where a rail click would land. • PART_LabelsGrid: HorizontalAlignment=Center, MinWidth 44, transparent background (xaml:41-45); the LabelTemplate is a right-aligned BodyTextBlockStyle TextBlock (14px Normal — TextBlock_themeresources.xaml:4/:23) with Margin 0,-5,0,-2 (xaml:8-19). • PART_ToolTipRail: a 1px right-aligned tooltip anchor rail (xaml:46) whose ToolTip is Placement=Top, MaxWidth 360 / MinHeight 40 (:38/:39), BaseTextBlockStyle content (14px SemiBold) — modeled by detailLabel: the resolved text floats in a chip above the pointer (the DetailLabelRequested seam). • ScrollButtonStyle: MinWidth/MinHeight 16 (:43-44), FontSize 8 (:40/:51), CornerRadius = ControlCornerRadius 4 (:49), background SubtleFillColorTransparent in EVERY state (:5; the :56-87 visual states recolor ONLY the foreground: TextFillColorPrimary → Secondary hover → Tertiary pressed → Disabled, :6-9), IsTabStop=False (xaml:37/:100) — each steps by SmallChange (default ViewportSize / ratio — AnnotatedScrollBar.cpp:484-489 EnsureSmallChangeValue). • Rail click / drag / buttons raise Scrolling with the offset + kind, CANCELABLE (AnnotatedScrollBarScrollingEventArgs.Cancel; cpp:960+ RaiseScrolling) — modeled by the onScrolling filter returning false to cancel. ENGINE SEMANTIC (the bug this file once had): inside a ZStack, children land at the LEFT edge and AlignSelf is the VERTICAL overlay placement — RIGHT alignment therefore uses a full-width row wrapper (Direction=0, Justify=FlexJustify.End) per overlay part, never AlignSelf. Thumb position rides a TransformBind on the position signal (compositor-instant, no re-render).">
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/new/feat/prop-unification/apiSpec/new?filename=FluentGpu_Controls_AnnotatedScrollBar.md&amp;value=---%0Auid%3A%20FluentGpu.Controls.AnnotatedScrollBar%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="ManagedReference">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="FluentGpu.Controls.AnnotatedScrollBar">
+
+
+
+  <h1 id="FluentGpu_Controls_AnnotatedScrollBar" data-uid="FluentGpu.Controls.AnnotatedScrollBar" class="text-break">
+Class AnnotatedScrollBar  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/AnnotatedScrollBar.cs/#L44"><i class="bi bi-code-slash"></i></a>
+  </h1>
+
+  <div class="facts text-secondary">
+    <dl><dt>Namespace</dt><dd><a class="xref" href="FluentGpu.html">FluentGpu</a>.<a class="xref" href="FluentGpu.Controls.html">Controls</a></dd></dl>
+  <dl><dt>Assembly</dt><dd>FluentGpu.Controls.dll</dd></dl>
+  </div>
+
+  <div class="markdown summary"><p>WinUI <code>AnnotatedScrollBar</code> (controls\dev\AnnotatedScrollBar) — the jump-list rail: a column of right-aligned
+labels beside a thin accent thumb, with CLICK-TO-JUMP on the rail, thumb drag, and repeat-hold increment/decrement
+buttons. Template facts (AnnotatedScrollBar.xaml + _themeresources.xaml; the _perf2026 variant differs only in
+storyboard→setter form, identical values):
+• Control MinWidth = LabelsGridMinWidth 44 (xaml:4, :37) — the control hugs ~44 unless its host stretches it.
+• Root grid rows: increment RepeatButton on TOP (glyph EDDB, HorizontalAlignment=Right — xaml:31-39), the
+vertical grid (star), decrement RepeatButton on the BOTTOM (glyph EDDC — xaml:94-102).
+• Thumb = 30×3 @ r1.5 (ThumbWidth :36 / ThumbHeight :35 / ThumbCornerRadius :41), VerticalThumbBrush =
+AccentFillColorDefault (:11/:21), HorizontalAlignment=Right + VerticalAlignment=Top at the scroll position
+(xaml:84-92).
+• Ghost thumb = same geometry in AccentFillColorDisabled (PART_VerticalThumbGhost xaml:74-83) — the hover preview
+of where a rail click would land.
+• PART_LabelsGrid: HorizontalAlignment=Center, MinWidth 44, transparent background (xaml:41-45); the
+LabelTemplate is a right-aligned BodyTextBlockStyle TextBlock (14px Normal — TextBlock_themeresources.xaml:4/:23)
+with Margin 0,-5,0,-2 (xaml:8-19).
+• PART_ToolTipRail: a 1px right-aligned tooltip anchor rail (xaml:46) whose ToolTip is Placement=Top,
+MaxWidth 360 / MinHeight 40 (:38/:39), BaseTextBlockStyle content (14px SemiBold) — modeled by
+<code>detailLabel</code>: the resolved text floats in a chip above the pointer (the DetailLabelRequested seam).
+• ScrollButtonStyle: MinWidth/MinHeight 16 (:43-44), FontSize 8 (:40/:51), CornerRadius = ControlCornerRadius 4
+(:49), background SubtleFillColorTransparent in EVERY state (:5; the :56-87 visual states recolor ONLY the
+foreground: TextFillColorPrimary → Secondary hover → Tertiary pressed → Disabled, :6-9), IsTabStop=False
+(xaml:37/:100) — each steps by <code>SmallChange</code> (default ViewportSize / ratio —
+AnnotatedScrollBar.cpp:484-489 EnsureSmallChangeValue).
+• Rail click / drag / buttons raise <code>Scrolling</code> with the offset + kind, CANCELABLE
+(AnnotatedScrollBarScrollingEventArgs.Cancel; cpp:960+ RaiseScrolling) — modeled by the
+<code>onScrolling</code> filter returning false to cancel.
+ENGINE SEMANTIC (the bug this file once had): inside a ZStack, children land at the LEFT edge and
+<code>AlignSelf</code> is the VERTICAL overlay placement — RIGHT alignment therefore uses a full-width row wrapper
+(<code>Direction=0, Justify=FlexJustify.End</code>) per overlay part, never <code>AlignSelf</code>.
+Thumb position rides a <code>TransformBind</code> on the position signal (compositor-instant, no re-render).</p>
+</div>
+  <div class="markdown conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static class AnnotatedScrollBar</code></pre>
+  </div>
+
+
+
+
+  <dl class="typelist inheritance">
+    <dt>Inheritance</dt>
+    <dd>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></div>
+      <div><span class="xref">AnnotatedScrollBar</span></div>
+    </dd>
+  </dl>
+
+
+
+  <dl class="typelist inheritedMembers">
+    <dt>Inherited Members</dt>
+    <dd>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)">object.Equals(object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)">object.Equals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gethashcode">object.GetHashCode()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gettype">object.GetType()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone">object.MemberwiseClone()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.referenceequals">object.ReferenceEquals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.tostring">object.ToString()</a>
+    </div>
+  </dd></dl>
+
+
+
+
+
+
+  <h2 class="section" id="fields">Fields
+</h2>
+
+
+
+  <h3 id="FluentGpu_Controls_AnnotatedScrollBar_PartGhost" data-uid="FluentGpu.Controls.AnnotatedScrollBar.PartGhost">
+  PartGhost
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/AnnotatedScrollBar.cs/#L57"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The hover-preview ghost-thumb row (WinUI PART_VerticalThumbGhost; mounted only while hovering).
+Owned: Key — the hover-tracking OffsetY is stock per-render placement a modifier sees and may override.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartGhost = &quot;asb-ghost&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_AnnotatedScrollBar_PartLabels" data-uid="FluentGpu.Controls.AnnotatedScrollBar.PartLabels">
+  PartLabels
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/AnnotatedScrollBar.cs/#L52"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The labels grid (WinUI PART_LabelsGrid). Owned: Key, Children (the annotations slot — restructure
+via the annotations list, restyle via this part).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartLabels = &quot;asb-labels&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_AnnotatedScrollBar_PartRail" data-uid="FluentGpu.Controls.AnnotatedScrollBar.PartRail">
+  PartRail
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/AnnotatedScrollBar.cs/#L54"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The 1px right-aligned tooltip anchor rail row (WinUI PART_ToolTipRail). Owned: Key.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartRail = &quot;asb-rail&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_AnnotatedScrollBar_PartThumb" data-uid="FluentGpu.Controls.AnnotatedScrollBar.PartThumb">
+  PartThumb
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/AnnotatedScrollBar.cs/#L63"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The live accent-thumb row (WinUI PART_VerticalThumb). Owned: Key, TransformBind (the
+compositor-bound scroll position).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartThumb = &quot;asb-thumb&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_AnnotatedScrollBar_PartTip" data-uid="FluentGpu.Controls.AnnotatedScrollBar.PartTip">
+  PartTip
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/AnnotatedScrollBar.cs/#L60"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The hover detail-chip row (WinUI PART_DetailLabelToolTip; mounted while hovering with a
+detailLabel). Owned: Key — same OffsetY note as <a class="xref" href="FluentGpu.Controls.AnnotatedScrollBar.html#FluentGpu_Controls_AnnotatedScrollBar_PartGhost">PartGhost</a>.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartTip = &quot;asb-tip&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+  <h2 class="section" id="methods">Methods
+</h2>
+
+
+  <a id="FluentGpu_Controls_AnnotatedScrollBar_Create_" data-uid="FluentGpu.Controls.AnnotatedScrollBar.Create*"></a>
+
+  <h3 id="FluentGpu_Controls_AnnotatedScrollBar_Create_System_Collections_Generic_IReadOnlyList_System_ValueTuple_System_String_System_Single___FluentGpu_Signals_Signal_System_Single__System_Action_System_Single_FluentGpu_Controls_AnnotatedScrollBarScrollKind__System_Single_System_Single_System_Func_System_Single_System_Boolean__System_Func_System_Single_System_String__FluentGpu_Dsl_TemplateParts_" data-uid="FluentGpu.Controls.AnnotatedScrollBar.Create(System.Collections.Generic.IReadOnlyList{System.ValueTuple{System.String,System.Single}},FluentGpu.Signals.Signal{System.Single},System.Action{System.Single,FluentGpu.Controls.AnnotatedScrollBarScrollKind},System.Single,System.Single,System.Func{System.Single,System.Boolean},System.Func{System.Single,System.String},FluentGpu.Dsl.TemplateParts)">
+  Create(IReadOnlyList&lt;(string Label, float Position01)&gt;, Signal&lt;float&gt;, Action&lt;float, AnnotatedScrollBarScrollKind&gt;?, float, float, Func&lt;float, bool&gt;?, Func&lt;float, string&gt;?, TemplateParts?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/AnnotatedScrollBar.cs/#L101"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The interactive control. <code class="paramref">position01</code> is the normalized scroll position signal (0..1) —
+writes move the thumb compositor-instantly; <code class="paramref">onScroll</code> receives every user scroll
+(new position, kind); <code class="paramref">onScrolling</code> (optional) may return false to CANCEL a scroll (the WinUI
+Scrolling.Cancel seam); <code class="paramref">smallChange01</code> is the button step (default 0.05 — the SmallChange
+auto-value stands in for viewport/ratio, cpp:484-489); <code class="paramref">detailLabel</code> resolves the hover chip
+text from a position; <code class="paramref">parts</code> = per-part styling keyed by the <code>PartXxx</code> consts (see
+<a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a> for the contract).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static Element Create(IReadOnlyList&lt;(string Label, float Position01)&gt; annotations, Signal&lt;float&gt; position01, Action&lt;float, AnnotatedScrollBarScrollKind&gt;? onScroll, float height = 280, float smallChange01 = 0.05, Func&lt;float, bool&gt;? onScrolling = null, Func&lt;float, string&gt;? detailLabel = null, TemplateParts? parts = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>annotations</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1">IReadOnlyList</a>&lt;(<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.valuetuple-system.string,system.single-.label">Label</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.valuetuple-system.string,system.single-.position01">Position01</a>)&gt;</dt>
+    <dd></dd>
+    <dt><code>position01</code> <a class="xref" href="FluentGpu.Signals.Signal-1.html">Signal</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>onScroll</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action-2">Action</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a>, <a class="xref" href="FluentGpu.Controls.AnnotatedScrollBarScrollKind.html">AnnotatedScrollBarScrollKind</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>height</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>smallChange01</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>onScrolling</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>detailLabel</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>parts</code> <a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.Element.html">Element</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_AnnotatedScrollBar_Create_" data-uid="FluentGpu.Controls.AnnotatedScrollBar.Create*"></a>
+
+  <h3 id="FluentGpu_Controls_AnnotatedScrollBar_Create_System_Collections_Generic_IReadOnlyList_System_ValueTuple_System_String_System_Single___System_Single_FluentGpu_Dsl_TemplateParts_" data-uid="FluentGpu.Controls.AnnotatedScrollBar.Create(System.Collections.Generic.IReadOnlyList{System.ValueTuple{System.String,System.Single}},System.Single,FluentGpu.Dsl.TemplateParts)">
+  Create(IReadOnlyList&lt;(string Label, float Position01)&gt;, float, TemplateParts?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/AnnotatedScrollBar.cs/#L77"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Static/legacy surface (kept source-compatible): annotations as (label, 0..1 position) with no
+callbacks — renders the full anatomy inert at position 0.2 (the original demo shape).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static Element Create(IReadOnlyList&lt;(string Label, float Position01)&gt; annotations, float height = 280, TemplateParts? parts = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>annotations</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1">IReadOnlyList</a>&lt;(<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.valuetuple-system.string,system.single-.label">Label</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.valuetuple-system.string,system.single-.position01">Position01</a>)&gt;</dt>
+    <dd></dd>
+    <dt><code>height</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>parts</code> <a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.Element.html">Element</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_AnnotatedScrollBar_Create_" data-uid="FluentGpu.Controls.AnnotatedScrollBar.Create*"></a>
+
+  <h3 id="FluentGpu_Controls_AnnotatedScrollBar_Create_System_Collections_Generic_IReadOnlyList_System_ValueTuple_System_String_System_Single___System_Single_System_Action_System_Single_FluentGpu_Controls_AnnotatedScrollBarScrollKind__System_Single_System_Single_System_Func_System_Single_System_Boolean__System_Func_System_Single_System_String__FluentGpu_Dsl_TemplateParts_" data-uid="FluentGpu.Controls.AnnotatedScrollBar.Create(System.Collections.Generic.IReadOnlyList{System.ValueTuple{System.String,System.Single}},System.Single,System.Action{System.Single,FluentGpu.Controls.AnnotatedScrollBarScrollKind},System.Single,System.Single,System.Func{System.Single,System.Boolean},System.Func{System.Single,System.String},FluentGpu.Dsl.TemplateParts)">
+  Create(IReadOnlyList&lt;(string Label, float Position01)&gt;, float, Action&lt;float, AnnotatedScrollBarScrollKind&gt;?, float, float, Func&lt;float, bool&gt;?, Func&lt;float, string&gt;?, TemplateParts?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/AnnotatedScrollBar.cs/#L82"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The interactive control with a FROZEN position (component props freeze at mount — use the
+<code>Signal&lt;float&gt;</code> overload below for a live, app-controlled position).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static Element Create(IReadOnlyList&lt;(string Label, float Position01)&gt; annotations, float position01, Action&lt;float, AnnotatedScrollBarScrollKind&gt;? onScroll, float height = 280, float smallChange01 = 0.05, Func&lt;float, bool&gt;? onScrolling = null, Func&lt;float, string&gt;? detailLabel = null, TemplateParts? parts = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>annotations</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1">IReadOnlyList</a>&lt;(<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.valuetuple-system.string,system.single-.label">Label</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.valuetuple-system.string,system.single-.position01">Position01</a>)&gt;</dt>
+    <dd></dd>
+    <dt><code>position01</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>onScroll</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action-2">Action</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a>, <a class="xref" href="FluentGpu.Controls.AnnotatedScrollBarScrollKind.html">AnnotatedScrollBarScrollKind</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>height</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>smallChange01</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>onScrolling</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>detailLabel</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>parts</code> <a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.Element.html">Element</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+</article>
+
+
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

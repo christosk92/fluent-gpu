@@ -1,0 +1,139 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.PaneMode
+  commentId: T:FluentGpu.Controls.PaneMode
+  id: PaneMode
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.PaneMode.Compact
+  - FluentGpu.Controls.PaneMode.Expanded
+  - FluentGpu.Controls.PaneMode.Minimal
+  langs:
+  - csharp
+  - vb
+  name: PaneMode
+  nameWithType: PaneMode
+  fullName: FluentGpu.Controls.PaneMode
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NavigationView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PaneMode
+    path: ../../src/FluentGpu.Controls/NavigationView.cs
+    startLine: 31
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: 'public enum PaneMode : byte'
+    content.vb: Public Enum PaneMode As Byte
+- uid: FluentGpu.Controls.PaneMode.Expanded
+  commentId: F:FluentGpu.Controls.PaneMode.Expanded
+  id: Expanded
+  parent: FluentGpu.Controls.PaneMode
+  langs:
+  - csharp
+  - vb
+  name: Expanded
+  nameWithType: PaneMode.Expanded
+  fullName: FluentGpu.Controls.PaneMode.Expanded
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NavigationView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Expanded
+    path: ../../src/FluentGpu.Controls/NavigationView.cs
+    startLine: 31
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Expanded = 0
+    return:
+      type: FluentGpu.Controls.PaneMode
+- uid: FluentGpu.Controls.PaneMode.Compact
+  commentId: F:FluentGpu.Controls.PaneMode.Compact
+  id: Compact
+  parent: FluentGpu.Controls.PaneMode
+  langs:
+  - csharp
+  - vb
+  name: Compact
+  nameWithType: PaneMode.Compact
+  fullName: FluentGpu.Controls.PaneMode.Compact
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NavigationView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Compact
+    path: ../../src/FluentGpu.Controls/NavigationView.cs
+    startLine: 31
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Compact = 1
+    return:
+      type: FluentGpu.Controls.PaneMode
+- uid: FluentGpu.Controls.PaneMode.Minimal
+  commentId: F:FluentGpu.Controls.PaneMode.Minimal
+  id: Minimal
+  parent: FluentGpu.Controls.PaneMode
+  langs:
+  - csharp
+  - vb
+  name: Minimal
+  nameWithType: PaneMode.Minimal
+  fullName: FluentGpu.Controls.PaneMode.Minimal
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NavigationView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Minimal
+    path: ../../src/FluentGpu.Controls/NavigationView.cs
+    startLine: 31
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Minimal = 2
+    return:
+      type: FluentGpu.Controls.PaneMode
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.PaneMode
+  commentId: T:FluentGpu.Controls.PaneMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.PaneMode.html
+  name: PaneMode
+  nameWithType: PaneMode
+  fullName: FluentGpu.Controls.PaneMode

@@ -1,0 +1,701 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Animation.CaretBlinker
+  commentId: T:FluentGpu.Animation.CaretBlinker
+  id: CaretBlinker
+  parent: FluentGpu.Animation
+  children:
+  - FluentGpu.Animation.CaretBlinker.#ctor(FluentGpu.Scene.SceneStore)
+  - FluentGpu.Animation.CaretBlinker.Blur(FluentGpu.Foundation.NodeHandle)
+  - FluentGpu.Animation.CaretBlinker.BlurAll
+  - FluentGpu.Animation.CaretBlinker.DefaultBlinkMs
+  - FluentGpu.Animation.CaretBlinker.Focus(FluentGpu.Foundation.NodeHandle,System.Single)
+  - FluentGpu.Animation.CaretBlinker.HasActive
+  - FluentGpu.Animation.CaretBlinker.ResetBlink(FluentGpu.Foundation.NodeHandle)
+  - FluentGpu.Animation.CaretBlinker.Tick(System.Single)
+  langs:
+  - csharp
+  - vb
+  name: CaretBlinker
+  nameWithType: CaretBlinker
+  fullName: FluentGpu.Animation.CaretBlinker
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Animation/CaretBlinker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CaretBlinker
+    path: ../../src/FluentGpu.Animation/CaretBlinker.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: >-
+    Drives the focused editor's caret blink (the <xref href="FluentGpu.Animation.RepeatTicker" data-throw-if-not-resolved="false"></xref> phase-7 idiom): while an editable text node
+
+    is focused, the <xref href="FluentGpu.Scene.TextEditState.CaretVisible" data-throw-if-not-resolved="false"></xref> bit toggles every half-period (Win32
+
+    <code>GetCaretBlinkTime</code> semantics — the host passes the OS value; headless uses the fixed 500ms default) and the
+
+    node is marked PaintDirty so the recorder re-emits. One focused editor at a time (focus is singular). The host
+
+    includes <xref href="FluentGpu.Animation.CaretBlinker.HasActive" data-throw-if-not-resolved="false"></xref> in its work gate so the loop keeps ticking at blink granularity while an editor is
+
+    focused — and goes fully idle the moment it blurs. Zero alloc per tick (writes a POD row + a flag bit).
+  example: []
+  syntax:
+    content: public sealed class CaretBlinker
+    content.vb: Public NotInheritable Class CaretBlinker
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Animation.CaretBlinker.DefaultBlinkMs
+  commentId: F:FluentGpu.Animation.CaretBlinker.DefaultBlinkMs
+  id: DefaultBlinkMs
+  parent: FluentGpu.Animation.CaretBlinker
+  langs:
+  - csharp
+  - vb
+  name: DefaultBlinkMs
+  nameWithType: CaretBlinker.DefaultBlinkMs
+  fullName: FluentGpu.Animation.CaretBlinker.DefaultBlinkMs
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Animation/CaretBlinker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DefaultBlinkMs
+    path: ../../src/FluentGpu.Animation/CaretBlinker.cs
+    startLine: 21
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: Default half-period (caret-on / caret-off time) — the Win32 <code>GetCaretBlinkTime</code> default.
+  example: []
+  syntax:
+    content: public const float DefaultBlinkMs = 500
+    return:
+      type: System.Single
+    content.vb: Public Const DefaultBlinkMs As Single = 500
+- uid: FluentGpu.Animation.CaretBlinker.#ctor(FluentGpu.Scene.SceneStore)
+  commentId: M:FluentGpu.Animation.CaretBlinker.#ctor(FluentGpu.Scene.SceneStore)
+  id: '#ctor(FluentGpu.Scene.SceneStore)'
+  parent: FluentGpu.Animation.CaretBlinker
+  langs:
+  - csharp
+  - vb
+  name: CaretBlinker(SceneStore)
+  nameWithType: CaretBlinker.CaretBlinker(SceneStore)
+  fullName: FluentGpu.Animation.CaretBlinker.CaretBlinker(FluentGpu.Scene.SceneStore)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Animation/CaretBlinker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Animation/CaretBlinker.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: public CaretBlinker(SceneStore scene)
+    parameters:
+    - id: scene
+      type: FluentGpu.Scene.SceneStore
+    content.vb: Public Sub New(scene As SceneStore)
+  overload: FluentGpu.Animation.CaretBlinker.#ctor*
+  nameWithType.vb: CaretBlinker.New(SceneStore)
+  fullName.vb: FluentGpu.Animation.CaretBlinker.New(FluentGpu.Scene.SceneStore)
+  name.vb: New(SceneStore)
+- uid: FluentGpu.Animation.CaretBlinker.HasActive
+  commentId: P:FluentGpu.Animation.CaretBlinker.HasActive
+  id: HasActive
+  parent: FluentGpu.Animation.CaretBlinker
+  langs:
+  - csharp
+  - vb
+  name: HasActive
+  nameWithType: CaretBlinker.HasActive
+  fullName: FluentGpu.Animation.CaretBlinker.HasActive
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Animation/CaretBlinker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HasActive
+    path: ../../src/FluentGpu.Animation/CaretBlinker.cs
+    startLine: 26
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: An editor is focused → the frame loop must keep ticking (at blink granularity).
+  example: []
+  syntax:
+    content: public bool HasActive { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property HasActive As Boolean
+  overload: FluentGpu.Animation.CaretBlinker.HasActive*
+- uid: FluentGpu.Animation.CaretBlinker.Focus(FluentGpu.Foundation.NodeHandle,System.Single)
+  commentId: M:FluentGpu.Animation.CaretBlinker.Focus(FluentGpu.Foundation.NodeHandle,System.Single)
+  id: Focus(FluentGpu.Foundation.NodeHandle,System.Single)
+  parent: FluentGpu.Animation.CaretBlinker
+  langs:
+  - csharp
+  - vb
+  name: Focus(NodeHandle, float)
+  nameWithType: CaretBlinker.Focus(NodeHandle, float)
+  fullName: FluentGpu.Animation.CaretBlinker.Focus(FluentGpu.Foundation.NodeHandle, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/CaretBlinker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Focus
+    path: ../../src/FluentGpu.Animation/CaretBlinker.cs
+    startLine: 30
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: >-
+    Begin blinking for the (newly focused) editor's text node: caret shown, blink phase reset.
+        <code class="paramref">blinkMs</code> is the half-period (<code>GetCaretBlinkTime</code>); ≤ 0 falls back to the default.
+  example: []
+  syntax:
+    content: public void Focus(NodeHandle textNode, float blinkMs = 500)
+    parameters:
+    - id: textNode
+      type: FluentGpu.Foundation.NodeHandle
+    - id: blinkMs
+      type: System.Single
+    content.vb: Public Sub Focus(textNode As NodeHandle, blinkMs As Single = 500)
+  overload: FluentGpu.Animation.CaretBlinker.Focus*
+  nameWithType.vb: CaretBlinker.Focus(NodeHandle, Single)
+  fullName.vb: FluentGpu.Animation.CaretBlinker.Focus(FluentGpu.Foundation.NodeHandle, Single)
+  name.vb: Focus(NodeHandle, Single)
+- uid: FluentGpu.Animation.CaretBlinker.Blur(FluentGpu.Foundation.NodeHandle)
+  commentId: M:FluentGpu.Animation.CaretBlinker.Blur(FluentGpu.Foundation.NodeHandle)
+  id: Blur(FluentGpu.Foundation.NodeHandle)
+  parent: FluentGpu.Animation.CaretBlinker
+  langs:
+  - csharp
+  - vb
+  name: Blur(NodeHandle)
+  nameWithType: CaretBlinker.Blur(NodeHandle)
+  fullName: FluentGpu.Animation.CaretBlinker.Blur(FluentGpu.Foundation.NodeHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/CaretBlinker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Blur
+    path: ../../src/FluentGpu.Animation/CaretBlinker.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: 'Stop blinking for this editor (focus lost): caret hidden, <xref href="FluentGpu.Scene.TextEditState.Focused" data-throw-if-not-resolved="false"></xref> cleared.'
+  example: []
+  syntax:
+    content: public void Blur(NodeHandle textNode)
+    parameters:
+    - id: textNode
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Public Sub Blur(textNode As NodeHandle)
+  overload: FluentGpu.Animation.CaretBlinker.Blur*
+- uid: FluentGpu.Animation.CaretBlinker.BlurAll
+  commentId: M:FluentGpu.Animation.CaretBlinker.BlurAll
+  id: BlurAll
+  parent: FluentGpu.Animation.CaretBlinker
+  langs:
+  - csharp
+  - vb
+  name: BlurAll()
+  nameWithType: CaretBlinker.BlurAll()
+  fullName: FluentGpu.Animation.CaretBlinker.BlurAll()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/CaretBlinker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BlurAll
+    path: ../../src/FluentGpu.Animation/CaretBlinker.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: Blur whichever editor is blinking (window deactivated / overlay swallowed focus).
+  example: []
+  syntax:
+    content: public void BlurAll()
+    content.vb: Public Sub BlurAll()
+  overload: FluentGpu.Animation.CaretBlinker.BlurAll*
+- uid: FluentGpu.Animation.CaretBlinker.ResetBlink(FluentGpu.Foundation.NodeHandle)
+  commentId: M:FluentGpu.Animation.CaretBlinker.ResetBlink(FluentGpu.Foundation.NodeHandle)
+  id: ResetBlink(FluentGpu.Foundation.NodeHandle)
+  parent: FluentGpu.Animation.CaretBlinker
+  langs:
+  - csharp
+  - vb
+  name: ResetBlink(NodeHandle)
+  nameWithType: CaretBlinker.ResetBlink(NodeHandle)
+  fullName: FluentGpu.Animation.CaretBlinker.ResetBlink(FluentGpu.Foundation.NodeHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/CaretBlinker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ResetBlink
+    path: ../../src/FluentGpu.Animation/CaretBlinker.cs
+    startLine: 60
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: >-
+    An edit happened: the caret snaps visible and the blink phase restarts (WinUI/Win32 behavior —
+        the caret never blinks away mid-typing).
+  example: []
+  syntax:
+    content: public void ResetBlink(NodeHandle textNode)
+    parameters:
+    - id: textNode
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Public Sub ResetBlink(textNode As NodeHandle)
+  overload: FluentGpu.Animation.CaretBlinker.ResetBlink*
+- uid: FluentGpu.Animation.CaretBlinker.Tick(System.Single)
+  commentId: M:FluentGpu.Animation.CaretBlinker.Tick(System.Single)
+  id: Tick(System.Single)
+  parent: FluentGpu.Animation.CaretBlinker
+  langs:
+  - csharp
+  - vb
+  name: Tick(float)
+  nameWithType: CaretBlinker.Tick(float)
+  fullName: FluentGpu.Animation.CaretBlinker.Tick(float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/CaretBlinker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Tick
+    path: ../../src/FluentGpu.Animation/CaretBlinker.cs
+    startLine: 75
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: >-
+    Phase-7 tick: accumulate; on each elapsed half-period toggle the caret bit. A slow frame spanning
+        several half-periods nets the parity (an even count is a visual no-op — no spurious repaint).
+  example: []
+  syntax:
+    content: public void Tick(float dtMs)
+    parameters:
+    - id: dtMs
+      type: System.Single
+    content.vb: Public Sub Tick(dtMs As Single)
+  overload: FluentGpu.Animation.CaretBlinker.Tick*
+  nameWithType.vb: CaretBlinker.Tick(Single)
+  fullName.vb: FluentGpu.Animation.CaretBlinker.Tick(Single)
+  name.vb: Tick(Single)
+references:
+- uid: FluentGpu.Animation.RepeatTicker
+  commentId: T:FluentGpu.Animation.RepeatTicker
+  href: FluentGpu.Animation.RepeatTicker.html
+  name: RepeatTicker
+  nameWithType: RepeatTicker
+  fullName: FluentGpu.Animation.RepeatTicker
+- uid: FluentGpu.Scene.TextEditState.CaretVisible
+  commentId: F:FluentGpu.Scene.TextEditState.CaretVisible
+  href: FluentGpu.Scene.TextEditState.html#FluentGpu_Scene_TextEditState_CaretVisible
+  name: CaretVisible
+  nameWithType: TextEditState.CaretVisible
+  fullName: FluentGpu.Scene.TextEditState.CaretVisible
+- uid: FluentGpu.Animation.CaretBlinker.HasActive
+  commentId: P:FluentGpu.Animation.CaretBlinker.HasActive
+  href: FluentGpu.Animation.CaretBlinker.html#FluentGpu_Animation_CaretBlinker_HasActive
+  name: HasActive
+  nameWithType: CaretBlinker.HasActive
+  fullName: FluentGpu.Animation.CaretBlinker.HasActive
+- uid: FluentGpu.Animation
+  commentId: N:FluentGpu.Animation
+  href: FluentGpu.html
+  name: FluentGpu.Animation
+  nameWithType: FluentGpu.Animation
+  fullName: FluentGpu.Animation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Animation
+    name: Animation
+    href: FluentGpu.Animation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Animation
+    name: Animation
+    href: FluentGpu.Animation.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Animation.CaretBlinker.#ctor*
+  commentId: Overload:FluentGpu.Animation.CaretBlinker.#ctor
+  href: FluentGpu.Animation.CaretBlinker.html#FluentGpu_Animation_CaretBlinker__ctor_FluentGpu_Scene_SceneStore_
+  name: CaretBlinker
+  nameWithType: CaretBlinker.CaretBlinker
+  fullName: FluentGpu.Animation.CaretBlinker.CaretBlinker
+  nameWithType.vb: CaretBlinker.New
+  fullName.vb: FluentGpu.Animation.CaretBlinker.New
+  name.vb: New
+- uid: FluentGpu.Scene.SceneStore
+  commentId: T:FluentGpu.Scene.SceneStore
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.SceneStore.html
+  name: SceneStore
+  nameWithType: SceneStore
+  fullName: FluentGpu.Scene.SceneStore
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: FluentGpu.Animation.CaretBlinker.HasActive*
+  commentId: Overload:FluentGpu.Animation.CaretBlinker.HasActive
+  href: FluentGpu.Animation.CaretBlinker.html#FluentGpu_Animation_CaretBlinker_HasActive
+  name: HasActive
+  nameWithType: CaretBlinker.HasActive
+  fullName: FluentGpu.Animation.CaretBlinker.HasActive
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Animation.CaretBlinker.Focus*
+  commentId: Overload:FluentGpu.Animation.CaretBlinker.Focus
+  href: FluentGpu.Animation.CaretBlinker.html#FluentGpu_Animation_CaretBlinker_Focus_FluentGpu_Foundation_NodeHandle_System_Single_
+  name: Focus
+  nameWithType: CaretBlinker.Focus
+  fullName: FluentGpu.Animation.CaretBlinker.Focus
+- uid: FluentGpu.Foundation.NodeHandle
+  commentId: T:FluentGpu.Foundation.NodeHandle
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.NodeHandle.html
+  name: NodeHandle
+  nameWithType: NodeHandle
+  fullName: FluentGpu.Foundation.NodeHandle
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Scene.TextEditState.Focused
+  commentId: F:FluentGpu.Scene.TextEditState.Focused
+  href: FluentGpu.Scene.TextEditState.html#FluentGpu_Scene_TextEditState_Focused
+  name: Focused
+  nameWithType: TextEditState.Focused
+  fullName: FluentGpu.Scene.TextEditState.Focused
+- uid: FluentGpu.Animation.CaretBlinker.Blur*
+  commentId: Overload:FluentGpu.Animation.CaretBlinker.Blur
+  href: FluentGpu.Animation.CaretBlinker.html#FluentGpu_Animation_CaretBlinker_Blur_FluentGpu_Foundation_NodeHandle_
+  name: Blur
+  nameWithType: CaretBlinker.Blur
+  fullName: FluentGpu.Animation.CaretBlinker.Blur
+- uid: FluentGpu.Animation.CaretBlinker.BlurAll*
+  commentId: Overload:FluentGpu.Animation.CaretBlinker.BlurAll
+  href: FluentGpu.Animation.CaretBlinker.html#FluentGpu_Animation_CaretBlinker_BlurAll
+  name: BlurAll
+  nameWithType: CaretBlinker.BlurAll
+  fullName: FluentGpu.Animation.CaretBlinker.BlurAll
+- uid: FluentGpu.Animation.CaretBlinker.ResetBlink*
+  commentId: Overload:FluentGpu.Animation.CaretBlinker.ResetBlink
+  href: FluentGpu.Animation.CaretBlinker.html#FluentGpu_Animation_CaretBlinker_ResetBlink_FluentGpu_Foundation_NodeHandle_
+  name: ResetBlink
+  nameWithType: CaretBlinker.ResetBlink
+  fullName: FluentGpu.Animation.CaretBlinker.ResetBlink
+- uid: FluentGpu.Animation.CaretBlinker.Tick*
+  commentId: Overload:FluentGpu.Animation.CaretBlinker.Tick
+  href: FluentGpu.Animation.CaretBlinker.html#FluentGpu_Animation_CaretBlinker_Tick_System_Single_
+  name: Tick
+  nameWithType: CaretBlinker.Tick
+  fullName: FluentGpu.Animation.CaretBlinker.Tick

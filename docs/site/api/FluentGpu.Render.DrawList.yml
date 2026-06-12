@@ -1,0 +1,1721 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Render.DrawList
+  commentId: T:FluentGpu.Render.DrawList
+  id: DrawList
+  parent: FluentGpu.Render
+  children:
+  - FluentGpu.Render.DrawList.#ctor(System.Int32)
+  - FluentGpu.Render.DrawList.Arc(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.ColorF@,System.Single,System.Single,System.Single,System.Boolean,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  - FluentGpu.Render.DrawList.Bytes
+  - FluentGpu.Render.DrawList.CommandCount
+  - FluentGpu.Render.DrawList.DrawGlyphRun(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.ColorF@,FluentGpu.Foundation.StringId,FluentGpu.Foundation.StringId,System.Single,System.Int32,System.Int32,System.Int32,System.Int32,System.Single,System.Single,System.Int32,System.Int32,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64,System.Int32,System.Boolean)
+  - FluentGpu.Render.DrawList.DrawImage(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,System.Int32,System.Boolean,FluentGpu.Foundation.ColorF@,FluentGpu.Foundation.Affine2D@,System.Single,FluentGpu.Foundation.RectF@,System.Single,System.UInt64)
+  - FluentGpu.Render.DrawList.FillRoundRect(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,FluentGpu.Foundation.ColorF@,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  - FluentGpu.Render.DrawList.FillRoundRectChecker(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,FluentGpu.Foundation.ColorF@,FluentGpu.Foundation.ColorF@,System.Single,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  - FluentGpu.Render.DrawList.GradientRect(FluentGpu.Render.DrawGradientRectCmd@,System.UInt64)
+  - FluentGpu.Render.DrawList.GradientStroke(FluentGpu.Render.DrawGradientStrokeCmd@,System.UInt64)
+  - FluentGpu.Render.DrawList.PolylineStroke(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.ColorF@,System.Single,FluentGpu.Foundation.Point2@,FluentGpu.Foundation.Point2@,FluentGpu.Foundation.Point2@,FluentGpu.Foundation.Point2@,System.Int32,System.Single,System.Single,System.Boolean,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  - FluentGpu.Render.DrawList.PopClip(System.UInt64)
+  - FluentGpu.Render.DrawList.PopLayer(FluentGpu.Foundation.RectF@,System.UInt64)
+  - FluentGpu.Render.DrawList.PushClip(FluentGpu.Foundation.RectF@,System.UInt64)
+  - FluentGpu.Render.DrawList.PushClipRounded(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.RectF@,System.Single,System.UInt64)
+  - FluentGpu.Render.DrawList.PushLayer(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,FluentGpu.Foundation.ColorF@,FluentGpu.Foundation.ColorF@,System.Single,System.Single,System.Single,System.Single,System.UInt64)
+  - FluentGpu.Render.DrawList.PushOpacityLayer(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,System.Single,System.UInt64)
+  - FluentGpu.Render.DrawList.Reset
+  - FluentGpu.Render.DrawList.Shadow(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,FluentGpu.Foundation.ColorF@,System.Single,System.Single,System.Single,System.Single,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  - FluentGpu.Render.DrawList.SortKeys
+  - FluentGpu.Render.DrawList.StrokeRoundRect(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,FluentGpu.Foundation.ColorF@,System.Single,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  - FluentGpu.Render.DrawList.StrokeRoundRectDashed(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,FluentGpu.Foundation.ColorF@,System.Single,System.Single,System.Single,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  - FluentGpu.Render.DrawList.TabShape(FluentGpu.Foundation.RectF@,System.Single,System.Single,FluentGpu.Foundation.ColorF@,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  langs:
+  - csharp
+  - vb
+  name: DrawList
+  nameWithType: DrawList
+  fullName: FluentGpu.Render.DrawList
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DrawList
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 123
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  summary: >-
+    Flat POD command stream consumed by the RHI (<code>SubmitDrawList</code>). The slice grows a single contiguous buffer;
+
+    the full engine uses double-buffered arenas + clean-span memcpy. SortKeys are recorded in parallel.
+  example: []
+  syntax:
+    content: public sealed class DrawList
+    content.vb: Public NotInheritable Class DrawList
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Render.DrawList.#ctor(System.Int32)
+  commentId: M:FluentGpu.Render.DrawList.#ctor(System.Int32)
+  id: '#ctor(System.Int32)'
+  parent: FluentGpu.Render.DrawList
+  langs:
+  - csharp
+  - vb
+  name: DrawList(int)
+  nameWithType: DrawList.DrawList(int)
+  fullName: FluentGpu.Render.DrawList.DrawList(int)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 130
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public DrawList(int capacity = 4096)
+    parameters:
+    - id: capacity
+      type: System.Int32
+    content.vb: Public Sub New(capacity As Integer = 4096)
+  overload: FluentGpu.Render.DrawList.#ctor*
+  nameWithType.vb: DrawList.New(Integer)
+  fullName.vb: FluentGpu.Render.DrawList.New(Integer)
+  name.vb: New(Integer)
+- uid: FluentGpu.Render.DrawList.Bytes
+  commentId: P:FluentGpu.Render.DrawList.Bytes
+  id: Bytes
+  parent: FluentGpu.Render.DrawList
+  langs:
+  - csharp
+  - vb
+  name: Bytes
+  nameWithType: DrawList.Bytes
+  fullName: FluentGpu.Render.DrawList.Bytes
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Bytes
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 136
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public ReadOnlySpan<byte> Bytes { get; }
+    parameters: []
+    return:
+      type: System.ReadOnlySpan{System.Byte}
+    content.vb: Public ReadOnly Property Bytes As ReadOnlySpan(Of Byte)
+  overload: FluentGpu.Render.DrawList.Bytes*
+- uid: FluentGpu.Render.DrawList.SortKeys
+  commentId: P:FluentGpu.Render.DrawList.SortKeys
+  id: SortKeys
+  parent: FluentGpu.Render.DrawList
+  langs:
+  - csharp
+  - vb
+  name: SortKeys
+  nameWithType: DrawList.SortKeys
+  fullName: FluentGpu.Render.DrawList.SortKeys
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SortKeys
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 137
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public ReadOnlySpan<ulong> SortKeys { get; }
+    parameters: []
+    return:
+      type: System.ReadOnlySpan{System.UInt64}
+    content.vb: Public ReadOnly Property SortKeys As ReadOnlySpan(Of ULong)
+  overload: FluentGpu.Render.DrawList.SortKeys*
+- uid: FluentGpu.Render.DrawList.CommandCount
+  commentId: P:FluentGpu.Render.DrawList.CommandCount
+  id: CommandCount
+  parent: FluentGpu.Render.DrawList
+  langs:
+  - csharp
+  - vb
+  name: CommandCount
+  nameWithType: DrawList.CommandCount
+  fullName: FluentGpu.Render.DrawList.CommandCount
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CommandCount
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 138
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public int CommandCount { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property CommandCount As Integer
+  overload: FluentGpu.Render.DrawList.CommandCount*
+- uid: FluentGpu.Render.DrawList.Reset
+  commentId: M:FluentGpu.Render.DrawList.Reset
+  id: Reset
+  parent: FluentGpu.Render.DrawList
+  langs:
+  - csharp
+  - vb
+  name: Reset()
+  nameWithType: DrawList.Reset()
+  fullName: FluentGpu.Render.DrawList.Reset()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Reset
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 140
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public void Reset()
+    content.vb: Public Sub Reset()
+  overload: FluentGpu.Render.DrawList.Reset*
+- uid: FluentGpu.Render.DrawList.FillRoundRect(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,FluentGpu.Foundation.ColorF@,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  commentId: M:FluentGpu.Render.DrawList.FillRoundRect(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,FluentGpu.Foundation.ColorF@,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  id: FillRoundRect(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,FluentGpu.Foundation.ColorF@,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  parent: FluentGpu.Render.DrawList
+  langs:
+  - csharp
+  - vb
+  name: FillRoundRect(in RectF, in CornerRadius4, in ColorF, in Affine2D, float, ulong)
+  nameWithType: DrawList.FillRoundRect(in RectF, in CornerRadius4, in ColorF, in Affine2D, float, ulong)
+  fullName: FluentGpu.Render.DrawList.FillRoundRect(in FluentGpu.Foundation.RectF, in FluentGpu.Foundation.CornerRadius4, in FluentGpu.Foundation.ColorF, in FluentGpu.Foundation.Affine2D, float, ulong)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillRoundRect
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 142
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public void FillRoundRect(in RectF rect, in CornerRadius4 radii, in ColorF fill, in Affine2D transform, float opacity, ulong sortKey = 0)
+    parameters:
+    - id: rect
+      type: FluentGpu.Foundation.RectF
+    - id: radii
+      type: FluentGpu.Foundation.CornerRadius4
+    - id: fill
+      type: FluentGpu.Foundation.ColorF
+    - id: transform
+      type: FluentGpu.Foundation.Affine2D
+    - id: opacity
+      type: System.Single
+    - id: sortKey
+      type: System.UInt64
+    content.vb: Public Sub FillRoundRect(rect As RectF, radii As CornerRadius4, fill As ColorF, transform As Affine2D, opacity As Single, sortKey As ULong = 0)
+  overload: FluentGpu.Render.DrawList.FillRoundRect*
+  nameWithType.vb: DrawList.FillRoundRect(RectF, CornerRadius4, ColorF, Affine2D, Single, ULong)
+  fullName.vb: FluentGpu.Render.DrawList.FillRoundRect(FluentGpu.Foundation.RectF, FluentGpu.Foundation.CornerRadius4, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.Affine2D, Single, ULong)
+  name.vb: FillRoundRect(RectF, CornerRadius4, ColorF, Affine2D, Single, ULong)
+- uid: FluentGpu.Render.DrawList.FillRoundRectChecker(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,FluentGpu.Foundation.ColorF@,FluentGpu.Foundation.ColorF@,System.Single,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  commentId: M:FluentGpu.Render.DrawList.FillRoundRectChecker(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,FluentGpu.Foundation.ColorF@,FluentGpu.Foundation.ColorF@,System.Single,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  id: FillRoundRectChecker(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,FluentGpu.Foundation.ColorF@,FluentGpu.Foundation.ColorF@,System.Single,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  parent: FluentGpu.Render.DrawList
+  langs:
+  - csharp
+  - vb
+  name: FillRoundRectChecker(in RectF, in CornerRadius4, in ColorF, in ColorF, float, in Affine2D, float, ulong)
+  nameWithType: DrawList.FillRoundRectChecker(in RectF, in CornerRadius4, in ColorF, in ColorF, float, in Affine2D, float, ulong)
+  fullName: FluentGpu.Render.DrawList.FillRoundRectChecker(in FluentGpu.Foundation.RectF, in FluentGpu.Foundation.CornerRadius4, in FluentGpu.Foundation.ColorF, in FluentGpu.Foundation.ColorF, float, in FluentGpu.Foundation.Affine2D, float, ulong)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillRoundRectChecker
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 152
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  summary: >-
+    A checkerboard-filled rounded rect (<xref href="FluentGpu.Render.FillKind.Checker" data-throw-if-not-resolved="false"></xref>): square <code class="paramref">cellPx</code>
+        cells alternating <code class="paramref">fillA</code> (even cells) and <code class="paramref">fillB</code> (odd) — the ColorPicker
+        alpha-lane / preview-swatch transparency pattern (WinUI CheckerSize = 4, ColorHelpers.cpp:9).
+  example: []
+  syntax:
+    content: public void FillRoundRectChecker(in RectF rect, in CornerRadius4 radii, in ColorF fillA, in ColorF fillB, float cellPx, in Affine2D transform, float opacity, ulong sortKey = 0)
+    parameters:
+    - id: rect
+      type: FluentGpu.Foundation.RectF
+    - id: radii
+      type: FluentGpu.Foundation.CornerRadius4
+    - id: fillA
+      type: FluentGpu.Foundation.ColorF
+    - id: fillB
+      type: FluentGpu.Foundation.ColorF
+    - id: cellPx
+      type: System.Single
+    - id: transform
+      type: FluentGpu.Foundation.Affine2D
+    - id: opacity
+      type: System.Single
+    - id: sortKey
+      type: System.UInt64
+    content.vb: Public Sub FillRoundRectChecker(rect As RectF, radii As CornerRadius4, fillA As ColorF, fillB As ColorF, cellPx As Single, transform As Affine2D, opacity As Single, sortKey As ULong = 0)
+  overload: FluentGpu.Render.DrawList.FillRoundRectChecker*
+  nameWithType.vb: DrawList.FillRoundRectChecker(RectF, CornerRadius4, ColorF, ColorF, Single, Affine2D, Single, ULong)
+  fullName.vb: FluentGpu.Render.DrawList.FillRoundRectChecker(FluentGpu.Foundation.RectF, FluentGpu.Foundation.CornerRadius4, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.ColorF, Single, FluentGpu.Foundation.Affine2D, Single, ULong)
+  name.vb: FillRoundRectChecker(RectF, CornerRadius4, ColorF, ColorF, Single, Affine2D, Single, ULong)
+- uid: FluentGpu.Render.DrawList.DrawGlyphRun(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.ColorF@,FluentGpu.Foundation.StringId,FluentGpu.Foundation.StringId,System.Single,System.Int32,System.Int32,System.Int32,System.Int32,System.Single,System.Single,System.Int32,System.Int32,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64,System.Int32,System.Boolean)
+  commentId: M:FluentGpu.Render.DrawList.DrawGlyphRun(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.ColorF@,FluentGpu.Foundation.StringId,FluentGpu.Foundation.StringId,System.Single,System.Int32,System.Int32,System.Int32,System.Int32,System.Single,System.Single,System.Int32,System.Int32,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64,System.Int32,System.Boolean)
+  id: DrawGlyphRun(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.ColorF@,FluentGpu.Foundation.StringId,FluentGpu.Foundation.StringId,System.Single,System.Int32,System.Int32,System.Int32,System.Int32,System.Single,System.Single,System.Int32,System.Int32,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64,System.Int32,System.Boolean)
+  parent: FluentGpu.Render.DrawList
+  langs:
+  - csharp
+  - vb
+  name: DrawGlyphRun(in RectF, in ColorF, StringId, StringId, float, int, int, int, int, float, float, int, int, in Affine2D, float, ulong, int, bool)
+  nameWithType: DrawList.DrawGlyphRun(in RectF, in ColorF, StringId, StringId, float, int, int, int, int, float, float, int, int, in Affine2D, float, ulong, int, bool)
+  fullName: FluentGpu.Render.DrawList.DrawGlyphRun(in FluentGpu.Foundation.RectF, in FluentGpu.Foundation.ColorF, FluentGpu.Foundation.StringId, FluentGpu.Foundation.StringId, float, int, int, int, int, float, float, int, int, in FluentGpu.Foundation.Affine2D, float, ulong, int, bool)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DrawGlyphRun
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 159
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public void DrawGlyphRun(in RectF bounds, in ColorF color, StringId text, StringId family, float fontSize, int weight, int wrap, int trim, int maxLines, float charSpacing, float lineHeight, int lineStacking, int lineBounds, in Affine2D transform, float opacity, ulong sortKey = 0, int spanRunId = 0, bool forceColor = false)
+    parameters:
+    - id: bounds
+      type: FluentGpu.Foundation.RectF
+    - id: color
+      type: FluentGpu.Foundation.ColorF
+    - id: text
+      type: FluentGpu.Foundation.StringId
+    - id: family
+      type: FluentGpu.Foundation.StringId
+    - id: fontSize
+      type: System.Single
+    - id: weight
+      type: System.Int32
+    - id: wrap
+      type: System.Int32
+    - id: trim
+      type: System.Int32
+    - id: maxLines
+      type: System.Int32
+    - id: charSpacing
+      type: System.Single
+    - id: lineHeight
+      type: System.Single
+    - id: lineStacking
+      type: System.Int32
+    - id: lineBounds
+      type: System.Int32
+    - id: transform
+      type: FluentGpu.Foundation.Affine2D
+    - id: opacity
+      type: System.Single
+    - id: sortKey
+      type: System.UInt64
+    - id: spanRunId
+      type: System.Int32
+    - id: forceColor
+      type: System.Boolean
+    content.vb: Public Sub DrawGlyphRun(bounds As RectF, color As ColorF, text As StringId, family As StringId, fontSize As Single, weight As Integer, wrap As Integer, trim As Integer, maxLines As Integer, charSpacing As Single, lineHeight As Single, lineStacking As Integer, lineBounds As Integer, transform As Affine2D, opacity As Single, sortKey As ULong = 0, spanRunId As Integer = 0, forceColor As Boolean = False)
+  overload: FluentGpu.Render.DrawList.DrawGlyphRun*
+  nameWithType.vb: DrawList.DrawGlyphRun(RectF, ColorF, StringId, StringId, Single, Integer, Integer, Integer, Integer, Single, Single, Integer, Integer, Affine2D, Single, ULong, Integer, Boolean)
+  fullName.vb: FluentGpu.Render.DrawList.DrawGlyphRun(FluentGpu.Foundation.RectF, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.StringId, FluentGpu.Foundation.StringId, Single, Integer, Integer, Integer, Integer, Single, Single, Integer, Integer, FluentGpu.Foundation.Affine2D, Single, ULong, Integer, Boolean)
+  name.vb: DrawGlyphRun(RectF, ColorF, StringId, StringId, Single, Integer, Integer, Integer, Integer, Single, Single, Integer, Integer, Affine2D, Single, ULong, Integer, Boolean)
+- uid: FluentGpu.Render.DrawList.PushClip(FluentGpu.Foundation.RectF@,System.UInt64)
+  commentId: M:FluentGpu.Render.DrawList.PushClip(FluentGpu.Foundation.RectF@,System.UInt64)
+  id: PushClip(FluentGpu.Foundation.RectF@,System.UInt64)
+  parent: FluentGpu.Render.DrawList
+  langs:
+  - csharp
+  - vb
+  name: PushClip(in RectF, ulong)
+  nameWithType: DrawList.PushClip(in RectF, ulong)
+  fullName: FluentGpu.Render.DrawList.PushClip(in FluentGpu.Foundation.RectF, ulong)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PushClip
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 170
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  summary: Push a tier-1 scissor clip (device-space, pre-intersected). Pair with <xref href="FluentGpu.Render.DrawList.PopClip(System.UInt64)" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: public void PushClip(in RectF deviceRect, ulong sortKey = 0)
+    parameters:
+    - id: deviceRect
+      type: FluentGpu.Foundation.RectF
+    - id: sortKey
+      type: System.UInt64
+    content.vb: Public Sub PushClip(deviceRect As RectF, sortKey As ULong = 0)
+  overload: FluentGpu.Render.DrawList.PushClip*
+  nameWithType.vb: DrawList.PushClip(RectF, ULong)
+  fullName.vb: FluentGpu.Render.DrawList.PushClip(FluentGpu.Foundation.RectF, ULong)
+  name.vb: PushClip(RectF, ULong)
+- uid: FluentGpu.Render.DrawList.PushClipRounded(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.RectF@,System.Single,System.UInt64)
+  commentId: M:FluentGpu.Render.DrawList.PushClipRounded(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.RectF@,System.Single,System.UInt64)
+  id: PushClipRounded(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.RectF@,System.Single,System.UInt64)
+  parent: FluentGpu.Render.DrawList
+  langs:
+  - csharp
+  - vb
+  name: PushClipRounded(in RectF, in RectF, float, ulong)
+  nameWithType: DrawList.PushClipRounded(in RectF, in RectF, float, ulong)
+  fullName: FluentGpu.Render.DrawList.PushClipRounded(in FluentGpu.Foundation.RectF, in FluentGpu.Foundation.RectF, float, ulong)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PushClipRounded
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 181
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  summary: >-
+    Push a tier-2 ROUNDED clip: the scissor still clamps to <code class="paramref">deviceRect</code>, and RoundRect-
+        pipeline primitives additionally clamp to the rounded-box SDF of (<code class="paramref">roundedRect</code>,
+        <code class="paramref">cornerRadius</code>) — both device-space. Pair with <xref href="FluentGpu.Render.DrawList.PopClip(System.UInt64)" data-throw-if-not-resolved="false"></xref>. See <xref href="FluentGpu.Render.ClipCmd" data-throw-if-not-resolved="false"></xref>
+        for the honest coverage scope (RoundRect-pipeline primitives only).
+  example: []
+  syntax:
+    content: public void PushClipRounded(in RectF deviceRect, in RectF roundedRect, float cornerRadius, ulong sortKey = 0)
+    parameters:
+    - id: deviceRect
+      type: FluentGpu.Foundation.RectF
+    - id: roundedRect
+      type: FluentGpu.Foundation.RectF
+    - id: cornerRadius
+      type: System.Single
+    - id: sortKey
+      type: System.UInt64
+    content.vb: Public Sub PushClipRounded(deviceRect As RectF, roundedRect As RectF, cornerRadius As Single, sortKey As ULong = 0)
+  overload: FluentGpu.Render.DrawList.PushClipRounded*
+  nameWithType.vb: DrawList.PushClipRounded(RectF, RectF, Single, ULong)
+  fullName.vb: FluentGpu.Render.DrawList.PushClipRounded(FluentGpu.Foundation.RectF, FluentGpu.Foundation.RectF, Single, ULong)
+  name.vb: PushClipRounded(RectF, RectF, Single, ULong)
+- uid: FluentGpu.Render.DrawList.PopClip(System.UInt64)
+  commentId: M:FluentGpu.Render.DrawList.PopClip(System.UInt64)
+  id: PopClip(System.UInt64)
+  parent: FluentGpu.Render.DrawList
+  langs:
+  - csharp
+  - vb
+  name: PopClip(ulong)
+  nameWithType: DrawList.PopClip(ulong)
+  fullName: FluentGpu.Render.DrawList.PopClip(ulong)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PopClip
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 188
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public void PopClip(ulong sortKey = 0)
+    parameters:
+    - id: sortKey
+      type: System.UInt64
+    content.vb: Public Sub PopClip(sortKey As ULong = 0)
+  overload: FluentGpu.Render.DrawList.PopClip*
+  nameWithType.vb: DrawList.PopClip(ULong)
+  fullName.vb: FluentGpu.Render.DrawList.PopClip(ULong)
+  name.vb: PopClip(ULong)
+- uid: FluentGpu.Render.DrawList.DrawImage(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,System.Int32,System.Boolean,FluentGpu.Foundation.ColorF@,FluentGpu.Foundation.Affine2D@,System.Single,FluentGpu.Foundation.RectF@,System.Single,System.UInt64)
+  commentId: M:FluentGpu.Render.DrawList.DrawImage(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,System.Int32,System.Boolean,FluentGpu.Foundation.ColorF@,FluentGpu.Foundation.Affine2D@,System.Single,FluentGpu.Foundation.RectF@,System.Single,System.UInt64)
+  id: DrawImage(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,System.Int32,System.Boolean,FluentGpu.Foundation.ColorF@,FluentGpu.Foundation.Affine2D@,System.Single,FluentGpu.Foundation.RectF@,System.Single,System.UInt64)
+  parent: FluentGpu.Render.DrawList
+  langs:
+  - csharp
+  - vb
+  name: DrawImage(in RectF, in CornerRadius4, int, bool, in ColorF, in Affine2D, float, in RectF, float, ulong)
+  nameWithType: DrawList.DrawImage(in RectF, in CornerRadius4, int, bool, in ColorF, in Affine2D, float, in RectF, float, ulong)
+  fullName: FluentGpu.Render.DrawList.DrawImage(in FluentGpu.Foundation.RectF, in FluentGpu.Foundation.CornerRadius4, int, bool, in FluentGpu.Foundation.ColorF, in FluentGpu.Foundation.Affine2D, float, in FluentGpu.Foundation.RectF, float, ulong)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DrawImage
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 194
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public void DrawImage(in RectF rect, in CornerRadius4 radii, int imageId, bool ready, in ColorF placeholder, in Affine2D transform, float opacity, in RectF uvRect, float crossFade = 1, ulong sortKey = 0)
+    parameters:
+    - id: rect
+      type: FluentGpu.Foundation.RectF
+    - id: radii
+      type: FluentGpu.Foundation.CornerRadius4
+    - id: imageId
+      type: System.Int32
+    - id: ready
+      type: System.Boolean
+    - id: placeholder
+      type: FluentGpu.Foundation.ColorF
+    - id: transform
+      type: FluentGpu.Foundation.Affine2D
+    - id: opacity
+      type: System.Single
+    - id: uvRect
+      type: FluentGpu.Foundation.RectF
+    - id: crossFade
+      type: System.Single
+    - id: sortKey
+      type: System.UInt64
+    content.vb: Public Sub DrawImage(rect As RectF, radii As CornerRadius4, imageId As Integer, ready As Boolean, placeholder As ColorF, transform As Affine2D, opacity As Single, uvRect As RectF, crossFade As Single = 1, sortKey As ULong = 0)
+  overload: FluentGpu.Render.DrawList.DrawImage*
+  nameWithType.vb: DrawList.DrawImage(RectF, CornerRadius4, Integer, Boolean, ColorF, Affine2D, Single, RectF, Single, ULong)
+  fullName.vb: FluentGpu.Render.DrawList.DrawImage(FluentGpu.Foundation.RectF, FluentGpu.Foundation.CornerRadius4, Integer, Boolean, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.Affine2D, Single, FluentGpu.Foundation.RectF, Single, ULong)
+  name.vb: DrawImage(RectF, CornerRadius4, Integer, Boolean, ColorF, Affine2D, Single, RectF, Single, ULong)
+- uid: FluentGpu.Render.DrawList.StrokeRoundRect(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,FluentGpu.Foundation.ColorF@,System.Single,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  commentId: M:FluentGpu.Render.DrawList.StrokeRoundRect(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,FluentGpu.Foundation.ColorF@,System.Single,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  id: StrokeRoundRect(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,FluentGpu.Foundation.ColorF@,System.Single,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  parent: FluentGpu.Render.DrawList
+  langs:
+  - csharp
+  - vb
+  name: StrokeRoundRect(in RectF, in CornerRadius4, in ColorF, float, in Affine2D, float, ulong)
+  nameWithType: DrawList.StrokeRoundRect(in RectF, in CornerRadius4, in ColorF, float, in Affine2D, float, ulong)
+  fullName: FluentGpu.Render.DrawList.StrokeRoundRect(in FluentGpu.Foundation.RectF, in FluentGpu.Foundation.CornerRadius4, in FluentGpu.Foundation.ColorF, float, in FluentGpu.Foundation.Affine2D, float, ulong)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StrokeRoundRect
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 201
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public void StrokeRoundRect(in RectF rect, in CornerRadius4 radii, in ColorF color, float strokeWidth, in Affine2D transform, float opacity, ulong sortKey = 0)
+    parameters:
+    - id: rect
+      type: FluentGpu.Foundation.RectF
+    - id: radii
+      type: FluentGpu.Foundation.CornerRadius4
+    - id: color
+      type: FluentGpu.Foundation.ColorF
+    - id: strokeWidth
+      type: System.Single
+    - id: transform
+      type: FluentGpu.Foundation.Affine2D
+    - id: opacity
+      type: System.Single
+    - id: sortKey
+      type: System.UInt64
+    content.vb: Public Sub StrokeRoundRect(rect As RectF, radii As CornerRadius4, color As ColorF, strokeWidth As Single, transform As Affine2D, opacity As Single, sortKey As ULong = 0)
+  overload: FluentGpu.Render.DrawList.StrokeRoundRect*
+  nameWithType.vb: DrawList.StrokeRoundRect(RectF, CornerRadius4, ColorF, Single, Affine2D, Single, ULong)
+  fullName.vb: FluentGpu.Render.DrawList.StrokeRoundRect(FluentGpu.Foundation.RectF, FluentGpu.Foundation.CornerRadius4, FluentGpu.Foundation.ColorF, Single, FluentGpu.Foundation.Affine2D, Single, ULong)
+  name.vb: StrokeRoundRect(RectF, CornerRadius4, ColorF, Single, Affine2D, Single, ULong)
+- uid: FluentGpu.Render.DrawList.StrokeRoundRectDashed(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,FluentGpu.Foundation.ColorF@,System.Single,System.Single,System.Single,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  commentId: M:FluentGpu.Render.DrawList.StrokeRoundRectDashed(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,FluentGpu.Foundation.ColorF@,System.Single,System.Single,System.Single,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  id: StrokeRoundRectDashed(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,FluentGpu.Foundation.ColorF@,System.Single,System.Single,System.Single,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  parent: FluentGpu.Render.DrawList
+  langs:
+  - csharp
+  - vb
+  name: StrokeRoundRectDashed(in RectF, in CornerRadius4, in ColorF, float, float, float, in Affine2D, float, ulong)
+  nameWithType: DrawList.StrokeRoundRectDashed(in RectF, in CornerRadius4, in ColorF, float, float, float, in Affine2D, float, ulong)
+  fullName: FluentGpu.Render.DrawList.StrokeRoundRectDashed(in FluentGpu.Foundation.RectF, in FluentGpu.Foundation.CornerRadius4, in FluentGpu.Foundation.ColorF, float, float, float, in FluentGpu.Foundation.Affine2D, float, ulong)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StrokeRoundRectDashed
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 211
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  summary: >-
+    A DASHED SDF outline: the stroke band is modulated along the perimeter into <code class="paramref">dashOn</code>-px
+        dashes separated by <code class="paramref">dashOff</code>-px gaps (clockwise from the top edge's left end). dashOn ≤ 0 falls
+        back to a solid stroke.
+  example: []
+  syntax:
+    content: public void StrokeRoundRectDashed(in RectF rect, in CornerRadius4 radii, in ColorF color, float strokeWidth, float dashOn, float dashOff, in Affine2D transform, float opacity, ulong sortKey = 0)
+    parameters:
+    - id: rect
+      type: FluentGpu.Foundation.RectF
+    - id: radii
+      type: FluentGpu.Foundation.CornerRadius4
+    - id: color
+      type: FluentGpu.Foundation.ColorF
+    - id: strokeWidth
+      type: System.Single
+    - id: dashOn
+      type: System.Single
+    - id: dashOff
+      type: System.Single
+    - id: transform
+      type: FluentGpu.Foundation.Affine2D
+    - id: opacity
+      type: System.Single
+    - id: sortKey
+      type: System.UInt64
+    content.vb: Public Sub StrokeRoundRectDashed(rect As RectF, radii As CornerRadius4, color As ColorF, strokeWidth As Single, dashOn As Single, dashOff As Single, transform As Affine2D, opacity As Single, sortKey As ULong = 0)
+  overload: FluentGpu.Render.DrawList.StrokeRoundRectDashed*
+  nameWithType.vb: DrawList.StrokeRoundRectDashed(RectF, CornerRadius4, ColorF, Single, Single, Single, Affine2D, Single, ULong)
+  fullName.vb: FluentGpu.Render.DrawList.StrokeRoundRectDashed(FluentGpu.Foundation.RectF, FluentGpu.Foundation.CornerRadius4, FluentGpu.Foundation.ColorF, Single, Single, Single, FluentGpu.Foundation.Affine2D, Single, ULong)
+  name.vb: StrokeRoundRectDashed(RectF, CornerRadius4, ColorF, Single, Single, Single, Affine2D, Single, ULong)
+- uid: FluentGpu.Render.DrawList.Shadow(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,FluentGpu.Foundation.ColorF@,System.Single,System.Single,System.Single,System.Single,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  commentId: M:FluentGpu.Render.DrawList.Shadow(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,FluentGpu.Foundation.ColorF@,System.Single,System.Single,System.Single,System.Single,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  id: Shadow(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,FluentGpu.Foundation.ColorF@,System.Single,System.Single,System.Single,System.Single,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  parent: FluentGpu.Render.DrawList
+  langs:
+  - csharp
+  - vb
+  name: Shadow(in RectF, in CornerRadius4, in ColorF, float, float, float, float, in Affine2D, float, ulong)
+  nameWithType: DrawList.Shadow(in RectF, in CornerRadius4, in ColorF, float, float, float, float, in Affine2D, float, ulong)
+  fullName: FluentGpu.Render.DrawList.Shadow(in FluentGpu.Foundation.RectF, in FluentGpu.Foundation.CornerRadius4, in FluentGpu.Foundation.ColorF, float, float, float, float, in FluentGpu.Foundation.Affine2D, float, ulong)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Shadow
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 218
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public void Shadow(in RectF rect, in CornerRadius4 radii, in ColorF color, float offsetX, float offsetY, float blur, float spread, in Affine2D transform, float opacity, ulong sortKey = 0)
+    parameters:
+    - id: rect
+      type: FluentGpu.Foundation.RectF
+    - id: radii
+      type: FluentGpu.Foundation.CornerRadius4
+    - id: color
+      type: FluentGpu.Foundation.ColorF
+    - id: offsetX
+      type: System.Single
+    - id: offsetY
+      type: System.Single
+    - id: blur
+      type: System.Single
+    - id: spread
+      type: System.Single
+    - id: transform
+      type: FluentGpu.Foundation.Affine2D
+    - id: opacity
+      type: System.Single
+    - id: sortKey
+      type: System.UInt64
+    content.vb: Public Sub Shadow(rect As RectF, radii As CornerRadius4, color As ColorF, offsetX As Single, offsetY As Single, blur As Single, spread As Single, transform As Affine2D, opacity As Single, sortKey As ULong = 0)
+  overload: FluentGpu.Render.DrawList.Shadow*
+  nameWithType.vb: DrawList.Shadow(RectF, CornerRadius4, ColorF, Single, Single, Single, Single, Affine2D, Single, ULong)
+  fullName.vb: FluentGpu.Render.DrawList.Shadow(FluentGpu.Foundation.RectF, FluentGpu.Foundation.CornerRadius4, FluentGpu.Foundation.ColorF, Single, Single, Single, Single, FluentGpu.Foundation.Affine2D, Single, ULong)
+  name.vb: Shadow(RectF, CornerRadius4, ColorF, Single, Single, Single, Single, Affine2D, Single, ULong)
+- uid: FluentGpu.Render.DrawList.GradientRect(FluentGpu.Render.DrawGradientRectCmd@,System.UInt64)
+  commentId: M:FluentGpu.Render.DrawList.GradientRect(FluentGpu.Render.DrawGradientRectCmd@,System.UInt64)
+  id: GradientRect(FluentGpu.Render.DrawGradientRectCmd@,System.UInt64)
+  parent: FluentGpu.Render.DrawList
+  langs:
+  - csharp
+  - vb
+  name: GradientRect(in DrawGradientRectCmd, ulong)
+  nameWithType: DrawList.GradientRect(in DrawGradientRectCmd, ulong)
+  fullName: FluentGpu.Render.DrawList.GradientRect(in FluentGpu.Render.DrawGradientRectCmd, ulong)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GradientRect
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 225
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public void GradientRect(in DrawGradientRectCmd cmd, ulong sortKey = 0)
+    parameters:
+    - id: cmd
+      type: FluentGpu.Render.DrawGradientRectCmd
+    - id: sortKey
+      type: System.UInt64
+    content.vb: Public Sub GradientRect(cmd As DrawGradientRectCmd, sortKey As ULong = 0)
+  overload: FluentGpu.Render.DrawList.GradientRect*
+  nameWithType.vb: DrawList.GradientRect(DrawGradientRectCmd, ULong)
+  fullName.vb: FluentGpu.Render.DrawList.GradientRect(FluentGpu.Render.DrawGradientRectCmd, ULong)
+  name.vb: GradientRect(DrawGradientRectCmd, ULong)
+- uid: FluentGpu.Render.DrawList.GradientStroke(FluentGpu.Render.DrawGradientStrokeCmd@,System.UInt64)
+  commentId: M:FluentGpu.Render.DrawList.GradientStroke(FluentGpu.Render.DrawGradientStrokeCmd@,System.UInt64)
+  id: GradientStroke(FluentGpu.Render.DrawGradientStrokeCmd@,System.UInt64)
+  parent: FluentGpu.Render.DrawList
+  langs:
+  - csharp
+  - vb
+  name: GradientStroke(in DrawGradientStrokeCmd, ulong)
+  nameWithType: DrawList.GradientStroke(in DrawGradientStrokeCmd, ulong)
+  fullName: FluentGpu.Render.DrawList.GradientStroke(in FluentGpu.Render.DrawGradientStrokeCmd, ulong)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GradientStroke
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 232
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public void GradientStroke(in DrawGradientStrokeCmd cmd, ulong sortKey = 0)
+    parameters:
+    - id: cmd
+      type: FluentGpu.Render.DrawGradientStrokeCmd
+    - id: sortKey
+      type: System.UInt64
+    content.vb: Public Sub GradientStroke(cmd As DrawGradientStrokeCmd, sortKey As ULong = 0)
+  overload: FluentGpu.Render.DrawList.GradientStroke*
+  nameWithType.vb: DrawList.GradientStroke(DrawGradientStrokeCmd, ULong)
+  fullName.vb: FluentGpu.Render.DrawList.GradientStroke(FluentGpu.Render.DrawGradientStrokeCmd, ULong)
+  name.vb: GradientStroke(DrawGradientStrokeCmd, ULong)
+- uid: FluentGpu.Render.DrawList.PushLayer(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,FluentGpu.Foundation.ColorF@,FluentGpu.Foundation.ColorF@,System.Single,System.Single,System.Single,System.Single,System.UInt64)
+  commentId: M:FluentGpu.Render.DrawList.PushLayer(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,FluentGpu.Foundation.ColorF@,FluentGpu.Foundation.ColorF@,System.Single,System.Single,System.Single,System.Single,System.UInt64)
+  id: PushLayer(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,FluentGpu.Foundation.ColorF@,FluentGpu.Foundation.ColorF@,System.Single,System.Single,System.Single,System.Single,System.UInt64)
+  parent: FluentGpu.Render.DrawList
+  langs:
+  - csharp
+  - vb
+  name: PushLayer(in RectF, in CornerRadius4, in ColorF, in ColorF, float, float, float, float, ulong)
+  nameWithType: DrawList.PushLayer(in RectF, in CornerRadius4, in ColorF, in ColorF, float, float, float, float, ulong)
+  fullName: FluentGpu.Render.DrawList.PushLayer(in FluentGpu.Foundation.RectF, in FluentGpu.Foundation.CornerRadius4, in FluentGpu.Foundation.ColorF, in FluentGpu.Foundation.ColorF, float, float, float, float, ulong)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PushLayer
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 239
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public void PushLayer(in RectF deviceRect, in CornerRadius4 radii, in ColorF tint, in ColorF fallback, float tintOpacity, float blurSigma, float noiseOpacity, float luminosityOpacity, ulong sortKey = 0)
+    parameters:
+    - id: deviceRect
+      type: FluentGpu.Foundation.RectF
+    - id: radii
+      type: FluentGpu.Foundation.CornerRadius4
+    - id: tint
+      type: FluentGpu.Foundation.ColorF
+    - id: fallback
+      type: FluentGpu.Foundation.ColorF
+    - id: tintOpacity
+      type: System.Single
+    - id: blurSigma
+      type: System.Single
+    - id: noiseOpacity
+      type: System.Single
+    - id: luminosityOpacity
+      type: System.Single
+    - id: sortKey
+      type: System.UInt64
+    content.vb: Public Sub PushLayer(deviceRect As RectF, radii As CornerRadius4, tint As ColorF, fallback As ColorF, tintOpacity As Single, blurSigma As Single, noiseOpacity As Single, luminosityOpacity As Single, sortKey As ULong = 0)
+  overload: FluentGpu.Render.DrawList.PushLayer*
+  nameWithType.vb: DrawList.PushLayer(RectF, CornerRadius4, ColorF, ColorF, Single, Single, Single, Single, ULong)
+  fullName.vb: FluentGpu.Render.DrawList.PushLayer(FluentGpu.Foundation.RectF, FluentGpu.Foundation.CornerRadius4, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.ColorF, Single, Single, Single, Single, ULong)
+  name.vb: PushLayer(RectF, CornerRadius4, ColorF, ColorF, Single, Single, Single, Single, ULong)
+- uid: FluentGpu.Render.DrawList.PushOpacityLayer(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,System.Single,System.UInt64)
+  commentId: M:FluentGpu.Render.DrawList.PushOpacityLayer(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,System.Single,System.UInt64)
+  id: PushOpacityLayer(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.CornerRadius4@,System.Single,System.UInt64)
+  parent: FluentGpu.Render.DrawList
+  langs:
+  - csharp
+  - vb
+  name: PushOpacityLayer(in RectF, in CornerRadius4, float, ulong)
+  nameWithType: DrawList.PushOpacityLayer(in RectF, in CornerRadius4, float, ulong)
+  fullName: FluentGpu.Render.DrawList.PushOpacityLayer(in FluentGpu.Foundation.RectF, in FluentGpu.Foundation.CornerRadius4, float, ulong)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PushOpacityLayer
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 250
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  summary: >-
+    Begin a FLAT opacity group (<xref href="FluentGpu.Render.LayerKind.Opacity" data-throw-if-not-resolved="false"></xref>): everything until the matching
+        <xref href="FluentGpu.Render.DrawList.PopLayer(FluentGpu.Foundation.RectF%40%2cSystem.UInt64)" data-throw-if-not-resolved="false"></xref> renders at full alpha offscreen and composites once at <code class="paramref">groupAlpha</code> —
+        WinUI Composition LayerVisual semantics (no double-blend of overlapping children). Subtree commands should be
+        recorded with opacity relative to 1, NOT pre-multiplied by the group alpha.
+  example: []
+  syntax:
+    content: public void PushOpacityLayer(in RectF deviceRect, in CornerRadius4 radii, float groupAlpha, ulong sortKey = 0)
+    parameters:
+    - id: deviceRect
+      type: FluentGpu.Foundation.RectF
+    - id: radii
+      type: FluentGpu.Foundation.CornerRadius4
+    - id: groupAlpha
+      type: System.Single
+    - id: sortKey
+      type: System.UInt64
+    content.vb: Public Sub PushOpacityLayer(deviceRect As RectF, radii As CornerRadius4, groupAlpha As Single, sortKey As ULong = 0)
+  overload: FluentGpu.Render.DrawList.PushOpacityLayer*
+  nameWithType.vb: DrawList.PushOpacityLayer(RectF, CornerRadius4, Single, ULong)
+  fullName.vb: FluentGpu.Render.DrawList.PushOpacityLayer(FluentGpu.Foundation.RectF, FluentGpu.Foundation.CornerRadius4, Single, ULong)
+  name.vb: PushOpacityLayer(RectF, CornerRadius4, Single, ULong)
+- uid: FluentGpu.Render.DrawList.PopLayer(FluentGpu.Foundation.RectF@,System.UInt64)
+  commentId: M:FluentGpu.Render.DrawList.PopLayer(FluentGpu.Foundation.RectF@,System.UInt64)
+  id: PopLayer(FluentGpu.Foundation.RectF@,System.UInt64)
+  parent: FluentGpu.Render.DrawList
+  langs:
+  - csharp
+  - vb
+  name: PopLayer(in RectF, ulong)
+  nameWithType: DrawList.PopLayer(in RectF, ulong)
+  fullName: FluentGpu.Render.DrawList.PopLayer(in FluentGpu.Foundation.RectF, ulong)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PopLayer
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 258
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public void PopLayer(in RectF deviceRect, ulong sortKey = 0)
+    parameters:
+    - id: deviceRect
+      type: FluentGpu.Foundation.RectF
+    - id: sortKey
+      type: System.UInt64
+    content.vb: Public Sub PopLayer(deviceRect As RectF, sortKey As ULong = 0)
+  overload: FluentGpu.Render.DrawList.PopLayer*
+  nameWithType.vb: DrawList.PopLayer(RectF, ULong)
+  fullName.vb: FluentGpu.Render.DrawList.PopLayer(FluentGpu.Foundation.RectF, ULong)
+  name.vb: PopLayer(RectF, ULong)
+- uid: FluentGpu.Render.DrawList.Arc(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.ColorF@,System.Single,System.Single,System.Single,System.Boolean,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  commentId: M:FluentGpu.Render.DrawList.Arc(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.ColorF@,System.Single,System.Single,System.Single,System.Boolean,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  id: Arc(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.ColorF@,System.Single,System.Single,System.Single,System.Boolean,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  parent: FluentGpu.Render.DrawList
+  langs:
+  - csharp
+  - vb
+  name: Arc(in RectF, in ColorF, float, float, float, bool, in Affine2D, float, ulong)
+  nameWithType: DrawList.Arc(in RectF, in ColorF, float, float, float, bool, in Affine2D, float, ulong)
+  fullName: FluentGpu.Render.DrawList.Arc(in FluentGpu.Foundation.RectF, in FluentGpu.Foundation.ColorF, float, float, float, bool, in FluentGpu.Foundation.Affine2D, float, ulong)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Arc
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 265
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public void Arc(in RectF rect, in ColorF color, float thickness, float startDeg, float sweepDeg, bool roundCaps, in Affine2D transform, float opacity, ulong sortKey = 0)
+    parameters:
+    - id: rect
+      type: FluentGpu.Foundation.RectF
+    - id: color
+      type: FluentGpu.Foundation.ColorF
+    - id: thickness
+      type: System.Single
+    - id: startDeg
+      type: System.Single
+    - id: sweepDeg
+      type: System.Single
+    - id: roundCaps
+      type: System.Boolean
+    - id: transform
+      type: FluentGpu.Foundation.Affine2D
+    - id: opacity
+      type: System.Single
+    - id: sortKey
+      type: System.UInt64
+    content.vb: Public Sub Arc(rect As RectF, color As ColorF, thickness As Single, startDeg As Single, sweepDeg As Single, roundCaps As Boolean, transform As Affine2D, opacity As Single, sortKey As ULong = 0)
+  overload: FluentGpu.Render.DrawList.Arc*
+  nameWithType.vb: DrawList.Arc(RectF, ColorF, Single, Single, Single, Boolean, Affine2D, Single, ULong)
+  fullName.vb: FluentGpu.Render.DrawList.Arc(FluentGpu.Foundation.RectF, FluentGpu.Foundation.ColorF, Single, Single, Single, Boolean, FluentGpu.Foundation.Affine2D, Single, ULong)
+  name.vb: Arc(RectF, ColorF, Single, Single, Single, Boolean, Affine2D, Single, ULong)
+- uid: FluentGpu.Render.DrawList.PolylineStroke(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.ColorF@,System.Single,FluentGpu.Foundation.Point2@,FluentGpu.Foundation.Point2@,FluentGpu.Foundation.Point2@,FluentGpu.Foundation.Point2@,System.Int32,System.Single,System.Single,System.Boolean,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  commentId: M:FluentGpu.Render.DrawList.PolylineStroke(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.ColorF@,System.Single,FluentGpu.Foundation.Point2@,FluentGpu.Foundation.Point2@,FluentGpu.Foundation.Point2@,FluentGpu.Foundation.Point2@,System.Int32,System.Single,System.Single,System.Boolean,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  id: PolylineStroke(FluentGpu.Foundation.RectF@,FluentGpu.Foundation.ColorF@,System.Single,FluentGpu.Foundation.Point2@,FluentGpu.Foundation.Point2@,FluentGpu.Foundation.Point2@,FluentGpu.Foundation.Point2@,System.Int32,System.Single,System.Single,System.Boolean,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  parent: FluentGpu.Render.DrawList
+  langs:
+  - csharp
+  - vb
+  name: PolylineStroke(in RectF, in ColorF, float, in Point2, in Point2, in Point2, in Point2, int, float, float, bool, in Affine2D, float, ulong)
+  nameWithType: DrawList.PolylineStroke(in RectF, in ColorF, float, in Point2, in Point2, in Point2, in Point2, int, float, float, bool, in Affine2D, float, ulong)
+  fullName: FluentGpu.Render.DrawList.PolylineStroke(in FluentGpu.Foundation.RectF, in FluentGpu.Foundation.ColorF, float, in FluentGpu.Foundation.Point2, in FluentGpu.Foundation.Point2, in FluentGpu.Foundation.Point2, in FluentGpu.Foundation.Point2, int, float, float, bool, in FluentGpu.Foundation.Affine2D, float, ulong)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PolylineStroke
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 272
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public void PolylineStroke(in RectF rect, in ColorF color, float thickness, in Point2 p0, in Point2 p1, in Point2 p2, in Point2 p3, int pointCount, float trimStart, float trimEnd, bool roundCaps, in Affine2D transform, float opacity, ulong sortKey = 0)
+    parameters:
+    - id: rect
+      type: FluentGpu.Foundation.RectF
+    - id: color
+      type: FluentGpu.Foundation.ColorF
+    - id: thickness
+      type: System.Single
+    - id: p0
+      type: FluentGpu.Foundation.Point2
+    - id: p1
+      type: FluentGpu.Foundation.Point2
+    - id: p2
+      type: FluentGpu.Foundation.Point2
+    - id: p3
+      type: FluentGpu.Foundation.Point2
+    - id: pointCount
+      type: System.Int32
+    - id: trimStart
+      type: System.Single
+    - id: trimEnd
+      type: System.Single
+    - id: roundCaps
+      type: System.Boolean
+    - id: transform
+      type: FluentGpu.Foundation.Affine2D
+    - id: opacity
+      type: System.Single
+    - id: sortKey
+      type: System.UInt64
+    content.vb: Public Sub PolylineStroke(rect As RectF, color As ColorF, thickness As Single, p0 As Point2, p1 As Point2, p2 As Point2, p3 As Point2, pointCount As Integer, trimStart As Single, trimEnd As Single, roundCaps As Boolean, transform As Affine2D, opacity As Single, sortKey As ULong = 0)
+  overload: FluentGpu.Render.DrawList.PolylineStroke*
+  nameWithType.vb: DrawList.PolylineStroke(RectF, ColorF, Single, Point2, Point2, Point2, Point2, Integer, Single, Single, Boolean, Affine2D, Single, ULong)
+  fullName.vb: FluentGpu.Render.DrawList.PolylineStroke(FluentGpu.Foundation.RectF, FluentGpu.Foundation.ColorF, Single, FluentGpu.Foundation.Point2, FluentGpu.Foundation.Point2, FluentGpu.Foundation.Point2, FluentGpu.Foundation.Point2, Integer, Single, Single, Boolean, FluentGpu.Foundation.Affine2D, Single, ULong)
+  name.vb: PolylineStroke(RectF, ColorF, Single, Point2, Point2, Point2, Point2, Integer, Single, Single, Boolean, Affine2D, Single, ULong)
+- uid: FluentGpu.Render.DrawList.TabShape(FluentGpu.Foundation.RectF@,System.Single,System.Single,FluentGpu.Foundation.ColorF@,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  commentId: M:FluentGpu.Render.DrawList.TabShape(FluentGpu.Foundation.RectF@,System.Single,System.Single,FluentGpu.Foundation.ColorF@,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  id: TabShape(FluentGpu.Foundation.RectF@,System.Single,System.Single,FluentGpu.Foundation.ColorF@,FluentGpu.Foundation.Affine2D@,System.Single,System.UInt64)
+  parent: FluentGpu.Render.DrawList
+  langs:
+  - csharp
+  - vb
+  name: TabShape(in RectF, float, float, in ColorF, in Affine2D, float, ulong)
+  nameWithType: DrawList.TabShape(in RectF, float, float, in ColorF, in Affine2D, float, ulong)
+  fullName: FluentGpu.Render.DrawList.TabShape(in FluentGpu.Foundation.RectF, float, float, in FluentGpu.Foundation.ColorF, in FluentGpu.Foundation.Affine2D, float, ulong)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TabShape
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 286
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  summary: >-
+    The WinUI selected-tab shape (see <xref href="FluentGpu.Render.DrawTabShapeCmd" data-throw-if-not-resolved="false"></xref>): <code class="paramref">rect</code> is the FULL
+        shape box including both bottom flares; the tab body is inset by <code class="paramref">flareRadius</code> per side with
+        <code class="paramref">topRadius</code> top corners. WinUI values: topRadius = OverlayCornerRadius (8), flareRadius = 4
+        (TabViewItem.cpp:106).
+  example: []
+  syntax:
+    content: public void TabShape(in RectF rect, float topRadius, float flareRadius, in ColorF fill, in Affine2D transform, float opacity, ulong sortKey = 0)
+    parameters:
+    - id: rect
+      type: FluentGpu.Foundation.RectF
+    - id: topRadius
+      type: System.Single
+    - id: flareRadius
+      type: System.Single
+    - id: fill
+      type: FluentGpu.Foundation.ColorF
+    - id: transform
+      type: FluentGpu.Foundation.Affine2D
+    - id: opacity
+      type: System.Single
+    - id: sortKey
+      type: System.UInt64
+    content.vb: Public Sub TabShape(rect As RectF, topRadius As Single, flareRadius As Single, fill As ColorF, transform As Affine2D, opacity As Single, sortKey As ULong = 0)
+  overload: FluentGpu.Render.DrawList.TabShape*
+  nameWithType.vb: DrawList.TabShape(RectF, Single, Single, ColorF, Affine2D, Single, ULong)
+  fullName.vb: FluentGpu.Render.DrawList.TabShape(FluentGpu.Foundation.RectF, Single, Single, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.Affine2D, Single, ULong)
+  name.vb: TabShape(RectF, Single, Single, ColorF, Affine2D, Single, ULong)
+references:
+- uid: FluentGpu.Render
+  commentId: N:FluentGpu.Render
+  href: FluentGpu.html
+  name: FluentGpu.Render
+  nameWithType: FluentGpu.Render
+  fullName: FluentGpu.Render
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Render
+    name: Render
+    href: FluentGpu.Render.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Render
+    name: Render
+    href: FluentGpu.Render.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Render.DrawList.#ctor*
+  commentId: Overload:FluentGpu.Render.DrawList.#ctor
+  href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList__ctor_System_Int32_
+  name: DrawList
+  nameWithType: DrawList.DrawList
+  fullName: FluentGpu.Render.DrawList.DrawList
+  nameWithType.vb: DrawList.New
+  fullName.vb: FluentGpu.Render.DrawList.New
+  name.vb: New
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Render.DrawList.Bytes*
+  commentId: Overload:FluentGpu.Render.DrawList.Bytes
+  href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_Bytes
+  name: Bytes
+  nameWithType: DrawList.Bytes
+  fullName: FluentGpu.Render.DrawList.Bytes
+- uid: System.ReadOnlySpan{System.Byte}
+  commentId: T:System.ReadOnlySpan{System.Byte}
+  parent: System
+  definition: System.ReadOnlySpan`1
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<byte>
+  nameWithType: ReadOnlySpan<byte>
+  fullName: System.ReadOnlySpan<byte>
+  nameWithType.vb: ReadOnlySpan(Of Byte)
+  fullName.vb: System.ReadOnlySpan(Of Byte)
+  name.vb: ReadOnlySpan(Of Byte)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - uid: System.Byte
+    name: byte
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.byte
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Byte
+    name: Byte
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.byte
+  - name: )
+- uid: System.ReadOnlySpan`1
+  commentId: T:System.ReadOnlySpan`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<T>
+  nameWithType: ReadOnlySpan<T>
+  fullName: System.ReadOnlySpan<T>
+  nameWithType.vb: ReadOnlySpan(Of T)
+  fullName.vb: System.ReadOnlySpan(Of T)
+  name.vb: ReadOnlySpan(Of T)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Render.DrawList.SortKeys*
+  commentId: Overload:FluentGpu.Render.DrawList.SortKeys
+  href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_SortKeys
+  name: SortKeys
+  nameWithType: DrawList.SortKeys
+  fullName: FluentGpu.Render.DrawList.SortKeys
+- uid: System.ReadOnlySpan{System.UInt64}
+  commentId: T:System.ReadOnlySpan{System.UInt64}
+  parent: System
+  definition: System.ReadOnlySpan`1
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<ulong>
+  nameWithType: ReadOnlySpan<ulong>
+  fullName: System.ReadOnlySpan<ulong>
+  nameWithType.vb: ReadOnlySpan(Of ULong)
+  fullName.vb: System.ReadOnlySpan(Of ULong)
+  name.vb: ReadOnlySpan(Of ULong)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - uid: System.UInt64
+    name: ulong
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.uint64
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.UInt64
+    name: ULong
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.uint64
+  - name: )
+- uid: FluentGpu.Render.DrawList.CommandCount*
+  commentId: Overload:FluentGpu.Render.DrawList.CommandCount
+  href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_CommandCount
+  name: CommandCount
+  nameWithType: DrawList.CommandCount
+  fullName: FluentGpu.Render.DrawList.CommandCount
+- uid: FluentGpu.Render.DrawList.Reset*
+  commentId: Overload:FluentGpu.Render.DrawList.Reset
+  href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_Reset
+  name: Reset
+  nameWithType: DrawList.Reset
+  fullName: FluentGpu.Render.DrawList.Reset
+- uid: FluentGpu.Render.DrawList.FillRoundRect*
+  commentId: Overload:FluentGpu.Render.DrawList.FillRoundRect
+  href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_FillRoundRect_FluentGpu_Foundation_RectF__FluentGpu_Foundation_CornerRadius4__FluentGpu_Foundation_ColorF__FluentGpu_Foundation_Affine2D__System_Single_System_UInt64_
+  name: FillRoundRect
+  nameWithType: DrawList.FillRoundRect
+  fullName: FluentGpu.Render.DrawList.FillRoundRect
+- uid: FluentGpu.Foundation.RectF
+  commentId: T:FluentGpu.Foundation.RectF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.RectF.html
+  name: RectF
+  nameWithType: RectF
+  fullName: FluentGpu.Foundation.RectF
+- uid: FluentGpu.Foundation.CornerRadius4
+  commentId: T:FluentGpu.Foundation.CornerRadius4
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.CornerRadius4.html
+  name: CornerRadius4
+  nameWithType: CornerRadius4
+  fullName: FluentGpu.Foundation.CornerRadius4
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Foundation.Affine2D
+  commentId: T:FluentGpu.Foundation.Affine2D
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Affine2D.html
+  name: Affine2D
+  nameWithType: Affine2D
+  fullName: FluentGpu.Foundation.Affine2D
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System.UInt64
+  commentId: T:System.UInt64
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.uint64
+  name: ulong
+  nameWithType: ulong
+  fullName: ulong
+  nameWithType.vb: ULong
+  fullName.vb: ULong
+  name.vb: ULong
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Render.FillKind.Checker
+  commentId: F:FluentGpu.Render.FillKind.Checker
+  href: FluentGpu.Render.FillKind.html#FluentGpu_Render_FillKind_Checker
+  name: Checker
+  nameWithType: FillKind.Checker
+  fullName: FluentGpu.Render.FillKind.Checker
+- uid: FluentGpu.Render.DrawList.FillRoundRectChecker*
+  commentId: Overload:FluentGpu.Render.DrawList.FillRoundRectChecker
+  href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_FillRoundRectChecker_FluentGpu_Foundation_RectF__FluentGpu_Foundation_CornerRadius4__FluentGpu_Foundation_ColorF__FluentGpu_Foundation_ColorF__System_Single_FluentGpu_Foundation_Affine2D__System_Single_System_UInt64_
+  name: FillRoundRectChecker
+  nameWithType: DrawList.FillRoundRectChecker
+  fullName: FluentGpu.Render.DrawList.FillRoundRectChecker
+- uid: FluentGpu.Render.DrawList.DrawGlyphRun*
+  commentId: Overload:FluentGpu.Render.DrawList.DrawGlyphRun
+  href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_DrawGlyphRun_FluentGpu_Foundation_RectF__FluentGpu_Foundation_ColorF__FluentGpu_Foundation_StringId_FluentGpu_Foundation_StringId_System_Single_System_Int32_System_Int32_System_Int32_System_Int32_System_Single_System_Single_System_Int32_System_Int32_FluentGpu_Foundation_Affine2D__System_Single_System_UInt64_System_Int32_System_Boolean_
+  name: DrawGlyphRun
+  nameWithType: DrawList.DrawGlyphRun
+  fullName: FluentGpu.Render.DrawList.DrawGlyphRun
+- uid: FluentGpu.Foundation.StringId
+  commentId: T:FluentGpu.Foundation.StringId
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.StringId.html
+  name: StringId
+  nameWithType: StringId
+  fullName: FluentGpu.Foundation.StringId
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Render.DrawList.PopClip(System.UInt64)
+  commentId: M:FluentGpu.Render.DrawList.PopClip(System.UInt64)
+  isExternal: true
+  href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_PopClip_System_UInt64_
+  name: PopClip(ulong)
+  nameWithType: DrawList.PopClip(ulong)
+  fullName: FluentGpu.Render.DrawList.PopClip(ulong)
+  nameWithType.vb: DrawList.PopClip(ULong)
+  fullName.vb: FluentGpu.Render.DrawList.PopClip(ULong)
+  name.vb: PopClip(ULong)
+  spec.csharp:
+  - uid: FluentGpu.Render.DrawList.PopClip(System.UInt64)
+    name: PopClip
+    href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_PopClip_System_UInt64_
+  - name: (
+  - uid: System.UInt64
+    name: ulong
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.uint64
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Render.DrawList.PopClip(System.UInt64)
+    name: PopClip
+    href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_PopClip_System_UInt64_
+  - name: (
+  - uid: System.UInt64
+    name: ULong
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.uint64
+  - name: )
+- uid: FluentGpu.Render.DrawList.PushClip*
+  commentId: Overload:FluentGpu.Render.DrawList.PushClip
+  href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_PushClip_FluentGpu_Foundation_RectF__System_UInt64_
+  name: PushClip
+  nameWithType: DrawList.PushClip
+  fullName: FluentGpu.Render.DrawList.PushClip
+- uid: FluentGpu.Render.ClipCmd
+  commentId: T:FluentGpu.Render.ClipCmd
+  href: FluentGpu.Render.ClipCmd.html
+  name: ClipCmd
+  nameWithType: ClipCmd
+  fullName: FluentGpu.Render.ClipCmd
+- uid: FluentGpu.Render.DrawList.PushClipRounded*
+  commentId: Overload:FluentGpu.Render.DrawList.PushClipRounded
+  href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_PushClipRounded_FluentGpu_Foundation_RectF__FluentGpu_Foundation_RectF__System_Single_System_UInt64_
+  name: PushClipRounded
+  nameWithType: DrawList.PushClipRounded
+  fullName: FluentGpu.Render.DrawList.PushClipRounded
+- uid: FluentGpu.Render.DrawList.PopClip*
+  commentId: Overload:FluentGpu.Render.DrawList.PopClip
+  href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_PopClip_System_UInt64_
+  name: PopClip
+  nameWithType: DrawList.PopClip
+  fullName: FluentGpu.Render.DrawList.PopClip
+- uid: FluentGpu.Render.DrawList.DrawImage*
+  commentId: Overload:FluentGpu.Render.DrawList.DrawImage
+  href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_DrawImage_FluentGpu_Foundation_RectF__FluentGpu_Foundation_CornerRadius4__System_Int32_System_Boolean_FluentGpu_Foundation_ColorF__FluentGpu_Foundation_Affine2D__System_Single_FluentGpu_Foundation_RectF__System_Single_System_UInt64_
+  name: DrawImage
+  nameWithType: DrawList.DrawImage
+  fullName: FluentGpu.Render.DrawList.DrawImage
+- uid: FluentGpu.Render.DrawList.StrokeRoundRect*
+  commentId: Overload:FluentGpu.Render.DrawList.StrokeRoundRect
+  href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_StrokeRoundRect_FluentGpu_Foundation_RectF__FluentGpu_Foundation_CornerRadius4__FluentGpu_Foundation_ColorF__System_Single_FluentGpu_Foundation_Affine2D__System_Single_System_UInt64_
+  name: StrokeRoundRect
+  nameWithType: DrawList.StrokeRoundRect
+  fullName: FluentGpu.Render.DrawList.StrokeRoundRect
+- uid: FluentGpu.Render.DrawList.StrokeRoundRectDashed*
+  commentId: Overload:FluentGpu.Render.DrawList.StrokeRoundRectDashed
+  href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_StrokeRoundRectDashed_FluentGpu_Foundation_RectF__FluentGpu_Foundation_CornerRadius4__FluentGpu_Foundation_ColorF__System_Single_System_Single_System_Single_FluentGpu_Foundation_Affine2D__System_Single_System_UInt64_
+  name: StrokeRoundRectDashed
+  nameWithType: DrawList.StrokeRoundRectDashed
+  fullName: FluentGpu.Render.DrawList.StrokeRoundRectDashed
+- uid: FluentGpu.Render.DrawList.Shadow*
+  commentId: Overload:FluentGpu.Render.DrawList.Shadow
+  href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_Shadow_FluentGpu_Foundation_RectF__FluentGpu_Foundation_CornerRadius4__FluentGpu_Foundation_ColorF__System_Single_System_Single_System_Single_System_Single_FluentGpu_Foundation_Affine2D__System_Single_System_UInt64_
+  name: Shadow
+  nameWithType: DrawList.Shadow
+  fullName: FluentGpu.Render.DrawList.Shadow
+- uid: FluentGpu.Render.DrawList.GradientRect*
+  commentId: Overload:FluentGpu.Render.DrawList.GradientRect
+  href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_GradientRect_FluentGpu_Render_DrawGradientRectCmd__System_UInt64_
+  name: GradientRect
+  nameWithType: DrawList.GradientRect
+  fullName: FluentGpu.Render.DrawList.GradientRect
+- uid: FluentGpu.Render.DrawGradientRectCmd
+  commentId: T:FluentGpu.Render.DrawGradientRectCmd
+  parent: FluentGpu.Render
+  href: FluentGpu.Render.DrawGradientRectCmd.html
+  name: DrawGradientRectCmd
+  nameWithType: DrawGradientRectCmd
+  fullName: FluentGpu.Render.DrawGradientRectCmd
+- uid: FluentGpu.Render.DrawList.GradientStroke*
+  commentId: Overload:FluentGpu.Render.DrawList.GradientStroke
+  href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_GradientStroke_FluentGpu_Render_DrawGradientStrokeCmd__System_UInt64_
+  name: GradientStroke
+  nameWithType: DrawList.GradientStroke
+  fullName: FluentGpu.Render.DrawList.GradientStroke
+- uid: FluentGpu.Render.DrawGradientStrokeCmd
+  commentId: T:FluentGpu.Render.DrawGradientStrokeCmd
+  parent: FluentGpu.Render
+  href: FluentGpu.Render.DrawGradientStrokeCmd.html
+  name: DrawGradientStrokeCmd
+  nameWithType: DrawGradientStrokeCmd
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd
+- uid: FluentGpu.Render.DrawList.PushLayer*
+  commentId: Overload:FluentGpu.Render.DrawList.PushLayer
+  href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_PushLayer_FluentGpu_Foundation_RectF__FluentGpu_Foundation_CornerRadius4__FluentGpu_Foundation_ColorF__FluentGpu_Foundation_ColorF__System_Single_System_Single_System_Single_System_Single_System_UInt64_
+  name: PushLayer
+  nameWithType: DrawList.PushLayer
+  fullName: FluentGpu.Render.DrawList.PushLayer
+- uid: FluentGpu.Render.LayerKind.Opacity
+  commentId: F:FluentGpu.Render.LayerKind.Opacity
+  href: FluentGpu.Render.LayerKind.html#FluentGpu_Render_LayerKind_Opacity
+  name: Opacity
+  nameWithType: LayerKind.Opacity
+  fullName: FluentGpu.Render.LayerKind.Opacity
+- uid: FluentGpu.Render.DrawList.PopLayer(FluentGpu.Foundation.RectF@,System.UInt64)
+  commentId: M:FluentGpu.Render.DrawList.PopLayer(FluentGpu.Foundation.RectF@,System.UInt64)
+  isExternal: true
+  href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_PopLayer_FluentGpu_Foundation_RectF__System_UInt64_
+  name: PopLayer(in RectF, ulong)
+  nameWithType: DrawList.PopLayer(in RectF, ulong)
+  fullName: FluentGpu.Render.DrawList.PopLayer(in FluentGpu.Foundation.RectF, ulong)
+  nameWithType.vb: DrawList.PopLayer(RectF, ULong)
+  fullName.vb: FluentGpu.Render.DrawList.PopLayer(FluentGpu.Foundation.RectF, ULong)
+  name.vb: PopLayer(RectF, ULong)
+  spec.csharp:
+  - uid: FluentGpu.Render.DrawList.PopLayer(FluentGpu.Foundation.RectF@,System.UInt64)
+    name: PopLayer
+    href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_PopLayer_FluentGpu_Foundation_RectF__System_UInt64_
+  - name: (
+  - name: in
+  - name: " "
+  - uid: FluentGpu.Foundation.RectF
+    name: RectF
+    href: FluentGpu.Foundation.RectF.html
+  - name: ','
+  - name: " "
+  - uid: System.UInt64
+    name: ulong
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.uint64
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Render.DrawList.PopLayer(FluentGpu.Foundation.RectF@,System.UInt64)
+    name: PopLayer
+    href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_PopLayer_FluentGpu_Foundation_RectF__System_UInt64_
+  - name: (
+  - uid: FluentGpu.Foundation.RectF
+    name: RectF
+    href: FluentGpu.Foundation.RectF.html
+  - name: ','
+  - name: " "
+  - uid: System.UInt64
+    name: ULong
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.uint64
+  - name: )
+- uid: FluentGpu.Render.DrawList.PushOpacityLayer*
+  commentId: Overload:FluentGpu.Render.DrawList.PushOpacityLayer
+  href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_PushOpacityLayer_FluentGpu_Foundation_RectF__FluentGpu_Foundation_CornerRadius4__System_Single_System_UInt64_
+  name: PushOpacityLayer
+  nameWithType: DrawList.PushOpacityLayer
+  fullName: FluentGpu.Render.DrawList.PushOpacityLayer
+- uid: FluentGpu.Render.DrawList.PopLayer*
+  commentId: Overload:FluentGpu.Render.DrawList.PopLayer
+  href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_PopLayer_FluentGpu_Foundation_RectF__System_UInt64_
+  name: PopLayer
+  nameWithType: DrawList.PopLayer
+  fullName: FluentGpu.Render.DrawList.PopLayer
+- uid: FluentGpu.Render.DrawList.Arc*
+  commentId: Overload:FluentGpu.Render.DrawList.Arc
+  href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_Arc_FluentGpu_Foundation_RectF__FluentGpu_Foundation_ColorF__System_Single_System_Single_System_Single_System_Boolean_FluentGpu_Foundation_Affine2D__System_Single_System_UInt64_
+  name: Arc
+  nameWithType: DrawList.Arc
+  fullName: FluentGpu.Render.DrawList.Arc
+- uid: FluentGpu.Render.DrawList.PolylineStroke*
+  commentId: Overload:FluentGpu.Render.DrawList.PolylineStroke
+  href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_PolylineStroke_FluentGpu_Foundation_RectF__FluentGpu_Foundation_ColorF__System_Single_FluentGpu_Foundation_Point2__FluentGpu_Foundation_Point2__FluentGpu_Foundation_Point2__FluentGpu_Foundation_Point2__System_Int32_System_Single_System_Single_System_Boolean_FluentGpu_Foundation_Affine2D__System_Single_System_UInt64_
+  name: PolylineStroke
+  nameWithType: DrawList.PolylineStroke
+  fullName: FluentGpu.Render.DrawList.PolylineStroke
+- uid: FluentGpu.Foundation.Point2
+  commentId: T:FluentGpu.Foundation.Point2
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Point2.html
+  name: Point2
+  nameWithType: Point2
+  fullName: FluentGpu.Foundation.Point2
+- uid: FluentGpu.Render.DrawTabShapeCmd
+  commentId: T:FluentGpu.Render.DrawTabShapeCmd
+  href: FluentGpu.Render.DrawTabShapeCmd.html
+  name: DrawTabShapeCmd
+  nameWithType: DrawTabShapeCmd
+  fullName: FluentGpu.Render.DrawTabShapeCmd
+- uid: FluentGpu.Render.DrawList.TabShape*
+  commentId: Overload:FluentGpu.Render.DrawList.TabShape
+  href: FluentGpu.Render.DrawList.html#FluentGpu_Render_DrawList_TabShape_FluentGpu_Foundation_RectF__System_Single_System_Single_FluentGpu_Foundation_ColorF__FluentGpu_Foundation_Affine2D__System_Single_System_UInt64_
+  name: TabShape
+  nameWithType: DrawList.TabShape
+  fullName: FluentGpu.Render.DrawList.TabShape

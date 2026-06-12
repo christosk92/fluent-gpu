@@ -1,0 +1,526 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Media.DecodeOptions
+  commentId: T:FluentGpu.Media.DecodeOptions
+  id: DecodeOptions
+  parent: FluentGpu.Media
+  children:
+  - FluentGpu.Media.DecodeOptions.BackoffBase
+  - FluentGpu.Media.DecodeOptions.BackoffMax
+  - FluentGpu.Media.DecodeOptions.MaxAttempts
+  - FluentGpu.Media.DecodeOptions.MaxConcurrency
+  - FluentGpu.Media.DecodeOptions.QueueCapacity
+  - FluentGpu.Media.DecodeOptions.RequestTimeout
+  langs:
+  - csharp
+  - vb
+  name: DecodeOptions
+  nameWithType: DecodeOptions
+  fullName: FluentGpu.Media.DecodeOptions
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Media/IImageFetcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DecodeOptions
+    path: ../../src/FluentGpu.Media/IImageFetcher.cs
+    startLine: 34
+  assemblies:
+  - FluentGpu.Media
+  namespace: FluentGpu.Media
+  summary: Decode/fetch robustness policy. Defaults tuned for album art over flaky links (slow internet, transient 5xx).
+  example: []
+  syntax:
+    content: public sealed class DecodeOptions
+    content.vb: Public NotInheritable Class DecodeOptions
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Media.DecodeOptions.MaxConcurrency
+  commentId: P:FluentGpu.Media.DecodeOptions.MaxConcurrency
+  id: MaxConcurrency
+  parent: FluentGpu.Media.DecodeOptions
+  langs:
+  - csharp
+  - vb
+  name: MaxConcurrency
+  nameWithType: DecodeOptions.MaxConcurrency
+  fullName: FluentGpu.Media.DecodeOptions.MaxConcurrency
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Media/IImageFetcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MaxConcurrency
+    path: ../../src/FluentGpu.Media/IImageFetcher.cs
+    startLine: 37
+  assemblies:
+  - FluentGpu.Media
+  namespace: FluentGpu.Media
+  summary: Worker (parallel decode) count. 0 ⇒ clamp(ProcessorCount-2, 2..6) per the design's WORKER pool.
+  example: []
+  syntax:
+    content: public int MaxConcurrency { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property MaxConcurrency As Integer
+  overload: FluentGpu.Media.DecodeOptions.MaxConcurrency*
+- uid: FluentGpu.Media.DecodeOptions.MaxAttempts
+  commentId: P:FluentGpu.Media.DecodeOptions.MaxAttempts
+  id: MaxAttempts
+  parent: FluentGpu.Media.DecodeOptions
+  langs:
+  - csharp
+  - vb
+  name: MaxAttempts
+  nameWithType: DecodeOptions.MaxAttempts
+  fullName: FluentGpu.Media.DecodeOptions.MaxAttempts
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Media/IImageFetcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MaxAttempts
+    path: ../../src/FluentGpu.Media/IImageFetcher.cs
+    startLine: 39
+  assemblies:
+  - FluentGpu.Media
+  namespace: FluentGpu.Media
+  summary: Total fetch attempts for a TRANSIENT failure (1 try + N-1 retries). Permanent failures never retry.
+  example: []
+  syntax:
+    content: public int MaxAttempts { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property MaxAttempts As Integer
+  overload: FluentGpu.Media.DecodeOptions.MaxAttempts*
+- uid: FluentGpu.Media.DecodeOptions.RequestTimeout
+  commentId: P:FluentGpu.Media.DecodeOptions.RequestTimeout
+  id: RequestTimeout
+  parent: FluentGpu.Media.DecodeOptions
+  langs:
+  - csharp
+  - vb
+  name: RequestTimeout
+  nameWithType: DecodeOptions.RequestTimeout
+  fullName: FluentGpu.Media.DecodeOptions.RequestTimeout
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Media/IImageFetcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RequestTimeout
+    path: ../../src/FluentGpu.Media/IImageFetcher.cs
+    startLine: 41
+  assemblies:
+  - FluentGpu.Media
+  namespace: FluentGpu.Media
+  summary: Per-attempt deadline — bounds a slow/stalled download so it fails over to a retry instead of hanging.
+  example: []
+  syntax:
+    content: public TimeSpan RequestTimeout { get; init; }
+    parameters: []
+    return:
+      type: System.TimeSpan
+    content.vb: Public Property RequestTimeout As TimeSpan
+  overload: FluentGpu.Media.DecodeOptions.RequestTimeout*
+- uid: FluentGpu.Media.DecodeOptions.BackoffBase
+  commentId: P:FluentGpu.Media.DecodeOptions.BackoffBase
+  id: BackoffBase
+  parent: FluentGpu.Media.DecodeOptions
+  langs:
+  - csharp
+  - vb
+  name: BackoffBase
+  nameWithType: DecodeOptions.BackoffBase
+  fullName: FluentGpu.Media.DecodeOptions.BackoffBase
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Media/IImageFetcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BackoffBase
+    path: ../../src/FluentGpu.Media/IImageFetcher.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Media
+  namespace: FluentGpu.Media
+  summary: 'Exponential backoff between transient retries: <code>BackoffBase * 2^(attempt-1)</code>, capped at <xref href="FluentGpu.Media.DecodeOptions.BackoffMax" data-throw-if-not-resolved="false"></xref>.'
+  example: []
+  syntax:
+    content: public TimeSpan BackoffBase { get; init; }
+    parameters: []
+    return:
+      type: System.TimeSpan
+    content.vb: Public Property BackoffBase As TimeSpan
+  overload: FluentGpu.Media.DecodeOptions.BackoffBase*
+- uid: FluentGpu.Media.DecodeOptions.BackoffMax
+  commentId: P:FluentGpu.Media.DecodeOptions.BackoffMax
+  id: BackoffMax
+  parent: FluentGpu.Media.DecodeOptions
+  langs:
+  - csharp
+  - vb
+  name: BackoffMax
+  nameWithType: DecodeOptions.BackoffMax
+  fullName: FluentGpu.Media.DecodeOptions.BackoffMax
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Media/IImageFetcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BackoffMax
+    path: ../../src/FluentGpu.Media/IImageFetcher.cs
+    startLine: 44
+  assemblies:
+  - FluentGpu.Media
+  namespace: FluentGpu.Media
+  syntax:
+    content: public TimeSpan BackoffMax { get; init; }
+    parameters: []
+    return:
+      type: System.TimeSpan
+    content.vb: Public Property BackoffMax As TimeSpan
+  overload: FluentGpu.Media.DecodeOptions.BackoffMax*
+- uid: FluentGpu.Media.DecodeOptions.QueueCapacity
+  commentId: P:FluentGpu.Media.DecodeOptions.QueueCapacity
+  id: QueueCapacity
+  parent: FluentGpu.Media.DecodeOptions
+  langs:
+  - csharp
+  - vb
+  name: QueueCapacity
+  nameWithType: DecodeOptions.QueueCapacity
+  fullName: FluentGpu.Media.DecodeOptions.QueueCapacity
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Media/IImageFetcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: QueueCapacity
+    path: ../../src/FluentGpu.Media/IImageFetcher.cs
+    startLine: 46
+  assemblies:
+  - FluentGpu.Media
+  namespace: FluentGpu.Media
+  summary: Bounded request-channel capacity; a saturated channel drops the newest enqueue (fast-scroll backpressure).
+  example: []
+  syntax:
+    content: public int QueueCapacity { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property QueueCapacity As Integer
+  overload: FluentGpu.Media.DecodeOptions.QueueCapacity*
+references:
+- uid: FluentGpu.Media
+  commentId: N:FluentGpu.Media
+  href: FluentGpu.html
+  name: FluentGpu.Media
+  nameWithType: FluentGpu.Media
+  fullName: FluentGpu.Media
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Media
+    name: Media
+    href: FluentGpu.Media.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Media
+    name: Media
+    href: FluentGpu.Media.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Media.DecodeOptions.MaxConcurrency*
+  commentId: Overload:FluentGpu.Media.DecodeOptions.MaxConcurrency
+  href: FluentGpu.Media.DecodeOptions.html#FluentGpu_Media_DecodeOptions_MaxConcurrency
+  name: MaxConcurrency
+  nameWithType: DecodeOptions.MaxConcurrency
+  fullName: FluentGpu.Media.DecodeOptions.MaxConcurrency
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Media.DecodeOptions.MaxAttempts*
+  commentId: Overload:FluentGpu.Media.DecodeOptions.MaxAttempts
+  href: FluentGpu.Media.DecodeOptions.html#FluentGpu_Media_DecodeOptions_MaxAttempts
+  name: MaxAttempts
+  nameWithType: DecodeOptions.MaxAttempts
+  fullName: FluentGpu.Media.DecodeOptions.MaxAttempts
+- uid: FluentGpu.Media.DecodeOptions.RequestTimeout*
+  commentId: Overload:FluentGpu.Media.DecodeOptions.RequestTimeout
+  href: FluentGpu.Media.DecodeOptions.html#FluentGpu_Media_DecodeOptions_RequestTimeout
+  name: RequestTimeout
+  nameWithType: DecodeOptions.RequestTimeout
+  fullName: FluentGpu.Media.DecodeOptions.RequestTimeout
+- uid: System.TimeSpan
+  commentId: T:System.TimeSpan
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.timespan
+  name: TimeSpan
+  nameWithType: TimeSpan
+  fullName: System.TimeSpan
+- uid: FluentGpu.Media.DecodeOptions.BackoffMax
+  commentId: P:FluentGpu.Media.DecodeOptions.BackoffMax
+  href: FluentGpu.Media.DecodeOptions.html#FluentGpu_Media_DecodeOptions_BackoffMax
+  name: BackoffMax
+  nameWithType: DecodeOptions.BackoffMax
+  fullName: FluentGpu.Media.DecodeOptions.BackoffMax
+- uid: FluentGpu.Media.DecodeOptions.BackoffBase*
+  commentId: Overload:FluentGpu.Media.DecodeOptions.BackoffBase
+  href: FluentGpu.Media.DecodeOptions.html#FluentGpu_Media_DecodeOptions_BackoffBase
+  name: BackoffBase
+  nameWithType: DecodeOptions.BackoffBase
+  fullName: FluentGpu.Media.DecodeOptions.BackoffBase
+- uid: FluentGpu.Media.DecodeOptions.BackoffMax*
+  commentId: Overload:FluentGpu.Media.DecodeOptions.BackoffMax
+  href: FluentGpu.Media.DecodeOptions.html#FluentGpu_Media_DecodeOptions_BackoffMax
+  name: BackoffMax
+  nameWithType: DecodeOptions.BackoffMax
+  fullName: FluentGpu.Media.DecodeOptions.BackoffMax
+- uid: FluentGpu.Media.DecodeOptions.QueueCapacity*
+  commentId: Overload:FluentGpu.Media.DecodeOptions.QueueCapacity
+  href: FluentGpu.Media.DecodeOptions.html#FluentGpu_Media_DecodeOptions_QueueCapacity
+  name: QueueCapacity
+  nameWithType: DecodeOptions.QueueCapacity
+  fullName: FluentGpu.Media.DecodeOptions.QueueCapacity

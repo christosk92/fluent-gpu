@@ -1,0 +1,650 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Pal.WindowDesc
+  commentId: T:FluentGpu.Pal.WindowDesc
+  id: WindowDesc
+  parent: FluentGpu.Pal
+  children:
+  - FluentGpu.Pal.WindowDesc.#ctor(System.String,FluentGpu.Foundation.Size2,System.Single,System.Boolean,System.Boolean)
+  - FluentGpu.Pal.WindowDesc.Composited
+  - FluentGpu.Pal.WindowDesc.CustomFrame
+  - FluentGpu.Pal.WindowDesc.Scale
+  - FluentGpu.Pal.WindowDesc.SizePx
+  - FluentGpu.Pal.WindowDesc.Title
+  langs:
+  - csharp
+  - vb
+  name: WindowDesc
+  nameWithType: WindowDesc
+  fullName: FluentGpu.Pal.WindowDesc
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: WindowDesc
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 148
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: >-
+    <code class="paramref">Composited</code> = the window is composited with per-pixel alpha (WS_EX_NOREDIRECTIONBITMAP) so a
+        DirectComposition swapchain can show the DWM Mica backdrop through transparent pixels. <code class="paramref">CustomFrame</code> =
+        the engine draws the ENTIRE titlebar (WinUI ExtendsContentIntoTitleBar): the platform strips the OS caption
+        (WM_NCCALCSIZE) but keeps the resize frame/shadow, answers WM_NCHITTEST from the engine-reported
+        <xref href="FluentGpu.Pal.TitleBarRegion" data-throw-if-not-resolved="false"></xref>s, and synthesizes pointer input for the engine-drawn caption buttons.
+  example: []
+  syntax:
+    content: 'public readonly record struct WindowDesc : IEquatable<WindowDesc>'
+    content.vb: Public Structure WindowDesc Implements IEquatable(Of WindowDesc)
+  implements:
+  - System.IEquatable{FluentGpu.Pal.WindowDesc}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Pal.WindowDesc.#ctor(System.String,FluentGpu.Foundation.Size2,System.Single,System.Boolean,System.Boolean)
+  commentId: M:FluentGpu.Pal.WindowDesc.#ctor(System.String,FluentGpu.Foundation.Size2,System.Single,System.Boolean,System.Boolean)
+  id: '#ctor(System.String,FluentGpu.Foundation.Size2,System.Single,System.Boolean,System.Boolean)'
+  parent: FluentGpu.Pal.WindowDesc
+  langs:
+  - csharp
+  - vb
+  name: WindowDesc(string, Size2, float, bool, bool)
+  nameWithType: WindowDesc.WindowDesc(string, Size2, float, bool, bool)
+  fullName: FluentGpu.Pal.WindowDesc.WindowDesc(string, FluentGpu.Foundation.Size2, float, bool, bool)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 148
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: >-
+    <code class="paramref">Composited</code> = the window is composited with per-pixel alpha (WS_EX_NOREDIRECTIONBITMAP) so a
+        DirectComposition swapchain can show the DWM Mica backdrop through transparent pixels. <code class="paramref">CustomFrame</code> =
+        the engine draws the ENTIRE titlebar (WinUI ExtendsContentIntoTitleBar): the platform strips the OS caption
+        (WM_NCCALCSIZE) but keeps the resize frame/shadow, answers WM_NCHITTEST from the engine-reported
+        <xref href="FluentGpu.Pal.TitleBarRegion" data-throw-if-not-resolved="false"></xref>s, and synthesizes pointer input for the engine-drawn caption buttons.
+  example: []
+  syntax:
+    content: public WindowDesc(string Title, Size2 SizePx, float Scale, bool Composited = false, bool CustomFrame = false)
+    parameters:
+    - id: Title
+      type: System.String
+    - id: SizePx
+      type: FluentGpu.Foundation.Size2
+    - id: Scale
+      type: System.Single
+    - id: Composited
+      type: System.Boolean
+    - id: CustomFrame
+      type: System.Boolean
+    content.vb: Public Sub New(Title As String, SizePx As Size2, Scale As Single, Composited As Boolean = False, CustomFrame As Boolean = False)
+  overload: FluentGpu.Pal.WindowDesc.#ctor*
+  nameWithType.vb: WindowDesc.New(String, Size2, Single, Boolean, Boolean)
+  fullName.vb: FluentGpu.Pal.WindowDesc.New(String, FluentGpu.Foundation.Size2, Single, Boolean, Boolean)
+  name.vb: New(String, Size2, Single, Boolean, Boolean)
+- uid: FluentGpu.Pal.WindowDesc.Title
+  commentId: P:FluentGpu.Pal.WindowDesc.Title
+  id: Title
+  parent: FluentGpu.Pal.WindowDesc
+  langs:
+  - csharp
+  - vb
+  name: Title
+  nameWithType: WindowDesc.Title
+  fullName: FluentGpu.Pal.WindowDesc.Title
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Title
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 148
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: public string Title { get; init; }
+    parameters: []
+    return:
+      type: System.String
+    content.vb: Public Property Title As String
+  overload: FluentGpu.Pal.WindowDesc.Title*
+- uid: FluentGpu.Pal.WindowDesc.SizePx
+  commentId: P:FluentGpu.Pal.WindowDesc.SizePx
+  id: SizePx
+  parent: FluentGpu.Pal.WindowDesc
+  langs:
+  - csharp
+  - vb
+  name: SizePx
+  nameWithType: WindowDesc.SizePx
+  fullName: FluentGpu.Pal.WindowDesc.SizePx
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SizePx
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 148
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: public Size2 SizePx { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Size2
+    content.vb: Public Property SizePx As Size2
+  overload: FluentGpu.Pal.WindowDesc.SizePx*
+- uid: FluentGpu.Pal.WindowDesc.Scale
+  commentId: P:FluentGpu.Pal.WindowDesc.Scale
+  id: Scale
+  parent: FluentGpu.Pal.WindowDesc
+  langs:
+  - csharp
+  - vb
+  name: Scale
+  nameWithType: WindowDesc.Scale
+  fullName: FluentGpu.Pal.WindowDesc.Scale
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Scale
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 148
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: public float Scale { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Scale As Single
+  overload: FluentGpu.Pal.WindowDesc.Scale*
+- uid: FluentGpu.Pal.WindowDesc.Composited
+  commentId: P:FluentGpu.Pal.WindowDesc.Composited
+  id: Composited
+  parent: FluentGpu.Pal.WindowDesc
+  langs:
+  - csharp
+  - vb
+  name: Composited
+  nameWithType: WindowDesc.Composited
+  fullName: FluentGpu.Pal.WindowDesc.Composited
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Composited
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 148
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: public bool Composited { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property Composited As Boolean
+  overload: FluentGpu.Pal.WindowDesc.Composited*
+- uid: FluentGpu.Pal.WindowDesc.CustomFrame
+  commentId: P:FluentGpu.Pal.WindowDesc.CustomFrame
+  id: CustomFrame
+  parent: FluentGpu.Pal.WindowDesc
+  langs:
+  - csharp
+  - vb
+  name: CustomFrame
+  nameWithType: WindowDesc.CustomFrame
+  fullName: FluentGpu.Pal.WindowDesc.CustomFrame
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CustomFrame
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 148
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: public bool CustomFrame { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property CustomFrame As Boolean
+  overload: FluentGpu.Pal.WindowDesc.CustomFrame*
+references:
+- uid: FluentGpu.Pal.TitleBarRegion
+  commentId: T:FluentGpu.Pal.TitleBarRegion
+  href: FluentGpu.Pal.TitleBarRegion.html
+  name: TitleBarRegion
+  nameWithType: TitleBarRegion
+  fullName: FluentGpu.Pal.TitleBarRegion
+- uid: FluentGpu.Pal
+  commentId: N:FluentGpu.Pal
+  href: FluentGpu.html
+  name: FluentGpu.Pal
+  nameWithType: FluentGpu.Pal
+  fullName: FluentGpu.Pal
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+- uid: System.IEquatable{FluentGpu.Pal.WindowDesc}
+  commentId: T:System.IEquatable{FluentGpu.Pal.WindowDesc}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<WindowDesc>
+  nameWithType: IEquatable<WindowDesc>
+  fullName: System.IEquatable<FluentGpu.Pal.WindowDesc>
+  nameWithType.vb: IEquatable(Of WindowDesc)
+  fullName.vb: System.IEquatable(Of FluentGpu.Pal.WindowDesc)
+  name.vb: IEquatable(Of WindowDesc)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Pal.WindowDesc
+    name: WindowDesc
+    href: FluentGpu.Pal.WindowDesc.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Pal.WindowDesc
+    name: WindowDesc
+    href: FluentGpu.Pal.WindowDesc.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Pal.WindowDesc.#ctor*
+  commentId: Overload:FluentGpu.Pal.WindowDesc.#ctor
+  href: FluentGpu.Pal.WindowDesc.html#FluentGpu_Pal_WindowDesc__ctor_System_String_FluentGpu_Foundation_Size2_System_Single_System_Boolean_System_Boolean_
+  name: WindowDesc
+  nameWithType: WindowDesc.WindowDesc
+  fullName: FluentGpu.Pal.WindowDesc.WindowDesc
+  nameWithType.vb: WindowDesc.New
+  fullName.vb: FluentGpu.Pal.WindowDesc.New
+  name.vb: New
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Foundation.Size2
+  commentId: T:FluentGpu.Foundation.Size2
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Size2.html
+  name: Size2
+  nameWithType: Size2
+  fullName: FluentGpu.Foundation.Size2
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Pal.WindowDesc.Title*
+  commentId: Overload:FluentGpu.Pal.WindowDesc.Title
+  href: FluentGpu.Pal.WindowDesc.html#FluentGpu_Pal_WindowDesc_Title
+  name: Title
+  nameWithType: WindowDesc.Title
+  fullName: FluentGpu.Pal.WindowDesc.Title
+- uid: FluentGpu.Pal.WindowDesc.SizePx*
+  commentId: Overload:FluentGpu.Pal.WindowDesc.SizePx
+  href: FluentGpu.Pal.WindowDesc.html#FluentGpu_Pal_WindowDesc_SizePx
+  name: SizePx
+  nameWithType: WindowDesc.SizePx
+  fullName: FluentGpu.Pal.WindowDesc.SizePx
+- uid: FluentGpu.Pal.WindowDesc.Scale*
+  commentId: Overload:FluentGpu.Pal.WindowDesc.Scale
+  href: FluentGpu.Pal.WindowDesc.html#FluentGpu_Pal_WindowDesc_Scale
+  name: Scale
+  nameWithType: WindowDesc.Scale
+  fullName: FluentGpu.Pal.WindowDesc.Scale
+- uid: FluentGpu.Pal.WindowDesc.Composited*
+  commentId: Overload:FluentGpu.Pal.WindowDesc.Composited
+  href: FluentGpu.Pal.WindowDesc.html#FluentGpu_Pal_WindowDesc_Composited
+  name: Composited
+  nameWithType: WindowDesc.Composited
+  fullName: FluentGpu.Pal.WindowDesc.Composited
+- uid: FluentGpu.Pal.WindowDesc.CustomFrame*
+  commentId: Overload:FluentGpu.Pal.WindowDesc.CustomFrame
+  href: FluentGpu.Pal.WindowDesc.html#FluentGpu_Pal_WindowDesc_CustomFrame
+  name: CustomFrame
+  nameWithType: WindowDesc.CustomFrame
+  fullName: FluentGpu.Pal.WindowDesc.CustomFrame

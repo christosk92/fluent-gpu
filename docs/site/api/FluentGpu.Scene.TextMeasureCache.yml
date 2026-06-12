@@ -1,0 +1,608 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Scene.TextMeasureCache
+  commentId: T:FluentGpu.Scene.TextMeasureCache
+  id: TextMeasureCache
+  parent: FluentGpu.Scene
+  children:
+  - FluentGpu.Scene.TextMeasureCache.MaxW
+  - FluentGpu.Scene.TextMeasureCache.Size
+  - FluentGpu.Scene.TextMeasureCache.StrikeY
+  - FluentGpu.Scene.TextMeasureCache.Style
+  - FluentGpu.Scene.TextMeasureCache.Text
+  - FluentGpu.Scene.TextMeasureCache.UnderlineThickness
+  - FluentGpu.Scene.TextMeasureCache.UnderlineY
+  - FluentGpu.Scene.TextMeasureCache.Valid
+  langs:
+  - csharp
+  - vb
+  name: TextMeasureCache
+  nameWithType: TextMeasureCache
+  fullName: FluentGpu.Scene.TextMeasureCache
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextMeasureCache
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    Per-text-node measure cache (layout.md §2.3): a pure-function cache of (text, style, availWidth) → size, so a
+        scoped relayout skips re-shaping a text leaf whose inputs are unchanged. Self-invalidating — any input change makes
+        the stored key not match. Helps the real DirectWrite shaping path; neutral for the headless fake font.
+        Besides the size, the cache retains the face's DECORATION metrics from the same <code>TextMetrics</code> (top-down DIP,
+        the line frame of <code>Baseline</code> — see FluentGpu.Text.TextMetrics): the recorder reads them at record time to
+        place underline/strikethrough bars (NodePaint.TextDecorations) without re-touching the font seam. Filled by the
+        layout engine's measure-miss path; 0 ⇒ the backend reported no face metrics (the recorder falls back to a
+        size-derived approximation).
+  example: []
+  syntax:
+    content: public struct TextMeasureCache
+    content.vb: Public Structure TextMeasureCache
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Scene.TextMeasureCache.Valid
+  commentId: F:FluentGpu.Scene.TextMeasureCache.Valid
+  id: Valid
+  parent: FluentGpu.Scene.TextMeasureCache
+  langs:
+  - csharp
+  - vb
+  name: Valid
+  nameWithType: TextMeasureCache.Valid
+  fullName: FluentGpu.Scene.TextMeasureCache.Valid
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Valid
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public bool Valid
+    return:
+      type: System.Boolean
+    content.vb: Public Valid As Boolean
+- uid: FluentGpu.Scene.TextMeasureCache.Text
+  commentId: F:FluentGpu.Scene.TextMeasureCache.Text
+  id: Text
+  parent: FluentGpu.Scene.TextMeasureCache
+  langs:
+  - csharp
+  - vb
+  name: Text
+  nameWithType: TextMeasureCache.Text
+  fullName: FluentGpu.Scene.TextMeasureCache.Text
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Text
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public StringId Text
+    return:
+      type: FluentGpu.Foundation.StringId
+    content.vb: Public Text As StringId
+- uid: FluentGpu.Scene.TextMeasureCache.Style
+  commentId: F:FluentGpu.Scene.TextMeasureCache.Style
+  id: Style
+  parent: FluentGpu.Scene.TextMeasureCache
+  langs:
+  - csharp
+  - vb
+  name: Style
+  nameWithType: TextMeasureCache.Style
+  fullName: FluentGpu.Scene.TextMeasureCache.Style
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Style
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public TextStyle Style
+    return:
+      type: FluentGpu.Text.TextStyle
+    content.vb: Public Style As TextStyle
+- uid: FluentGpu.Scene.TextMeasureCache.MaxW
+  commentId: F:FluentGpu.Scene.TextMeasureCache.MaxW
+  id: MaxW
+  parent: FluentGpu.Scene.TextMeasureCache
+  langs:
+  - csharp
+  - vb
+  name: MaxW
+  nameWithType: TextMeasureCache.MaxW
+  fullName: FluentGpu.Scene.TextMeasureCache.MaxW
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MaxW
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float MaxW
+    return:
+      type: System.Single
+    content.vb: Public MaxW As Single
+- uid: FluentGpu.Scene.TextMeasureCache.Size
+  commentId: F:FluentGpu.Scene.TextMeasureCache.Size
+  id: Size
+  parent: FluentGpu.Scene.TextMeasureCache
+  langs:
+  - csharp
+  - vb
+  name: Size
+  nameWithType: TextMeasureCache.Size
+  fullName: FluentGpu.Scene.TextMeasureCache.Size
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Size
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 21
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public Size2 Size
+    return:
+      type: FluentGpu.Foundation.Size2
+    content.vb: Public Size As Size2
+- uid: FluentGpu.Scene.TextMeasureCache.UnderlineY
+  commentId: F:FluentGpu.Scene.TextMeasureCache.UnderlineY
+  id: UnderlineY
+  parent: FluentGpu.Scene.TextMeasureCache
+  langs:
+  - csharp
+  - vb
+  name: UnderlineY
+  nameWithType: TextMeasureCache.UnderlineY
+  fullName: FluentGpu.Scene.TextMeasureCache.UnderlineY
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UnderlineY
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 24
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    Underline bar top, measured DOWN from the line top (DWrite underlinePosition flipped over the baseline
+        — TextLayoutEngine.cs:141; headless model: baseline + 1).
+  example: []
+  syntax:
+    content: public float UnderlineY
+    return:
+      type: System.Single
+    content.vb: Public UnderlineY As Single
+- uid: FluentGpu.Scene.TextMeasureCache.UnderlineThickness
+  commentId: F:FluentGpu.Scene.TextMeasureCache.UnderlineThickness
+  id: UnderlineThickness
+  parent: FluentGpu.Scene.TextMeasureCache
+  langs:
+  - csharp
+  - vb
+  name: UnderlineThickness
+  nameWithType: TextMeasureCache.UnderlineThickness
+  fullName: FluentGpu.Scene.TextMeasureCache.UnderlineThickness
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UnderlineThickness
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    Underline bar thickness (DWrite underlineThickness; also reused for the strikethrough bar, the
+        DWrite/WinUI convention).
+  example: []
+  syntax:
+    content: public float UnderlineThickness
+    return:
+      type: System.Single
+    content.vb: Public UnderlineThickness As Single
+- uid: FluentGpu.Scene.TextMeasureCache.StrikeY
+  commentId: F:FluentGpu.Scene.TextMeasureCache.StrikeY
+  id: StrikeY
+  parent: FluentGpu.Scene.TextMeasureCache
+  langs:
+  - csharp
+  - vb
+  name: StrikeY
+  nameWithType: TextMeasureCache.StrikeY
+  fullName: FluentGpu.Scene.TextMeasureCache.StrikeY
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StrikeY
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 30
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    Strikethrough bar top, measured DOWN from the line top (DWrite strikethroughPosition flipped;
+        headless model: SizeDip × 0.8).
+  example: []
+  syntax:
+    content: public float StrikeY
+    return:
+      type: System.Single
+    content.vb: Public StrikeY As Single
+references:
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Foundation.StringId
+  commentId: T:FluentGpu.Foundation.StringId
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.StringId.html
+  name: StringId
+  nameWithType: StringId
+  fullName: FluentGpu.Foundation.StringId
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Text.TextStyle
+  commentId: T:FluentGpu.Text.TextStyle
+  parent: FluentGpu.Text
+  href: FluentGpu.Text.TextStyle.html
+  name: TextStyle
+  nameWithType: TextStyle
+  fullName: FluentGpu.Text.TextStyle
+- uid: FluentGpu.Text
+  commentId: N:FluentGpu.Text
+  href: FluentGpu.html
+  name: FluentGpu.Text
+  nameWithType: FluentGpu.Text
+  fullName: FluentGpu.Text
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.Size2
+  commentId: T:FluentGpu.Foundation.Size2
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Size2.html
+  name: Size2
+  nameWithType: Size2
+  fullName: FluentGpu.Foundation.Size2

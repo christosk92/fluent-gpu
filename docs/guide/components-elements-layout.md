@@ -20,7 +20,7 @@ them in `Render()`/`Setup()` and return the root. Build them with the `Ui.*` hel
 | `ContextProviderEl` | `Ctx.Provide(channel, value, child)` | provides a context value |
 | `ShowEl` / `ForEl` | `Flow.Show` / `Flow.For` | reactive conditional / keyed list |
 
-### `Ui.*` builders (`src/FluentGpu.Dsl/Factories.cs`)
+### `Ui.*` builders (`src/FluentGpu.Engine/Dsl/Factories.cs`)
 
 ```csharp
 VStack(float gap, params Element[] children)            // column flex
@@ -43,7 +43,7 @@ Pill(string label, bool selected, Action onClick)
 LinearGradient(float angleDeg, params GradientStop[] stops) / RadialGradient(params GradientStop[] stops)
 ```
 
-### Modifiers (`src/FluentGpu.Dsl/Modifiers.cs`) — fluent per-element overrides
+### Modifiers (`src/FluentGpu.Engine/Dsl/Modifiers.cs`) — fluent per-element overrides
 
 ```csharp
 box.Background(c).HoverColor(c).PressedColor(c).Border(c, width).Rounded(r).Pad(all) / .Pad(l,t,r,b)
@@ -55,7 +55,7 @@ text.Foreground(c).FontSize(px).Strong().Font(family).Wrapped().NoWrap().Trim().
 These return a `with`-copy — they don't fork a control's default style, so e.g. `Button.Accent(...).Rounded(20)`
 just tweaks that one instance.
 
-### Template parts (`src/FluentGpu.Dsl/TemplateParts.cs`) — lightweight styling of CONTROL internals
+### Template parts (`src/FluentGpu.Engine/Dsl/TemplateParts.cs`) — lightweight styling of CONTROL internals
 
 The one generic door into a control's template — CSS `::part` / WinUI lightweight styling, signals-native. Controls
 export part-name consts (`Expander.PartHeader/PartChevron/PartClip/PartContent/PartRoot`) and a `Parts` field; app
@@ -80,12 +80,12 @@ new Expander
 ```
 
 Rules: (1) a modifier is a PURE `with`-copy of its input; (2) signal **reads** inside subscribe the owning control —
-the granular `:stuck` restyle loop; never **write** a signal in a modifier, and use binds (`FillBind`/`TransformBind`)
+the granular `:stuck` restyle loop; never **write** a signal in a modifier, and use bound props (`Fill`/`Transform` set to a Func/signal)
 for per-frame-hot values; (3) type-preserving — a modifier that changes the record type is ignored (parts *style*,
 content **slots** like `Content`/`HeaderContent` *restructure*); (4) don't reshape `Children`; (5) the control
 re-asserts its mechanics-critical props AFTER your modifier (toggle clicks, reflow specs, ref captures — chained, see
 each part const's doc for the owned list), so you can restyle everything but break nothing; (6) one transform owner —
-don't put `StickyTop`/`TransformBind` on a transform-owned part (e.g. the Expander clip mid-reflow). **New per-control
+don't put `StickyTop`/a bound `Transform` on a transform-owned part (e.g. the Expander clip mid-reflow). **New per-control
 styling knobs are banned**: if a prop's only job is to restyle one template part, it must be a Parts modifier instead.
 
 ## Layout
@@ -189,7 +189,28 @@ Repeater.ItemsRepeater(int count, Func<int,Element> template, in RepeatLayout la
 Only the visible window (+overscan) is realized; scrolling recycles row nodes through the slab free-list. Provide a
 stable `keyOf` so row state/identity survives recycling. In-window scroll is transform-only (no realize, no relayout).
 
-## Theming (`Tok` / `Theme`, `src/FluentGpu.Dsl/Tokens.cs`)
+### Collections — `ItemsView` and its presets
+`ItemsView` is the premiere collection control: any `RepeatLayout` × any `SelectionModel` mode × any `SelectorVisual`
+chrome × built-in drag-reorder, over one virtualized viewport. The former `ListView`/`GridView` controls are FOLDED
+onto it as static presets (the control types no longer exist):
+```csharp
+ItemsView.List(items, selectedIndex)                       // AccentPill selector, Stack(44), Single, 200ms reorder dwell
+ItemsView.List(count, itemTemplate, selectionMode: …, canReorderItems: …, onReorder: …, …)
+ItemsView.Grid(items, columns: 4, tileSize: 96f)           // Check selector, Grid layout, 300ms 2-D reorder dwell
+ItemsView.Grid(count, itemTemplate, columns, tileHeight, selectionMode: …, canReorderItems: …, …)
+ItemsView.Create(count, itemTemplate, layout, selector: SelectorVisual.AccentPill|Check|FullRow|Border|None,
+                 selection: …, partDelta: (i, state) => new PartDelta(Fill: …, Corners: …), …)   // the full surface
+```
+- `SelectorVisual` picks the item chrome (AccentPill = the WinUI ListView accent bar; Check = the GridView corner
+  check; FullRow = a full-bleed superset; Border = the default `ItemContainer` ring; None = app-drawn). A custom
+  `ContainerFactory` overrides the preset.
+- Per-item VARIATION uses `PartDelta` (fill/foreground/opacity/corner/padding/glyph as VALUES, applied during
+  construction — zero extra allocation, shape-stable). This is the legal per-item-customization path; a per-item
+  `TemplateParts` modifier in a recycled scroll path is the banned hazard (see control-fidelity §6).
+- Reorder rides the displacement channel (`ItemDisplacement`/`DisplacementVersion`); displaced siblings glide aside
+  via an animated translate — a capability WinUI's own ItemsView lacks.
+
+## Theming (`Tok` / `Theme`, `src/FluentGpu.Engine/Dsl/Tokens.cs`)
 
 Read semantic tokens; never hard-code colors:
 

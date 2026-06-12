@@ -1,0 +1,141 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.OverlayCloseCause
+  commentId: T:FluentGpu.Controls.OverlayCloseCause
+  id: OverlayCloseCause
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.OverlayCloseCause.Escape
+  - FluentGpu.Controls.OverlayCloseCause.LightDismiss
+  - FluentGpu.Controls.OverlayCloseCause.Programmatic
+  langs:
+  - csharp
+  - vb
+  name: OverlayCloseCause
+  nameWithType: OverlayCloseCause
+  fullName: FluentGpu.Controls.OverlayCloseCause
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OverlayCloseCause
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Where an overlay close request came from; controls map this to their public close reason.
+  example: []
+  syntax:
+    content: 'public enum OverlayCloseCause : byte'
+    content.vb: Public Enum OverlayCloseCause As Byte
+- uid: FluentGpu.Controls.OverlayCloseCause.Programmatic
+  commentId: F:FluentGpu.Controls.OverlayCloseCause.Programmatic
+  id: Programmatic
+  parent: FluentGpu.Controls.OverlayCloseCause
+  langs:
+  - csharp
+  - vb
+  name: Programmatic
+  nameWithType: OverlayCloseCause.Programmatic
+  fullName: FluentGpu.Controls.OverlayCloseCause.Programmatic
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Programmatic
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Programmatic = 0
+    return:
+      type: FluentGpu.Controls.OverlayCloseCause
+- uid: FluentGpu.Controls.OverlayCloseCause.LightDismiss
+  commentId: F:FluentGpu.Controls.OverlayCloseCause.LightDismiss
+  id: LightDismiss
+  parent: FluentGpu.Controls.OverlayCloseCause
+  langs:
+  - csharp
+  - vb
+  name: LightDismiss
+  nameWithType: OverlayCloseCause.LightDismiss
+  fullName: FluentGpu.Controls.OverlayCloseCause.LightDismiss
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LightDismiss
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: LightDismiss = 1
+    return:
+      type: FluentGpu.Controls.OverlayCloseCause
+- uid: FluentGpu.Controls.OverlayCloseCause.Escape
+  commentId: F:FluentGpu.Controls.OverlayCloseCause.Escape
+  id: Escape
+  parent: FluentGpu.Controls.OverlayCloseCause
+  langs:
+  - csharp
+  - vb
+  name: Escape
+  nameWithType: OverlayCloseCause.Escape
+  fullName: FluentGpu.Controls.OverlayCloseCause.Escape
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Escape
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Escape = 2
+    return:
+      type: FluentGpu.Controls.OverlayCloseCause
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.OverlayCloseCause
+  commentId: T:FluentGpu.Controls.OverlayCloseCause
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.OverlayCloseCause.html
+  name: OverlayCloseCause
+  nameWithType: OverlayCloseCause
+  fullName: FluentGpu.Controls.OverlayCloseCause

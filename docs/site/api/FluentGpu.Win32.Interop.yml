@@ -1,0 +1,23 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Win32.Interop
+  commentId: N:FluentGpu.Win32.Interop
+  id: FluentGpu.Win32.Interop
+  children:
+  - FluentGpu.Win32.Interop.Win32InteropMarker
+  langs:
+  - csharp
+  - vb
+  name: FluentGpu.Win32.Interop
+  nameWithType: FluentGpu.Win32.Interop
+  fullName: FluentGpu.Win32.Interop
+  type: Namespace
+  assemblies:
+  - FluentGpu.Win32.Interop
+references:
+- uid: FluentGpu.Win32.Interop.Win32InteropMarker
+  commentId: T:FluentGpu.Win32.Interop.Win32InteropMarker
+  href: FluentGpu.Win32.Interop.Win32InteropMarker.html
+  name: Win32InteropMarker
+  nameWithType: Win32InteropMarker
+  fullName: FluentGpu.Win32.Interop.Win32InteropMarker

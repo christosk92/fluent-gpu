@@ -1,0 +1,687 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+  commentId: T:FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+  id: PersonPicture.PersonPictureTemplateSettings
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.#ctor(System.String,System.Boolean,System.Single,System.Single,System.Single)
+  - FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.ActualInitials
+  - FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.BadgeFontSize
+  - FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.BadgePlateSize
+  - FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.For(System.String,System.Boolean,System.Single)
+  - FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.InitialsFontSize
+  - FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.UseSymbolFont
+  langs:
+  - csharp
+  - vb
+  name: PersonPicture.PersonPictureTemplateSettings
+  nameWithType: PersonPicture.PersonPictureTemplateSettings
+  fullName: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Controls/PersonPicture.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PersonPictureTemplateSettings
+    path: ../../src/FluentGpu.Controls/PersonPicture.cs
+    startLine: 29
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Computed geometry/content WinUI bakes into <code>PersonPictureTemplateSettings</code> + its size-driven font
+        rules. Pure factory (no signals): the resolved initials/glyph string, which face renders it, and the size-derived
+        font/badge metrics — fed straight into the static element props (this is a cold, reconcile-time composition).
+  example: []
+  syntax:
+    content: 'public readonly record struct PersonPicture.PersonPictureTemplateSettings : IEquatable<PersonPicture.PersonPictureTemplateSettings>'
+    content.vb: Public Structure PersonPicture.PersonPictureTemplateSettings Implements IEquatable(Of PersonPicture.PersonPictureTemplateSettings)
+  implements:
+  - System.IEquatable{FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.#ctor(System.String,System.Boolean,System.Single,System.Single,System.Single)
+  commentId: M:FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.#ctor(System.String,System.Boolean,System.Single,System.Single,System.Single)
+  id: '#ctor(System.String,System.Boolean,System.Single,System.Single,System.Single)'
+  parent: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: PersonPictureTemplateSettings(string, bool, float, float, float)
+  nameWithType: PersonPicture.PersonPictureTemplateSettings.PersonPictureTemplateSettings(string, bool, float, float, float)
+  fullName: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.PersonPictureTemplateSettings(string, bool, float, float, float)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Controls/PersonPicture.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Controls/PersonPicture.cs
+    startLine: 29
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Computed geometry/content WinUI bakes into <code>PersonPictureTemplateSettings</code> + its size-driven font
+        rules. Pure factory (no signals): the resolved initials/glyph string, which face renders it, and the size-derived
+        font/badge metrics — fed straight into the static element props (this is a cold, reconcile-time composition).
+  example: []
+  syntax:
+    content: public PersonPictureTemplateSettings(string ActualInitials, bool UseSymbolFont, float InitialsFontSize, float BadgePlateSize, float BadgeFontSize)
+    parameters:
+    - id: ActualInitials
+      type: System.String
+    - id: UseSymbolFont
+      type: System.Boolean
+    - id: InitialsFontSize
+      type: System.Single
+    - id: BadgePlateSize
+      type: System.Single
+    - id: BadgeFontSize
+      type: System.Single
+    content.vb: Public Sub New(ActualInitials As String, UseSymbolFont As Boolean, InitialsFontSize As Single, BadgePlateSize As Single, BadgeFontSize As Single)
+  overload: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.#ctor*
+  nameWithType.vb: PersonPicture.PersonPictureTemplateSettings.New(String, Boolean, Single, Single, Single)
+  fullName.vb: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.New(String, Boolean, Single, Single, Single)
+  name.vb: New(String, Boolean, Single, Single, Single)
+- uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.ActualInitials
+  commentId: P:FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.ActualInitials
+  id: ActualInitials
+  parent: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: ActualInitials
+  nameWithType: PersonPicture.PersonPictureTemplateSettings.ActualInitials
+  fullName: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.ActualInitials
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/PersonPicture.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ActualInitials
+    path: ../../src/FluentGpu.Controls/PersonPicture.cs
+    startLine: 30
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string ActualInitials { get; init; }
+    parameters: []
+    return:
+      type: System.String
+    content.vb: Public Property ActualInitials As String
+  overload: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.ActualInitials*
+- uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.UseSymbolFont
+  commentId: P:FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.UseSymbolFont
+  id: UseSymbolFont
+  parent: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: UseSymbolFont
+  nameWithType: PersonPicture.PersonPictureTemplateSettings.UseSymbolFont
+  fullName: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.UseSymbolFont
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/PersonPicture.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UseSymbolFont
+    path: ../../src/FluentGpu.Controls/PersonPicture.cs
+    startLine: 31
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool UseSymbolFont { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property UseSymbolFont As Boolean
+  overload: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.UseSymbolFont*
+- uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.InitialsFontSize
+  commentId: P:FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.InitialsFontSize
+  id: InitialsFontSize
+  parent: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: InitialsFontSize
+  nameWithType: PersonPicture.PersonPictureTemplateSettings.InitialsFontSize
+  fullName: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.InitialsFontSize
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/PersonPicture.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InitialsFontSize
+    path: ../../src/FluentGpu.Controls/PersonPicture.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float InitialsFontSize { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property InitialsFontSize As Single
+  overload: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.InitialsFontSize*
+- uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.BadgePlateSize
+  commentId: P:FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.BadgePlateSize
+  id: BadgePlateSize
+  parent: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: BadgePlateSize
+  nameWithType: PersonPicture.PersonPictureTemplateSettings.BadgePlateSize
+  fullName: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.BadgePlateSize
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/PersonPicture.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BadgePlateSize
+    path: ../../src/FluentGpu.Controls/PersonPicture.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float BadgePlateSize { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property BadgePlateSize As Single
+  overload: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.BadgePlateSize*
+- uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.BadgeFontSize
+  commentId: P:FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.BadgeFontSize
+  id: BadgeFontSize
+  parent: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: BadgeFontSize
+  nameWithType: PersonPicture.PersonPictureTemplateSettings.BadgeFontSize
+  fullName: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.BadgeFontSize
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/PersonPicture.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BadgeFontSize
+    path: ../../src/FluentGpu.Controls/PersonPicture.cs
+    startLine: 34
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float BadgeFontSize { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property BadgeFontSize As Single
+  overload: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.BadgeFontSize*
+- uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.For(System.String,System.Boolean,System.Single)
+  commentId: M:FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.For(System.String,System.Boolean,System.Single)
+  id: For(System.String,System.Boolean,System.Single)
+  parent: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: For(string, bool, float)
+  nameWithType: PersonPicture.PersonPictureTemplateSettings.For(string, bool, float)
+  fullName: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.For(string, bool, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/PersonPicture.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: For
+    path: ../../src/FluentGpu.Controls/PersonPicture.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static PersonPicture.PersonPictureTemplateSettings For(string actualInitials, bool useSymbolFont, float size)
+    parameters:
+    - id: actualInitials
+      type: System.String
+    - id: useSymbolFont
+      type: System.Boolean
+    - id: size
+      type: System.Single
+    return:
+      type: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+    content.vb: Public Shared Function [For](actualInitials As String, useSymbolFont As Boolean, size As Single) As PersonPicture.PersonPictureTemplateSettings
+  overload: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.For*
+  nameWithType.vb: PersonPicture.PersonPictureTemplateSettings.For(String, Boolean, Single)
+  fullName.vb: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.For(String, Boolean, Single)
+  name.vb: For(String, Boolean, Single)
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.IEquatable{FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings}
+  commentId: T:System.IEquatable{FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<PersonPicture.PersonPictureTemplateSettings>
+  nameWithType: IEquatable<PersonPicture.PersonPictureTemplateSettings>
+  fullName: System.IEquatable<FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings>
+  nameWithType.vb: IEquatable(Of PersonPicture.PersonPictureTemplateSettings)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings)
+  name.vb: IEquatable(Of PersonPicture.PersonPictureTemplateSettings)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.PersonPicture
+    name: PersonPicture
+    href: FluentGpu.Controls.PersonPicture.html
+  - name: .
+  - uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+    name: PersonPictureTemplateSettings
+    href: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.PersonPicture
+    name: PersonPicture
+    href: FluentGpu.Controls.PersonPicture.html
+  - name: .
+  - uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+    name: PersonPictureTemplateSettings
+    href: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.#ctor*
+  commentId: Overload:FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.#ctor
+  href: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.html#FluentGpu_Controls_PersonPicture_PersonPictureTemplateSettings__ctor_System_String_System_Boolean_System_Single_System_Single_System_Single_
+  name: PersonPictureTemplateSettings
+  nameWithType: PersonPicture.PersonPictureTemplateSettings.PersonPictureTemplateSettings
+  fullName: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.PersonPictureTemplateSettings
+  nameWithType.vb: PersonPicture.PersonPictureTemplateSettings.New
+  fullName.vb: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.New
+  name.vb: New
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.ActualInitials*
+  commentId: Overload:FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.ActualInitials
+  href: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.html#FluentGpu_Controls_PersonPicture_PersonPictureTemplateSettings_ActualInitials
+  name: ActualInitials
+  nameWithType: PersonPicture.PersonPictureTemplateSettings.ActualInitials
+  fullName: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.ActualInitials
+- uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.UseSymbolFont*
+  commentId: Overload:FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.UseSymbolFont
+  href: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.html#FluentGpu_Controls_PersonPicture_PersonPictureTemplateSettings_UseSymbolFont
+  name: UseSymbolFont
+  nameWithType: PersonPicture.PersonPictureTemplateSettings.UseSymbolFont
+  fullName: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.UseSymbolFont
+- uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.InitialsFontSize*
+  commentId: Overload:FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.InitialsFontSize
+  href: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.html#FluentGpu_Controls_PersonPicture_PersonPictureTemplateSettings_InitialsFontSize
+  name: InitialsFontSize
+  nameWithType: PersonPicture.PersonPictureTemplateSettings.InitialsFontSize
+  fullName: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.InitialsFontSize
+- uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.BadgePlateSize*
+  commentId: Overload:FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.BadgePlateSize
+  href: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.html#FluentGpu_Controls_PersonPicture_PersonPictureTemplateSettings_BadgePlateSize
+  name: BadgePlateSize
+  nameWithType: PersonPicture.PersonPictureTemplateSettings.BadgePlateSize
+  fullName: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.BadgePlateSize
+- uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.BadgeFontSize*
+  commentId: Overload:FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.BadgeFontSize
+  href: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.html#FluentGpu_Controls_PersonPicture_PersonPictureTemplateSettings_BadgeFontSize
+  name: BadgeFontSize
+  nameWithType: PersonPicture.PersonPictureTemplateSettings.BadgeFontSize
+  fullName: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.BadgeFontSize
+- uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.For*
+  commentId: Overload:FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.For
+  href: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.html#FluentGpu_Controls_PersonPicture_PersonPictureTemplateSettings_For_System_String_System_Boolean_System_Single_
+  name: For
+  nameWithType: PersonPicture.PersonPictureTemplateSettings.For
+  fullName: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.For
+- uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+  commentId: T:FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.PersonPicture.html
+  name: PersonPicture.PersonPictureTemplateSettings
+  nameWithType: PersonPicture.PersonPictureTemplateSettings
+  fullName: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+  spec.csharp:
+  - uid: FluentGpu.Controls.PersonPicture
+    name: PersonPicture
+    href: FluentGpu.Controls.PersonPicture.html
+  - name: .
+  - uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+    name: PersonPictureTemplateSettings
+    href: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.html
+  spec.vb:
+  - uid: FluentGpu.Controls.PersonPicture
+    name: PersonPicture
+    href: FluentGpu.Controls.PersonPicture.html
+  - name: .
+  - uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+    name: PersonPictureTemplateSettings
+    href: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.html

@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Class AppBarButton | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Class AppBarButton | FluentGpu Developer Docs ">
+      
+      <meta name="description" content="A WinUI AppBarButton (AppBarButton_themeresources.xaml). Three layout families: &amp;lt;ul&amp;gt;&amp;lt;li&amp;gt;&amp;lt;b&amp;gt;FullSize&amp;lt;/b&amp;gt; (default style): a 68-wide (:133 Width=68), 64-min-high (AppBarThemeMinHeight, CommandBar_themeresources.xaml:71) vertical stack — 16px icon (AppBarButtonContentHeight) over a 12px Caption label.&amp;lt;/li&amp;gt;&amp;lt;li&amp;gt;&amp;lt;b&amp;gt;Compact&amp;lt;/b&amp;gt; (&amp;lt;code&amp;gt;isCompact: true&amp;lt;/code&amp;gt; — the closed CommandBar): the label collapses; icon-only at the 48px compact height (AppBarThemeCompactHeight :72), ContentViewboxCompactMargin 0,12,0,12 (:111).&amp;lt;/li&amp;gt;&amp;lt;li&amp;gt;&amp;lt;b&amp;gt;Overflow&amp;lt;/b&amp;gt; (&amp;lt;xref href=&amp;quot;FluentGpu.Controls.AppBarButton.CreateOverflow(FluentGpu.Controls.AppBarCommand%2cSystem.Boolean%2cSystem.Boolean%2cSystem.Action%2cFluentGpu.Controls.AppBarButton.Style)&amp;quot; data-throw-if-not-resolved=&amp;quot;false&amp;quot;&amp;gt;&amp;lt;/xref&amp;gt; — the CommandBar overflow menu): a HORIZONTAL row — optional toggle-check column, optional 16&#215;16 icon at the left (OverflowWithMenuIcons :211-223), the label as a 14px Body run (OverflowTextLabel, padding 0,5,0,8 = AppBarButtonOverflowTextLabelPadding :114; lead margin 12 / 38 with toggles / 76 with toggles+icons :192-238), and right-aligned 12px accelerator text (KeyboardAcceleratorTextLabel Margin 24,0,12,0 :371).&amp;lt;/li&amp;gt;&amp;lt;/ul&amp;gt;  State fills are the subtle ramp (AppBarButtonBackground/​PointerOver/​Pressed = SubtleFill Transparent/Secondary/ Tertiary); press dims the foreground to TextSecondary. FocusVisualMargin = −3 (:135). A &amp;lt;xref href=&amp;quot;FluentGpu.Foundation.KeyAccelerator&amp;quot; data-throw-if-not-resolved=&amp;quot;false&amp;quot;&amp;gt;&amp;lt;/xref&amp;gt; chord invokes the button from anywhere (WinUI KeyboardAccelerator).">
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/new/feat/prop-unification/apiSpec/new?filename=FluentGpu_Controls_AppBarButton.md&amp;value=---%0Auid%3A%20FluentGpu.Controls.AppBarButton%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="ManagedReference">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="FluentGpu.Controls.AppBarButton">
+
+
+
+  <h1 id="FluentGpu_Controls_AppBarButton" data-uid="FluentGpu.Controls.AppBarButton" class="text-break">
+Class AppBarButton  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/AppBarButton.cs/#L22"><i class="bi bi-code-slash"></i></a>
+  </h1>
+
+  <div class="facts text-secondary">
+    <dl><dt>Namespace</dt><dd><a class="xref" href="FluentGpu.html">FluentGpu</a>.<a class="xref" href="FluentGpu.Controls.html">Controls</a></dd></dl>
+  <dl><dt>Assembly</dt><dd>FluentGpu.Controls.dll</dd></dl>
+  </div>
+
+  <div class="markdown summary"><p>A WinUI AppBarButton (AppBarButton_themeresources.xaml). Three layout families:</p>
+<pre><code>&lt;ul&gt;&lt;li&gt;&lt;b&gt;FullSize&lt;/b&gt; (default style): a 68-wide (:133 Width=68), 64-min-high (AppBarThemeMinHeight,
+CommandBar_themeresources.xaml:71) vertical stack — 16px icon (AppBarButtonContentHeight) over a 12px Caption
+label.&lt;/li&gt;&lt;li&gt;&lt;b&gt;Compact&lt;/b&gt; (&lt;code&gt;isCompact: true&lt;/code&gt; — the closed CommandBar): the label collapses; icon-only at the 48px
+compact height (AppBarThemeCompactHeight :72), ContentViewboxCompactMargin 0,12,0,12 (:111).&lt;/li&gt;&lt;li&gt;&lt;b&gt;Overflow&lt;/b&gt; (&lt;xref href=&quot;FluentGpu.Controls.AppBarButton.CreateOverflow(FluentGpu.Controls.AppBarCommand%2cSystem.Boolean%2cSystem.Boolean%2cSystem.Action%2cFluentGpu.Controls.AppBarButton.Style)&quot; data-throw-if-not-resolved=&quot;false&quot;&gt;&lt;/xref&gt; — the CommandBar overflow menu): a HORIZONTAL row — optional
+toggle-check column, optional 16×16 icon at the left (OverflowWithMenuIcons :211-223), the label as a 14px Body run
+(OverflowTextLabel, padding 0,5,0,8 = AppBarButtonOverflowTextLabelPadding :114; lead margin 12 / 38 with toggles /
+76 with toggles+icons :192-238), and right-aligned 12px accelerator text (KeyboardAcceleratorTextLabel Margin
+24,0,12,0 :371).&lt;/li&gt;&lt;/ul&gt;
+
+State fills are the subtle ramp (AppBarButtonBackground/​PointerOver/​Pressed = SubtleFill Transparent/Secondary/
+Tertiary); press dims the foreground to TextSecondary. FocusVisualMargin = −3 (:135). A
+&lt;xref href=&quot;FluentGpu.Foundation.KeyAccelerator&quot; data-throw-if-not-resolved=&quot;false&quot;&gt;&lt;/xref&gt; chord invokes the button from anywhere (WinUI KeyboardAccelerator).
+</code></pre>
+</div>
+  <div class="markdown conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static class AppBarButton</code></pre>
+  </div>
+
+
+
+
+  <dl class="typelist inheritance">
+    <dt>Inheritance</dt>
+    <dd>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></div>
+      <div><span class="xref">AppBarButton</span></div>
+    </dd>
+  </dl>
+
+
+
+  <dl class="typelist inheritedMembers">
+    <dt>Inherited Members</dt>
+    <dd>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)">object.Equals(object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)">object.Equals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gethashcode">object.GetHashCode()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gettype">object.GetType()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone">object.MemberwiseClone()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.referenceequals">object.ReferenceEquals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.tostring">object.ToString()</a>
+    </div>
+  </dd></dl>
+
+
+
+
+
+
+  <h2 class="section" id="fields">Fields
+</h2>
+
+
+
+  <h3 id="FluentGpu_Controls_AppBarButton_StyleOverride" data-uid="FluentGpu.Controls.AppBarButton.StyleOverride">
+  StyleOverride
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/AppBarButton.cs/#L47"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static AppBarButton.Style? StyleOverride</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Controls.AppBarButton.html">AppBarButton</a>.<a class="xref" href="FluentGpu.Controls.AppBarButton.Style.html">Style</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+  <h2 class="section" id="properties">Properties
+</h2>
+
+
+  <a id="FluentGpu_Controls_AppBarButton_DefaultStyle_" data-uid="FluentGpu.Controls.AppBarButton.DefaultStyle*"></a>
+
+  <h3 id="FluentGpu_Controls_AppBarButton_DefaultStyle" data-uid="FluentGpu.Controls.AppBarButton.DefaultStyle">
+  DefaultStyle
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/AppBarButton.cs/#L49"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static AppBarButton.Style DefaultStyle { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Controls.AppBarButton.html">AppBarButton</a>.<a class="xref" href="FluentGpu.Controls.AppBarButton.Style.html">Style</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <h2 class="section" id="methods">Methods
+</h2>
+
+
+  <a id="FluentGpu_Controls_AppBarButton_Create_" data-uid="FluentGpu.Controls.AppBarButton.Create*"></a>
+
+  <h3 id="FluentGpu_Controls_AppBarButton_Create_System_String_System_String_System_Action_System_Boolean_FluentGpu_Controls_AppBarButton_Style_System_Boolean_System_Nullable_FluentGpu_Foundation_KeyAccelerator__" data-uid="FluentGpu.Controls.AppBarButton.Create(System.String,System.String,System.Action,System.Boolean,FluentGpu.Controls.AppBarButton.Style,System.Boolean,System.Nullable{FluentGpu.Foundation.KeyAccelerator})">
+  Create(string, string, Action, bool, Style?, bool, KeyAccelerator?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/AppBarButton.cs/#L63"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>FullSize (labeled, 68×64) or Compact (icon-only, 48×48) AppBarButton.
+<code class="paramref">accelerator</code> wires a real engine keyboard-accelerator chord onto the click.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static BoxEl Create(string glyph, string label, Action onClick, bool enabled = true, AppBarButton.Style? style = null, bool isCompact = false, KeyAccelerator? accelerator = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>glyph</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>label</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>onClick</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action">Action</a></dt>
+    <dd></dd>
+    <dt><code>enabled</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+    <dt><code>style</code> <a class="xref" href="FluentGpu.Controls.AppBarButton.html">AppBarButton</a>.<a class="xref" href="FluentGpu.Controls.AppBarButton.Style.html">Style</a></dt>
+    <dd></dd>
+    <dt><code>isCompact</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+    <dt><code>accelerator</code> <a class="xref" href="FluentGpu.Foundation.KeyAccelerator.html">KeyAccelerator</a>?</dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.BoxEl.html">BoxEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_AppBarButton_CreateOverflow_" data-uid="FluentGpu.Controls.AppBarButton.CreateOverflow*"></a>
+
+  <h3 id="FluentGpu_Controls_AppBarButton_CreateOverflow_FluentGpu_Controls_AppBarCommand_System_Boolean_System_Boolean_System_Action_FluentGpu_Controls_AppBarButton_Style_" data-uid="FluentGpu.Controls.AppBarButton.CreateOverflow(FluentGpu.Controls.AppBarCommand,System.Boolean,System.Boolean,System.Action,FluentGpu.Controls.AppBarButton.Style)">
+  CreateOverflow(AppBarCommand, bool, bool, Action, Style?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/AppBarButton.cs/#L126"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>An Overflow-state AppBarButton row for the CommandBar overflow menu (AppBarButton_themeresources.xaml
+:192-238 Overflow/OverflowWithToggleButtons/OverflowWithMenuIcons/OverflowWithToggleButtonsAndMenuIcons):
+[check column when <code class="paramref">hasToggles</code>] [16×16 icon at left when <code class="paramref">hasIcons</code>]
+label (Body 14, padding 0,5,0,8) … right-aligned accelerator text (Caption 12, margin 24,0,12,0).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static BoxEl CreateOverflow(AppBarCommand cmd, bool hasToggles, bool hasIcons, Action onInvoke, AppBarButton.Style? style = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>cmd</code> <a class="xref" href="FluentGpu.Controls.AppBarCommand.html">AppBarCommand</a></dt>
+    <dd></dd>
+    <dt><code>hasToggles</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+    <dt><code>hasIcons</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+    <dt><code>onInvoke</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action">Action</a></dt>
+    <dd></dd>
+    <dt><code>style</code> <a class="xref" href="FluentGpu.Controls.AppBarButton.html">AppBarButton</a>.<a class="xref" href="FluentGpu.Controls.AppBarButton.Style.html">Style</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.BoxEl.html">BoxEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+</article>
+
+
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

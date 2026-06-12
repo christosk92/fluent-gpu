@@ -1,0 +1,1333 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.Button.Style
+  commentId: T:FluentGpu.Controls.Button.Style
+  id: Button.Style
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.Button.Style.Background
+  - FluentGpu.Controls.Button.Style.BackgroundSizing
+  - FluentGpu.Controls.Button.Style.Bold
+  - FluentGpu.Controls.Button.Style.BorderBrush
+  - FluentGpu.Controls.Button.Style.BorderWidth
+  - FluentGpu.Controls.Button.Style.BrushTransitionMs
+  - FluentGpu.Controls.Button.Style.CornerRadius
+  - FluentGpu.Controls.Button.Style.DisabledBackground
+  - FluentGpu.Controls.Button.Style.DisabledBorderBrush
+  - FluentGpu.Controls.Button.Style.DisabledForeground
+  - FluentGpu.Controls.Button.Style.FocusVisualMargin
+  - FluentGpu.Controls.Button.Style.FontSize
+  - FluentGpu.Controls.Button.Style.Foreground
+  - FluentGpu.Controls.Button.Style.HorizontalContentAlignment
+  - FluentGpu.Controls.Button.Style.HoverBackground
+  - FluentGpu.Controls.Button.Style.HoverBorderBrush
+  - FluentGpu.Controls.Button.Style.HoverForeground
+  - FluentGpu.Controls.Button.Style.MinHeight
+  - FluentGpu.Controls.Button.Style.Padding
+  - FluentGpu.Controls.Button.Style.PressedBackground
+  - FluentGpu.Controls.Button.Style.PressedBorderBrush
+  - FluentGpu.Controls.Button.Style.PressedForeground
+  - FluentGpu.Controls.Button.Style.VerticalContentAlignment
+  langs:
+  - csharp
+  - vb
+  name: Button.Style
+  nameWithType: Button.Style
+  fullName: FluentGpu.Controls.Button.Style
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Style
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A button's visual style. Colours resolve from <xref href="FluentGpu.Dsl.Tok" data-throw-if-not-resolved="false"></xref> in the computed default styles below.
+        State colours follow WinUI's 4-state matrix (normal/hover/pressed/disabled) for fill, foreground and border.
+  example: []
+  syntax:
+    content: 'public sealed record Button.Style : IEquatable<Button.Style>'
+    content.vb: Public NotInheritable Class Button.Style Implements IEquatable(Of Button.Style)
+  inheritance:
+  - System.Object
+  implements:
+  - System.IEquatable{FluentGpu.Controls.Button.Style}
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.Button.Style.Background
+  commentId: P:FluentGpu.Controls.Button.Style.Background
+  id: Background
+  parent: FluentGpu.Controls.Button.Style
+  langs:
+  - csharp
+  - vb
+  name: Background
+  nameWithType: Button.Style.Background
+  fullName: FluentGpu.Controls.Button.Style.Background
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Background
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 49
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF Background { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property Background As ColorF
+  overload: FluentGpu.Controls.Button.Style.Background*
+- uid: FluentGpu.Controls.Button.Style.Foreground
+  commentId: P:FluentGpu.Controls.Button.Style.Foreground
+  id: Foreground
+  parent: FluentGpu.Controls.Button.Style
+  langs:
+  - csharp
+  - vb
+  name: Foreground
+  nameWithType: Button.Style.Foreground
+  fullName: FluentGpu.Controls.Button.Style.Foreground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Foreground
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 50
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF Foreground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property Foreground As ColorF
+  overload: FluentGpu.Controls.Button.Style.Foreground*
+- uid: FluentGpu.Controls.Button.Style.BorderBrush
+  commentId: P:FluentGpu.Controls.Button.Style.BorderBrush
+  id: BorderBrush
+  parent: FluentGpu.Controls.Button.Style
+  langs:
+  - csharp
+  - vb
+  name: BorderBrush
+  nameWithType: Button.Style.BorderBrush
+  fullName: FluentGpu.Controls.Button.Style.BorderBrush
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BorderBrush
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 52
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'The one border knob: a WinUI elevation gradient (the default) or a solid via <code>GradientSpec.Solid(c)</code>.'
+  example: []
+  syntax:
+    content: public GradientSpec? BorderBrush { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.GradientSpec}
+    content.vb: Public Property BorderBrush As GradientSpec?
+  overload: FluentGpu.Controls.Button.Style.BorderBrush*
+- uid: FluentGpu.Controls.Button.Style.HoverBackground
+  commentId: P:FluentGpu.Controls.Button.Style.HoverBackground
+  id: HoverBackground
+  parent: FluentGpu.Controls.Button.Style
+  langs:
+  - csharp
+  - vb
+  name: HoverBackground
+  nameWithType: Button.Style.HoverBackground
+  fullName: FluentGpu.Controls.Button.Style.HoverBackground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HoverBackground
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF HoverBackground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property HoverBackground As ColorF
+  overload: FluentGpu.Controls.Button.Style.HoverBackground*
+- uid: FluentGpu.Controls.Button.Style.PressedBackground
+  commentId: P:FluentGpu.Controls.Button.Style.PressedBackground
+  id: PressedBackground
+  parent: FluentGpu.Controls.Button.Style
+  langs:
+  - csharp
+  - vb
+  name: PressedBackground
+  nameWithType: Button.Style.PressedBackground
+  fullName: FluentGpu.Controls.Button.Style.PressedBackground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PressedBackground
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF PressedBackground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property PressedBackground As ColorF
+  overload: FluentGpu.Controls.Button.Style.PressedBackground*
+- uid: FluentGpu.Controls.Button.Style.DisabledBackground
+  commentId: P:FluentGpu.Controls.Button.Style.DisabledBackground
+  id: DisabledBackground
+  parent: FluentGpu.Controls.Button.Style
+  langs:
+  - csharp
+  - vb
+  name: DisabledBackground
+  nameWithType: Button.Style.DisabledBackground
+  fullName: FluentGpu.Controls.Button.Style.DisabledBackground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DisabledBackground
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 58
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF DisabledBackground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property DisabledBackground As ColorF
+  overload: FluentGpu.Controls.Button.Style.DisabledBackground*
+- uid: FluentGpu.Controls.Button.Style.HoverForeground
+  commentId: P:FluentGpu.Controls.Button.Style.HoverForeground
+  id: HoverForeground
+  parent: FluentGpu.Controls.Button.Style
+  langs:
+  - csharp
+  - vb
+  name: HoverForeground
+  nameWithType: Button.Style.HoverForeground
+  fullName: FluentGpu.Controls.Button.Style.HoverForeground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HoverForeground
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 59
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF HoverForeground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property HoverForeground As ColorF
+  overload: FluentGpu.Controls.Button.Style.HoverForeground*
+- uid: FluentGpu.Controls.Button.Style.PressedForeground
+  commentId: P:FluentGpu.Controls.Button.Style.PressedForeground
+  id: PressedForeground
+  parent: FluentGpu.Controls.Button.Style
+  langs:
+  - csharp
+  - vb
+  name: PressedForeground
+  nameWithType: Button.Style.PressedForeground
+  fullName: FluentGpu.Controls.Button.Style.PressedForeground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PressedForeground
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 60
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF PressedForeground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property PressedForeground As ColorF
+  overload: FluentGpu.Controls.Button.Style.PressedForeground*
+- uid: FluentGpu.Controls.Button.Style.DisabledForeground
+  commentId: P:FluentGpu.Controls.Button.Style.DisabledForeground
+  id: DisabledForeground
+  parent: FluentGpu.Controls.Button.Style
+  langs:
+  - csharp
+  - vb
+  name: DisabledForeground
+  nameWithType: Button.Style.DisabledForeground
+  fullName: FluentGpu.Controls.Button.Style.DisabledForeground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DisabledForeground
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 61
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF DisabledForeground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property DisabledForeground As ColorF
+  overload: FluentGpu.Controls.Button.Style.DisabledForeground*
+- uid: FluentGpu.Controls.Button.Style.HoverBorderBrush
+  commentId: P:FluentGpu.Controls.Button.Style.HoverBorderBrush
+  id: HoverBorderBrush
+  parent: FluentGpu.Controls.Button.Style
+  langs:
+  - csharp
+  - vb
+  name: HoverBorderBrush
+  nameWithType: Button.Style.HoverBorderBrush
+  fullName: FluentGpu.Controls.Button.Style.HoverBorderBrush
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HoverBorderBrush
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public GradientSpec? HoverBorderBrush { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.GradientSpec}
+    content.vb: Public Property HoverBorderBrush As GradientSpec?
+  overload: FluentGpu.Controls.Button.Style.HoverBorderBrush*
+- uid: FluentGpu.Controls.Button.Style.PressedBorderBrush
+  commentId: P:FluentGpu.Controls.Button.Style.PressedBorderBrush
+  id: PressedBorderBrush
+  parent: FluentGpu.Controls.Button.Style
+  langs:
+  - csharp
+  - vb
+  name: PressedBorderBrush
+  nameWithType: Button.Style.PressedBorderBrush
+  fullName: FluentGpu.Controls.Button.Style.PressedBorderBrush
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PressedBorderBrush
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 63
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public GradientSpec? PressedBorderBrush { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.GradientSpec}
+    content.vb: Public Property PressedBorderBrush As GradientSpec?
+  overload: FluentGpu.Controls.Button.Style.PressedBorderBrush*
+- uid: FluentGpu.Controls.Button.Style.DisabledBorderBrush
+  commentId: P:FluentGpu.Controls.Button.Style.DisabledBorderBrush
+  id: DisabledBorderBrush
+  parent: FluentGpu.Controls.Button.Style
+  langs:
+  - csharp
+  - vb
+  name: DisabledBorderBrush
+  nameWithType: Button.Style.DisabledBorderBrush
+  fullName: FluentGpu.Controls.Button.Style.DisabledBorderBrush
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DisabledBorderBrush
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 64
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public GradientSpec? DisabledBorderBrush { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.GradientSpec}
+    content.vb: Public Property DisabledBorderBrush As GradientSpec?
+  overload: FluentGpu.Controls.Button.Style.DisabledBorderBrush*
+- uid: FluentGpu.Controls.Button.Style.BorderWidth
+  commentId: P:FluentGpu.Controls.Button.Style.BorderWidth
+  id: BorderWidth
+  parent: FluentGpu.Controls.Button.Style
+  langs:
+  - csharp
+  - vb
+  name: BorderWidth
+  nameWithType: Button.Style.BorderWidth
+  fullName: FluentGpu.Controls.Button.Style.BorderWidth
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BorderWidth
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 65
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float BorderWidth { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property BorderWidth As Single
+  overload: FluentGpu.Controls.Button.Style.BorderWidth*
+- uid: FluentGpu.Controls.Button.Style.CornerRadius
+  commentId: P:FluentGpu.Controls.Button.Style.CornerRadius
+  id: CornerRadius
+  parent: FluentGpu.Controls.Button.Style
+  langs:
+  - csharp
+  - vb
+  name: CornerRadius
+  nameWithType: Button.Style.CornerRadius
+  fullName: FluentGpu.Controls.Button.Style.CornerRadius
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CornerRadius
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 66
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float CornerRadius { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property CornerRadius As Single
+  overload: FluentGpu.Controls.Button.Style.CornerRadius*
+- uid: FluentGpu.Controls.Button.Style.Padding
+  commentId: P:FluentGpu.Controls.Button.Style.Padding
+  id: Padding
+  parent: FluentGpu.Controls.Button.Style
+  langs:
+  - csharp
+  - vb
+  name: Padding
+  nameWithType: Button.Style.Padding
+  fullName: FluentGpu.Controls.Button.Style.Padding
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Padding
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 67
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Edges4 Padding { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Edges4
+    content.vb: Public Property Padding As Edges4
+  overload: FluentGpu.Controls.Button.Style.Padding*
+- uid: FluentGpu.Controls.Button.Style.FontSize
+  commentId: P:FluentGpu.Controls.Button.Style.FontSize
+  id: FontSize
+  parent: FluentGpu.Controls.Button.Style
+  langs:
+  - csharp
+  - vb
+  name: FontSize
+  nameWithType: Button.Style.FontSize
+  fullName: FluentGpu.Controls.Button.Style.FontSize
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FontSize
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 68
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float FontSize { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property FontSize As Single
+  overload: FluentGpu.Controls.Button.Style.FontSize*
+- uid: FluentGpu.Controls.Button.Style.MinHeight
+  commentId: P:FluentGpu.Controls.Button.Style.MinHeight
+  id: MinHeight
+  parent: FluentGpu.Controls.Button.Style
+  langs:
+  - csharp
+  - vb
+  name: MinHeight
+  nameWithType: Button.Style.MinHeight
+  fullName: FluentGpu.Controls.Button.Style.MinHeight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MinHeight
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 69
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float MinHeight { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property MinHeight As Single
+  overload: FluentGpu.Controls.Button.Style.MinHeight*
+- uid: FluentGpu.Controls.Button.Style.Bold
+  commentId: P:FluentGpu.Controls.Button.Style.Bold
+  id: Bold
+  parent: FluentGpu.Controls.Button.Style
+  langs:
+  - csharp
+  - vb
+  name: Bold
+  nameWithType: Button.Style.Bold
+  fullName: FluentGpu.Controls.Button.Style.Bold
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Bold
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 70
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool Bold { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property Bold As Boolean
+  overload: FluentGpu.Controls.Button.Style.Bold*
+- uid: FluentGpu.Controls.Button.Style.HorizontalContentAlignment
+  commentId: P:FluentGpu.Controls.Button.Style.HorizontalContentAlignment
+  id: HorizontalContentAlignment
+  parent: FluentGpu.Controls.Button.Style
+  langs:
+  - csharp
+  - vb
+  name: HorizontalContentAlignment
+  nameWithType: Button.Style.HorizontalContentAlignment
+  fullName: FluentGpu.Controls.Button.Style.HorizontalContentAlignment
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HorizontalContentAlignment
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 74
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI HorizontalContentAlignment equivalent (main-axis Justify of the row box). WinUI Control
+        default = Center (dxaml\xcp\components\DependencyObject\DependencyProperty.cpp:646-648) — content centres
+        when the button is wider than its label.
+  example: []
+  syntax:
+    content: public FlexJustify HorizontalContentAlignment { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.FlexJustify
+    content.vb: Public Property HorizontalContentAlignment As FlexJustify
+  overload: FluentGpu.Controls.Button.Style.HorizontalContentAlignment*
+- uid: FluentGpu.Controls.Button.Style.VerticalContentAlignment
+  commentId: P:FluentGpu.Controls.Button.Style.VerticalContentAlignment
+  id: VerticalContentAlignment
+  parent: FluentGpu.Controls.Button.Style
+  langs:
+  - csharp
+  - vb
+  name: VerticalContentAlignment
+  nameWithType: Button.Style.VerticalContentAlignment
+  fullName: FluentGpu.Controls.Button.Style.VerticalContentAlignment
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: VerticalContentAlignment
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 77
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI VerticalContentAlignment equivalent (cross-axis AlignItems). WinUI Control default = Center
+        (DependencyProperty.cpp:650-652).
+  example: []
+  syntax:
+    content: public FlexAlign VerticalContentAlignment { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.FlexAlign
+    content.vb: Public Property VerticalContentAlignment As FlexAlign
+  overload: FluentGpu.Controls.Button.Style.VerticalContentAlignment*
+- uid: FluentGpu.Controls.Button.Style.FocusVisualMargin
+  commentId: P:FluentGpu.Controls.Button.Style.FocusVisualMargin
+  id: FocusVisualMargin
+  parent: FluentGpu.Controls.Button.Style
+  langs:
+  - csharp
+  - vb
+  name: FocusVisualMargin
+  nameWithType: Button.Style.FocusVisualMargin
+  fullName: FluentGpu.Controls.Button.Style.FocusVisualMargin
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FocusVisualMargin
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 80
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI FocusVisualMargin = −3: the keyboard focus ring sits 3px OUTSIDE the bounds
+        (Button_themeresources.xaml:167). The engine draws the ring (E1).
+  example: []
+  syntax:
+    content: public Edges4 FocusVisualMargin { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Edges4
+    content.vb: Public Property FocusVisualMargin As Edges4
+  overload: FluentGpu.Controls.Button.Style.FocusVisualMargin*
+- uid: FluentGpu.Controls.Button.Style.BackgroundSizing
+  commentId: P:FluentGpu.Controls.Button.Style.BackgroundSizing
+  id: BackgroundSizing
+  parent: FluentGpu.Controls.Button.Style
+  langs:
+  - csharp
+  - vb
+  name: BackgroundSizing
+  nameWithType: Button.Style.BackgroundSizing
+  fullName: FluentGpu.Controls.Button.Style.BackgroundSizing
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BackgroundSizing
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 84
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI BackgroundSizing: DefaultButtonStyle = InnerBorderEdge (Button_themeresources.xaml:156);
+        the accent style overrides to OuterBorderEdge. See <xref href="FluentGpu.Controls.BackgroundSizing" data-throw-if-not-resolved="false"></xref> for the
+        renderer-mapping note.
+  example: []
+  syntax:
+    content: public BackgroundSizing BackgroundSizing { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.BackgroundSizing
+    content.vb: Public Property BackgroundSizing As BackgroundSizing
+  overload: FluentGpu.Controls.Button.Style.BackgroundSizing*
+- uid: FluentGpu.Controls.Button.Style.BrushTransitionMs
+  commentId: P:FluentGpu.Controls.Button.Style.BrushTransitionMs
+  id: BrushTransitionMs
+  parent: FluentGpu.Controls.Button.Style
+  langs:
+  - csharp
+  - vb
+  name: BrushTransitionMs
+  nameWithType: Button.Style.BrushTransitionMs
+  fullName: FluentGpu.Controls.Button.Style.BrushTransitionMs
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BrushTransitionMs
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 89
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI ContentPresenter.BackgroundTransition = BrushTransition 83ms (Button_themeresources.xaml:173-175):
+        a re-render that flips the resting fill on a live node cross-fades instead of snapping (the E3 primitive).
+        WinUI scopes the transition to Background only; the engine routes border diffs through the same ramp —
+        a documented sub-100ms over-coverage. NaN = snap.
+  example: []
+  syntax:
+    content: public float BrushTransitionMs { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property BrushTransitionMs As Single
+  overload: FluentGpu.Controls.Button.Style.BrushTransitionMs*
+references:
+- uid: FluentGpu.Dsl.Tok
+  commentId: T:FluentGpu.Dsl.Tok
+  href: FluentGpu.Dsl.Tok.html
+  name: Tok
+  nameWithType: Tok
+  fullName: FluentGpu.Dsl.Tok
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.IEquatable{FluentGpu.Controls.Button.Style}
+  commentId: T:System.IEquatable{FluentGpu.Controls.Button.Style}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<Button.Style>
+  nameWithType: IEquatable<Button.Style>
+  fullName: System.IEquatable<FluentGpu.Controls.Button.Style>
+  nameWithType.vb: IEquatable(Of Button.Style)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.Button.Style)
+  name.vb: IEquatable(Of Button.Style)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.Button
+    name: Button
+    href: FluentGpu.Controls.Button.html
+  - name: .
+  - uid: FluentGpu.Controls.Button.Style
+    name: Style
+    href: FluentGpu.Controls.Button.Style.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.Button
+    name: Button
+    href: FluentGpu.Controls.Button.html
+  - name: .
+  - uid: FluentGpu.Controls.Button.Style
+    name: Style
+    href: FluentGpu.Controls.Button.Style.html
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.Button.Style.Background*
+  commentId: Overload:FluentGpu.Controls.Button.Style.Background
+  href: FluentGpu.Controls.Button.Style.html#FluentGpu_Controls_Button_Style_Background
+  name: Background
+  nameWithType: Button.Style.Background
+  fullName: FluentGpu.Controls.Button.Style.Background
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Controls.Button.Style.Foreground*
+  commentId: Overload:FluentGpu.Controls.Button.Style.Foreground
+  href: FluentGpu.Controls.Button.Style.html#FluentGpu_Controls_Button_Style_Foreground
+  name: Foreground
+  nameWithType: Button.Style.Foreground
+  fullName: FluentGpu.Controls.Button.Style.Foreground
+- uid: FluentGpu.Controls.Button.Style.BorderBrush*
+  commentId: Overload:FluentGpu.Controls.Button.Style.BorderBrush
+  href: FluentGpu.Controls.Button.Style.html#FluentGpu_Controls_Button_Style_BorderBrush
+  name: BorderBrush
+  nameWithType: Button.Style.BorderBrush
+  fullName: FluentGpu.Controls.Button.Style.BorderBrush
+- uid: System.Nullable{FluentGpu.Foundation.GradientSpec}
+  commentId: T:System.Nullable{FluentGpu.Foundation.GradientSpec}
+  parent: System
+  definition: System.Nullable`1
+  href: FluentGpu.Foundation.GradientSpec.html
+  name: GradientSpec?
+  nameWithType: GradientSpec?
+  fullName: FluentGpu.Foundation.GradientSpec?
+  spec.csharp:
+  - uid: FluentGpu.Foundation.GradientSpec
+    name: GradientSpec
+    href: FluentGpu.Foundation.GradientSpec.html
+  - name: '?'
+  spec.vb:
+  - uid: FluentGpu.Foundation.GradientSpec
+    name: GradientSpec
+    href: FluentGpu.Foundation.GradientSpec.html
+  - name: '?'
+- uid: System.Nullable`1
+  commentId: T:System.Nullable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  name: Nullable<T>
+  nameWithType: Nullable<T>
+  fullName: System.Nullable<T>
+  nameWithType.vb: Nullable(Of T)
+  fullName.vb: System.Nullable(Of T)
+  name.vb: Nullable(Of T)
+  spec.csharp:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.Button.Style.HoverBackground*
+  commentId: Overload:FluentGpu.Controls.Button.Style.HoverBackground
+  href: FluentGpu.Controls.Button.Style.html#FluentGpu_Controls_Button_Style_HoverBackground
+  name: HoverBackground
+  nameWithType: Button.Style.HoverBackground
+  fullName: FluentGpu.Controls.Button.Style.HoverBackground
+- uid: FluentGpu.Controls.Button.Style.PressedBackground*
+  commentId: Overload:FluentGpu.Controls.Button.Style.PressedBackground
+  href: FluentGpu.Controls.Button.Style.html#FluentGpu_Controls_Button_Style_PressedBackground
+  name: PressedBackground
+  nameWithType: Button.Style.PressedBackground
+  fullName: FluentGpu.Controls.Button.Style.PressedBackground
+- uid: FluentGpu.Controls.Button.Style.DisabledBackground*
+  commentId: Overload:FluentGpu.Controls.Button.Style.DisabledBackground
+  href: FluentGpu.Controls.Button.Style.html#FluentGpu_Controls_Button_Style_DisabledBackground
+  name: DisabledBackground
+  nameWithType: Button.Style.DisabledBackground
+  fullName: FluentGpu.Controls.Button.Style.DisabledBackground
+- uid: FluentGpu.Controls.Button.Style.HoverForeground*
+  commentId: Overload:FluentGpu.Controls.Button.Style.HoverForeground
+  href: FluentGpu.Controls.Button.Style.html#FluentGpu_Controls_Button_Style_HoverForeground
+  name: HoverForeground
+  nameWithType: Button.Style.HoverForeground
+  fullName: FluentGpu.Controls.Button.Style.HoverForeground
+- uid: FluentGpu.Controls.Button.Style.PressedForeground*
+  commentId: Overload:FluentGpu.Controls.Button.Style.PressedForeground
+  href: FluentGpu.Controls.Button.Style.html#FluentGpu_Controls_Button_Style_PressedForeground
+  name: PressedForeground
+  nameWithType: Button.Style.PressedForeground
+  fullName: FluentGpu.Controls.Button.Style.PressedForeground
+- uid: FluentGpu.Controls.Button.Style.DisabledForeground*
+  commentId: Overload:FluentGpu.Controls.Button.Style.DisabledForeground
+  href: FluentGpu.Controls.Button.Style.html#FluentGpu_Controls_Button_Style_DisabledForeground
+  name: DisabledForeground
+  nameWithType: Button.Style.DisabledForeground
+  fullName: FluentGpu.Controls.Button.Style.DisabledForeground
+- uid: FluentGpu.Controls.Button.Style.HoverBorderBrush*
+  commentId: Overload:FluentGpu.Controls.Button.Style.HoverBorderBrush
+  href: FluentGpu.Controls.Button.Style.html#FluentGpu_Controls_Button_Style_HoverBorderBrush
+  name: HoverBorderBrush
+  nameWithType: Button.Style.HoverBorderBrush
+  fullName: FluentGpu.Controls.Button.Style.HoverBorderBrush
+- uid: FluentGpu.Controls.Button.Style.PressedBorderBrush*
+  commentId: Overload:FluentGpu.Controls.Button.Style.PressedBorderBrush
+  href: FluentGpu.Controls.Button.Style.html#FluentGpu_Controls_Button_Style_PressedBorderBrush
+  name: PressedBorderBrush
+  nameWithType: Button.Style.PressedBorderBrush
+  fullName: FluentGpu.Controls.Button.Style.PressedBorderBrush
+- uid: FluentGpu.Controls.Button.Style.DisabledBorderBrush*
+  commentId: Overload:FluentGpu.Controls.Button.Style.DisabledBorderBrush
+  href: FluentGpu.Controls.Button.Style.html#FluentGpu_Controls_Button_Style_DisabledBorderBrush
+  name: DisabledBorderBrush
+  nameWithType: Button.Style.DisabledBorderBrush
+  fullName: FluentGpu.Controls.Button.Style.DisabledBorderBrush
+- uid: FluentGpu.Controls.Button.Style.BorderWidth*
+  commentId: Overload:FluentGpu.Controls.Button.Style.BorderWidth
+  href: FluentGpu.Controls.Button.Style.html#FluentGpu_Controls_Button_Style_BorderWidth
+  name: BorderWidth
+  nameWithType: Button.Style.BorderWidth
+  fullName: FluentGpu.Controls.Button.Style.BorderWidth
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Controls.Button.Style.CornerRadius*
+  commentId: Overload:FluentGpu.Controls.Button.Style.CornerRadius
+  href: FluentGpu.Controls.Button.Style.html#FluentGpu_Controls_Button_Style_CornerRadius
+  name: CornerRadius
+  nameWithType: Button.Style.CornerRadius
+  fullName: FluentGpu.Controls.Button.Style.CornerRadius
+- uid: FluentGpu.Controls.Button.Style.Padding*
+  commentId: Overload:FluentGpu.Controls.Button.Style.Padding
+  href: FluentGpu.Controls.Button.Style.html#FluentGpu_Controls_Button_Style_Padding
+  name: Padding
+  nameWithType: Button.Style.Padding
+  fullName: FluentGpu.Controls.Button.Style.Padding
+- uid: FluentGpu.Foundation.Edges4
+  commentId: T:FluentGpu.Foundation.Edges4
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Edges4.html
+  name: Edges4
+  nameWithType: Edges4
+  fullName: FluentGpu.Foundation.Edges4
+- uid: FluentGpu.Controls.Button.Style.FontSize*
+  commentId: Overload:FluentGpu.Controls.Button.Style.FontSize
+  href: FluentGpu.Controls.Button.Style.html#FluentGpu_Controls_Button_Style_FontSize
+  name: FontSize
+  nameWithType: Button.Style.FontSize
+  fullName: FluentGpu.Controls.Button.Style.FontSize
+- uid: FluentGpu.Controls.Button.Style.MinHeight*
+  commentId: Overload:FluentGpu.Controls.Button.Style.MinHeight
+  href: FluentGpu.Controls.Button.Style.html#FluentGpu_Controls_Button_Style_MinHeight
+  name: MinHeight
+  nameWithType: Button.Style.MinHeight
+  fullName: FluentGpu.Controls.Button.Style.MinHeight
+- uid: FluentGpu.Controls.Button.Style.Bold*
+  commentId: Overload:FluentGpu.Controls.Button.Style.Bold
+  href: FluentGpu.Controls.Button.Style.html#FluentGpu_Controls_Button_Style_Bold
+  name: Bold
+  nameWithType: Button.Style.Bold
+  fullName: FluentGpu.Controls.Button.Style.Bold
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Controls.Button.Style.HorizontalContentAlignment*
+  commentId: Overload:FluentGpu.Controls.Button.Style.HorizontalContentAlignment
+  href: FluentGpu.Controls.Button.Style.html#FluentGpu_Controls_Button_Style_HorizontalContentAlignment
+  name: HorizontalContentAlignment
+  nameWithType: Button.Style.HorizontalContentAlignment
+  fullName: FluentGpu.Controls.Button.Style.HorizontalContentAlignment
+- uid: FluentGpu.Foundation.FlexJustify
+  commentId: T:FluentGpu.Foundation.FlexJustify
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.FlexJustify.html
+  name: FlexJustify
+  nameWithType: FlexJustify
+  fullName: FluentGpu.Foundation.FlexJustify
+- uid: FluentGpu.Controls.Button.Style.VerticalContentAlignment*
+  commentId: Overload:FluentGpu.Controls.Button.Style.VerticalContentAlignment
+  href: FluentGpu.Controls.Button.Style.html#FluentGpu_Controls_Button_Style_VerticalContentAlignment
+  name: VerticalContentAlignment
+  nameWithType: Button.Style.VerticalContentAlignment
+  fullName: FluentGpu.Controls.Button.Style.VerticalContentAlignment
+- uid: FluentGpu.Foundation.FlexAlign
+  commentId: T:FluentGpu.Foundation.FlexAlign
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.FlexAlign.html
+  name: FlexAlign
+  nameWithType: FlexAlign
+  fullName: FluentGpu.Foundation.FlexAlign
+- uid: FluentGpu.Controls.Button.Style.FocusVisualMargin*
+  commentId: Overload:FluentGpu.Controls.Button.Style.FocusVisualMargin
+  href: FluentGpu.Controls.Button.Style.html#FluentGpu_Controls_Button_Style_FocusVisualMargin
+  name: FocusVisualMargin
+  nameWithType: Button.Style.FocusVisualMargin
+  fullName: FluentGpu.Controls.Button.Style.FocusVisualMargin
+- uid: FluentGpu.Controls.BackgroundSizing
+  commentId: T:FluentGpu.Controls.BackgroundSizing
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.BackgroundSizing.html
+  name: BackgroundSizing
+  nameWithType: BackgroundSizing
+  fullName: FluentGpu.Controls.BackgroundSizing
+- uid: FluentGpu.Controls.Button.Style.BackgroundSizing*
+  commentId: Overload:FluentGpu.Controls.Button.Style.BackgroundSizing
+  href: FluentGpu.Controls.Button.Style.html#FluentGpu_Controls_Button_Style_BackgroundSizing
+  name: BackgroundSizing
+  nameWithType: Button.Style.BackgroundSizing
+  fullName: FluentGpu.Controls.Button.Style.BackgroundSizing
+- uid: FluentGpu.Controls.Button.Style.BrushTransitionMs*
+  commentId: Overload:FluentGpu.Controls.Button.Style.BrushTransitionMs
+  href: FluentGpu.Controls.Button.Style.html#FluentGpu_Controls_Button_Style_BrushTransitionMs
+  name: BrushTransitionMs
+  nameWithType: Button.Style.BrushTransitionMs
+  fullName: FluentGpu.Controls.Button.Style.BrushTransitionMs

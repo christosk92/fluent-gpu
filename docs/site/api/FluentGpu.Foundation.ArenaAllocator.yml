@@ -1,0 +1,479 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.ArenaAllocator
+  commentId: T:FluentGpu.Foundation.ArenaAllocator
+  id: ArenaAllocator
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.ArenaAllocator.#ctor(System.Int32)
+  - FluentGpu.Foundation.ArenaAllocator.AllocSpan``1(System.Int32)
+  - FluentGpu.Foundation.ArenaAllocator.Reset
+  langs:
+  - csharp
+  - vb
+  name: ArenaAllocator
+  nameWithType: ArenaAllocator
+  fullName: FluentGpu.Foundation.ArenaAllocator
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Allocators.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ArenaAllocator
+    path: ../../src/FluentGpu.Foundation/Allocators.cs
+    startLine: 73
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Per-frame bump allocator. O(1) <xref href="FluentGpu.Foundation.ArenaAllocator.Reset" data-throw-if-not-resolved="false"></xref>. Spans are invalidated by Reset (and by a grow).
+  example: []
+  syntax:
+    content: public sealed class ArenaAllocator
+    content.vb: Public NotInheritable Class ArenaAllocator
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Foundation.ArenaAllocator.#ctor(System.Int32)
+  commentId: M:FluentGpu.Foundation.ArenaAllocator.#ctor(System.Int32)
+  id: '#ctor(System.Int32)'
+  parent: FluentGpu.Foundation.ArenaAllocator
+  langs:
+  - csharp
+  - vb
+  name: ArenaAllocator(int)
+  nameWithType: ArenaAllocator.ArenaAllocator(int)
+  fullName: FluentGpu.Foundation.ArenaAllocator.ArenaAllocator(int)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Allocators.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/Allocators.cs
+    startLine: 78
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public ArenaAllocator(int capacity = 65536)
+    parameters:
+    - id: capacity
+      type: System.Int32
+    content.vb: Public Sub New(capacity As Integer = 65536)
+  overload: FluentGpu.Foundation.ArenaAllocator.#ctor*
+  nameWithType.vb: ArenaAllocator.New(Integer)
+  fullName.vb: FluentGpu.Foundation.ArenaAllocator.New(Integer)
+  name.vb: New(Integer)
+- uid: FluentGpu.Foundation.ArenaAllocator.AllocSpan``1(System.Int32)
+  commentId: M:FluentGpu.Foundation.ArenaAllocator.AllocSpan``1(System.Int32)
+  id: AllocSpan``1(System.Int32)
+  parent: FluentGpu.Foundation.ArenaAllocator
+  langs:
+  - csharp
+  - vb
+  name: AllocSpan<T>(int)
+  nameWithType: ArenaAllocator.AllocSpan<T>(int)
+  fullName: FluentGpu.Foundation.ArenaAllocator.AllocSpan<T>(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Allocators.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AllocSpan
+    path: ../../src/FluentGpu.Foundation/Allocators.cs
+    startLine: 80
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: 'public Span<T> AllocSpan<T>(int count) where T : unmanaged'
+    parameters:
+    - id: count
+      type: System.Int32
+    typeParameters:
+    - id: T
+    return:
+      type: System.Span{{T}}
+    content.vb: Public Function AllocSpan(Of T As Structure)(count As Integer) As Span(Of T)
+  overload: FluentGpu.Foundation.ArenaAllocator.AllocSpan*
+  nameWithType.vb: ArenaAllocator.AllocSpan(Of T)(Integer)
+  fullName.vb: FluentGpu.Foundation.ArenaAllocator.AllocSpan(Of T)(Integer)
+  name.vb: AllocSpan(Of T)(Integer)
+- uid: FluentGpu.Foundation.ArenaAllocator.Reset
+  commentId: M:FluentGpu.Foundation.ArenaAllocator.Reset
+  id: Reset
+  parent: FluentGpu.Foundation.ArenaAllocator
+  langs:
+  - csharp
+  - vb
+  name: Reset()
+  nameWithType: ArenaAllocator.Reset()
+  fullName: FluentGpu.Foundation.ArenaAllocator.Reset()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Allocators.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Reset
+    path: ../../src/FluentGpu.Foundation/Allocators.cs
+    startLine: 90
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public void Reset()
+    content.vb: Public Sub Reset()
+  overload: FluentGpu.Foundation.ArenaAllocator.Reset*
+references:
+- uid: FluentGpu.Foundation.ArenaAllocator.Reset
+  commentId: M:FluentGpu.Foundation.ArenaAllocator.Reset
+  href: FluentGpu.Foundation.ArenaAllocator.html#FluentGpu_Foundation_ArenaAllocator_Reset
+  name: Reset()
+  nameWithType: ArenaAllocator.Reset()
+  fullName: FluentGpu.Foundation.ArenaAllocator.Reset()
+  spec.csharp:
+  - uid: FluentGpu.Foundation.ArenaAllocator.Reset
+    name: Reset
+    href: FluentGpu.Foundation.ArenaAllocator.html#FluentGpu_Foundation_ArenaAllocator_Reset
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Foundation.ArenaAllocator.Reset
+    name: Reset
+    href: FluentGpu.Foundation.ArenaAllocator.html#FluentGpu_Foundation_ArenaAllocator_Reset
+  - name: (
+  - name: )
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Foundation.ArenaAllocator.#ctor*
+  commentId: Overload:FluentGpu.Foundation.ArenaAllocator.#ctor
+  href: FluentGpu.Foundation.ArenaAllocator.html#FluentGpu_Foundation_ArenaAllocator__ctor_System_Int32_
+  name: ArenaAllocator
+  nameWithType: ArenaAllocator.ArenaAllocator
+  fullName: FluentGpu.Foundation.ArenaAllocator.ArenaAllocator
+  nameWithType.vb: ArenaAllocator.New
+  fullName.vb: FluentGpu.Foundation.ArenaAllocator.New
+  name.vb: New
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Foundation.ArenaAllocator.AllocSpan*
+  commentId: Overload:FluentGpu.Foundation.ArenaAllocator.AllocSpan
+  href: FluentGpu.Foundation.ArenaAllocator.html#FluentGpu_Foundation_ArenaAllocator_AllocSpan__1_System_Int32_
+  name: AllocSpan
+  nameWithType: ArenaAllocator.AllocSpan
+  fullName: FluentGpu.Foundation.ArenaAllocator.AllocSpan
+- uid: System.Span{{T}}
+  commentId: T:System.Span{``0}
+  parent: System
+  definition: System.Span`1
+  href: https://learn.microsoft.com/dotnet/api/system.span-1
+  name: Span<T>
+  nameWithType: Span<T>
+  fullName: System.Span<T>
+  nameWithType.vb: Span(Of T)
+  fullName.vb: System.Span(Of T)
+  name.vb: Span(Of T)
+  spec.csharp:
+  - uid: System.Span`1
+    name: Span
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.span-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Span`1
+    name: Span
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.span-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Span`1
+  commentId: T:System.Span`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.span-1
+  name: Span<T>
+  nameWithType: Span<T>
+  fullName: System.Span<T>
+  nameWithType.vb: Span(Of T)
+  fullName.vb: System.Span(Of T)
+  name.vb: Span(Of T)
+  spec.csharp:
+  - uid: System.Span`1
+    name: Span
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.span-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Span`1
+    name: Span
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.span-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Foundation.ArenaAllocator.Reset*
+  commentId: Overload:FluentGpu.Foundation.ArenaAllocator.Reset
+  href: FluentGpu.Foundation.ArenaAllocator.html#FluentGpu_Foundation_ArenaAllocator_Reset
+  name: Reset
+  nameWithType: ArenaAllocator.Reset
+  fullName: FluentGpu.Foundation.ArenaAllocator.Reset

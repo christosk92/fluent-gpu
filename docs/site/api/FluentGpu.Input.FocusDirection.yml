@@ -1,0 +1,168 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Input.FocusDirection
+  commentId: T:FluentGpu.Input.FocusDirection
+  id: FocusDirection
+  parent: FluentGpu.Input
+  children:
+  - FluentGpu.Input.FocusDirection.Down
+  - FluentGpu.Input.FocusDirection.Left
+  - FluentGpu.Input.FocusDirection.Right
+  - FluentGpu.Input.FocusDirection.Up
+  langs:
+  - csharp
+  - vb
+  name: FocusDirection
+  nameWithType: FocusDirection
+  fullName: FluentGpu.Input.FocusDirection
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FocusDirection
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: Directional focus movement for roving/XY keyboard navigation (arrow keys in lists, grids, menus).
+  example: []
+  syntax:
+    content: 'public enum FocusDirection : byte'
+    content.vb: Public Enum FocusDirection As Byte
+- uid: FluentGpu.Input.FocusDirection.Left
+  commentId: F:FluentGpu.Input.FocusDirection.Left
+  id: Left
+  parent: FluentGpu.Input.FocusDirection
+  langs:
+  - csharp
+  - vb
+  name: Left
+  nameWithType: FocusDirection.Left
+  fullName: FluentGpu.Input.FocusDirection.Left
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Left
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  syntax:
+    content: Left = 0
+    return:
+      type: FluentGpu.Input.FocusDirection
+- uid: FluentGpu.Input.FocusDirection.Right
+  commentId: F:FluentGpu.Input.FocusDirection.Right
+  id: Right
+  parent: FluentGpu.Input.FocusDirection
+  langs:
+  - csharp
+  - vb
+  name: Right
+  nameWithType: FocusDirection.Right
+  fullName: FluentGpu.Input.FocusDirection.Right
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Right
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  syntax:
+    content: Right = 1
+    return:
+      type: FluentGpu.Input.FocusDirection
+- uid: FluentGpu.Input.FocusDirection.Up
+  commentId: F:FluentGpu.Input.FocusDirection.Up
+  id: Up
+  parent: FluentGpu.Input.FocusDirection
+  langs:
+  - csharp
+  - vb
+  name: Up
+  nameWithType: FocusDirection.Up
+  fullName: FluentGpu.Input.FocusDirection.Up
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Up
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  syntax:
+    content: Up = 2
+    return:
+      type: FluentGpu.Input.FocusDirection
+- uid: FluentGpu.Input.FocusDirection.Down
+  commentId: F:FluentGpu.Input.FocusDirection.Down
+  id: Down
+  parent: FluentGpu.Input.FocusDirection
+  langs:
+  - csharp
+  - vb
+  name: Down
+  nameWithType: FocusDirection.Down
+  fullName: FluentGpu.Input.FocusDirection.Down
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Down
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  syntax:
+    content: Down = 3
+    return:
+      type: FluentGpu.Input.FocusDirection
+references:
+- uid: FluentGpu.Input
+  commentId: N:FluentGpu.Input
+  href: FluentGpu.html
+  name: FluentGpu.Input
+  nameWithType: FluentGpu.Input
+  fullName: FluentGpu.Input
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Input
+    name: Input
+    href: FluentGpu.Input.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Input
+    name: Input
+    href: FluentGpu.Input.html
+- uid: FluentGpu.Input.FocusDirection
+  commentId: T:FluentGpu.Input.FocusDirection
+  parent: FluentGpu.Input
+  href: FluentGpu.Input.FocusDirection.html
+  name: FocusDirection
+  nameWithType: FocusDirection
+  fullName: FluentGpu.Input.FocusDirection

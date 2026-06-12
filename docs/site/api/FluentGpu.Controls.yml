@@ -1,0 +1,1830 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  id: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.AnimatedIcon
+  - FluentGpu.Controls.AnnotatedScrollBar
+  - FluentGpu.Controls.AnnotatedScrollBarScrollKind
+  - FluentGpu.Controls.AppBarButton
+  - FluentGpu.Controls.AppBarButton.Style
+  - FluentGpu.Controls.AppBarCommand
+  - FluentGpu.Controls.AppBarCommandKind
+  - FluentGpu.Controls.AppBarSeparator
+  - FluentGpu.Controls.AppBarToggleButton
+  - FluentGpu.Controls.AutoSuggestBox
+  - FluentGpu.Controls.BackgroundSizing
+  - FluentGpu.Controls.Border
+  - FluentGpu.Controls.BreadcrumbBar
+  - FluentGpu.Controls.Button
+  - FluentGpu.Controls.Button.Style
+  - FluentGpu.Controls.CalendarDatePicker
+  - FluentGpu.Controls.CalendarView
+  - FluentGpu.Controls.CalendarViewDisplayMode
+  - FluentGpu.Controls.CalendarViewSelectionMode
+  - FluentGpu.Controls.Canvas
+  - FluentGpu.Controls.CanvasChild
+  - FluentGpu.Controls.CaptionButton
+  - FluentGpu.Controls.CaptionButton.Style
+  - FluentGpu.Controls.CheckBox
+  - FluentGpu.Controls.CheckBox.Style
+  - FluentGpu.Controls.CheckState
+  - FluentGpu.Controls.ColorPicker
+  - FluentGpu.Controls.ColorPicker.Style
+  - FluentGpu.Controls.ComboBox
+  - FluentGpu.Controls.CommandBar
+  - FluentGpu.Controls.CommandBarButton
+  - FluentGpu.Controls.CommandBarDisplayMode
+  - FluentGpu.Controls.CommandBarFlyout
+  - FluentGpu.Controls.CommandBarFlyoutShowMode
+  - FluentGpu.Controls.ContentDialog
+  - FluentGpu.Controls.ContentDialog.DefaultBtn
+  - FluentGpu.Controls.ContentDialogResult
+  - FluentGpu.Controls.ControlMotion
+  - FluentGpu.Controls.CornerJoin
+  - FluentGpu.Controls.DatePicker
+  - FluentGpu.Controls.DismissBehavior
+  - FluentGpu.Controls.DropDownButton
+  - FluentGpu.Controls.EditableText
+  - FluentGpu.Controls.Expander
+  - FluentGpu.Controls.ExpanderTemplateSettings
+  - FluentGpu.Controls.FlipView
+  - FluentGpu.Controls.FlyoutButton
+  - FluentGpu.Controls.FlyoutPlacement
+  - FluentGpu.Controls.FlyoutPositioner
+  - FluentGpu.Controls.HyperlinkButton
+  - FluentGpu.Controls.HyperlinkButton.Style
+  - FluentGpu.Controls.IOverlayService
+  - FluentGpu.Controls.IconButton
+  - FluentGpu.Controls.IconButton.Style
+  - FluentGpu.Controls.Icons
+  - FluentGpu.Controls.InfoBadge
+  - FluentGpu.Controls.InfoBadgeSeverity
+  - FluentGpu.Controls.InfoBadgeTemplateSettings
+  - FluentGpu.Controls.InfoBar
+  - FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+  - FluentGpu.Controls.InfoBarCloseReason
+  - FluentGpu.Controls.InfoBarClosedEventArgs
+  - FluentGpu.Controls.InfoBarClosingEventArgs
+  - FluentGpu.Controls.InfoBarSeverity
+  - FluentGpu.Controls.ItemChromeState
+  - FluentGpu.Controls.ItemCollectionTransition
+  - FluentGpu.Controls.ItemContainer
+  - FluentGpu.Controls.ItemContainerFactory
+  - FluentGpu.Controls.ItemContainerTrigger
+  - FluentGpu.Controls.ItemsSelectionMode
+  - FluentGpu.Controls.ItemsView
+  - FluentGpu.Controls.ItemsViewController
+  - FluentGpu.Controls.MediaPlayerElement
+  - FluentGpu.Controls.MenuBar
+  - FluentGpu.Controls.MenuBarItem
+  - FluentGpu.Controls.MenuFlyout
+  - FluentGpu.Controls.MenuFlyoutItem
+  - FluentGpu.Controls.MenuItemKind
+  - FluentGpu.Controls.Nav
+  - FluentGpu.Controls.NavItem
+  - FluentGpu.Controls.NavPaneClosingArgs
+  - FluentGpu.Controls.NavPaneDisplayMode
+  - FluentGpu.Controls.NavigationView
+  - FluentGpu.Controls.Navigator
+  - FluentGpu.Controls.NumberBox
+  - FluentGpu.Controls.NumberBox.Style
+  - FluentGpu.Controls.NumberBoxSpinButtonPlacementMode
+  - FluentGpu.Controls.NumberBoxValidationMode
+  - FluentGpu.Controls.Overlay
+  - FluentGpu.Controls.OverlayCloseCause
+  - FluentGpu.Controls.OverlayHandle
+  - FluentGpu.Controls.OverlayHost
+  - FluentGpu.Controls.OverlayPlacementInfo
+  - FluentGpu.Controls.PageHost
+  - FluentGpu.Controls.PaneMode
+  - FluentGpu.Controls.PartDelta
+  - FluentGpu.Controls.PasswordBox
+  - FluentGpu.Controls.PasswordRevealMode
+  - FluentGpu.Controls.PersonPicture
+  - FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+  - FluentGpu.Controls.PipsPager
+  - FluentGpu.Controls.PipsPagerButtonVisibility
+  - FluentGpu.Controls.Pivot
+  - FluentGpu.Controls.Popup
+  - FluentGpu.Controls.PopupChrome
+  - FluentGpu.Controls.PopupOptions
+  - FluentGpu.Controls.PopupPlacementResult
+  - FluentGpu.Controls.ProgressBar
+  - FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings
+  - FluentGpu.Controls.ProgressBarState
+  - FluentGpu.Controls.ProgressRing
+  - FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings
+  - FluentGpu.Controls.RadioButton
+  - FluentGpu.Controls.RadioButton.Style
+  - FluentGpu.Controls.RadioButtons
+  - FluentGpu.Controls.RatingControl
+  - FluentGpu.Controls.RatingControlTemplateSettings
+  - FluentGpu.Controls.RelativeChild
+  - FluentGpu.Controls.RelativePanel
+  - FluentGpu.Controls.ReorderCrossCommit
+  - FluentGpu.Controls.ReorderList
+  - FluentGpu.Controls.ReorderPayload
+  - FluentGpu.Controls.Reorderable
+  - FluentGpu.Controls.RepeatButton
+  - FluentGpu.Controls.RepeatButton.Style
+  - FluentGpu.Controls.RepeatKind
+  - FluentGpu.Controls.RepeatLayout
+  - FluentGpu.Controls.Repeater
+  - FluentGpu.Controls.RichTextBlock
+  - FluentGpu.Controls.RichTextBlock.Options
+  - FluentGpu.Controls.Route
+  - FluentGpu.Controls.ScrollBar
+  - FluentGpu.Controls.ScrollBar.Style
+  - FluentGpu.Controls.SelectionModel
+  - FluentGpu.Controls.SelectorBar
+  - FluentGpu.Controls.SelectorVisual
+  - FluentGpu.Controls.SelectorVisuals
+  - FluentGpu.Controls.Slider
+  - FluentGpu.Controls.Slider.Options
+  - FluentGpu.Controls.Slider.Style
+  - FluentGpu.Controls.Slider.TickPlacement
+  - FluentGpu.Controls.SplitButton
+  - FluentGpu.Controls.SplitView
+  - FluentGpu.Controls.SplitViewDisplayMode
+  - FluentGpu.Controls.SplitViewPaneClosingArgs
+  - FluentGpu.Controls.SplitViewPanePlacement
+  - FluentGpu.Controls.StateBrush
+  - FluentGpu.Controls.SwipeAction
+  - FluentGpu.Controls.SwipeBehaviorOnInvoked
+  - FluentGpu.Controls.SwipeControl
+  - FluentGpu.Controls.SwipeMode
+  - FluentGpu.Controls.TabView
+  - FluentGpu.Controls.TabViewCloseButtonOverlayMode
+  - FluentGpu.Controls.TabViewItem
+  - FluentGpu.Controls.TabViewWidthMode
+  - FluentGpu.Controls.TeachingTip
+  - FluentGpu.Controls.TeachingTip.CloseReason
+  - FluentGpu.Controls.TeachingTip.ClosingEventArgs
+  - FluentGpu.Controls.TeachingTip.HeroPlacement
+  - FluentGpu.Controls.TeachingTip.PlacementMode
+  - FluentGpu.Controls.TeachingTip.TailVisibilityMode
+  - FluentGpu.Controls.TextBlocks
+  - FluentGpu.Controls.TextBox
+  - FluentGpu.Controls.TextChangeReason
+  - FluentGpu.Controls.TimePicker
+  - FluentGpu.Controls.TitleBar
+  - FluentGpu.Controls.ToggleButton
+  - FluentGpu.Controls.ToggleButton.Style
+  - FluentGpu.Controls.ToggleSplitButton
+  - FluentGpu.Controls.ToggleSwitch
+  - FluentGpu.Controls.ToggleSwitch.Style
+  - FluentGpu.Controls.ToolTip
+  - FluentGpu.Controls.ToolTipPlacementMode
+  - FluentGpu.Controls.TreeNode
+  - FluentGpu.Controls.TreeView
+  - FluentGpu.Controls.Tween
+  - FluentGpu.Controls.VariableSizedWrapGrid
+  - FluentGpu.Controls.Viewbox
+  - FluentGpu.Controls.ViewboxStretch
+  - FluentGpu.Controls.ViewboxStretchDirection
+  - FluentGpu.Controls.Virtual
+  - FluentGpu.Controls.WrapTile
+  langs:
+  - csharp
+  - vb
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  type: Namespace
+  assemblies:
+  - FluentGpu.Controls
+references:
+- uid: FluentGpu.Controls.AnimatedIcon
+  commentId: T:FluentGpu.Controls.AnimatedIcon
+  href: FluentGpu.Controls.AnimatedIcon.html
+  name: AnimatedIcon
+  nameWithType: AnimatedIcon
+  fullName: FluentGpu.Controls.AnimatedIcon
+- uid: FluentGpu.Controls.AnnotatedScrollBarScrollKind
+  commentId: T:FluentGpu.Controls.AnnotatedScrollBarScrollKind
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.AnnotatedScrollBarScrollKind.html
+  name: AnnotatedScrollBarScrollKind
+  nameWithType: AnnotatedScrollBarScrollKind
+  fullName: FluentGpu.Controls.AnnotatedScrollBarScrollKind
+- uid: FluentGpu.Controls.AnnotatedScrollBar
+  commentId: T:FluentGpu.Controls.AnnotatedScrollBar
+  href: FluentGpu.Controls.AnnotatedScrollBar.html
+  name: AnnotatedScrollBar
+  nameWithType: AnnotatedScrollBar
+  fullName: FluentGpu.Controls.AnnotatedScrollBar
+- uid: FluentGpu.Controls.AppBarButton
+  commentId: T:FluentGpu.Controls.AppBarButton
+  href: FluentGpu.Controls.AppBarButton.html
+  name: AppBarButton
+  nameWithType: AppBarButton
+  fullName: FluentGpu.Controls.AppBarButton
+- uid: FluentGpu.Controls.AppBarButton.Style
+  commentId: T:FluentGpu.Controls.AppBarButton.Style
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.AppBarButton.html
+  name: AppBarButton.Style
+  nameWithType: AppBarButton.Style
+  fullName: FluentGpu.Controls.AppBarButton.Style
+  spec.csharp:
+  - uid: FluentGpu.Controls.AppBarButton
+    name: AppBarButton
+    href: FluentGpu.Controls.AppBarButton.html
+  - name: .
+  - uid: FluentGpu.Controls.AppBarButton.Style
+    name: Style
+    href: FluentGpu.Controls.AppBarButton.Style.html
+  spec.vb:
+  - uid: FluentGpu.Controls.AppBarButton
+    name: AppBarButton
+    href: FluentGpu.Controls.AppBarButton.html
+  - name: .
+  - uid: FluentGpu.Controls.AppBarButton.Style
+    name: Style
+    href: FluentGpu.Controls.AppBarButton.Style.html
+- uid: FluentGpu.Controls.AppBarSeparator
+  commentId: T:FluentGpu.Controls.AppBarSeparator
+  href: FluentGpu.Controls.AppBarSeparator.html
+  name: AppBarSeparator
+  nameWithType: AppBarSeparator
+  fullName: FluentGpu.Controls.AppBarSeparator
+- uid: FluentGpu.Controls.AppBarToggleButton
+  commentId: T:FluentGpu.Controls.AppBarToggleButton
+  href: FluentGpu.Controls.AppBarToggleButton.html
+  name: AppBarToggleButton
+  nameWithType: AppBarToggleButton
+  fullName: FluentGpu.Controls.AppBarToggleButton
+- uid: FluentGpu.Controls.AutoSuggestBox
+  commentId: T:FluentGpu.Controls.AutoSuggestBox
+  href: FluentGpu.Controls.AutoSuggestBox.html
+  name: AutoSuggestBox
+  nameWithType: AutoSuggestBox
+  fullName: FluentGpu.Controls.AutoSuggestBox
+- uid: FluentGpu.Controls.Border
+  commentId: T:FluentGpu.Controls.Border
+  href: FluentGpu.Controls.Border.html
+  name: Border
+  nameWithType: Border
+  fullName: FluentGpu.Controls.Border
+- uid: FluentGpu.Controls.BreadcrumbBar
+  commentId: T:FluentGpu.Controls.BreadcrumbBar
+  href: FluentGpu.Controls.BreadcrumbBar.html
+  name: BreadcrumbBar
+  nameWithType: BreadcrumbBar
+  fullName: FluentGpu.Controls.BreadcrumbBar
+- uid: FluentGpu.Controls.BackgroundSizing
+  commentId: T:FluentGpu.Controls.BackgroundSizing
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.BackgroundSizing.html
+  name: BackgroundSizing
+  nameWithType: BackgroundSizing
+  fullName: FluentGpu.Controls.BackgroundSizing
+- uid: FluentGpu.Controls.Button
+  commentId: T:FluentGpu.Controls.Button
+  href: FluentGpu.Controls.Button.html
+  name: Button
+  nameWithType: Button
+  fullName: FluentGpu.Controls.Button
+- uid: FluentGpu.Controls.Button.Style
+  commentId: T:FluentGpu.Controls.Button.Style
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.Button.html
+  name: Button.Style
+  nameWithType: Button.Style
+  fullName: FluentGpu.Controls.Button.Style
+  spec.csharp:
+  - uid: FluentGpu.Controls.Button
+    name: Button
+    href: FluentGpu.Controls.Button.html
+  - name: .
+  - uid: FluentGpu.Controls.Button.Style
+    name: Style
+    href: FluentGpu.Controls.Button.Style.html
+  spec.vb:
+  - uid: FluentGpu.Controls.Button
+    name: Button
+    href: FluentGpu.Controls.Button.html
+  - name: .
+  - uid: FluentGpu.Controls.Button.Style
+    name: Style
+    href: FluentGpu.Controls.Button.Style.html
+- uid: FluentGpu.Controls.CalendarDatePicker
+  commentId: T:FluentGpu.Controls.CalendarDatePicker
+  href: FluentGpu.Controls.CalendarDatePicker.html
+  name: CalendarDatePicker
+  nameWithType: CalendarDatePicker
+  fullName: FluentGpu.Controls.CalendarDatePicker
+- uid: FluentGpu.Controls.CalendarViewSelectionMode
+  commentId: T:FluentGpu.Controls.CalendarViewSelectionMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.CalendarViewSelectionMode.html
+  name: CalendarViewSelectionMode
+  nameWithType: CalendarViewSelectionMode
+  fullName: FluentGpu.Controls.CalendarViewSelectionMode
+- uid: FluentGpu.Controls.CalendarViewDisplayMode
+  commentId: T:FluentGpu.Controls.CalendarViewDisplayMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.CalendarViewDisplayMode.html
+  name: CalendarViewDisplayMode
+  nameWithType: CalendarViewDisplayMode
+  fullName: FluentGpu.Controls.CalendarViewDisplayMode
+- uid: FluentGpu.Controls.CalendarView
+  commentId: T:FluentGpu.Controls.CalendarView
+  href: FluentGpu.Controls.CalendarView.html
+  name: CalendarView
+  nameWithType: CalendarView
+  fullName: FluentGpu.Controls.CalendarView
+- uid: FluentGpu.Controls.CanvasChild
+  commentId: T:FluentGpu.Controls.CanvasChild
+  href: FluentGpu.Controls.CanvasChild.html
+  name: CanvasChild
+  nameWithType: CanvasChild
+  fullName: FluentGpu.Controls.CanvasChild
+- uid: FluentGpu.Controls.Canvas
+  commentId: T:FluentGpu.Controls.Canvas
+  href: FluentGpu.Controls.Canvas.html
+  name: Canvas
+  nameWithType: Canvas
+  fullName: FluentGpu.Controls.Canvas
+- uid: FluentGpu.Controls.CaptionButton
+  commentId: T:FluentGpu.Controls.CaptionButton
+  href: FluentGpu.Controls.CaptionButton.html
+  name: CaptionButton
+  nameWithType: CaptionButton
+  fullName: FluentGpu.Controls.CaptionButton
+- uid: FluentGpu.Controls.CaptionButton.Style
+  commentId: T:FluentGpu.Controls.CaptionButton.Style
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.CaptionButton.html
+  name: CaptionButton.Style
+  nameWithType: CaptionButton.Style
+  fullName: FluentGpu.Controls.CaptionButton.Style
+  spec.csharp:
+  - uid: FluentGpu.Controls.CaptionButton
+    name: CaptionButton
+    href: FluentGpu.Controls.CaptionButton.html
+  - name: .
+  - uid: FluentGpu.Controls.CaptionButton.Style
+    name: Style
+    href: FluentGpu.Controls.CaptionButton.Style.html
+  spec.vb:
+  - uid: FluentGpu.Controls.CaptionButton
+    name: CaptionButton
+    href: FluentGpu.Controls.CaptionButton.html
+  - name: .
+  - uid: FluentGpu.Controls.CaptionButton.Style
+    name: Style
+    href: FluentGpu.Controls.CaptionButton.Style.html
+- uid: FluentGpu.Controls.CheckBox
+  commentId: T:FluentGpu.Controls.CheckBox
+  href: FluentGpu.Controls.CheckBox.html
+  name: CheckBox
+  nameWithType: CheckBox
+  fullName: FluentGpu.Controls.CheckBox
+- uid: FluentGpu.Controls.CheckBox.Style
+  commentId: T:FluentGpu.Controls.CheckBox.Style
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.CheckBox.html
+  name: CheckBox.Style
+  nameWithType: CheckBox.Style
+  fullName: FluentGpu.Controls.CheckBox.Style
+  spec.csharp:
+  - uid: FluentGpu.Controls.CheckBox
+    name: CheckBox
+    href: FluentGpu.Controls.CheckBox.html
+  - name: .
+  - uid: FluentGpu.Controls.CheckBox.Style
+    name: Style
+    href: FluentGpu.Controls.CheckBox.Style.html
+  spec.vb:
+  - uid: FluentGpu.Controls.CheckBox
+    name: CheckBox
+    href: FluentGpu.Controls.CheckBox.html
+  - name: .
+  - uid: FluentGpu.Controls.CheckBox.Style
+    name: Style
+    href: FluentGpu.Controls.CheckBox.Style.html
+- uid: FluentGpu.Controls.ColorPicker
+  commentId: T:FluentGpu.Controls.ColorPicker
+  href: FluentGpu.Controls.ColorPicker.html
+  name: ColorPicker
+  nameWithType: ColorPicker
+  fullName: FluentGpu.Controls.ColorPicker
+- uid: FluentGpu.Controls.ColorPicker.Style
+  commentId: T:FluentGpu.Controls.ColorPicker.Style
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ColorPicker.html
+  name: ColorPicker.Style
+  nameWithType: ColorPicker.Style
+  fullName: FluentGpu.Controls.ColorPicker.Style
+  spec.csharp:
+  - uid: FluentGpu.Controls.ColorPicker
+    name: ColorPicker
+    href: FluentGpu.Controls.ColorPicker.html
+  - name: .
+  - uid: FluentGpu.Controls.ColorPicker.Style
+    name: Style
+    href: FluentGpu.Controls.ColorPicker.Style.html
+  spec.vb:
+  - uid: FluentGpu.Controls.ColorPicker
+    name: ColorPicker
+    href: FluentGpu.Controls.ColorPicker.html
+  - name: .
+  - uid: FluentGpu.Controls.ColorPicker.Style
+    name: Style
+    href: FluentGpu.Controls.ColorPicker.Style.html
+- uid: FluentGpu.Controls.ComboBox
+  commentId: T:FluentGpu.Controls.ComboBox
+  href: FluentGpu.Controls.ComboBox.html
+  name: ComboBox
+  nameWithType: ComboBox
+  fullName: FluentGpu.Controls.ComboBox
+- uid: FluentGpu.Controls.CommandBarButton
+  commentId: T:FluentGpu.Controls.CommandBarButton
+  href: FluentGpu.Controls.CommandBarButton.html
+  name: CommandBarButton
+  nameWithType: CommandBarButton
+  fullName: FluentGpu.Controls.CommandBarButton
+- uid: FluentGpu.Controls.CommandBarDisplayMode
+  commentId: T:FluentGpu.Controls.CommandBarDisplayMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.CommandBarDisplayMode.html
+  name: CommandBarDisplayMode
+  nameWithType: CommandBarDisplayMode
+  fullName: FluentGpu.Controls.CommandBarDisplayMode
+- uid: FluentGpu.Controls.CommandBar
+  commentId: T:FluentGpu.Controls.CommandBar
+  href: FluentGpu.Controls.CommandBar.html
+  name: CommandBar
+  nameWithType: CommandBar
+  fullName: FluentGpu.Controls.CommandBar
+- uid: FluentGpu.Controls.AppBarCommandKind
+  commentId: T:FluentGpu.Controls.AppBarCommandKind
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.AppBarCommandKind.html
+  name: AppBarCommandKind
+  nameWithType: AppBarCommandKind
+  fullName: FluentGpu.Controls.AppBarCommandKind
+- uid: FluentGpu.Controls.CommandBarFlyoutShowMode
+  commentId: T:FluentGpu.Controls.CommandBarFlyoutShowMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.CommandBarFlyoutShowMode.html
+  name: CommandBarFlyoutShowMode
+  nameWithType: CommandBarFlyoutShowMode
+  fullName: FluentGpu.Controls.CommandBarFlyoutShowMode
+- uid: FluentGpu.Controls.AppBarCommand
+  commentId: T:FluentGpu.Controls.AppBarCommand
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.AppBarCommand.html
+  name: AppBarCommand
+  nameWithType: AppBarCommand
+  fullName: FluentGpu.Controls.AppBarCommand
+- uid: FluentGpu.Controls.CommandBarFlyout
+  commentId: T:FluentGpu.Controls.CommandBarFlyout
+  href: FluentGpu.Controls.CommandBarFlyout.html
+  name: CommandBarFlyout
+  nameWithType: CommandBarFlyout
+  fullName: FluentGpu.Controls.CommandBarFlyout
+- uid: FluentGpu.Controls.ContentDialogResult
+  commentId: T:FluentGpu.Controls.ContentDialogResult
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ContentDialogResult.html
+  name: ContentDialogResult
+  nameWithType: ContentDialogResult
+  fullName: FluentGpu.Controls.ContentDialogResult
+- uid: FluentGpu.Controls.ContentDialog
+  commentId: T:FluentGpu.Controls.ContentDialog
+  href: FluentGpu.Controls.ContentDialog.html
+  name: ContentDialog
+  nameWithType: ContentDialog
+  fullName: FluentGpu.Controls.ContentDialog
+- uid: FluentGpu.Controls.ContentDialog.DefaultBtn
+  commentId: T:FluentGpu.Controls.ContentDialog.DefaultBtn
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ContentDialog.html
+  name: ContentDialog.DefaultBtn
+  nameWithType: ContentDialog.DefaultBtn
+  fullName: FluentGpu.Controls.ContentDialog.DefaultBtn
+  spec.csharp:
+  - uid: FluentGpu.Controls.ContentDialog
+    name: ContentDialog
+    href: FluentGpu.Controls.ContentDialog.html
+  - name: .
+  - uid: FluentGpu.Controls.ContentDialog.DefaultBtn
+    name: DefaultBtn
+    href: FluentGpu.Controls.ContentDialog.DefaultBtn.html
+  spec.vb:
+  - uid: FluentGpu.Controls.ContentDialog
+    name: ContentDialog
+    href: FluentGpu.Controls.ContentDialog.html
+  - name: .
+  - uid: FluentGpu.Controls.ContentDialog.DefaultBtn
+    name: DefaultBtn
+    href: FluentGpu.Controls.ContentDialog.DefaultBtn.html
+- uid: FluentGpu.Controls.StateBrush
+  commentId: T:FluentGpu.Controls.StateBrush
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.StateBrush.html
+  name: StateBrush
+  nameWithType: StateBrush
+  fullName: FluentGpu.Controls.StateBrush
+- uid: FluentGpu.Controls.Tween
+  commentId: T:FluentGpu.Controls.Tween
+  href: FluentGpu.Controls.Tween.html
+  name: Tween
+  nameWithType: Tween
+  fullName: FluentGpu.Controls.Tween
+- uid: FluentGpu.Controls.ControlMotion
+  commentId: T:FluentGpu.Controls.ControlMotion
+  href: FluentGpu.Controls.ControlMotion.html
+  name: ControlMotion
+  nameWithType: ControlMotion
+  fullName: FluentGpu.Controls.ControlMotion
+- uid: FluentGpu.Controls.DatePicker
+  commentId: T:FluentGpu.Controls.DatePicker
+  href: FluentGpu.Controls.DatePicker.html
+  name: DatePicker
+  nameWithType: DatePicker
+  fullName: FluentGpu.Controls.DatePicker
+- uid: FluentGpu.Controls.DropDownButton
+  commentId: T:FluentGpu.Controls.DropDownButton
+  href: FluentGpu.Controls.DropDownButton.html
+  name: DropDownButton
+  nameWithType: DropDownButton
+  fullName: FluentGpu.Controls.DropDownButton
+- uid: FluentGpu.Controls.TextChangeReason
+  commentId: T:FluentGpu.Controls.TextChangeReason
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.TextChangeReason.html
+  name: TextChangeReason
+  nameWithType: TextChangeReason
+  fullName: FluentGpu.Controls.TextChangeReason
+- uid: FluentGpu.Controls.EditableText
+  commentId: T:FluentGpu.Controls.EditableText
+  href: FluentGpu.Controls.EditableText.html
+  name: EditableText
+  nameWithType: EditableText
+  fullName: FluentGpu.Controls.EditableText
+- uid: FluentGpu.Controls.ExpanderTemplateSettings
+  commentId: T:FluentGpu.Controls.ExpanderTemplateSettings
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ExpanderTemplateSettings.html
+  name: ExpanderTemplateSettings
+  nameWithType: ExpanderTemplateSettings
+  fullName: FluentGpu.Controls.ExpanderTemplateSettings
+- uid: FluentGpu.Controls.Expander
+  commentId: T:FluentGpu.Controls.Expander
+  href: FluentGpu.Controls.Expander.html
+  name: Expander
+  nameWithType: Expander
+  fullName: FluentGpu.Controls.Expander
+- uid: FluentGpu.Controls.FlipView
+  commentId: T:FluentGpu.Controls.FlipView
+  href: FluentGpu.Controls.FlipView.html
+  name: FlipView
+  nameWithType: FlipView
+  fullName: FluentGpu.Controls.FlipView
+- uid: FluentGpu.Controls.FlyoutPlacement
+  commentId: T:FluentGpu.Controls.FlyoutPlacement
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.FlyoutPlacement.html
+  name: FlyoutPlacement
+  nameWithType: FlyoutPlacement
+  fullName: FluentGpu.Controls.FlyoutPlacement
+- uid: FluentGpu.Controls.CornerJoin
+  commentId: T:FluentGpu.Controls.CornerJoin
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.CornerJoin.html
+  name: CornerJoin
+  nameWithType: CornerJoin
+  fullName: FluentGpu.Controls.CornerJoin
+- uid: FluentGpu.Controls.PopupPlacementResult
+  commentId: T:FluentGpu.Controls.PopupPlacementResult
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.PopupPlacementResult.html
+  name: PopupPlacementResult
+  nameWithType: PopupPlacementResult
+  fullName: FluentGpu.Controls.PopupPlacementResult
+- uid: FluentGpu.Controls.FlyoutPositioner
+  commentId: T:FluentGpu.Controls.FlyoutPositioner
+  href: FluentGpu.Controls.FlyoutPositioner.html
+  name: FlyoutPositioner
+  nameWithType: FlyoutPositioner
+  fullName: FluentGpu.Controls.FlyoutPositioner
+- uid: FluentGpu.Controls.FlyoutButton
+  commentId: T:FluentGpu.Controls.FlyoutButton
+  href: FluentGpu.Controls.FlyoutButton.html
+  name: FlyoutButton
+  nameWithType: FlyoutButton
+  fullName: FluentGpu.Controls.FlyoutButton
+- uid: FluentGpu.Controls.HyperlinkButton
+  commentId: T:FluentGpu.Controls.HyperlinkButton
+  href: FluentGpu.Controls.HyperlinkButton.html
+  name: HyperlinkButton
+  nameWithType: HyperlinkButton
+  fullName: FluentGpu.Controls.HyperlinkButton
+- uid: FluentGpu.Controls.HyperlinkButton.Style
+  commentId: T:FluentGpu.Controls.HyperlinkButton.Style
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.HyperlinkButton.html
+  name: HyperlinkButton.Style
+  nameWithType: HyperlinkButton.Style
+  fullName: FluentGpu.Controls.HyperlinkButton.Style
+  spec.csharp:
+  - uid: FluentGpu.Controls.HyperlinkButton
+    name: HyperlinkButton
+    href: FluentGpu.Controls.HyperlinkButton.html
+  - name: .
+  - uid: FluentGpu.Controls.HyperlinkButton.Style
+    name: Style
+    href: FluentGpu.Controls.HyperlinkButton.Style.html
+  spec.vb:
+  - uid: FluentGpu.Controls.HyperlinkButton
+    name: HyperlinkButton
+    href: FluentGpu.Controls.HyperlinkButton.html
+  - name: .
+  - uid: FluentGpu.Controls.HyperlinkButton.Style
+    name: Style
+    href: FluentGpu.Controls.HyperlinkButton.Style.html
+- uid: FluentGpu.Controls.IconButton
+  commentId: T:FluentGpu.Controls.IconButton
+  href: FluentGpu.Controls.IconButton.html
+  name: IconButton
+  nameWithType: IconButton
+  fullName: FluentGpu.Controls.IconButton
+- uid: FluentGpu.Controls.IconButton.Style
+  commentId: T:FluentGpu.Controls.IconButton.Style
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.IconButton.html
+  name: IconButton.Style
+  nameWithType: IconButton.Style
+  fullName: FluentGpu.Controls.IconButton.Style
+  spec.csharp:
+  - uid: FluentGpu.Controls.IconButton
+    name: IconButton
+    href: FluentGpu.Controls.IconButton.html
+  - name: .
+  - uid: FluentGpu.Controls.IconButton.Style
+    name: Style
+    href: FluentGpu.Controls.IconButton.Style.html
+  spec.vb:
+  - uid: FluentGpu.Controls.IconButton
+    name: IconButton
+    href: FluentGpu.Controls.IconButton.html
+  - name: .
+  - uid: FluentGpu.Controls.IconButton.Style
+    name: Style
+    href: FluentGpu.Controls.IconButton.Style.html
+- uid: FluentGpu.Controls.Icons
+  commentId: T:FluentGpu.Controls.Icons
+  href: FluentGpu.Controls.Icons.html
+  name: Icons
+  nameWithType: Icons
+  fullName: FluentGpu.Controls.Icons
+- uid: FluentGpu.Controls.InfoBadgeSeverity
+  commentId: T:FluentGpu.Controls.InfoBadgeSeverity
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.InfoBadgeSeverity.html
+  name: InfoBadgeSeverity
+  nameWithType: InfoBadgeSeverity
+  fullName: FluentGpu.Controls.InfoBadgeSeverity
+- uid: FluentGpu.Controls.InfoBadgeTemplateSettings
+  commentId: T:FluentGpu.Controls.InfoBadgeTemplateSettings
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.InfoBadgeTemplateSettings.html
+  name: InfoBadgeTemplateSettings
+  nameWithType: InfoBadgeTemplateSettings
+  fullName: FluentGpu.Controls.InfoBadgeTemplateSettings
+- uid: FluentGpu.Controls.InfoBadge
+  commentId: T:FluentGpu.Controls.InfoBadge
+  href: FluentGpu.Controls.InfoBadge.html
+  name: InfoBadge
+  nameWithType: InfoBadge
+  fullName: FluentGpu.Controls.InfoBadge
+- uid: FluentGpu.Controls.InfoBarSeverity
+  commentId: T:FluentGpu.Controls.InfoBarSeverity
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.InfoBarSeverity.html
+  name: InfoBarSeverity
+  nameWithType: InfoBarSeverity
+  fullName: FluentGpu.Controls.InfoBarSeverity
+- uid: FluentGpu.Controls.InfoBarCloseReason
+  commentId: T:FluentGpu.Controls.InfoBarCloseReason
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.InfoBarCloseReason.html
+  name: InfoBarCloseReason
+  nameWithType: InfoBarCloseReason
+  fullName: FluentGpu.Controls.InfoBarCloseReason
+- uid: FluentGpu.Controls.InfoBarClosingEventArgs
+  commentId: T:FluentGpu.Controls.InfoBarClosingEventArgs
+  href: FluentGpu.Controls.InfoBarClosingEventArgs.html
+  name: InfoBarClosingEventArgs
+  nameWithType: InfoBarClosingEventArgs
+  fullName: FluentGpu.Controls.InfoBarClosingEventArgs
+- uid: FluentGpu.Controls.InfoBarClosedEventArgs
+  commentId: T:FluentGpu.Controls.InfoBarClosedEventArgs
+  href: FluentGpu.Controls.InfoBarClosedEventArgs.html
+  name: InfoBarClosedEventArgs
+  nameWithType: InfoBarClosedEventArgs
+  fullName: FluentGpu.Controls.InfoBarClosedEventArgs
+- uid: FluentGpu.Controls.InfoBar
+  commentId: T:FluentGpu.Controls.InfoBar
+  href: FluentGpu.Controls.InfoBar.html
+  name: InfoBar
+  nameWithType: InfoBar
+  fullName: FluentGpu.Controls.InfoBar
+- uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+  commentId: T:FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.InfoBar.html
+  name: InfoBar.InfoBarTemplateSettings
+  nameWithType: InfoBar.InfoBarTemplateSettings
+  fullName: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+  spec.csharp:
+  - uid: FluentGpu.Controls.InfoBar
+    name: InfoBar
+    href: FluentGpu.Controls.InfoBar.html
+  - name: .
+  - uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+    name: InfoBarTemplateSettings
+    href: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.html
+  spec.vb:
+  - uid: FluentGpu.Controls.InfoBar
+    name: InfoBar
+    href: FluentGpu.Controls.InfoBar.html
+  - name: .
+  - uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+    name: InfoBarTemplateSettings
+    href: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.html
+- uid: FluentGpu.Controls.ItemContainerTrigger
+  commentId: T:FluentGpu.Controls.ItemContainerTrigger
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ItemContainerTrigger.html
+  name: ItemContainerTrigger
+  nameWithType: ItemContainerTrigger
+  fullName: FluentGpu.Controls.ItemContainerTrigger
+- uid: FluentGpu.Controls.ItemContainer
+  commentId: T:FluentGpu.Controls.ItemContainer
+  href: FluentGpu.Controls.ItemContainer.html
+  name: ItemContainer
+  nameWithType: ItemContainer
+  fullName: FluentGpu.Controls.ItemContainer
+- uid: FluentGpu.Controls.ItemsViewController
+  commentId: T:FluentGpu.Controls.ItemsViewController
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ItemsViewController.html
+  name: ItemsViewController
+  nameWithType: ItemsViewController
+  fullName: FluentGpu.Controls.ItemsViewController
+- uid: FluentGpu.Controls.ItemChromeState
+  commentId: T:FluentGpu.Controls.ItemChromeState
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ItemChromeState.html
+  name: ItemChromeState
+  nameWithType: ItemChromeState
+  fullName: FluentGpu.Controls.ItemChromeState
+- uid: FluentGpu.Controls.ItemContainerFactory
+  commentId: T:FluentGpu.Controls.ItemContainerFactory
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ItemContainerFactory.html
+  name: ItemContainerFactory
+  nameWithType: ItemContainerFactory
+  fullName: FluentGpu.Controls.ItemContainerFactory
+- uid: FluentGpu.Controls.ItemsView
+  commentId: T:FluentGpu.Controls.ItemsView
+  href: FluentGpu.Controls.ItemsView.html
+  name: ItemsView
+  nameWithType: ItemsView
+  fullName: FluentGpu.Controls.ItemsView
+- uid: FluentGpu.Controls.MediaPlayerElement
+  commentId: T:FluentGpu.Controls.MediaPlayerElement
+  href: FluentGpu.Controls.MediaPlayerElement.html
+  name: MediaPlayerElement
+  nameWithType: MediaPlayerElement
+  fullName: FluentGpu.Controls.MediaPlayerElement
+- uid: FluentGpu.Controls.MenuBarItem
+  commentId: T:FluentGpu.Controls.MenuBarItem
+  href: FluentGpu.Controls.MenuBarItem.html
+  name: MenuBarItem
+  nameWithType: MenuBarItem
+  fullName: FluentGpu.Controls.MenuBarItem
+- uid: FluentGpu.Controls.MenuBar
+  commentId: T:FluentGpu.Controls.MenuBar
+  href: FluentGpu.Controls.MenuBar.html
+  name: MenuBar
+  nameWithType: MenuBar
+  fullName: FluentGpu.Controls.MenuBar
+- uid: FluentGpu.Controls.CheckState
+  commentId: T:FluentGpu.Controls.CheckState
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.CheckState.html
+  name: CheckState
+  nameWithType: CheckState
+  fullName: FluentGpu.Controls.CheckState
+- uid: FluentGpu.Controls.MenuItemKind
+  commentId: T:FluentGpu.Controls.MenuItemKind
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.MenuItemKind.html
+  name: MenuItemKind
+  nameWithType: MenuItemKind
+  fullName: FluentGpu.Controls.MenuItemKind
+- uid: FluentGpu.Controls.MenuFlyoutItem
+  commentId: T:FluentGpu.Controls.MenuFlyoutItem
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.MenuFlyoutItem.html
+  name: MenuFlyoutItem
+  nameWithType: MenuFlyoutItem
+  fullName: FluentGpu.Controls.MenuFlyoutItem
+- uid: FluentGpu.Controls.MenuFlyout
+  commentId: T:FluentGpu.Controls.MenuFlyout
+  href: FluentGpu.Controls.MenuFlyout.html
+  name: MenuFlyout
+  nameWithType: MenuFlyout
+  fullName: FluentGpu.Controls.MenuFlyout
+- uid: FluentGpu.Controls.Route
+  commentId: T:FluentGpu.Controls.Route
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.Route.html
+  name: Route
+  nameWithType: Route
+  fullName: FluentGpu.Controls.Route
+- uid: FluentGpu.Controls.Navigator
+  commentId: T:FluentGpu.Controls.Navigator
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.Navigator.html
+  name: Navigator
+  nameWithType: Navigator
+  fullName: FluentGpu.Controls.Navigator
+- uid: FluentGpu.Controls.PageHost
+  commentId: T:FluentGpu.Controls.PageHost
+  href: FluentGpu.Controls.PageHost.html
+  name: PageHost
+  nameWithType: PageHost
+  fullName: FluentGpu.Controls.PageHost
+- uid: FluentGpu.Controls.Nav
+  commentId: T:FluentGpu.Controls.Nav
+  href: FluentGpu.Controls.Nav.html
+  name: Nav
+  nameWithType: Nav
+  fullName: FluentGpu.Controls.Nav
+- uid: FluentGpu.Controls.NavItem
+  commentId: T:FluentGpu.Controls.NavItem
+  href: FluentGpu.Controls.NavItem.html
+  name: NavItem
+  nameWithType: NavItem
+  fullName: FluentGpu.Controls.NavItem
+- uid: FluentGpu.Controls.PaneMode
+  commentId: T:FluentGpu.Controls.PaneMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.PaneMode.html
+  name: PaneMode
+  nameWithType: PaneMode
+  fullName: FluentGpu.Controls.PaneMode
+- uid: FluentGpu.Controls.NavPaneDisplayMode
+  commentId: T:FluentGpu.Controls.NavPaneDisplayMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.NavPaneDisplayMode.html
+  name: NavPaneDisplayMode
+  nameWithType: NavPaneDisplayMode
+  fullName: FluentGpu.Controls.NavPaneDisplayMode
+- uid: FluentGpu.Controls.NavPaneClosingArgs
+  commentId: T:FluentGpu.Controls.NavPaneClosingArgs
+  href: FluentGpu.Controls.NavPaneClosingArgs.html
+  name: NavPaneClosingArgs
+  nameWithType: NavPaneClosingArgs
+  fullName: FluentGpu.Controls.NavPaneClosingArgs
+- uid: FluentGpu.Controls.NavigationView
+  commentId: T:FluentGpu.Controls.NavigationView
+  href: FluentGpu.Controls.NavigationView.html
+  name: NavigationView
+  nameWithType: NavigationView
+  fullName: FluentGpu.Controls.NavigationView
+- uid: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode
+  commentId: T:FluentGpu.Controls.NumberBoxSpinButtonPlacementMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.html
+  name: NumberBoxSpinButtonPlacementMode
+  nameWithType: NumberBoxSpinButtonPlacementMode
+  fullName: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode
+- uid: FluentGpu.Controls.NumberBoxValidationMode
+  commentId: T:FluentGpu.Controls.NumberBoxValidationMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.NumberBoxValidationMode.html
+  name: NumberBoxValidationMode
+  nameWithType: NumberBoxValidationMode
+  fullName: FluentGpu.Controls.NumberBoxValidationMode
+- uid: FluentGpu.Controls.NumberBox
+  commentId: T:FluentGpu.Controls.NumberBox
+  href: FluentGpu.Controls.NumberBox.html
+  name: NumberBox
+  nameWithType: NumberBox
+  fullName: FluentGpu.Controls.NumberBox
+- uid: FluentGpu.Controls.NumberBox.Style
+  commentId: T:FluentGpu.Controls.NumberBox.Style
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.NumberBox.html
+  name: NumberBox.Style
+  nameWithType: NumberBox.Style
+  fullName: FluentGpu.Controls.NumberBox.Style
+  spec.csharp:
+  - uid: FluentGpu.Controls.NumberBox
+    name: NumberBox
+    href: FluentGpu.Controls.NumberBox.html
+  - name: .
+  - uid: FluentGpu.Controls.NumberBox.Style
+    name: Style
+    href: FluentGpu.Controls.NumberBox.Style.html
+  spec.vb:
+  - uid: FluentGpu.Controls.NumberBox
+    name: NumberBox
+    href: FluentGpu.Controls.NumberBox.html
+  - name: .
+  - uid: FluentGpu.Controls.NumberBox.Style
+    name: Style
+    href: FluentGpu.Controls.NumberBox.Style.html
+- uid: FluentGpu.Controls.OverlayHandle
+  commentId: T:FluentGpu.Controls.OverlayHandle
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.OverlayHandle.html
+  name: OverlayHandle
+  nameWithType: OverlayHandle
+  fullName: FluentGpu.Controls.OverlayHandle
+- uid: FluentGpu.Controls.DismissBehavior
+  commentId: T:FluentGpu.Controls.DismissBehavior
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.DismissBehavior.html
+  name: DismissBehavior
+  nameWithType: DismissBehavior
+  fullName: FluentGpu.Controls.DismissBehavior
+- uid: FluentGpu.Controls.OverlayCloseCause
+  commentId: T:FluentGpu.Controls.OverlayCloseCause
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.OverlayCloseCause.html
+  name: OverlayCloseCause
+  nameWithType: OverlayCloseCause
+  fullName: FluentGpu.Controls.OverlayCloseCause
+- uid: FluentGpu.Controls.PopupChrome
+  commentId: T:FluentGpu.Controls.PopupChrome
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.PopupChrome.html
+  name: PopupChrome
+  nameWithType: PopupChrome
+  fullName: FluentGpu.Controls.PopupChrome
+- uid: FluentGpu.Controls.PopupOptions
+  commentId: T:FluentGpu.Controls.PopupOptions
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.PopupOptions.html
+  name: PopupOptions
+  nameWithType: PopupOptions
+  fullName: FluentGpu.Controls.PopupOptions
+- uid: FluentGpu.Controls.IOverlayService
+  commentId: T:FluentGpu.Controls.IOverlayService
+  href: FluentGpu.Controls.IOverlayService.html
+  name: IOverlayService
+  nameWithType: IOverlayService
+  fullName: FluentGpu.Controls.IOverlayService
+- uid: FluentGpu.Controls.Overlay
+  commentId: T:FluentGpu.Controls.Overlay
+  href: FluentGpu.Controls.Overlay.html
+  name: Overlay
+  nameWithType: Overlay
+  fullName: FluentGpu.Controls.Overlay
+- uid: FluentGpu.Controls.OverlayPlacementInfo
+  commentId: T:FluentGpu.Controls.OverlayPlacementInfo
+  href: FluentGpu.Controls.OverlayPlacementInfo.html
+  name: OverlayPlacementInfo
+  nameWithType: OverlayPlacementInfo
+  fullName: FluentGpu.Controls.OverlayPlacementInfo
+- uid: FluentGpu.Controls.OverlayHost
+  commentId: T:FluentGpu.Controls.OverlayHost
+  href: FluentGpu.Controls.OverlayHost.html
+  name: OverlayHost
+  nameWithType: OverlayHost
+  fullName: FluentGpu.Controls.OverlayHost
+- uid: FluentGpu.Controls.PasswordRevealMode
+  commentId: T:FluentGpu.Controls.PasswordRevealMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.PasswordRevealMode.html
+  name: PasswordRevealMode
+  nameWithType: PasswordRevealMode
+  fullName: FluentGpu.Controls.PasswordRevealMode
+- uid: FluentGpu.Controls.PasswordBox
+  commentId: T:FluentGpu.Controls.PasswordBox
+  href: FluentGpu.Controls.PasswordBox.html
+  name: PasswordBox
+  nameWithType: PasswordBox
+  fullName: FluentGpu.Controls.PasswordBox
+- uid: FluentGpu.Controls.PersonPicture
+  commentId: T:FluentGpu.Controls.PersonPicture
+  href: FluentGpu.Controls.PersonPicture.html
+  name: PersonPicture
+  nameWithType: PersonPicture
+  fullName: FluentGpu.Controls.PersonPicture
+- uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+  commentId: T:FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.PersonPicture.html
+  name: PersonPicture.PersonPictureTemplateSettings
+  nameWithType: PersonPicture.PersonPictureTemplateSettings
+  fullName: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+  spec.csharp:
+  - uid: FluentGpu.Controls.PersonPicture
+    name: PersonPicture
+    href: FluentGpu.Controls.PersonPicture.html
+  - name: .
+  - uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+    name: PersonPictureTemplateSettings
+    href: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.html
+  spec.vb:
+  - uid: FluentGpu.Controls.PersonPicture
+    name: PersonPicture
+    href: FluentGpu.Controls.PersonPicture.html
+  - name: .
+  - uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+    name: PersonPictureTemplateSettings
+    href: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.html
+- uid: FluentGpu.Controls.PipsPagerButtonVisibility
+  commentId: T:FluentGpu.Controls.PipsPagerButtonVisibility
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.PipsPagerButtonVisibility.html
+  name: PipsPagerButtonVisibility
+  nameWithType: PipsPagerButtonVisibility
+  fullName: FluentGpu.Controls.PipsPagerButtonVisibility
+- uid: FluentGpu.Controls.PipsPager
+  commentId: T:FluentGpu.Controls.PipsPager
+  href: FluentGpu.Controls.PipsPager.html
+  name: PipsPager
+  nameWithType: PipsPager
+  fullName: FluentGpu.Controls.PipsPager
+- uid: FluentGpu.Controls.Pivot
+  commentId: T:FluentGpu.Controls.Pivot
+  href: FluentGpu.Controls.Pivot.html
+  name: Pivot
+  nameWithType: Pivot
+  fullName: FluentGpu.Controls.Pivot
+- uid: FluentGpu.Controls.Popup
+  commentId: T:FluentGpu.Controls.Popup
+  href: FluentGpu.Controls.Popup.html
+  name: Popup
+  nameWithType: Popup
+  fullName: FluentGpu.Controls.Popup
+- uid: FluentGpu.Controls.ProgressBarState
+  commentId: T:FluentGpu.Controls.ProgressBarState
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ProgressBarState.html
+  name: ProgressBarState
+  nameWithType: ProgressBarState
+  fullName: FluentGpu.Controls.ProgressBarState
+- uid: FluentGpu.Controls.ProgressBar
+  commentId: T:FluentGpu.Controls.ProgressBar
+  href: FluentGpu.Controls.ProgressBar.html
+  name: ProgressBar
+  nameWithType: ProgressBar
+  fullName: FluentGpu.Controls.ProgressBar
+- uid: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings
+  commentId: T:FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ProgressBar.html
+  name: ProgressBar.ProgressBarTemplateSettings
+  nameWithType: ProgressBar.ProgressBarTemplateSettings
+  fullName: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings
+  spec.csharp:
+  - uid: FluentGpu.Controls.ProgressBar
+    name: ProgressBar
+    href: FluentGpu.Controls.ProgressBar.html
+  - name: .
+  - uid: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings
+    name: ProgressBarTemplateSettings
+    href: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.html
+  spec.vb:
+  - uid: FluentGpu.Controls.ProgressBar
+    name: ProgressBar
+    href: FluentGpu.Controls.ProgressBar.html
+  - name: .
+  - uid: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings
+    name: ProgressBarTemplateSettings
+    href: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.html
+- uid: FluentGpu.Controls.ProgressRing
+  commentId: T:FluentGpu.Controls.ProgressRing
+  href: FluentGpu.Controls.ProgressRing.html
+  name: ProgressRing
+  nameWithType: ProgressRing
+  fullName: FluentGpu.Controls.ProgressRing
+- uid: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings
+  commentId: T:FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ProgressRing.html
+  name: ProgressRing.ProgressRingTemplateSettings
+  nameWithType: ProgressRing.ProgressRingTemplateSettings
+  fullName: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings
+  spec.csharp:
+  - uid: FluentGpu.Controls.ProgressRing
+    name: ProgressRing
+    href: FluentGpu.Controls.ProgressRing.html
+  - name: .
+  - uid: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings
+    name: ProgressRingTemplateSettings
+    href: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.html
+  spec.vb:
+  - uid: FluentGpu.Controls.ProgressRing
+    name: ProgressRing
+    href: FluentGpu.Controls.ProgressRing.html
+  - name: .
+  - uid: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings
+    name: ProgressRingTemplateSettings
+    href: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.html
+- uid: FluentGpu.Controls.RadioButton
+  commentId: T:FluentGpu.Controls.RadioButton
+  href: FluentGpu.Controls.RadioButton.html
+  name: RadioButton
+  nameWithType: RadioButton
+  fullName: FluentGpu.Controls.RadioButton
+- uid: FluentGpu.Controls.RadioButton.Style
+  commentId: T:FluentGpu.Controls.RadioButton.Style
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.RadioButton.html
+  name: RadioButton.Style
+  nameWithType: RadioButton.Style
+  fullName: FluentGpu.Controls.RadioButton.Style
+  spec.csharp:
+  - uid: FluentGpu.Controls.RadioButton
+    name: RadioButton
+    href: FluentGpu.Controls.RadioButton.html
+  - name: .
+  - uid: FluentGpu.Controls.RadioButton.Style
+    name: Style
+    href: FluentGpu.Controls.RadioButton.Style.html
+  spec.vb:
+  - uid: FluentGpu.Controls.RadioButton
+    name: RadioButton
+    href: FluentGpu.Controls.RadioButton.html
+  - name: .
+  - uid: FluentGpu.Controls.RadioButton.Style
+    name: Style
+    href: FluentGpu.Controls.RadioButton.Style.html
+- uid: FluentGpu.Controls.RadioButtons
+  commentId: T:FluentGpu.Controls.RadioButtons
+  href: FluentGpu.Controls.RadioButtons.html
+  name: RadioButtons
+  nameWithType: RadioButtons
+  fullName: FluentGpu.Controls.RadioButtons
+- uid: FluentGpu.Controls.RatingControlTemplateSettings
+  commentId: T:FluentGpu.Controls.RatingControlTemplateSettings
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.RatingControlTemplateSettings.html
+  name: RatingControlTemplateSettings
+  nameWithType: RatingControlTemplateSettings
+  fullName: FluentGpu.Controls.RatingControlTemplateSettings
+- uid: FluentGpu.Controls.RatingControl
+  commentId: T:FluentGpu.Controls.RatingControl
+  href: FluentGpu.Controls.RatingControl.html
+  name: RatingControl
+  nameWithType: RatingControl
+  fullName: FluentGpu.Controls.RatingControl
+- uid: FluentGpu.Controls.RelativeChild
+  commentId: T:FluentGpu.Controls.RelativeChild
+  href: FluentGpu.Controls.RelativeChild.html
+  name: RelativeChild
+  nameWithType: RelativeChild
+  fullName: FluentGpu.Controls.RelativeChild
+- uid: FluentGpu.Controls.RelativePanel
+  commentId: T:FluentGpu.Controls.RelativePanel
+  href: FluentGpu.Controls.RelativePanel.html
+  name: RelativePanel
+  nameWithType: RelativePanel
+  fullName: FluentGpu.Controls.RelativePanel
+- uid: FluentGpu.Controls.ReorderCrossCommit
+  commentId: T:FluentGpu.Controls.ReorderCrossCommit
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ReorderCrossCommit.html
+  name: ReorderCrossCommit
+  nameWithType: ReorderCrossCommit
+  fullName: FluentGpu.Controls.ReorderCrossCommit
+- uid: FluentGpu.Controls.ReorderPayload
+  commentId: T:FluentGpu.Controls.ReorderPayload
+  href: FluentGpu.Controls.ReorderPayload.html
+  name: ReorderPayload
+  nameWithType: ReorderPayload
+  fullName: FluentGpu.Controls.ReorderPayload
+- uid: FluentGpu.Controls.Reorderable
+  commentId: T:FluentGpu.Controls.Reorderable
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.Reorderable.html
+  name: Reorderable
+  nameWithType: Reorderable
+  fullName: FluentGpu.Controls.Reorderable
+- uid: FluentGpu.Controls.ReorderList
+  commentId: T:FluentGpu.Controls.ReorderList
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ReorderList.html
+  name: ReorderList
+  nameWithType: ReorderList
+  fullName: FluentGpu.Controls.ReorderList
+- uid: FluentGpu.Controls.RepeatButton
+  commentId: T:FluentGpu.Controls.RepeatButton
+  href: FluentGpu.Controls.RepeatButton.html
+  name: RepeatButton
+  nameWithType: RepeatButton
+  fullName: FluentGpu.Controls.RepeatButton
+- uid: FluentGpu.Controls.RepeatButton.Style
+  commentId: T:FluentGpu.Controls.RepeatButton.Style
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.RepeatButton.html
+  name: RepeatButton.Style
+  nameWithType: RepeatButton.Style
+  fullName: FluentGpu.Controls.RepeatButton.Style
+  spec.csharp:
+  - uid: FluentGpu.Controls.RepeatButton
+    name: RepeatButton
+    href: FluentGpu.Controls.RepeatButton.html
+  - name: .
+  - uid: FluentGpu.Controls.RepeatButton.Style
+    name: Style
+    href: FluentGpu.Controls.RepeatButton.Style.html
+  spec.vb:
+  - uid: FluentGpu.Controls.RepeatButton
+    name: RepeatButton
+    href: FluentGpu.Controls.RepeatButton.html
+  - name: .
+  - uid: FluentGpu.Controls.RepeatButton.Style
+    name: Style
+    href: FluentGpu.Controls.RepeatButton.Style.html
+- uid: FluentGpu.Controls.RepeatKind
+  commentId: T:FluentGpu.Controls.RepeatKind
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.RepeatKind.html
+  name: RepeatKind
+  nameWithType: RepeatKind
+  fullName: FluentGpu.Controls.RepeatKind
+- uid: FluentGpu.Controls.RepeatLayout
+  commentId: T:FluentGpu.Controls.RepeatLayout
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.RepeatLayout.html
+  name: RepeatLayout
+  nameWithType: RepeatLayout
+  fullName: FluentGpu.Controls.RepeatLayout
+- uid: FluentGpu.Controls.ItemCollectionTransition
+  commentId: T:FluentGpu.Controls.ItemCollectionTransition
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ItemCollectionTransition.html
+  name: ItemCollectionTransition
+  nameWithType: ItemCollectionTransition
+  fullName: FluentGpu.Controls.ItemCollectionTransition
+- uid: FluentGpu.Controls.Repeater
+  commentId: T:FluentGpu.Controls.Repeater
+  href: FluentGpu.Controls.Repeater.html
+  name: Repeater
+  nameWithType: Repeater
+  fullName: FluentGpu.Controls.Repeater
+- uid: FluentGpu.Controls.RichTextBlock
+  commentId: T:FluentGpu.Controls.RichTextBlock
+  href: FluentGpu.Controls.RichTextBlock.html
+  name: RichTextBlock
+  nameWithType: RichTextBlock
+  fullName: FluentGpu.Controls.RichTextBlock
+- uid: FluentGpu.Controls.RichTextBlock.Options
+  commentId: T:FluentGpu.Controls.RichTextBlock.Options
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.RichTextBlock.html
+  name: RichTextBlock.Options
+  nameWithType: RichTextBlock.Options
+  fullName: FluentGpu.Controls.RichTextBlock.Options
+  spec.csharp:
+  - uid: FluentGpu.Controls.RichTextBlock
+    name: RichTextBlock
+    href: FluentGpu.Controls.RichTextBlock.html
+  - name: .
+  - uid: FluentGpu.Controls.RichTextBlock.Options
+    name: Options
+    href: FluentGpu.Controls.RichTextBlock.Options.html
+  spec.vb:
+  - uid: FluentGpu.Controls.RichTextBlock
+    name: RichTextBlock
+    href: FluentGpu.Controls.RichTextBlock.html
+  - name: .
+  - uid: FluentGpu.Controls.RichTextBlock.Options
+    name: Options
+    href: FluentGpu.Controls.RichTextBlock.Options.html
+- uid: FluentGpu.Controls.ScrollBar
+  commentId: T:FluentGpu.Controls.ScrollBar
+  href: FluentGpu.Controls.ScrollBar.html
+  name: ScrollBar
+  nameWithType: ScrollBar
+  fullName: FluentGpu.Controls.ScrollBar
+- uid: FluentGpu.Controls.ScrollBar.Style
+  commentId: T:FluentGpu.Controls.ScrollBar.Style
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ScrollBar.html
+  name: ScrollBar.Style
+  nameWithType: ScrollBar.Style
+  fullName: FluentGpu.Controls.ScrollBar.Style
+  spec.csharp:
+  - uid: FluentGpu.Controls.ScrollBar
+    name: ScrollBar
+    href: FluentGpu.Controls.ScrollBar.html
+  - name: .
+  - uid: FluentGpu.Controls.ScrollBar.Style
+    name: Style
+    href: FluentGpu.Controls.ScrollBar.Style.html
+  spec.vb:
+  - uid: FluentGpu.Controls.ScrollBar
+    name: ScrollBar
+    href: FluentGpu.Controls.ScrollBar.html
+  - name: .
+  - uid: FluentGpu.Controls.ScrollBar.Style
+    name: Style
+    href: FluentGpu.Controls.ScrollBar.Style.html
+- uid: FluentGpu.Controls.ItemsSelectionMode
+  commentId: T:FluentGpu.Controls.ItemsSelectionMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ItemsSelectionMode.html
+  name: ItemsSelectionMode
+  nameWithType: ItemsSelectionMode
+  fullName: FluentGpu.Controls.ItemsSelectionMode
+- uid: FluentGpu.Controls.SelectionModel
+  commentId: T:FluentGpu.Controls.SelectionModel
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.SelectionModel.html
+  name: SelectionModel
+  nameWithType: SelectionModel
+  fullName: FluentGpu.Controls.SelectionModel
+- uid: FluentGpu.Controls.SelectorBar
+  commentId: T:FluentGpu.Controls.SelectorBar
+  href: FluentGpu.Controls.SelectorBar.html
+  name: SelectorBar
+  nameWithType: SelectorBar
+  fullName: FluentGpu.Controls.SelectorBar
+- uid: FluentGpu.Controls.SelectorVisual
+  commentId: T:FluentGpu.Controls.SelectorVisual
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.SelectorVisual.html
+  name: SelectorVisual
+  nameWithType: SelectorVisual
+  fullName: FluentGpu.Controls.SelectorVisual
+- uid: FluentGpu.Controls.PartDelta
+  commentId: T:FluentGpu.Controls.PartDelta
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.PartDelta.html
+  name: PartDelta
+  nameWithType: PartDelta
+  fullName: FluentGpu.Controls.PartDelta
+- uid: FluentGpu.Controls.SelectorVisuals
+  commentId: T:FluentGpu.Controls.SelectorVisuals
+  href: FluentGpu.Controls.SelectorVisuals.html
+  name: SelectorVisuals
+  nameWithType: SelectorVisuals
+  fullName: FluentGpu.Controls.SelectorVisuals
+- uid: FluentGpu.Controls.Slider
+  commentId: T:FluentGpu.Controls.Slider
+  href: FluentGpu.Controls.Slider.html
+  name: Slider
+  nameWithType: Slider
+  fullName: FluentGpu.Controls.Slider
+- uid: FluentGpu.Controls.Slider.Style
+  commentId: T:FluentGpu.Controls.Slider.Style
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.Slider.html
+  name: Slider.Style
+  nameWithType: Slider.Style
+  fullName: FluentGpu.Controls.Slider.Style
+  spec.csharp:
+  - uid: FluentGpu.Controls.Slider
+    name: Slider
+    href: FluentGpu.Controls.Slider.html
+  - name: .
+  - uid: FluentGpu.Controls.Slider.Style
+    name: Style
+    href: FluentGpu.Controls.Slider.Style.html
+  spec.vb:
+  - uid: FluentGpu.Controls.Slider
+    name: Slider
+    href: FluentGpu.Controls.Slider.html
+  - name: .
+  - uid: FluentGpu.Controls.Slider.Style
+    name: Style
+    href: FluentGpu.Controls.Slider.Style.html
+- uid: FluentGpu.Controls.Slider.TickPlacement
+  commentId: T:FluentGpu.Controls.Slider.TickPlacement
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.Slider.html
+  name: Slider.TickPlacement
+  nameWithType: Slider.TickPlacement
+  fullName: FluentGpu.Controls.Slider.TickPlacement
+  spec.csharp:
+  - uid: FluentGpu.Controls.Slider
+    name: Slider
+    href: FluentGpu.Controls.Slider.html
+  - name: .
+  - uid: FluentGpu.Controls.Slider.TickPlacement
+    name: TickPlacement
+    href: FluentGpu.Controls.Slider.TickPlacement.html
+  spec.vb:
+  - uid: FluentGpu.Controls.Slider
+    name: Slider
+    href: FluentGpu.Controls.Slider.html
+  - name: .
+  - uid: FluentGpu.Controls.Slider.TickPlacement
+    name: TickPlacement
+    href: FluentGpu.Controls.Slider.TickPlacement.html
+- uid: FluentGpu.Controls.Slider.Options
+  commentId: T:FluentGpu.Controls.Slider.Options
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.Slider.html
+  name: Slider.Options
+  nameWithType: Slider.Options
+  fullName: FluentGpu.Controls.Slider.Options
+  spec.csharp:
+  - uid: FluentGpu.Controls.Slider
+    name: Slider
+    href: FluentGpu.Controls.Slider.html
+  - name: .
+  - uid: FluentGpu.Controls.Slider.Options
+    name: Options
+    href: FluentGpu.Controls.Slider.Options.html
+  spec.vb:
+  - uid: FluentGpu.Controls.Slider
+    name: Slider
+    href: FluentGpu.Controls.Slider.html
+  - name: .
+  - uid: FluentGpu.Controls.Slider.Options
+    name: Options
+    href: FluentGpu.Controls.Slider.Options.html
+- uid: FluentGpu.Controls.SplitButton
+  commentId: T:FluentGpu.Controls.SplitButton
+  href: FluentGpu.Controls.SplitButton.html
+  name: SplitButton
+  nameWithType: SplitButton
+  fullName: FluentGpu.Controls.SplitButton
+- uid: FluentGpu.Controls.SplitViewDisplayMode
+  commentId: T:FluentGpu.Controls.SplitViewDisplayMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.SplitViewDisplayMode.html
+  name: SplitViewDisplayMode
+  nameWithType: SplitViewDisplayMode
+  fullName: FluentGpu.Controls.SplitViewDisplayMode
+- uid: FluentGpu.Controls.SplitViewPanePlacement
+  commentId: T:FluentGpu.Controls.SplitViewPanePlacement
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.SplitViewPanePlacement.html
+  name: SplitViewPanePlacement
+  nameWithType: SplitViewPanePlacement
+  fullName: FluentGpu.Controls.SplitViewPanePlacement
+- uid: FluentGpu.Controls.SplitViewPaneClosingArgs
+  commentId: T:FluentGpu.Controls.SplitViewPaneClosingArgs
+  href: FluentGpu.Controls.SplitViewPaneClosingArgs.html
+  name: SplitViewPaneClosingArgs
+  nameWithType: SplitViewPaneClosingArgs
+  fullName: FluentGpu.Controls.SplitViewPaneClosingArgs
+- uid: FluentGpu.Controls.SplitView
+  commentId: T:FluentGpu.Controls.SplitView
+  href: FluentGpu.Controls.SplitView.html
+  name: SplitView
+  nameWithType: SplitView
+  fullName: FluentGpu.Controls.SplitView
+- uid: FluentGpu.Controls.SwipeBehaviorOnInvoked
+  commentId: T:FluentGpu.Controls.SwipeBehaviorOnInvoked
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.SwipeBehaviorOnInvoked.html
+  name: SwipeBehaviorOnInvoked
+  nameWithType: SwipeBehaviorOnInvoked
+  fullName: FluentGpu.Controls.SwipeBehaviorOnInvoked
+- uid: FluentGpu.Controls.SwipeMode
+  commentId: T:FluentGpu.Controls.SwipeMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.SwipeMode.html
+  name: SwipeMode
+  nameWithType: SwipeMode
+  fullName: FluentGpu.Controls.SwipeMode
+- uid: FluentGpu.Controls.SwipeAction
+  commentId: T:FluentGpu.Controls.SwipeAction
+  href: FluentGpu.Controls.SwipeAction.html
+  name: SwipeAction
+  nameWithType: SwipeAction
+  fullName: FluentGpu.Controls.SwipeAction
+- uid: FluentGpu.Controls.SwipeControl
+  commentId: T:FluentGpu.Controls.SwipeControl
+  href: FluentGpu.Controls.SwipeControl.html
+  name: SwipeControl
+  nameWithType: SwipeControl
+  fullName: FluentGpu.Controls.SwipeControl
+- uid: FluentGpu.Controls.TabViewWidthMode
+  commentId: T:FluentGpu.Controls.TabViewWidthMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.TabViewWidthMode.html
+  name: TabViewWidthMode
+  nameWithType: TabViewWidthMode
+  fullName: FluentGpu.Controls.TabViewWidthMode
+- uid: FluentGpu.Controls.TabViewCloseButtonOverlayMode
+  commentId: T:FluentGpu.Controls.TabViewCloseButtonOverlayMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.TabViewCloseButtonOverlayMode.html
+  name: TabViewCloseButtonOverlayMode
+  nameWithType: TabViewCloseButtonOverlayMode
+  fullName: FluentGpu.Controls.TabViewCloseButtonOverlayMode
+- uid: FluentGpu.Controls.TabViewItem
+  commentId: T:FluentGpu.Controls.TabViewItem
+  href: FluentGpu.Controls.TabViewItem.html
+  name: TabViewItem
+  nameWithType: TabViewItem
+  fullName: FluentGpu.Controls.TabViewItem
+- uid: FluentGpu.Controls.TabView
+  commentId: T:FluentGpu.Controls.TabView
+  href: FluentGpu.Controls.TabView.html
+  name: TabView
+  nameWithType: TabView
+  fullName: FluentGpu.Controls.TabView
+- uid: FluentGpu.Controls.TeachingTip
+  commentId: T:FluentGpu.Controls.TeachingTip
+  href: FluentGpu.Controls.TeachingTip.html
+  name: TeachingTip
+  nameWithType: TeachingTip
+  fullName: FluentGpu.Controls.TeachingTip
+- uid: FluentGpu.Controls.TeachingTip.CloseReason
+  commentId: T:FluentGpu.Controls.TeachingTip.CloseReason
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.TeachingTip.html
+  name: TeachingTip.CloseReason
+  nameWithType: TeachingTip.CloseReason
+  fullName: FluentGpu.Controls.TeachingTip.CloseReason
+  spec.csharp:
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.CloseReason
+    name: CloseReason
+    href: FluentGpu.Controls.TeachingTip.CloseReason.html
+  spec.vb:
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.CloseReason
+    name: CloseReason
+    href: FluentGpu.Controls.TeachingTip.CloseReason.html
+- uid: FluentGpu.Controls.TeachingTip.PlacementMode
+  commentId: T:FluentGpu.Controls.TeachingTip.PlacementMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.TeachingTip.html
+  name: TeachingTip.PlacementMode
+  nameWithType: TeachingTip.PlacementMode
+  fullName: FluentGpu.Controls.TeachingTip.PlacementMode
+  spec.csharp:
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.PlacementMode
+    name: PlacementMode
+    href: FluentGpu.Controls.TeachingTip.PlacementMode.html
+  spec.vb:
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.PlacementMode
+    name: PlacementMode
+    href: FluentGpu.Controls.TeachingTip.PlacementMode.html
+- uid: FluentGpu.Controls.TeachingTip.TailVisibilityMode
+  commentId: T:FluentGpu.Controls.TeachingTip.TailVisibilityMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.TeachingTip.html
+  name: TeachingTip.TailVisibilityMode
+  nameWithType: TeachingTip.TailVisibilityMode
+  fullName: FluentGpu.Controls.TeachingTip.TailVisibilityMode
+  spec.csharp:
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.TailVisibilityMode
+    name: TailVisibilityMode
+    href: FluentGpu.Controls.TeachingTip.TailVisibilityMode.html
+  spec.vb:
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.TailVisibilityMode
+    name: TailVisibilityMode
+    href: FluentGpu.Controls.TeachingTip.TailVisibilityMode.html
+- uid: FluentGpu.Controls.TeachingTip.HeroPlacement
+  commentId: T:FluentGpu.Controls.TeachingTip.HeroPlacement
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.TeachingTip.html
+  name: TeachingTip.HeroPlacement
+  nameWithType: TeachingTip.HeroPlacement
+  fullName: FluentGpu.Controls.TeachingTip.HeroPlacement
+  spec.csharp:
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.HeroPlacement
+    name: HeroPlacement
+    href: FluentGpu.Controls.TeachingTip.HeroPlacement.html
+  spec.vb:
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.HeroPlacement
+    name: HeroPlacement
+    href: FluentGpu.Controls.TeachingTip.HeroPlacement.html
+- uid: FluentGpu.Controls.TeachingTip.ClosingEventArgs
+  commentId: T:FluentGpu.Controls.TeachingTip.ClosingEventArgs
+  href: FluentGpu.Controls.TeachingTip.html
+  name: TeachingTip.ClosingEventArgs
+  nameWithType: TeachingTip.ClosingEventArgs
+  fullName: FluentGpu.Controls.TeachingTip.ClosingEventArgs
+  spec.csharp:
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.ClosingEventArgs
+    name: ClosingEventArgs
+    href: FluentGpu.Controls.TeachingTip.ClosingEventArgs.html
+  spec.vb:
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.ClosingEventArgs
+    name: ClosingEventArgs
+    href: FluentGpu.Controls.TeachingTip.ClosingEventArgs.html
+- uid: FluentGpu.Controls.TextBlocks
+  commentId: T:FluentGpu.Controls.TextBlocks
+  href: FluentGpu.Controls.TextBlocks.html
+  name: TextBlocks
+  nameWithType: TextBlocks
+  fullName: FluentGpu.Controls.TextBlocks
+- uid: FluentGpu.Controls.TextBox
+  commentId: T:FluentGpu.Controls.TextBox
+  href: FluentGpu.Controls.TextBox.html
+  name: TextBox
+  nameWithType: TextBox
+  fullName: FluentGpu.Controls.TextBox
+- uid: FluentGpu.Controls.TimePicker
+  commentId: T:FluentGpu.Controls.TimePicker
+  href: FluentGpu.Controls.TimePicker.html
+  name: TimePicker
+  nameWithType: TimePicker
+  fullName: FluentGpu.Controls.TimePicker
+- uid: FluentGpu.Controls.TitleBar
+  commentId: T:FluentGpu.Controls.TitleBar
+  href: FluentGpu.Controls.TitleBar.html
+  name: TitleBar
+  nameWithType: TitleBar
+  fullName: FluentGpu.Controls.TitleBar
+- uid: FluentGpu.Controls.ToggleButton
+  commentId: T:FluentGpu.Controls.ToggleButton
+  href: FluentGpu.Controls.ToggleButton.html
+  name: ToggleButton
+  nameWithType: ToggleButton
+  fullName: FluentGpu.Controls.ToggleButton
+- uid: FluentGpu.Controls.ToggleButton.Style
+  commentId: T:FluentGpu.Controls.ToggleButton.Style
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ToggleButton.html
+  name: ToggleButton.Style
+  nameWithType: ToggleButton.Style
+  fullName: FluentGpu.Controls.ToggleButton.Style
+  spec.csharp:
+  - uid: FluentGpu.Controls.ToggleButton
+    name: ToggleButton
+    href: FluentGpu.Controls.ToggleButton.html
+  - name: .
+  - uid: FluentGpu.Controls.ToggleButton.Style
+    name: Style
+    href: FluentGpu.Controls.ToggleButton.Style.html
+  spec.vb:
+  - uid: FluentGpu.Controls.ToggleButton
+    name: ToggleButton
+    href: FluentGpu.Controls.ToggleButton.html
+  - name: .
+  - uid: FluentGpu.Controls.ToggleButton.Style
+    name: Style
+    href: FluentGpu.Controls.ToggleButton.Style.html
+- uid: FluentGpu.Controls.ToggleSplitButton
+  commentId: T:FluentGpu.Controls.ToggleSplitButton
+  href: FluentGpu.Controls.ToggleSplitButton.html
+  name: ToggleSplitButton
+  nameWithType: ToggleSplitButton
+  fullName: FluentGpu.Controls.ToggleSplitButton
+- uid: FluentGpu.Controls.ToggleSwitch
+  commentId: T:FluentGpu.Controls.ToggleSwitch
+  href: FluentGpu.Controls.ToggleSwitch.html
+  name: ToggleSwitch
+  nameWithType: ToggleSwitch
+  fullName: FluentGpu.Controls.ToggleSwitch
+- uid: FluentGpu.Controls.ToggleSwitch.Style
+  commentId: T:FluentGpu.Controls.ToggleSwitch.Style
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ToggleSwitch.html
+  name: ToggleSwitch.Style
+  nameWithType: ToggleSwitch.Style
+  fullName: FluentGpu.Controls.ToggleSwitch.Style
+  spec.csharp:
+  - uid: FluentGpu.Controls.ToggleSwitch
+    name: ToggleSwitch
+    href: FluentGpu.Controls.ToggleSwitch.html
+  - name: .
+  - uid: FluentGpu.Controls.ToggleSwitch.Style
+    name: Style
+    href: FluentGpu.Controls.ToggleSwitch.Style.html
+  spec.vb:
+  - uid: FluentGpu.Controls.ToggleSwitch
+    name: ToggleSwitch
+    href: FluentGpu.Controls.ToggleSwitch.html
+  - name: .
+  - uid: FluentGpu.Controls.ToggleSwitch.Style
+    name: Style
+    href: FluentGpu.Controls.ToggleSwitch.Style.html
+- uid: FluentGpu.Controls.ToolTipPlacementMode
+  commentId: T:FluentGpu.Controls.ToolTipPlacementMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ToolTipPlacementMode.html
+  name: ToolTipPlacementMode
+  nameWithType: ToolTipPlacementMode
+  fullName: FluentGpu.Controls.ToolTipPlacementMode
+- uid: FluentGpu.Controls.ToolTip
+  commentId: T:FluentGpu.Controls.ToolTip
+  href: FluentGpu.Controls.ToolTip.html
+  name: ToolTip
+  nameWithType: ToolTip
+  fullName: FluentGpu.Controls.ToolTip
+- uid: FluentGpu.Controls.TreeNode
+  commentId: T:FluentGpu.Controls.TreeNode
+  href: FluentGpu.Controls.TreeNode.html
+  name: TreeNode
+  nameWithType: TreeNode
+  fullName: FluentGpu.Controls.TreeNode
+- uid: FluentGpu.Controls.TreeView
+  commentId: T:FluentGpu.Controls.TreeView
+  href: FluentGpu.Controls.TreeView.html
+  name: TreeView
+  nameWithType: TreeView
+  fullName: FluentGpu.Controls.TreeView
+- uid: FluentGpu.Controls.WrapTile
+  commentId: T:FluentGpu.Controls.WrapTile
+  href: FluentGpu.Controls.WrapTile.html
+  name: WrapTile
+  nameWithType: WrapTile
+  fullName: FluentGpu.Controls.WrapTile
+- uid: FluentGpu.Controls.VariableSizedWrapGrid
+  commentId: T:FluentGpu.Controls.VariableSizedWrapGrid
+  href: FluentGpu.Controls.VariableSizedWrapGrid.html
+  name: VariableSizedWrapGrid
+  nameWithType: VariableSizedWrapGrid
+  fullName: FluentGpu.Controls.VariableSizedWrapGrid
+- uid: FluentGpu.Controls.ViewboxStretch
+  commentId: T:FluentGpu.Controls.ViewboxStretch
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ViewboxStretch.html
+  name: ViewboxStretch
+  nameWithType: ViewboxStretch
+  fullName: FluentGpu.Controls.ViewboxStretch
+- uid: FluentGpu.Controls.ViewboxStretchDirection
+  commentId: T:FluentGpu.Controls.ViewboxStretchDirection
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ViewboxStretchDirection.html
+  name: ViewboxStretchDirection
+  nameWithType: ViewboxStretchDirection
+  fullName: FluentGpu.Controls.ViewboxStretchDirection
+- uid: FluentGpu.Controls.Viewbox
+  commentId: T:FluentGpu.Controls.Viewbox
+  href: FluentGpu.Controls.Viewbox.html
+  name: Viewbox
+  nameWithType: Viewbox
+  fullName: FluentGpu.Controls.Viewbox
+- uid: FluentGpu.Controls.Virtual
+  commentId: T:FluentGpu.Controls.Virtual
+  href: FluentGpu.Controls.Virtual.html
+  name: Virtual
+  nameWithType: Virtual
+  fullName: FluentGpu.Controls.Virtual
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html

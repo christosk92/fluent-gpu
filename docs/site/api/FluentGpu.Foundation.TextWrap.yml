@@ -1,0 +1,141 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.TextWrap
+  commentId: T:FluentGpu.Foundation.TextWrap
+  id: TextWrap
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.TextWrap.NoWrap
+  - FluentGpu.Foundation.TextWrap.Wrap
+  - FluentGpu.Foundation.TextWrap.WrapWholeWords
+  langs:
+  - csharp
+  - vb
+  name: TextWrap
+  nameWithType: TextWrap
+  fullName: FluentGpu.Foundation.TextWrap
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/TextLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextWrap
+    path: ../../src/FluentGpu.Foundation/TextLayout.cs
+    startLine: 3
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: How a text run breaks across lines (mirrors WinUI TextWrapping).
+  example: []
+  syntax:
+    content: 'public enum TextWrap : byte'
+    content.vb: Public Enum TextWrap As Byte
+- uid: FluentGpu.Foundation.TextWrap.NoWrap
+  commentId: F:FluentGpu.Foundation.TextWrap.NoWrap
+  id: NoWrap
+  parent: FluentGpu.Foundation.TextWrap
+  langs:
+  - csharp
+  - vb
+  name: NoWrap
+  nameWithType: TextWrap.NoWrap
+  fullName: FluentGpu.Foundation.TextWrap.NoWrap
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/TextLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NoWrap
+    path: ../../src/FluentGpu.Foundation/TextLayout.cs
+    startLine: 5
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: NoWrap = 0
+    return:
+      type: FluentGpu.Foundation.TextWrap
+- uid: FluentGpu.Foundation.TextWrap.Wrap
+  commentId: F:FluentGpu.Foundation.TextWrap.Wrap
+  id: Wrap
+  parent: FluentGpu.Foundation.TextWrap
+  langs:
+  - csharp
+  - vb
+  name: Wrap
+  nameWithType: TextWrap.Wrap
+  fullName: FluentGpu.Foundation.TextWrap.Wrap
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/TextLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Wrap
+    path: ../../src/FluentGpu.Foundation/TextLayout.cs
+    startLine: 6
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Wrap = 1
+    return:
+      type: FluentGpu.Foundation.TextWrap
+- uid: FluentGpu.Foundation.TextWrap.WrapWholeWords
+  commentId: F:FluentGpu.Foundation.TextWrap.WrapWholeWords
+  id: WrapWholeWords
+  parent: FluentGpu.Foundation.TextWrap
+  langs:
+  - csharp
+  - vb
+  name: WrapWholeWords
+  nameWithType: TextWrap.WrapWholeWords
+  fullName: FluentGpu.Foundation.TextWrap.WrapWholeWords
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/TextLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: WrapWholeWords
+    path: ../../src/FluentGpu.Foundation/TextLayout.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: WrapWholeWords = 2
+    return:
+      type: FluentGpu.Foundation.TextWrap
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Foundation.TextWrap
+  commentId: T:FluentGpu.Foundation.TextWrap
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.TextWrap.html
+  name: TextWrap
+  nameWithType: TextWrap
+  fullName: FluentGpu.Foundation.TextWrap

@@ -1,0 +1,840 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.PopupOptions
+  commentId: T:FluentGpu.Controls.PopupOptions
+  id: PopupOptions
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.PopupOptions.#ctor(System.Boolean,FluentGpu.Controls.DismissBehavior,FluentGpu.Controls.PopupChrome)
+  - FluentGpu.Controls.PopupOptions.AnchorOffsetX
+  - FluentGpu.Controls.PopupOptions.Chrome
+  - FluentGpu.Controls.PopupOptions.ConstrainToRootBounds
+  - FluentGpu.Controls.PopupOptions.DismissBehavior
+  - FluentGpu.Controls.PopupOptions.FocusTrap
+  - FluentGpu.Controls.PopupOptions.PassThrough
+  - FluentGpu.Controls.PopupOptions.SeamOffsetY
+  langs:
+  - csharp
+  - vb
+  name: PopupOptions
+  nameWithType: PopupOptions
+  fullName: FluentGpu.Controls.PopupOptions
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PopupOptions
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Optional popup behavior. <xref href="FluentGpu.Controls.PopupOptions.FocusTrap" data-throw-if-not-resolved="false"></xref> keeps Tab/Shift-Tab inside the overlay subtree (modal-style).
+  example: []
+  syntax:
+    content: 'public readonly record struct PopupOptions : IEquatable<PopupOptions>'
+    content.vb: Public Structure PopupOptions Implements IEquatable(Of PopupOptions)
+  implements:
+  - System.IEquatable{FluentGpu.Controls.PopupOptions}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Controls.PopupOptions.#ctor(System.Boolean,FluentGpu.Controls.DismissBehavior,FluentGpu.Controls.PopupChrome)
+  commentId: M:FluentGpu.Controls.PopupOptions.#ctor(System.Boolean,FluentGpu.Controls.DismissBehavior,FluentGpu.Controls.PopupChrome)
+  id: '#ctor(System.Boolean,FluentGpu.Controls.DismissBehavior,FluentGpu.Controls.PopupChrome)'
+  parent: FluentGpu.Controls.PopupOptions
+  langs:
+  - csharp
+  - vb
+  name: PopupOptions(bool, DismissBehavior, PopupChrome)
+  nameWithType: PopupOptions.PopupOptions(bool, DismissBehavior, PopupChrome)
+  fullName: FluentGpu.Controls.PopupOptions.PopupOptions(bool, FluentGpu.Controls.DismissBehavior, FluentGpu.Controls.PopupChrome)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Optional popup behavior. <xref href="FluentGpu.Controls.PopupOptions.FocusTrap" data-throw-if-not-resolved="false"></xref> keeps Tab/Shift-Tab inside the overlay subtree (modal-style).
+  example: []
+  syntax:
+    content: public PopupOptions(bool FocusTrap = false, DismissBehavior DismissBehavior = DismissBehavior.LightDismiss, PopupChrome Chrome = PopupChrome.Flyout)
+    parameters:
+    - id: FocusTrap
+      type: System.Boolean
+    - id: DismissBehavior
+      type: FluentGpu.Controls.DismissBehavior
+    - id: Chrome
+      type: FluentGpu.Controls.PopupChrome
+    content.vb: Public Sub New(FocusTrap As Boolean = False, DismissBehavior As DismissBehavior = DismissBehavior.LightDismiss, Chrome As PopupChrome = PopupChrome.Flyout)
+  overload: FluentGpu.Controls.PopupOptions.#ctor*
+  nameWithType.vb: PopupOptions.New(Boolean, DismissBehavior, PopupChrome)
+  fullName.vb: FluentGpu.Controls.PopupOptions.New(Boolean, FluentGpu.Controls.DismissBehavior, FluentGpu.Controls.PopupChrome)
+  name.vb: New(Boolean, DismissBehavior, PopupChrome)
+- uid: FluentGpu.Controls.PopupOptions.FocusTrap
+  commentId: P:FluentGpu.Controls.PopupOptions.FocusTrap
+  id: FocusTrap
+  parent: FluentGpu.Controls.PopupOptions
+  langs:
+  - csharp
+  - vb
+  name: FocusTrap
+  nameWithType: PopupOptions.FocusTrap
+  fullName: FluentGpu.Controls.PopupOptions.FocusTrap
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FocusTrap
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 55
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool FocusTrap { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property FocusTrap As Boolean
+  overload: FluentGpu.Controls.PopupOptions.FocusTrap*
+- uid: FluentGpu.Controls.PopupOptions.DismissBehavior
+  commentId: P:FluentGpu.Controls.PopupOptions.DismissBehavior
+  id: DismissBehavior
+  parent: FluentGpu.Controls.PopupOptions
+  langs:
+  - csharp
+  - vb
+  name: DismissBehavior
+  nameWithType: PopupOptions.DismissBehavior
+  fullName: FluentGpu.Controls.PopupOptions.DismissBehavior
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DismissBehavior
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 56
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public DismissBehavior DismissBehavior { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.DismissBehavior
+    content.vb: Public Property DismissBehavior As DismissBehavior
+  overload: FluentGpu.Controls.PopupOptions.DismissBehavior*
+- uid: FluentGpu.Controls.PopupOptions.Chrome
+  commentId: P:FluentGpu.Controls.PopupOptions.Chrome
+  id: Chrome
+  parent: FluentGpu.Controls.PopupOptions
+  langs:
+  - csharp
+  - vb
+  name: Chrome
+  nameWithType: PopupOptions.Chrome
+  fullName: FluentGpu.Controls.PopupOptions.Chrome
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Chrome
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 57
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public PopupChrome Chrome { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.PopupChrome
+    content.vb: Public Property Chrome As PopupChrome
+  overload: FluentGpu.Controls.PopupOptions.Chrome*
+- uid: FluentGpu.Controls.PopupOptions.ConstrainToRootBounds
+  commentId: P:FluentGpu.Controls.PopupOptions.ConstrainToRootBounds
+  id: ConstrainToRootBounds
+  parent: FluentGpu.Controls.PopupOptions
+  langs:
+  - csharp
+  - vb
+  name: ConstrainToRootBounds
+  nameWithType: PopupOptions.ConstrainToRootBounds
+  fullName: FluentGpu.Controls.PopupOptions.ConstrainToRootBounds
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ConstrainToRootBounds
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 70
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>Popup.ShouldConstrainToRootBounds</code> (Popup_Partial.cpp:951-970: read-only false for WINDOWED popups;
+
+    FlyoutBase_Partial.cpp:3181-3205 <code>SetIsWindowedPopup</code>). Default TRUE = the popup is clamped inside the
+
+    window (today's behavior). Set FALSE where WinUI windows its popups (menus, ComboBox tall dropdowns,
+
+    CommandBarFlyout): the host then asks the platform for a top-level popup window, places against the MONITOR
+
+    work area, and renders the subtree into the popup window's own swapchain. Falls back to constrained placement
+
+    when the platform/host cannot create popup windows (WinUI's <code>DoesPlatformSupportWindowedPopup</code> gate).
+
+    Stored inverted so <code>default(PopupOptions)</code> stays constrained.
+  example: []
+  syntax:
+    content: public bool ConstrainToRootBounds { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property ConstrainToRootBounds As Boolean
+  overload: FluentGpu.Controls.PopupOptions.ConstrainToRootBounds*
+- uid: FluentGpu.Controls.PopupOptions.SeamOffsetY
+  commentId: P:FluentGpu.Controls.PopupOptions.SeamOffsetY
+  id: SeamOffsetY
+  parent: FluentGpu.Controls.PopupOptions
+  langs:
+  - csharp
+  - vb
+  name: SeamOffsetY
+  nameWithType: PopupOptions.SeamOffsetY
+  fullName: FluentGpu.Controls.PopupOptions.SeamOffsetY
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SeamOffsetY
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 80
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Dropdown (SplitOpen/SplitClose) seam: (selected-row centre Y) − (popup centre Y) in POPUP-LOCAL px —
+        WinUI <code>SplitOpenThemeAnimation.OffsetFromCenter</code> (the ComboBox carousel centres the reveal on the selected
+        row; ThemeAnimations.cpp:682 registers ClipTranslateY = OffsetFromCenter immediately). Null (the default) keeps
+        the anchor-edge reveal. Only meaningful with <xref href="FluentGpu.Controls.PopupChrome.Dropdown" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: public float? SeamOffsetY { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{System.Single}
+    content.vb: Public Property SeamOffsetY As Single?
+  overload: FluentGpu.Controls.PopupOptions.SeamOffsetY*
+- uid: FluentGpu.Controls.PopupOptions.PassThrough
+  commentId: P:FluentGpu.Controls.PopupOptions.PassThrough
+  id: PassThrough
+  parent: FluentGpu.Controls.PopupOptions
+  langs:
+  - csharp
+  - vb
+  name: PassThrough
+  nameWithType: PopupOptions.PassThrough
+  fullName: FluentGpu.Controls.PopupOptions.PassThrough
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PassThrough
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 87
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>FlyoutBase.OverlayInputPassThroughElement</code> (FlyoutBase_Partial.cpp:3922-3938): pointer
+        input over THIS node's rendered bounds bypasses the light-dismiss scrim while the popup is open — the MenuBar
+        keeps hover-switching titles with a menu down (MenuBarItem.cpp:64-70 sets the bar as the pass-through).
+        (The full FlyoutShowMode surface — Transient / TransientWithDismissOnPointerMoveAway 80px — remains open;
+        tracked as engine item 31 in docs/plans/winui-parity-sweep.md.)
+  example: []
+  syntax:
+    content: public Func<NodeHandle>? PassThrough { get; init; }
+    parameters: []
+    return:
+      type: System.Func{FluentGpu.Foundation.NodeHandle}
+    content.vb: Public Property PassThrough As Func(Of NodeHandle)
+  overload: FluentGpu.Controls.PopupOptions.PassThrough*
+- uid: FluentGpu.Controls.PopupOptions.AnchorOffsetX
+  commentId: P:FluentGpu.Controls.PopupOptions.AnchorOffsetX
+  id: AnchorOffsetX
+  parent: FluentGpu.Controls.PopupOptions
+  langs:
+  - csharp
+  - vb
+  name: AnchorOffsetX
+  nameWithType: PopupOptions.AnchorOffsetX
+  fullName: FluentGpu.Controls.PopupOptions.AnchorOffsetX
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AnchorOffsetX
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 93
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Post-placement horizontal nudge in px, MIRRORED when the positioner flips the popup to the anchor's
+        other side: the cascading-menu 4px overlap onto its owner (CascadingMenuHelper.h:121
+        <code>m_subMenuOverlapPixels = 4</code>; cpp:678 subMenuPosition.X += subItemWidth − 4 → pass −4 with
+        <xref href="FluentGpu.Controls.FlyoutPlacement.RightEdgeAlignedTop" data-throw-if-not-resolved="false"></xref>).
+  example: []
+  syntax:
+    content: public float AnchorOffsetX { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property AnchorOffsetX As Single
+  overload: FluentGpu.Controls.PopupOptions.AnchorOffsetX*
+references:
+- uid: FluentGpu.Controls.PopupOptions.FocusTrap
+  commentId: P:FluentGpu.Controls.PopupOptions.FocusTrap
+  href: FluentGpu.Controls.PopupOptions.html#FluentGpu_Controls_PopupOptions_FocusTrap
+  name: FocusTrap
+  nameWithType: PopupOptions.FocusTrap
+  fullName: FluentGpu.Controls.PopupOptions.FocusTrap
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.IEquatable{FluentGpu.Controls.PopupOptions}
+  commentId: T:System.IEquatable{FluentGpu.Controls.PopupOptions}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<PopupOptions>
+  nameWithType: IEquatable<PopupOptions>
+  fullName: System.IEquatable<FluentGpu.Controls.PopupOptions>
+  nameWithType.vb: IEquatable(Of PopupOptions)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.PopupOptions)
+  name.vb: IEquatable(Of PopupOptions)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.PopupOptions
+    name: PopupOptions
+    href: FluentGpu.Controls.PopupOptions.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.PopupOptions
+    name: PopupOptions
+    href: FluentGpu.Controls.PopupOptions.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Controls.PopupOptions.#ctor*
+  commentId: Overload:FluentGpu.Controls.PopupOptions.#ctor
+  href: FluentGpu.Controls.PopupOptions.html#FluentGpu_Controls_PopupOptions__ctor_System_Boolean_FluentGpu_Controls_DismissBehavior_FluentGpu_Controls_PopupChrome_
+  name: PopupOptions
+  nameWithType: PopupOptions.PopupOptions
+  fullName: FluentGpu.Controls.PopupOptions.PopupOptions
+  nameWithType.vb: PopupOptions.New
+  fullName.vb: FluentGpu.Controls.PopupOptions.New
+  name.vb: New
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Controls.DismissBehavior
+  commentId: T:FluentGpu.Controls.DismissBehavior
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.DismissBehavior.html
+  name: DismissBehavior
+  nameWithType: DismissBehavior
+  fullName: FluentGpu.Controls.DismissBehavior
+- uid: FluentGpu.Controls.PopupChrome
+  commentId: T:FluentGpu.Controls.PopupChrome
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.PopupChrome.html
+  name: PopupChrome
+  nameWithType: PopupChrome
+  fullName: FluentGpu.Controls.PopupChrome
+- uid: FluentGpu.Controls.PopupOptions.FocusTrap*
+  commentId: Overload:FluentGpu.Controls.PopupOptions.FocusTrap
+  href: FluentGpu.Controls.PopupOptions.html#FluentGpu_Controls_PopupOptions_FocusTrap
+  name: FocusTrap
+  nameWithType: PopupOptions.FocusTrap
+  fullName: FluentGpu.Controls.PopupOptions.FocusTrap
+- uid: FluentGpu.Controls.PopupOptions.DismissBehavior*
+  commentId: Overload:FluentGpu.Controls.PopupOptions.DismissBehavior
+  href: FluentGpu.Controls.PopupOptions.html#FluentGpu_Controls_PopupOptions_DismissBehavior
+  name: DismissBehavior
+  nameWithType: PopupOptions.DismissBehavior
+  fullName: FluentGpu.Controls.PopupOptions.DismissBehavior
+- uid: FluentGpu.Controls.PopupOptions.Chrome*
+  commentId: Overload:FluentGpu.Controls.PopupOptions.Chrome
+  href: FluentGpu.Controls.PopupOptions.html#FluentGpu_Controls_PopupOptions_Chrome
+  name: Chrome
+  nameWithType: PopupOptions.Chrome
+  fullName: FluentGpu.Controls.PopupOptions.Chrome
+- uid: FluentGpu.Controls.PopupOptions.ConstrainToRootBounds*
+  commentId: Overload:FluentGpu.Controls.PopupOptions.ConstrainToRootBounds
+  href: FluentGpu.Controls.PopupOptions.html#FluentGpu_Controls_PopupOptions_ConstrainToRootBounds
+  name: ConstrainToRootBounds
+  nameWithType: PopupOptions.ConstrainToRootBounds
+  fullName: FluentGpu.Controls.PopupOptions.ConstrainToRootBounds
+- uid: FluentGpu.Controls.PopupChrome.Dropdown
+  commentId: F:FluentGpu.Controls.PopupChrome.Dropdown
+  href: FluentGpu.Controls.PopupChrome.html#FluentGpu_Controls_PopupChrome_Dropdown
+  name: Dropdown
+  nameWithType: PopupChrome.Dropdown
+  fullName: FluentGpu.Controls.PopupChrome.Dropdown
+- uid: FluentGpu.Controls.PopupOptions.SeamOffsetY*
+  commentId: Overload:FluentGpu.Controls.PopupOptions.SeamOffsetY
+  href: FluentGpu.Controls.PopupOptions.html#FluentGpu_Controls_PopupOptions_SeamOffsetY
+  name: SeamOffsetY
+  nameWithType: PopupOptions.SeamOffsetY
+  fullName: FluentGpu.Controls.PopupOptions.SeamOffsetY
+- uid: System.Nullable{System.Single}
+  commentId: T:System.Nullable{System.Single}
+  parent: System
+  definition: System.Nullable`1
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float?
+  nameWithType: float?
+  fullName: float?
+  nameWithType.vb: Single?
+  fullName.vb: Single?
+  name.vb: Single?
+  spec.csharp:
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: '?'
+  spec.vb:
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: '?'
+- uid: System.Nullable`1
+  commentId: T:System.Nullable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  name: Nullable<T>
+  nameWithType: Nullable<T>
+  fullName: System.Nullable<T>
+  nameWithType.vb: Nullable(Of T)
+  fullName.vb: System.Nullable(Of T)
+  name.vb: Nullable(Of T)
+  spec.csharp:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.PopupOptions.PassThrough*
+  commentId: Overload:FluentGpu.Controls.PopupOptions.PassThrough
+  href: FluentGpu.Controls.PopupOptions.html#FluentGpu_Controls_PopupOptions_PassThrough
+  name: PassThrough
+  nameWithType: PopupOptions.PassThrough
+  fullName: FluentGpu.Controls.PopupOptions.PassThrough
+- uid: System.Func{FluentGpu.Foundation.NodeHandle}
+  commentId: T:System.Func{FluentGpu.Foundation.NodeHandle}
+  parent: System
+  definition: System.Func`1
+  href: https://learn.microsoft.com/dotnet/api/system.func-1
+  name: Func<NodeHandle>
+  nameWithType: Func<NodeHandle>
+  fullName: System.Func<FluentGpu.Foundation.NodeHandle>
+  nameWithType.vb: Func(Of NodeHandle)
+  fullName.vb: System.Func(Of FluentGpu.Foundation.NodeHandle)
+  name.vb: Func(Of NodeHandle)
+  spec.csharp:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: <
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: )
+- uid: System.Func`1
+  commentId: T:System.Func`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.func-1
+  name: Func<TResult>
+  nameWithType: Func<TResult>
+  fullName: System.Func<TResult>
+  nameWithType.vb: Func(Of TResult)
+  fullName.vb: System.Func(Of TResult)
+  name.vb: Func(Of TResult)
+  spec.csharp:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: <
+  - name: TResult
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: TResult
+  - name: )
+- uid: FluentGpu.Controls.FlyoutPlacement.RightEdgeAlignedTop
+  commentId: F:FluentGpu.Controls.FlyoutPlacement.RightEdgeAlignedTop
+  href: FluentGpu.Controls.FlyoutPlacement.html#FluentGpu_Controls_FlyoutPlacement_RightEdgeAlignedTop
+  name: RightEdgeAlignedTop
+  nameWithType: FlyoutPlacement.RightEdgeAlignedTop
+  fullName: FluentGpu.Controls.FlyoutPlacement.RightEdgeAlignedTop
+- uid: FluentGpu.Controls.PopupOptions.AnchorOffsetX*
+  commentId: Overload:FluentGpu.Controls.PopupOptions.AnchorOffsetX
+  href: FluentGpu.Controls.PopupOptions.html#FluentGpu_Controls_PopupOptions_AnchorOffsetX
+  name: AnchorOffsetX
+  nameWithType: PopupOptions.AnchorOffsetX
+  fullName: FluentGpu.Controls.PopupOptions.AnchorOffsetX
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single

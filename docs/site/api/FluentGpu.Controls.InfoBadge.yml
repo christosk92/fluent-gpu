@@ -1,0 +1,988 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.InfoBadge
+  commentId: T:FluentGpu.Controls.InfoBadge
+  id: InfoBadge
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.InfoBadge.Count(System.Int32,FluentGpu.Controls.InfoBadgeSeverity,FluentGpu.Dsl.TemplateParts)
+  - FluentGpu.Controls.InfoBadge.Count(System.Int32,System.Nullable{FluentGpu.Foundation.ColorF},FluentGpu.Dsl.TemplateParts)
+  - FluentGpu.Controls.InfoBadge.DefaultGlyph(FluentGpu.Controls.InfoBadgeSeverity)
+  - FluentGpu.Controls.InfoBadge.Dot(FluentGpu.Controls.InfoBadgeSeverity,FluentGpu.Dsl.TemplateParts)
+  - FluentGpu.Controls.InfoBadge.Dot(System.Nullable{FluentGpu.Foundation.ColorF},FluentGpu.Dsl.TemplateParts)
+  - FluentGpu.Controls.InfoBadge.GlyphAttention
+  - FluentGpu.Controls.InfoBadge.GlyphCaution
+  - FluentGpu.Controls.InfoBadge.GlyphCritical
+  - FluentGpu.Controls.InfoBadge.GlyphInformational
+  - FluentGpu.Controls.InfoBadge.GlyphSuccess
+  - FluentGpu.Controls.InfoBadge.Icon(FluentGpu.Controls.InfoBadgeSeverity,FluentGpu.Dsl.TemplateParts)
+  - FluentGpu.Controls.InfoBadge.Icon(System.String,FluentGpu.Controls.InfoBadgeSeverity,FluentGpu.Dsl.TemplateParts)
+  - FluentGpu.Controls.InfoBadge.Icon(System.String,System.Nullable{FluentGpu.Foundation.ColorF},FluentGpu.Dsl.TemplateParts)
+  - FluentGpu.Controls.InfoBadge.PartRoot
+  langs:
+  - csharp
+  - vb
+  name: InfoBadge
+  nameWithType: InfoBadge
+  fullName: FluentGpu.Controls.InfoBadge
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InfoBadge
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 77
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A WinUI InfoBadge: a small accent (or severity) pill that surfaces a notification count, an icon, or a bare dot.
+
+    Three display kinds, resolved exactly as WinUI's <code>InfoBadge::OnDisplayKindPropertiesChanged</code> does:
+
+
+    <ul><li><b>Value</b> (Value &gt;= 0): an 11px count, clamped to a 16-tall pill (single digits stay circular because
+
+    WinUI's MeasureOverride squares a badge narrower than it is tall).</li><li><b>Icon</b> (Value &lt; 0, glyph supplied): a Segoe Fluent glyph in the same 16-tall pill, scaled by the WinUI
+
+    IconPresenter Viewbox to the content-box height (8 for the padded Attention/Informational FontIcon styles and the
+
+    SymbolIcon severities, 14 for an unpadded FontIcon — see <xref href="FluentGpu.Controls.InfoBadgeTemplateSettings" data-throw-if-not-resolved="false"></xref>).</li><li><b>Dot</b> (neither): a bare 4x4 disc.</li></ul>
+
+
+    Background = AccentFillColorDefault (Default), or a SystemFillColor* per <xref href="FluentGpu.Controls.InfoBadgeSeverity" data-throw-if-not-resolved="false"></xref>; foreground =
+
+    TextOnAccentFillColorPrimary. The corner radius is the computed pill (height/2) from
+
+    <xref href="FluentGpu.Controls.InfoBadgeTemplateSettings" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: public static class InfoBadge
+    content.vb: Public Module InfoBadge
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.MemberwiseClone
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.InfoBadge.PartRoot
+  commentId: F:FluentGpu.Controls.InfoBadge.PartRoot
+  id: PartRoot
+  parent: FluentGpu.Controls.InfoBadge
+  langs:
+  - csharp
+  - vb
+  name: PartRoot
+  nameWithType: InfoBadge.PartRoot
+  fullName: FluentGpu.Controls.InfoBadge.PartRoot
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartRoot
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 84
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The badge pill itself (WinUI RootGrid — the control's only named element). Owned: Children (the
+        value text / icon glyph — the display-kind content; the Dot has none). The per-kind geometry and severity
+        fill are stock per-render styling a modifier may override.
+  example: []
+  syntax:
+    content: public const string PartRoot = "Root"
+    return:
+      type: System.String
+    content.vb: Public Const PartRoot As String = "Root"
+- uid: FluentGpu.Controls.InfoBadge.GlyphAttention
+  commentId: F:FluentGpu.Controls.InfoBadge.GlyphAttention
+  id: GlyphAttention
+  parent: FluentGpu.Controls.InfoBadge
+  langs:
+  - csharp
+  - vb
+  name: GlyphAttention
+  nameWithType: InfoBadge.GlyphAttention
+  fullName: FluentGpu.Controls.InfoBadge.GlyphAttention
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GlyphAttention
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 92
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string GlyphAttention = ""
+    return:
+      type: System.String
+    content.vb: Public Const GlyphAttention As String = ""
+- uid: FluentGpu.Controls.InfoBadge.GlyphInformational
+  commentId: F:FluentGpu.Controls.InfoBadge.GlyphInformational
+  id: GlyphInformational
+  parent: FluentGpu.Controls.InfoBadge
+  langs:
+  - csharp
+  - vb
+  name: GlyphInformational
+  nameWithType: InfoBadge.GlyphInformational
+  fullName: FluentGpu.Controls.InfoBadge.GlyphInformational
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GlyphInformational
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 93
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string GlyphInformational = ""
+    return:
+      type: System.String
+    content.vb: Public Const GlyphInformational As String = ""
+- uid: FluentGpu.Controls.InfoBadge.GlyphSuccess
+  commentId: F:FluentGpu.Controls.InfoBadge.GlyphSuccess
+  id: GlyphSuccess
+  parent: FluentGpu.Controls.InfoBadge
+  langs:
+  - csharp
+  - vb
+  name: GlyphSuccess
+  nameWithType: InfoBadge.GlyphSuccess
+  fullName: FluentGpu.Controls.InfoBadge.GlyphSuccess
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GlyphSuccess
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 94
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string GlyphSuccess = ""
+    return:
+      type: System.String
+    content.vb: Public Const GlyphSuccess As String = ""
+- uid: FluentGpu.Controls.InfoBadge.GlyphCaution
+  commentId: F:FluentGpu.Controls.InfoBadge.GlyphCaution
+  id: GlyphCaution
+  parent: FluentGpu.Controls.InfoBadge
+  langs:
+  - csharp
+  - vb
+  name: GlyphCaution
+  nameWithType: InfoBadge.GlyphCaution
+  fullName: FluentGpu.Controls.InfoBadge.GlyphCaution
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GlyphCaution
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 95
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string GlyphCaution = ""
+    return:
+      type: System.String
+    content.vb: Public Const GlyphCaution As String = ""
+- uid: FluentGpu.Controls.InfoBadge.GlyphCritical
+  commentId: F:FluentGpu.Controls.InfoBadge.GlyphCritical
+  id: GlyphCritical
+  parent: FluentGpu.Controls.InfoBadge
+  langs:
+  - csharp
+  - vb
+  name: GlyphCritical
+  nameWithType: InfoBadge.GlyphCritical
+  fullName: FluentGpu.Controls.InfoBadge.GlyphCritical
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GlyphCritical
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 96
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string GlyphCritical = ""
+    return:
+      type: System.String
+    content.vb: Public Const GlyphCritical As String = ""
+- uid: FluentGpu.Controls.InfoBadge.Dot(System.Nullable{FluentGpu.Foundation.ColorF},FluentGpu.Dsl.TemplateParts)
+  commentId: M:FluentGpu.Controls.InfoBadge.Dot(System.Nullable{FluentGpu.Foundation.ColorF},FluentGpu.Dsl.TemplateParts)
+  id: Dot(System.Nullable{FluentGpu.Foundation.ColorF},FluentGpu.Dsl.TemplateParts)
+  parent: FluentGpu.Controls.InfoBadge
+  langs:
+  - csharp
+  - vb
+  name: Dot(ColorF?, TemplateParts?)
+  nameWithType: InfoBadge.Dot(ColorF?, TemplateParts?)
+  fullName: FluentGpu.Controls.InfoBadge.Dot(FluentGpu.Foundation.ColorF?, FluentGpu.Dsl.TemplateParts?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Dot
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 113
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'The bare 4x4 dot. WinUI Dot state (no Value, no Icon): 4x4, corner = 2 (pill at that height).'
+  example: []
+  syntax:
+    content: public static BoxEl Dot(ColorF? color = null, TemplateParts? parts = null)
+    parameters:
+    - id: color
+      type: System.Nullable{FluentGpu.Foundation.ColorF}
+    - id: parts
+      type: FluentGpu.Dsl.TemplateParts
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Dot(color As ColorF? = Nothing, parts As TemplateParts = Nothing) As BoxEl
+  overload: FluentGpu.Controls.InfoBadge.Dot*
+  nameWithType.vb: InfoBadge.Dot(ColorF?, TemplateParts)
+  fullName.vb: FluentGpu.Controls.InfoBadge.Dot(FluentGpu.Foundation.ColorF?, FluentGpu.Dsl.TemplateParts)
+  name.vb: Dot(ColorF?, TemplateParts)
+- uid: FluentGpu.Controls.InfoBadge.Dot(FluentGpu.Controls.InfoBadgeSeverity,FluentGpu.Dsl.TemplateParts)
+  commentId: M:FluentGpu.Controls.InfoBadge.Dot(FluentGpu.Controls.InfoBadgeSeverity,FluentGpu.Dsl.TemplateParts)
+  id: Dot(FluentGpu.Controls.InfoBadgeSeverity,FluentGpu.Dsl.TemplateParts)
+  parent: FluentGpu.Controls.InfoBadge
+  langs:
+  - csharp
+  - vb
+  name: Dot(InfoBadgeSeverity, TemplateParts?)
+  nameWithType: InfoBadge.Dot(InfoBadgeSeverity, TemplateParts?)
+  fullName: FluentGpu.Controls.InfoBadge.Dot(FluentGpu.Controls.InfoBadgeSeverity, FluentGpu.Dsl.TemplateParts?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Dot
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 116
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Severity dot — same geometry as <xref href="FluentGpu.Controls.InfoBadge.Dot(System.Nullable%7bFluentGpu.Foundation.ColorF%7d%2cFluentGpu.Dsl.TemplateParts)" data-throw-if-not-resolved="false"></xref> with the severity background.
+  example: []
+  syntax:
+    content: public static BoxEl Dot(InfoBadgeSeverity severity, TemplateParts? parts = null)
+    parameters:
+    - id: severity
+      type: FluentGpu.Controls.InfoBadgeSeverity
+    - id: parts
+      type: FluentGpu.Dsl.TemplateParts
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Dot(severity As InfoBadgeSeverity, parts As TemplateParts = Nothing) As BoxEl
+  overload: FluentGpu.Controls.InfoBadge.Dot*
+  nameWithType.vb: InfoBadge.Dot(InfoBadgeSeverity, TemplateParts)
+  fullName.vb: FluentGpu.Controls.InfoBadge.Dot(FluentGpu.Controls.InfoBadgeSeverity, FluentGpu.Dsl.TemplateParts)
+  name.vb: Dot(InfoBadgeSeverity, TemplateParts)
+- uid: FluentGpu.Controls.InfoBadge.Count(System.Int32,System.Nullable{FluentGpu.Foundation.ColorF},FluentGpu.Dsl.TemplateParts)
+  commentId: M:FluentGpu.Controls.InfoBadge.Count(System.Int32,System.Nullable{FluentGpu.Foundation.ColorF},FluentGpu.Dsl.TemplateParts)
+  id: Count(System.Int32,System.Nullable{FluentGpu.Foundation.ColorF},FluentGpu.Dsl.TemplateParts)
+  parent: FluentGpu.Controls.InfoBadge
+  langs:
+  - csharp
+  - vb
+  name: Count(int, ColorF?, TemplateParts?)
+  nameWithType: InfoBadge.Count(int, ColorF?, TemplateParts?)
+  fullName: FluentGpu.Controls.InfoBadge.Count(int, FluentGpu.Foundation.ColorF?, FluentGpu.Dsl.TemplateParts?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Count
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 133
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The Value badge: a notification count. WinUI clamps to a 16-tall pill; single digits stay circular via the
+        MinWidth = Height square. Pass <code class="paramref">severity</code> to recolor.
+  example: []
+  syntax:
+    content: public static BoxEl Count(int value, ColorF? color = null, TemplateParts? parts = null)
+    parameters:
+    - id: value
+      type: System.Int32
+    - id: color
+      type: System.Nullable{FluentGpu.Foundation.ColorF}
+    - id: parts
+      type: FluentGpu.Dsl.TemplateParts
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Count(value As Integer, color As ColorF? = Nothing, parts As TemplateParts = Nothing) As BoxEl
+  overload: FluentGpu.Controls.InfoBadge.Count*
+  nameWithType.vb: InfoBadge.Count(Integer, ColorF?, TemplateParts)
+  fullName.vb: FluentGpu.Controls.InfoBadge.Count(Integer, FluentGpu.Foundation.ColorF?, FluentGpu.Dsl.TemplateParts)
+  name.vb: Count(Integer, ColorF?, TemplateParts)
+- uid: FluentGpu.Controls.InfoBadge.Count(System.Int32,FluentGpu.Controls.InfoBadgeSeverity,FluentGpu.Dsl.TemplateParts)
+  commentId: M:FluentGpu.Controls.InfoBadge.Count(System.Int32,FluentGpu.Controls.InfoBadgeSeverity,FluentGpu.Dsl.TemplateParts)
+  id: Count(System.Int32,FluentGpu.Controls.InfoBadgeSeverity,FluentGpu.Dsl.TemplateParts)
+  parent: FluentGpu.Controls.InfoBadge
+  langs:
+  - csharp
+  - vb
+  name: Count(int, InfoBadgeSeverity, TemplateParts?)
+  nameWithType: InfoBadge.Count(int, InfoBadgeSeverity, TemplateParts?)
+  fullName: FluentGpu.Controls.InfoBadge.Count(int, FluentGpu.Controls.InfoBadgeSeverity, FluentGpu.Dsl.TemplateParts?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Count
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 136
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static BoxEl Count(int value, InfoBadgeSeverity severity, TemplateParts? parts = null)
+    parameters:
+    - id: value
+      type: System.Int32
+    - id: severity
+      type: FluentGpu.Controls.InfoBadgeSeverity
+    - id: parts
+      type: FluentGpu.Dsl.TemplateParts
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Count(value As Integer, severity As InfoBadgeSeverity, parts As TemplateParts = Nothing) As BoxEl
+  overload: FluentGpu.Controls.InfoBadge.Count*
+  nameWithType.vb: InfoBadge.Count(Integer, InfoBadgeSeverity, TemplateParts)
+  fullName.vb: FluentGpu.Controls.InfoBadge.Count(Integer, FluentGpu.Controls.InfoBadgeSeverity, FluentGpu.Dsl.TemplateParts)
+  name.vb: Count(Integer, InfoBadgeSeverity, TemplateParts)
+- uid: FluentGpu.Controls.InfoBadge.Icon(System.String,System.Nullable{FluentGpu.Foundation.ColorF},FluentGpu.Dsl.TemplateParts)
+  commentId: M:FluentGpu.Controls.InfoBadge.Icon(System.String,System.Nullable{FluentGpu.Foundation.ColorF},FluentGpu.Dsl.TemplateParts)
+  id: Icon(System.String,System.Nullable{FluentGpu.Foundation.ColorF},FluentGpu.Dsl.TemplateParts)
+  parent: FluentGpu.Controls.InfoBadge
+  langs:
+  - csharp
+  - vb
+  name: Icon(string, ColorF?, TemplateParts?)
+  nameWithType: InfoBadge.Icon(string, ColorF?, TemplateParts?)
+  fullName: FluentGpu.Controls.InfoBadge.Icon(string, FluentGpu.Foundation.ColorF?, FluentGpu.Dsl.TemplateParts?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Icon
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 176
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The Icon badge: a Segoe Fluent glyph in the 16-tall pill. A custom glyph is WinUI's FontIconSource →
+        the FontIcon state (margin 4,0,4,2, InfoBadge_themeresources.xaml:14/:71) — the IconPresenter Viewbox scales the
+        glyph to the content-box height (14 = 16 − 2 for the ad-hoc, no-severity overloads; the Attention/Informational
+        severity styles pad the root 0,4,0,2 → 8).
+  example: []
+  syntax:
+    content: public static BoxEl Icon(string glyph, ColorF? color = null, TemplateParts? parts = null)
+    parameters:
+    - id: glyph
+      type: System.String
+    - id: color
+      type: System.Nullable{FluentGpu.Foundation.ColorF}
+    - id: parts
+      type: FluentGpu.Dsl.TemplateParts
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Icon(glyph As String, color As ColorF? = Nothing, parts As TemplateParts = Nothing) As BoxEl
+  overload: FluentGpu.Controls.InfoBadge.Icon*
+  nameWithType.vb: InfoBadge.Icon(String, ColorF?, TemplateParts)
+  fullName.vb: FluentGpu.Controls.InfoBadge.Icon(String, FluentGpu.Foundation.ColorF?, FluentGpu.Dsl.TemplateParts)
+  name.vb: Icon(String, ColorF?, TemplateParts)
+- uid: FluentGpu.Controls.InfoBadge.Icon(System.String,FluentGpu.Controls.InfoBadgeSeverity,FluentGpu.Dsl.TemplateParts)
+  commentId: M:FluentGpu.Controls.InfoBadge.Icon(System.String,FluentGpu.Controls.InfoBadgeSeverity,FluentGpu.Dsl.TemplateParts)
+  id: Icon(System.String,FluentGpu.Controls.InfoBadgeSeverity,FluentGpu.Dsl.TemplateParts)
+  parent: FluentGpu.Controls.InfoBadge
+  langs:
+  - csharp
+  - vb
+  name: Icon(string, InfoBadgeSeverity, TemplateParts?)
+  nameWithType: InfoBadge.Icon(string, InfoBadgeSeverity, TemplateParts?)
+  fullName: FluentGpu.Controls.InfoBadge.Icon(string, FluentGpu.Controls.InfoBadgeSeverity, FluentGpu.Dsl.TemplateParts?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Icon
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 180
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static BoxEl Icon(string glyph, InfoBadgeSeverity severity, TemplateParts? parts = null)
+    parameters:
+    - id: glyph
+      type: System.String
+    - id: severity
+      type: FluentGpu.Controls.InfoBadgeSeverity
+    - id: parts
+      type: FluentGpu.Dsl.TemplateParts
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Icon(glyph As String, severity As InfoBadgeSeverity, parts As TemplateParts = Nothing) As BoxEl
+  overload: FluentGpu.Controls.InfoBadge.Icon*
+  nameWithType.vb: InfoBadge.Icon(String, InfoBadgeSeverity, TemplateParts)
+  fullName.vb: FluentGpu.Controls.InfoBadge.Icon(String, FluentGpu.Controls.InfoBadgeSeverity, FluentGpu.Dsl.TemplateParts)
+  name.vb: Icon(String, InfoBadgeSeverity, TemplateParts)
+- uid: FluentGpu.Controls.InfoBadge.Icon(FluentGpu.Controls.InfoBadgeSeverity,FluentGpu.Dsl.TemplateParts)
+  commentId: M:FluentGpu.Controls.InfoBadge.Icon(FluentGpu.Controls.InfoBadgeSeverity,FluentGpu.Dsl.TemplateParts)
+  id: Icon(FluentGpu.Controls.InfoBadgeSeverity,FluentGpu.Dsl.TemplateParts)
+  parent: FluentGpu.Controls.InfoBadge
+  langs:
+  - csharp
+  - vb
+  name: Icon(InfoBadgeSeverity, TemplateParts?)
+  nameWithType: InfoBadge.Icon(InfoBadgeSeverity, TemplateParts?)
+  fullName: FluentGpu.Controls.InfoBadge.Icon(FluentGpu.Controls.InfoBadgeSeverity, FluentGpu.Dsl.TemplateParts?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Icon
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 186
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Severity icon using WinUI's default per-severity IconSource (Attention 0xEA38, Informational 0xF13F —
+        FontIconSource; Success Accept, Caution Important, Critical Cancel — SymbolIconSource), scaled by the per-state
+        IconPresenter Viewbox target (8 in every severity style; see <xref href="FluentGpu.Controls.InfoBadgeTemplateSettings" data-throw-if-not-resolved="false"></xref>).
+  example: []
+  syntax:
+    content: public static BoxEl Icon(InfoBadgeSeverity severity, TemplateParts? parts = null)
+    parameters:
+    - id: severity
+      type: FluentGpu.Controls.InfoBadgeSeverity
+    - id: parts
+      type: FluentGpu.Dsl.TemplateParts
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Icon(severity As InfoBadgeSeverity, parts As TemplateParts = Nothing) As BoxEl
+  overload: FluentGpu.Controls.InfoBadge.Icon*
+  nameWithType.vb: InfoBadge.Icon(InfoBadgeSeverity, TemplateParts)
+  fullName.vb: FluentGpu.Controls.InfoBadge.Icon(FluentGpu.Controls.InfoBadgeSeverity, FluentGpu.Dsl.TemplateParts)
+  name.vb: Icon(InfoBadgeSeverity, TemplateParts)
+- uid: FluentGpu.Controls.InfoBadge.DefaultGlyph(FluentGpu.Controls.InfoBadgeSeverity)
+  commentId: M:FluentGpu.Controls.InfoBadge.DefaultGlyph(FluentGpu.Controls.InfoBadgeSeverity)
+  id: DefaultGlyph(FluentGpu.Controls.InfoBadgeSeverity)
+  parent: FluentGpu.Controls.InfoBadge
+  langs:
+  - csharp
+  - vb
+  name: DefaultGlyph(InfoBadgeSeverity)
+  nameWithType: InfoBadge.DefaultGlyph(InfoBadgeSeverity)
+  fullName: FluentGpu.Controls.InfoBadge.DefaultGlyph(FluentGpu.Controls.InfoBadgeSeverity)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DefaultGlyph
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 219
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static string DefaultGlyph(InfoBadgeSeverity severity)
+    parameters:
+    - id: severity
+      type: FluentGpu.Controls.InfoBadgeSeverity
+    return:
+      type: System.String
+    content.vb: Public Shared Function DefaultGlyph(severity As InfoBadgeSeverity) As String
+  overload: FluentGpu.Controls.InfoBadge.DefaultGlyph*
+references:
+- uid: FluentGpu.Controls.InfoBadgeTemplateSettings
+  commentId: T:FluentGpu.Controls.InfoBadgeTemplateSettings
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.InfoBadgeTemplateSettings.html
+  name: InfoBadgeTemplateSettings
+  nameWithType: InfoBadgeTemplateSettings
+  fullName: FluentGpu.Controls.InfoBadgeTemplateSettings
+- uid: FluentGpu.Controls.InfoBadgeSeverity
+  commentId: T:FluentGpu.Controls.InfoBadgeSeverity
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.InfoBadgeSeverity.html
+  name: InfoBadgeSeverity
+  nameWithType: InfoBadgeSeverity
+  fullName: FluentGpu.Controls.InfoBadgeSeverity
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.MemberwiseClone
+  commentId: M:System.Object.MemberwiseClone
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  name: MemberwiseClone()
+  nameWithType: object.MemberwiseClone()
+  fullName: object.MemberwiseClone()
+  nameWithType.vb: Object.MemberwiseClone()
+  fullName.vb: Object.MemberwiseClone()
+  spec.csharp:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Controls.InfoBadge.Dot*
+  commentId: Overload:FluentGpu.Controls.InfoBadge.Dot
+  href: FluentGpu.Controls.InfoBadge.html#FluentGpu_Controls_InfoBadge_Dot_System_Nullable_FluentGpu_Foundation_ColorF__FluentGpu_Dsl_TemplateParts_
+  name: Dot
+  nameWithType: InfoBadge.Dot
+  fullName: FluentGpu.Controls.InfoBadge.Dot
+- uid: System.Nullable{FluentGpu.Foundation.ColorF}
+  commentId: T:System.Nullable{FluentGpu.Foundation.ColorF}
+  parent: System
+  definition: System.Nullable`1
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF?
+  nameWithType: ColorF?
+  fullName: FluentGpu.Foundation.ColorF?
+  spec.csharp:
+  - uid: FluentGpu.Foundation.ColorF
+    name: ColorF
+    href: FluentGpu.Foundation.ColorF.html
+  - name: '?'
+  spec.vb:
+  - uid: FluentGpu.Foundation.ColorF
+    name: ColorF
+    href: FluentGpu.Foundation.ColorF.html
+  - name: '?'
+- uid: FluentGpu.Dsl.TemplateParts
+  commentId: T:FluentGpu.Dsl.TemplateParts
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.TemplateParts.html
+  name: TemplateParts
+  nameWithType: TemplateParts
+  fullName: FluentGpu.Dsl.TemplateParts
+- uid: FluentGpu.Dsl.BoxEl
+  commentId: T:FluentGpu.Dsl.BoxEl
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.BoxEl.html
+  name: BoxEl
+  nameWithType: BoxEl
+  fullName: FluentGpu.Dsl.BoxEl
+- uid: System.Nullable`1
+  commentId: T:System.Nullable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  name: Nullable<T>
+  nameWithType: Nullable<T>
+  fullName: System.Nullable<T>
+  nameWithType.vb: Nullable(Of T)
+  fullName.vb: System.Nullable(Of T)
+  name.vb: Nullable(Of T)
+  spec.csharp:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: FluentGpu.Controls.InfoBadge.Dot(System.Nullable{FluentGpu.Foundation.ColorF},FluentGpu.Dsl.TemplateParts)
+  commentId: M:FluentGpu.Controls.InfoBadge.Dot(System.Nullable{FluentGpu.Foundation.ColorF},FluentGpu.Dsl.TemplateParts)
+  href: FluentGpu.Controls.InfoBadge.html#FluentGpu_Controls_InfoBadge_Dot_System_Nullable_FluentGpu_Foundation_ColorF__FluentGpu_Dsl_TemplateParts_
+  name: Dot(ColorF?, TemplateParts)
+  nameWithType: InfoBadge.Dot(ColorF?, TemplateParts)
+  fullName: FluentGpu.Controls.InfoBadge.Dot(FluentGpu.Foundation.ColorF?, FluentGpu.Dsl.TemplateParts)
+  spec.csharp:
+  - uid: FluentGpu.Controls.InfoBadge.Dot(System.Nullable{FluentGpu.Foundation.ColorF},FluentGpu.Dsl.TemplateParts)
+    name: Dot
+    href: FluentGpu.Controls.InfoBadge.html#FluentGpu_Controls_InfoBadge_Dot_System_Nullable_FluentGpu_Foundation_ColorF__FluentGpu_Dsl_TemplateParts_
+  - name: (
+  - uid: FluentGpu.Foundation.ColorF
+    name: ColorF
+    href: FluentGpu.Foundation.ColorF.html
+  - name: '?'
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.TemplateParts
+    name: TemplateParts
+    href: FluentGpu.Dsl.TemplateParts.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.InfoBadge.Dot(System.Nullable{FluentGpu.Foundation.ColorF},FluentGpu.Dsl.TemplateParts)
+    name: Dot
+    href: FluentGpu.Controls.InfoBadge.html#FluentGpu_Controls_InfoBadge_Dot_System_Nullable_FluentGpu_Foundation_ColorF__FluentGpu_Dsl_TemplateParts_
+  - name: (
+  - uid: FluentGpu.Foundation.ColorF
+    name: ColorF
+    href: FluentGpu.Foundation.ColorF.html
+  - name: '?'
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.TemplateParts
+    name: TemplateParts
+    href: FluentGpu.Dsl.TemplateParts.html
+  - name: )
+- uid: FluentGpu.Controls.InfoBadge.Count*
+  commentId: Overload:FluentGpu.Controls.InfoBadge.Count
+  href: FluentGpu.Controls.InfoBadge.html#FluentGpu_Controls_InfoBadge_Count_System_Int32_System_Nullable_FluentGpu_Foundation_ColorF__FluentGpu_Dsl_TemplateParts_
+  name: Count
+  nameWithType: InfoBadge.Count
+  fullName: FluentGpu.Controls.InfoBadge.Count
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Controls.InfoBadge.Icon*
+  commentId: Overload:FluentGpu.Controls.InfoBadge.Icon
+  href: FluentGpu.Controls.InfoBadge.html#FluentGpu_Controls_InfoBadge_Icon_System_String_System_Nullable_FluentGpu_Foundation_ColorF__FluentGpu_Dsl_TemplateParts_
+  name: Icon
+  nameWithType: InfoBadge.Icon
+  fullName: FluentGpu.Controls.InfoBadge.Icon
+- uid: FluentGpu.Controls.InfoBadge.DefaultGlyph*
+  commentId: Overload:FluentGpu.Controls.InfoBadge.DefaultGlyph
+  href: FluentGpu.Controls.InfoBadge.html#FluentGpu_Controls_InfoBadge_DefaultGlyph_FluentGpu_Controls_InfoBadgeSeverity_
+  name: DefaultGlyph
+  nameWithType: InfoBadge.DefaultGlyph
+  fullName: FluentGpu.Controls.InfoBadge.DefaultGlyph

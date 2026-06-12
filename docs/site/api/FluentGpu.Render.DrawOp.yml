@@ -1,0 +1,436 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Render.DrawOp
+  commentId: T:FluentGpu.Render.DrawOp
+  id: DrawOp
+  parent: FluentGpu.Render
+  children:
+  - FluentGpu.Render.DrawOp.DrawArc
+  - FluentGpu.Render.DrawOp.DrawGlyphRun
+  - FluentGpu.Render.DrawOp.DrawGradientRect
+  - FluentGpu.Render.DrawOp.DrawGradientStroke
+  - FluentGpu.Render.DrawOp.DrawImage
+  - FluentGpu.Render.DrawOp.DrawPolylineStroke
+  - FluentGpu.Render.DrawOp.DrawRoundRectStroke
+  - FluentGpu.Render.DrawOp.DrawShadow
+  - FluentGpu.Render.DrawOp.DrawTabShape
+  - FluentGpu.Render.DrawOp.FillRoundRect
+  - FluentGpu.Render.DrawOp.PopClip
+  - FluentGpu.Render.DrawOp.PopLayer
+  - FluentGpu.Render.DrawOp.PushClip
+  - FluentGpu.Render.DrawOp.PushLayer
+  langs:
+  - csharp
+  - vb
+  name: DrawOp
+  nameWithType: DrawOp
+  fullName: FluentGpu.Render.DrawOp
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DrawOp
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 6
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public enum DrawOp
+    content.vb: Public Enum DrawOp
+- uid: FluentGpu.Render.DrawOp.FillRoundRect
+  commentId: F:FluentGpu.Render.DrawOp.FillRoundRect
+  id: FillRoundRect
+  parent: FluentGpu.Render.DrawOp
+  langs:
+  - csharp
+  - vb
+  name: FillRoundRect
+  nameWithType: DrawOp.FillRoundRect
+  fullName: FluentGpu.Render.DrawOp.FillRoundRect
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillRoundRect
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: FillRoundRect = 1
+    return:
+      type: FluentGpu.Render.DrawOp
+- uid: FluentGpu.Render.DrawOp.DrawGlyphRun
+  commentId: F:FluentGpu.Render.DrawOp.DrawGlyphRun
+  id: DrawGlyphRun
+  parent: FluentGpu.Render.DrawOp
+  langs:
+  - csharp
+  - vb
+  name: DrawGlyphRun
+  nameWithType: DrawOp.DrawGlyphRun
+  fullName: FluentGpu.Render.DrawOp.DrawGlyphRun
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DrawGlyphRun
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: DrawGlyphRun = 2
+    return:
+      type: FluentGpu.Render.DrawOp
+- uid: FluentGpu.Render.DrawOp.PushClip
+  commentId: F:FluentGpu.Render.DrawOp.PushClip
+  id: PushClip
+  parent: FluentGpu.Render.DrawOp
+  langs:
+  - csharp
+  - vb
+  name: PushClip
+  nameWithType: DrawOp.PushClip
+  fullName: FluentGpu.Render.DrawOp.PushClip
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PushClip
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: PushClip = 3
+    return:
+      type: FluentGpu.Render.DrawOp
+- uid: FluentGpu.Render.DrawOp.PopClip
+  commentId: F:FluentGpu.Render.DrawOp.PopClip
+  id: PopClip
+  parent: FluentGpu.Render.DrawOp
+  langs:
+  - csharp
+  - vb
+  name: PopClip
+  nameWithType: DrawOp.PopClip
+  fullName: FluentGpu.Render.DrawOp.PopClip
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PopClip
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: PopClip = 4
+    return:
+      type: FluentGpu.Render.DrawOp
+- uid: FluentGpu.Render.DrawOp.DrawImage
+  commentId: F:FluentGpu.Render.DrawOp.DrawImage
+  id: DrawImage
+  parent: FluentGpu.Render.DrawOp
+  langs:
+  - csharp
+  - vb
+  name: DrawImage
+  nameWithType: DrawOp.DrawImage
+  fullName: FluentGpu.Render.DrawOp.DrawImage
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DrawImage
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: DrawImage = 5
+    return:
+      type: FluentGpu.Render.DrawOp
+- uid: FluentGpu.Render.DrawOp.DrawRoundRectStroke
+  commentId: F:FluentGpu.Render.DrawOp.DrawRoundRectStroke
+  id: DrawRoundRectStroke
+  parent: FluentGpu.Render.DrawOp
+  langs:
+  - csharp
+  - vb
+  name: DrawRoundRectStroke
+  nameWithType: DrawOp.DrawRoundRectStroke
+  fullName: FluentGpu.Render.DrawOp.DrawRoundRectStroke
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DrawRoundRectStroke
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: DrawRoundRectStroke = 6
+    return:
+      type: FluentGpu.Render.DrawOp
+- uid: FluentGpu.Render.DrawOp.DrawShadow
+  commentId: F:FluentGpu.Render.DrawOp.DrawShadow
+  id: DrawShadow
+  parent: FluentGpu.Render.DrawOp
+  langs:
+  - csharp
+  - vb
+  name: DrawShadow
+  nameWithType: DrawOp.DrawShadow
+  fullName: FluentGpu.Render.DrawOp.DrawShadow
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DrawShadow
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 10
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: DrawShadow = 7
+    return:
+      type: FluentGpu.Render.DrawOp
+- uid: FluentGpu.Render.DrawOp.DrawGradientRect
+  commentId: F:FluentGpu.Render.DrawOp.DrawGradientRect
+  id: DrawGradientRect
+  parent: FluentGpu.Render.DrawOp
+  langs:
+  - csharp
+  - vb
+  name: DrawGradientRect
+  nameWithType: DrawOp.DrawGradientRect
+  fullName: FluentGpu.Render.DrawOp.DrawGradientRect
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DrawGradientRect
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: DrawGradientRect = 8
+    return:
+      type: FluentGpu.Render.DrawOp
+- uid: FluentGpu.Render.DrawOp.PushLayer
+  commentId: F:FluentGpu.Render.DrawOp.PushLayer
+  id: PushLayer
+  parent: FluentGpu.Render.DrawOp
+  langs:
+  - csharp
+  - vb
+  name: PushLayer
+  nameWithType: DrawOp.PushLayer
+  fullName: FluentGpu.Render.DrawOp.PushLayer
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PushLayer
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 12
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: PushLayer = 9
+    return:
+      type: FluentGpu.Render.DrawOp
+- uid: FluentGpu.Render.DrawOp.PopLayer
+  commentId: F:FluentGpu.Render.DrawOp.PopLayer
+  id: PopLayer
+  parent: FluentGpu.Render.DrawOp
+  langs:
+  - csharp
+  - vb
+  name: PopLayer
+  nameWithType: DrawOp.PopLayer
+  fullName: FluentGpu.Render.DrawOp.PopLayer
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PopLayer
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: PopLayer = 10
+    return:
+      type: FluentGpu.Render.DrawOp
+- uid: FluentGpu.Render.DrawOp.DrawGradientStroke
+  commentId: F:FluentGpu.Render.DrawOp.DrawGradientStroke
+  id: DrawGradientStroke
+  parent: FluentGpu.Render.DrawOp
+  langs:
+  - csharp
+  - vb
+  name: DrawGradientStroke
+  nameWithType: DrawOp.DrawGradientStroke
+  fullName: FluentGpu.Render.DrawOp.DrawGradientStroke
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DrawGradientStroke
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: DrawGradientStroke = 11
+    return:
+      type: FluentGpu.Render.DrawOp
+- uid: FluentGpu.Render.DrawOp.DrawArc
+  commentId: F:FluentGpu.Render.DrawOp.DrawArc
+  id: DrawArc
+  parent: FluentGpu.Render.DrawOp
+  langs:
+  - csharp
+  - vb
+  name: DrawArc
+  nameWithType: DrawOp.DrawArc
+  fullName: FluentGpu.Render.DrawOp.DrawArc
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DrawArc
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: DrawArc = 12
+    return:
+      type: FluentGpu.Render.DrawOp
+- uid: FluentGpu.Render.DrawOp.DrawPolylineStroke
+  commentId: F:FluentGpu.Render.DrawOp.DrawPolylineStroke
+  id: DrawPolylineStroke
+  parent: FluentGpu.Render.DrawOp
+  langs:
+  - csharp
+  - vb
+  name: DrawPolylineStroke
+  nameWithType: DrawOp.DrawPolylineStroke
+  fullName: FluentGpu.Render.DrawOp.DrawPolylineStroke
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DrawPolylineStroke
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: DrawPolylineStroke = 13
+    return:
+      type: FluentGpu.Render.DrawOp
+- uid: FluentGpu.Render.DrawOp.DrawTabShape
+  commentId: F:FluentGpu.Render.DrawOp.DrawTabShape
+  id: DrawTabShape
+  parent: FluentGpu.Render.DrawOp
+  langs:
+  - csharp
+  - vb
+  name: DrawTabShape
+  nameWithType: DrawOp.DrawTabShape
+  fullName: FluentGpu.Render.DrawOp.DrawTabShape
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DrawTabShape
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: DrawTabShape = 14
+    return:
+      type: FluentGpu.Render.DrawOp
+references:
+- uid: FluentGpu.Render
+  commentId: N:FluentGpu.Render
+  href: FluentGpu.html
+  name: FluentGpu.Render
+  nameWithType: FluentGpu.Render
+  fullName: FluentGpu.Render
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Render
+    name: Render
+    href: FluentGpu.Render.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Render
+    name: Render
+    href: FluentGpu.Render.html
+- uid: FluentGpu.Render.DrawOp
+  commentId: T:FluentGpu.Render.DrawOp
+  parent: FluentGpu.Render
+  href: FluentGpu.Render.DrawOp.html
+  name: DrawOp
+  nameWithType: DrawOp
+  fullName: FluentGpu.Render.DrawOp

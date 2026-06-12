@@ -1,0 +1,205 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.MenuItemKind
+  commentId: T:FluentGpu.Controls.MenuItemKind
+  id: MenuItemKind
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.MenuItemKind.Command
+  - FluentGpu.Controls.MenuItemKind.Radio
+  - FluentGpu.Controls.MenuItemKind.Separator
+  - FluentGpu.Controls.MenuItemKind.SubMenu
+  - FluentGpu.Controls.MenuItemKind.Toggle
+  langs:
+  - csharp
+  - vb
+  name: MenuItemKind
+  nameWithType: MenuItemKind
+  fullName: FluentGpu.Controls.MenuItemKind
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MenuItemKind
+    path: ../../src/FluentGpu.Controls/MenuFlyout.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The kind of a <xref href="FluentGpu.Controls.MenuFlyoutItem" data-throw-if-not-resolved="false"></xref> row: a plain command, a divider, a checkable
+        <code>ToggleMenuFlyoutItem</code> (E73E check), a mutually-exclusive <code>RadioMenuFlyoutItem</code> (E915 bullet), or a
+        cascading <code>MenuFlyoutSubItem</code> (E974 chevron + nested popup).
+  example: []
+  syntax:
+    content: 'public enum MenuItemKind : byte'
+    content.vb: Public Enum MenuItemKind As Byte
+- uid: FluentGpu.Controls.MenuItemKind.Command
+  commentId: F:FluentGpu.Controls.MenuItemKind.Command
+  id: Command
+  parent: FluentGpu.Controls.MenuItemKind
+  langs:
+  - csharp
+  - vb
+  name: Command
+  nameWithType: MenuItemKind.Command
+  fullName: FluentGpu.Controls.MenuItemKind.Command
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Command
+    path: ../../src/FluentGpu.Controls/MenuFlyout.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Command = 0
+    return:
+      type: FluentGpu.Controls.MenuItemKind
+- uid: FluentGpu.Controls.MenuItemKind.Separator
+  commentId: F:FluentGpu.Controls.MenuItemKind.Separator
+  id: Separator
+  parent: FluentGpu.Controls.MenuItemKind
+  langs:
+  - csharp
+  - vb
+  name: Separator
+  nameWithType: MenuItemKind.Separator
+  fullName: FluentGpu.Controls.MenuItemKind.Separator
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Separator
+    path: ../../src/FluentGpu.Controls/MenuFlyout.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Separator = 1
+    return:
+      type: FluentGpu.Controls.MenuItemKind
+- uid: FluentGpu.Controls.MenuItemKind.Toggle
+  commentId: F:FluentGpu.Controls.MenuItemKind.Toggle
+  id: Toggle
+  parent: FluentGpu.Controls.MenuItemKind
+  langs:
+  - csharp
+  - vb
+  name: Toggle
+  nameWithType: MenuItemKind.Toggle
+  fullName: FluentGpu.Controls.MenuItemKind.Toggle
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Toggle
+    path: ../../src/FluentGpu.Controls/MenuFlyout.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Toggle = 2
+    return:
+      type: FluentGpu.Controls.MenuItemKind
+- uid: FluentGpu.Controls.MenuItemKind.Radio
+  commentId: F:FluentGpu.Controls.MenuItemKind.Radio
+  id: Radio
+  parent: FluentGpu.Controls.MenuItemKind
+  langs:
+  - csharp
+  - vb
+  name: Radio
+  nameWithType: MenuItemKind.Radio
+  fullName: FluentGpu.Controls.MenuItemKind.Radio
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Radio
+    path: ../../src/FluentGpu.Controls/MenuFlyout.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Radio = 3
+    return:
+      type: FluentGpu.Controls.MenuItemKind
+- uid: FluentGpu.Controls.MenuItemKind.SubMenu
+  commentId: F:FluentGpu.Controls.MenuItemKind.SubMenu
+  id: SubMenu
+  parent: FluentGpu.Controls.MenuItemKind
+  langs:
+  - csharp
+  - vb
+  name: SubMenu
+  nameWithType: MenuItemKind.SubMenu
+  fullName: FluentGpu.Controls.MenuItemKind.SubMenu
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SubMenu
+    path: ../../src/FluentGpu.Controls/MenuFlyout.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: SubMenu = 4
+    return:
+      type: FluentGpu.Controls.MenuItemKind
+references:
+- uid: FluentGpu.Controls.MenuFlyoutItem
+  commentId: T:FluentGpu.Controls.MenuFlyoutItem
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.MenuFlyoutItem.html
+  name: MenuFlyoutItem
+  nameWithType: MenuFlyoutItem
+  fullName: FluentGpu.Controls.MenuFlyoutItem
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.MenuItemKind
+  commentId: T:FluentGpu.Controls.MenuItemKind
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.MenuItemKind.html
+  name: MenuItemKind
+  nameWithType: MenuItemKind
+  fullName: FluentGpu.Controls.MenuItemKind

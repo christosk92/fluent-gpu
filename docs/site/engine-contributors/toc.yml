@@ -1,0 +1,25 @@
+# Engine Contributors section — learning order: overview, the where-to-change map,
+# then the pipeline inside-out (signals -> reconciler/scene -> layout -> render -> seams -> backends),
+# then the workflows (controls) and the verification spine.
+- name: Engine Contributors
+  href: index.md
+- name: "Contributor Map: Where to Change What"
+  href: contributor-map.md
+- name: Signals and Reactivity Internals
+  href: signals-and-reactivity-internals.md
+- name: Reconciler and the Retained Scene
+  href: reconciler-and-scene.md
+- name: Layout Internals
+  href: layout-internals.md
+- name: Render Pipeline and SceneRecorder
+  href: render-pipeline-and-scenerecorder.md
+- name: The RHI, PAL, and Text Seams
+  href: seams-rhi-pal-text.md
+- name: "Windows Backends: D3D12, DirectWrite, Win32"
+  href: windows-backends.md
+- name: Adding or Modifying a Control
+  href: adding-or-modifying-a-control.md
+- name: Frame Pipeline and Verification Harness
+  href: frame-pipeline-and-verification-harness.md
+- name: Validation and Gates
+  href: validation-and-gates.md

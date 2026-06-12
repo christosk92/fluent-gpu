@@ -1,0 +1,692 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.PopupPlacementResult
+  commentId: T:FluentGpu.Controls.PopupPlacementResult
+  id: PopupPlacementResult
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.PopupPlacementResult.#ctor(System.Single,System.Single,System.Boolean,System.Single,FluentGpu.Controls.FlyoutPlacement,FluentGpu.Controls.CornerJoin,System.Single)
+  - FluentGpu.Controls.PopupPlacementResult.CornerJoin
+  - FluentGpu.Controls.PopupPlacementResult.MeasuredH
+  - FluentGpu.Controls.PopupPlacementResult.MeasuredW
+  - FluentGpu.Controls.PopupPlacementResult.OpensUp
+  - FluentGpu.Controls.PopupPlacementResult.Placement
+  - FluentGpu.Controls.PopupPlacementResult.X
+  - FluentGpu.Controls.PopupPlacementResult.Y
+  langs:
+  - csharp
+  - vb
+  name: PopupPlacementResult
+  nameWithType: PopupPlacementResult
+  fullName: FluentGpu.Controls.PopupPlacementResult
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PopupPlacementResult
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Result of placing an anchored popup: the absolute top-left, which side it opened on (so the open animation
+        can reveal from the correct edge), the width/height that actually fit (after a full collision resize), the EFFECTIVE
+        placement after fallback (WinUI <code>PerformPlacementWithFallback</code> reports the placement that won), and the
+        corner-join against the anchor.
+  example: []
+  syntax:
+    content: 'public readonly record struct PopupPlacementResult : IEquatable<PopupPlacementResult>'
+    content.vb: Public Structure PopupPlacementResult Implements IEquatable(Of PopupPlacementResult)
+  implements:
+  - System.IEquatable{FluentGpu.Controls.PopupPlacementResult}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Controls.PopupPlacementResult.#ctor(System.Single,System.Single,System.Boolean,System.Single,FluentGpu.Controls.FlyoutPlacement,FluentGpu.Controls.CornerJoin,System.Single)
+  commentId: M:FluentGpu.Controls.PopupPlacementResult.#ctor(System.Single,System.Single,System.Boolean,System.Single,FluentGpu.Controls.FlyoutPlacement,FluentGpu.Controls.CornerJoin,System.Single)
+  id: '#ctor(System.Single,System.Single,System.Boolean,System.Single,FluentGpu.Controls.FlyoutPlacement,FluentGpu.Controls.CornerJoin,System.Single)'
+  parent: FluentGpu.Controls.PopupPlacementResult
+  langs:
+  - csharp
+  - vb
+  name: PopupPlacementResult(float, float, bool, float, FlyoutPlacement, CornerJoin, float)
+  nameWithType: PopupPlacementResult.PopupPlacementResult(float, float, bool, float, FlyoutPlacement, CornerJoin, float)
+  fullName: FluentGpu.Controls.PopupPlacementResult.PopupPlacementResult(float, float, bool, float, FluentGpu.Controls.FlyoutPlacement, FluentGpu.Controls.CornerJoin, float)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Result of placing an anchored popup: the absolute top-left, which side it opened on (so the open animation
+        can reveal from the correct edge), the width/height that actually fit (after a full collision resize), the EFFECTIVE
+        placement after fallback (WinUI <code>PerformPlacementWithFallback</code> reports the placement that won), and the
+        corner-join against the anchor.
+  example: []
+  syntax:
+    content: public PopupPlacementResult(float X, float Y, bool OpensUp, float MeasuredH, FlyoutPlacement Placement, CornerJoin CornerJoin, float MeasuredW)
+    parameters:
+    - id: X
+      type: System.Single
+    - id: Y
+      type: System.Single
+    - id: OpensUp
+      type: System.Boolean
+    - id: MeasuredH
+      type: System.Single
+    - id: Placement
+      type: FluentGpu.Controls.FlyoutPlacement
+    - id: CornerJoin
+      type: FluentGpu.Controls.CornerJoin
+    - id: MeasuredW
+      type: System.Single
+    content.vb: Public Sub New(X As Single, Y As Single, OpensUp As Boolean, MeasuredH As Single, Placement As FlyoutPlacement, CornerJoin As CornerJoin, MeasuredW As Single)
+  overload: FluentGpu.Controls.PopupPlacementResult.#ctor*
+  nameWithType.vb: PopupPlacementResult.New(Single, Single, Boolean, Single, FlyoutPlacement, CornerJoin, Single)
+  fullName.vb: FluentGpu.Controls.PopupPlacementResult.New(Single, Single, Boolean, Single, FluentGpu.Controls.FlyoutPlacement, FluentGpu.Controls.CornerJoin, Single)
+  name.vb: New(Single, Single, Boolean, Single, FlyoutPlacement, CornerJoin, Single)
+- uid: FluentGpu.Controls.PopupPlacementResult.X
+  commentId: P:FluentGpu.Controls.PopupPlacementResult.X
+  id: X
+  parent: FluentGpu.Controls.PopupPlacementResult
+  langs:
+  - csharp
+  - vb
+  name: X
+  nameWithType: PopupPlacementResult.X
+  fullName: FluentGpu.Controls.PopupPlacementResult.X
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: X
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 55
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float X { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property X As Single
+  overload: FluentGpu.Controls.PopupPlacementResult.X*
+- uid: FluentGpu.Controls.PopupPlacementResult.Y
+  commentId: P:FluentGpu.Controls.PopupPlacementResult.Y
+  id: Y
+  parent: FluentGpu.Controls.PopupPlacementResult
+  langs:
+  - csharp
+  - vb
+  name: Y
+  nameWithType: PopupPlacementResult.Y
+  fullName: FluentGpu.Controls.PopupPlacementResult.Y
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Y
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 55
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float Y { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Y As Single
+  overload: FluentGpu.Controls.PopupPlacementResult.Y*
+- uid: FluentGpu.Controls.PopupPlacementResult.OpensUp
+  commentId: P:FluentGpu.Controls.PopupPlacementResult.OpensUp
+  id: OpensUp
+  parent: FluentGpu.Controls.PopupPlacementResult
+  langs:
+  - csharp
+  - vb
+  name: OpensUp
+  nameWithType: PopupPlacementResult.OpensUp
+  fullName: FluentGpu.Controls.PopupPlacementResult.OpensUp
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OpensUp
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 55
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool OpensUp { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property OpensUp As Boolean
+  overload: FluentGpu.Controls.PopupPlacementResult.OpensUp*
+- uid: FluentGpu.Controls.PopupPlacementResult.MeasuredH
+  commentId: P:FluentGpu.Controls.PopupPlacementResult.MeasuredH
+  id: MeasuredH
+  parent: FluentGpu.Controls.PopupPlacementResult
+  langs:
+  - csharp
+  - vb
+  name: MeasuredH
+  nameWithType: PopupPlacementResult.MeasuredH
+  fullName: FluentGpu.Controls.PopupPlacementResult.MeasuredH
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MeasuredH
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 55
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float MeasuredH { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property MeasuredH As Single
+  overload: FluentGpu.Controls.PopupPlacementResult.MeasuredH*
+- uid: FluentGpu.Controls.PopupPlacementResult.Placement
+  commentId: P:FluentGpu.Controls.PopupPlacementResult.Placement
+  id: Placement
+  parent: FluentGpu.Controls.PopupPlacementResult
+  langs:
+  - csharp
+  - vb
+  name: Placement
+  nameWithType: PopupPlacementResult.Placement
+  fullName: FluentGpu.Controls.PopupPlacementResult.Placement
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Placement
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 55
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public FlyoutPlacement Placement { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.FlyoutPlacement
+    content.vb: Public Property Placement As FlyoutPlacement
+  overload: FluentGpu.Controls.PopupPlacementResult.Placement*
+- uid: FluentGpu.Controls.PopupPlacementResult.CornerJoin
+  commentId: P:FluentGpu.Controls.PopupPlacementResult.CornerJoin
+  id: CornerJoin
+  parent: FluentGpu.Controls.PopupPlacementResult
+  langs:
+  - csharp
+  - vb
+  name: CornerJoin
+  nameWithType: PopupPlacementResult.CornerJoin
+  fullName: FluentGpu.Controls.PopupPlacementResult.CornerJoin
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CornerJoin
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 55
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public CornerJoin CornerJoin { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.CornerJoin
+    content.vb: Public Property CornerJoin As CornerJoin
+  overload: FluentGpu.Controls.PopupPlacementResult.CornerJoin*
+- uid: FluentGpu.Controls.PopupPlacementResult.MeasuredW
+  commentId: P:FluentGpu.Controls.PopupPlacementResult.MeasuredW
+  id: MeasuredW
+  parent: FluentGpu.Controls.PopupPlacementResult
+  langs:
+  - csharp
+  - vb
+  name: MeasuredW
+  nameWithType: PopupPlacementResult.MeasuredW
+  fullName: FluentGpu.Controls.PopupPlacementResult.MeasuredW
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MeasuredW
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 55
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float MeasuredW { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property MeasuredW As Single
+  overload: FluentGpu.Controls.PopupPlacementResult.MeasuredW*
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.IEquatable{FluentGpu.Controls.PopupPlacementResult}
+  commentId: T:System.IEquatable{FluentGpu.Controls.PopupPlacementResult}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<PopupPlacementResult>
+  nameWithType: IEquatable<PopupPlacementResult>
+  fullName: System.IEquatable<FluentGpu.Controls.PopupPlacementResult>
+  nameWithType.vb: IEquatable(Of PopupPlacementResult)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.PopupPlacementResult)
+  name.vb: IEquatable(Of PopupPlacementResult)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.PopupPlacementResult
+    name: PopupPlacementResult
+    href: FluentGpu.Controls.PopupPlacementResult.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.PopupPlacementResult
+    name: PopupPlacementResult
+    href: FluentGpu.Controls.PopupPlacementResult.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Controls.PopupPlacementResult.#ctor*
+  commentId: Overload:FluentGpu.Controls.PopupPlacementResult.#ctor
+  href: FluentGpu.Controls.PopupPlacementResult.html#FluentGpu_Controls_PopupPlacementResult__ctor_System_Single_System_Single_System_Boolean_System_Single_FluentGpu_Controls_FlyoutPlacement_FluentGpu_Controls_CornerJoin_System_Single_
+  name: PopupPlacementResult
+  nameWithType: PopupPlacementResult.PopupPlacementResult
+  fullName: FluentGpu.Controls.PopupPlacementResult.PopupPlacementResult
+  nameWithType.vb: PopupPlacementResult.New
+  fullName.vb: FluentGpu.Controls.PopupPlacementResult.New
+  name.vb: New
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Controls.FlyoutPlacement
+  commentId: T:FluentGpu.Controls.FlyoutPlacement
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.FlyoutPlacement.html
+  name: FlyoutPlacement
+  nameWithType: FlyoutPlacement
+  fullName: FluentGpu.Controls.FlyoutPlacement
+- uid: FluentGpu.Controls.CornerJoin
+  commentId: T:FluentGpu.Controls.CornerJoin
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.CornerJoin.html
+  name: CornerJoin
+  nameWithType: CornerJoin
+  fullName: FluentGpu.Controls.CornerJoin
+- uid: FluentGpu.Controls.PopupPlacementResult.X*
+  commentId: Overload:FluentGpu.Controls.PopupPlacementResult.X
+  href: FluentGpu.Controls.PopupPlacementResult.html#FluentGpu_Controls_PopupPlacementResult_X
+  name: X
+  nameWithType: PopupPlacementResult.X
+  fullName: FluentGpu.Controls.PopupPlacementResult.X
+- uid: FluentGpu.Controls.PopupPlacementResult.Y*
+  commentId: Overload:FluentGpu.Controls.PopupPlacementResult.Y
+  href: FluentGpu.Controls.PopupPlacementResult.html#FluentGpu_Controls_PopupPlacementResult_Y
+  name: Y
+  nameWithType: PopupPlacementResult.Y
+  fullName: FluentGpu.Controls.PopupPlacementResult.Y
+- uid: FluentGpu.Controls.PopupPlacementResult.OpensUp*
+  commentId: Overload:FluentGpu.Controls.PopupPlacementResult.OpensUp
+  href: FluentGpu.Controls.PopupPlacementResult.html#FluentGpu_Controls_PopupPlacementResult_OpensUp
+  name: OpensUp
+  nameWithType: PopupPlacementResult.OpensUp
+  fullName: FluentGpu.Controls.PopupPlacementResult.OpensUp
+- uid: FluentGpu.Controls.PopupPlacementResult.MeasuredH*
+  commentId: Overload:FluentGpu.Controls.PopupPlacementResult.MeasuredH
+  href: FluentGpu.Controls.PopupPlacementResult.html#FluentGpu_Controls_PopupPlacementResult_MeasuredH
+  name: MeasuredH
+  nameWithType: PopupPlacementResult.MeasuredH
+  fullName: FluentGpu.Controls.PopupPlacementResult.MeasuredH
+- uid: FluentGpu.Controls.PopupPlacementResult.Placement*
+  commentId: Overload:FluentGpu.Controls.PopupPlacementResult.Placement
+  href: FluentGpu.Controls.PopupPlacementResult.html#FluentGpu_Controls_PopupPlacementResult_Placement
+  name: Placement
+  nameWithType: PopupPlacementResult.Placement
+  fullName: FluentGpu.Controls.PopupPlacementResult.Placement
+- uid: FluentGpu.Controls.PopupPlacementResult.CornerJoin*
+  commentId: Overload:FluentGpu.Controls.PopupPlacementResult.CornerJoin
+  href: FluentGpu.Controls.PopupPlacementResult.html#FluentGpu_Controls_PopupPlacementResult_CornerJoin
+  name: CornerJoin
+  nameWithType: PopupPlacementResult.CornerJoin
+  fullName: FluentGpu.Controls.PopupPlacementResult.CornerJoin
+- uid: FluentGpu.Controls.PopupPlacementResult.MeasuredW*
+  commentId: Overload:FluentGpu.Controls.PopupPlacementResult.MeasuredW
+  href: FluentGpu.Controls.PopupPlacementResult.html#FluentGpu_Controls_PopupPlacementResult_MeasuredW
+  name: MeasuredW
+  nameWithType: PopupPlacementResult.MeasuredW
+  fullName: FluentGpu.Controls.PopupPlacementResult.MeasuredW

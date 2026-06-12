@@ -1,0 +1,2719 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.Keys
+  commentId: T:FluentGpu.Foundation.Keys
+  id: Keys
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.Keys.A
+  - FluentGpu.Foundation.Keys.Alt
+  - FluentGpu.Foundation.Keys.Apps
+  - FluentGpu.Foundation.Keys.B
+  - FluentGpu.Foundation.Keys.Back
+  - FluentGpu.Foundation.Keys.C
+  - FluentGpu.Foundation.Keys.CapsLock
+  - FluentGpu.Foundation.Keys.Ctrl
+  - FluentGpu.Foundation.Keys.D
+  - FluentGpu.Foundation.Keys.D0
+  - FluentGpu.Foundation.Keys.D1
+  - FluentGpu.Foundation.Keys.D2
+  - FluentGpu.Foundation.Keys.D3
+  - FluentGpu.Foundation.Keys.D4
+  - FluentGpu.Foundation.Keys.D5
+  - FluentGpu.Foundation.Keys.D6
+  - FluentGpu.Foundation.Keys.D7
+  - FluentGpu.Foundation.Keys.D8
+  - FluentGpu.Foundation.Keys.D9
+  - FluentGpu.Foundation.Keys.Delete
+  - FluentGpu.Foundation.Keys.Down
+  - FluentGpu.Foundation.Keys.E
+  - FluentGpu.Foundation.Keys.End
+  - FluentGpu.Foundation.Keys.Enter
+  - FluentGpu.Foundation.Keys.Escape
+  - FluentGpu.Foundation.Keys.F
+  - FluentGpu.Foundation.Keys.F1
+  - FluentGpu.Foundation.Keys.F10
+  - FluentGpu.Foundation.Keys.F11
+  - FluentGpu.Foundation.Keys.F12
+  - FluentGpu.Foundation.Keys.F2
+  - FluentGpu.Foundation.Keys.F3
+  - FluentGpu.Foundation.Keys.F4
+  - FluentGpu.Foundation.Keys.F5
+  - FluentGpu.Foundation.Keys.F6
+  - FluentGpu.Foundation.Keys.F7
+  - FluentGpu.Foundation.Keys.F8
+  - FluentGpu.Foundation.Keys.F9
+  - FluentGpu.Foundation.Keys.G
+  - FluentGpu.Foundation.Keys.GamepadA
+  - FluentGpu.Foundation.Keys.GamepadB
+  - FluentGpu.Foundation.Keys.GamepadDPadDown
+  - FluentGpu.Foundation.Keys.GamepadDPadLeft
+  - FluentGpu.Foundation.Keys.GamepadDPadRight
+  - FluentGpu.Foundation.Keys.GamepadDPadUp
+  - FluentGpu.Foundation.Keys.GamepadLeftThumbDown
+  - FluentGpu.Foundation.Keys.GamepadLeftThumbLeft
+  - FluentGpu.Foundation.Keys.GamepadLeftThumbRight
+  - FluentGpu.Foundation.Keys.GamepadLeftThumbUp
+  - FluentGpu.Foundation.Keys.GamepadX
+  - FluentGpu.Foundation.Keys.GamepadY
+  - FluentGpu.Foundation.Keys.H
+  - FluentGpu.Foundation.Keys.Home
+  - FluentGpu.Foundation.Keys.I
+  - FluentGpu.Foundation.Keys.Insert
+  - FluentGpu.Foundation.Keys.IsAccessKeyCandidate(System.Int32)
+  - FluentGpu.Foundation.Keys.J
+  - FluentGpu.Foundation.Keys.K
+  - FluentGpu.Foundation.Keys.L
+  - FluentGpu.Foundation.Keys.Left
+  - FluentGpu.Foundation.Keys.LeftWin
+  - FluentGpu.Foundation.Keys.M
+  - FluentGpu.Foundation.Keys.N
+  - FluentGpu.Foundation.Keys.O
+  - FluentGpu.Foundation.Keys.P
+  - FluentGpu.Foundation.Keys.PageDown
+  - FluentGpu.Foundation.Keys.PageUp
+  - FluentGpu.Foundation.Keys.Pause
+  - FluentGpu.Foundation.Keys.PrintScreen
+  - FluentGpu.Foundation.Keys.Q
+  - FluentGpu.Foundation.Keys.R
+  - FluentGpu.Foundation.Keys.Right
+  - FluentGpu.Foundation.Keys.RightWin
+  - FluentGpu.Foundation.Keys.S
+  - FluentGpu.Foundation.Keys.Shift
+  - FluentGpu.Foundation.Keys.Space
+  - FluentGpu.Foundation.Keys.T
+  - FluentGpu.Foundation.Keys.Tab
+  - FluentGpu.Foundation.Keys.U
+  - FluentGpu.Foundation.Keys.Up
+  - FluentGpu.Foundation.Keys.V
+  - FluentGpu.Foundation.Keys.W
+  - FluentGpu.Foundation.Keys.X
+  - FluentGpu.Foundation.Keys.Y
+  - FluentGpu.Foundation.Keys.Z
+  langs:
+  - csharp
+  - vb
+  name: Keys
+  nameWithType: Keys
+  fullName: FluentGpu.Foundation.Keys
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Keys
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 106
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Well-known virtual-key codes (Win32 VK_*) used by the input router.
+  example: []
+  syntax:
+    content: public static class Keys
+    content.vb: Public Module Keys
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.MemberwiseClone
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Foundation.Keys.Back
+  commentId: F:FluentGpu.Foundation.Keys.Back
+  id: Back
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: Back
+  nameWithType: Keys.Back
+  fullName: FluentGpu.Foundation.Keys.Back
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Back
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 108
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int Back = 8
+    return:
+      type: System.Int32
+    content.vb: Public Const Back As Integer = 8
+- uid: FluentGpu.Foundation.Keys.Tab
+  commentId: F:FluentGpu.Foundation.Keys.Tab
+  id: Tab
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: Tab
+  nameWithType: Keys.Tab
+  fullName: FluentGpu.Foundation.Keys.Tab
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Tab
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 109
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int Tab = 9
+    return:
+      type: System.Int32
+    content.vb: Public Const Tab As Integer = 9
+- uid: FluentGpu.Foundation.Keys.Enter
+  commentId: F:FluentGpu.Foundation.Keys.Enter
+  id: Enter
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: Enter
+  nameWithType: Keys.Enter
+  fullName: FluentGpu.Foundation.Keys.Enter
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Enter
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 110
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int Enter = 13
+    return:
+      type: System.Int32
+    content.vb: Public Const Enter As Integer = 13
+- uid: FluentGpu.Foundation.Keys.Shift
+  commentId: F:FluentGpu.Foundation.Keys.Shift
+  id: Shift
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: Shift
+  nameWithType: Keys.Shift
+  fullName: FluentGpu.Foundation.Keys.Shift
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Shift
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 111
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int Shift = 16
+    return:
+      type: System.Int32
+    content.vb: Public Const Shift As Integer = 16
+- uid: FluentGpu.Foundation.Keys.Ctrl
+  commentId: F:FluentGpu.Foundation.Keys.Ctrl
+  id: Ctrl
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: Ctrl
+  nameWithType: Keys.Ctrl
+  fullName: FluentGpu.Foundation.Keys.Ctrl
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Ctrl
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 111
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int Ctrl = 17
+    return:
+      type: System.Int32
+    content.vb: Public Const Ctrl As Integer = 17
+- uid: FluentGpu.Foundation.Keys.Alt
+  commentId: F:FluentGpu.Foundation.Keys.Alt
+  id: Alt
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: Alt
+  nameWithType: Keys.Alt
+  fullName: FluentGpu.Foundation.Keys.Alt
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Alt
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 111
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int Alt = 18
+    return:
+      type: System.Int32
+    content.vb: Public Const Alt As Integer = 18
+- uid: FluentGpu.Foundation.Keys.Pause
+  commentId: F:FluentGpu.Foundation.Keys.Pause
+  id: Pause
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: Pause
+  nameWithType: Keys.Pause
+  fullName: FluentGpu.Foundation.Keys.Pause
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Pause
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 112
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int Pause = 19
+    return:
+      type: System.Int32
+    content.vb: Public Const Pause As Integer = 19
+- uid: FluentGpu.Foundation.Keys.CapsLock
+  commentId: F:FluentGpu.Foundation.Keys.CapsLock
+  id: CapsLock
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: CapsLock
+  nameWithType: Keys.CapsLock
+  fullName: FluentGpu.Foundation.Keys.CapsLock
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CapsLock
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 112
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int CapsLock = 20
+    return:
+      type: System.Int32
+    content.vb: Public Const CapsLock As Integer = 20
+- uid: FluentGpu.Foundation.Keys.Escape
+  commentId: F:FluentGpu.Foundation.Keys.Escape
+  id: Escape
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: Escape
+  nameWithType: Keys.Escape
+  fullName: FluentGpu.Foundation.Keys.Escape
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Escape
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 113
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int Escape = 27
+    return:
+      type: System.Int32
+    content.vb: Public Const Escape As Integer = 27
+- uid: FluentGpu.Foundation.Keys.Space
+  commentId: F:FluentGpu.Foundation.Keys.Space
+  id: Space
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: Space
+  nameWithType: Keys.Space
+  fullName: FluentGpu.Foundation.Keys.Space
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Space
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 114
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int Space = 32
+    return:
+      type: System.Int32
+    content.vb: Public Const Space As Integer = 32
+- uid: FluentGpu.Foundation.Keys.PageUp
+  commentId: F:FluentGpu.Foundation.Keys.PageUp
+  id: PageUp
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: PageUp
+  nameWithType: Keys.PageUp
+  fullName: FluentGpu.Foundation.Keys.PageUp
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PageUp
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 115
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int PageUp = 33
+    return:
+      type: System.Int32
+    content.vb: Public Const PageUp As Integer = 33
+- uid: FluentGpu.Foundation.Keys.PageDown
+  commentId: F:FluentGpu.Foundation.Keys.PageDown
+  id: PageDown
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: PageDown
+  nameWithType: Keys.PageDown
+  fullName: FluentGpu.Foundation.Keys.PageDown
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PageDown
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 115
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int PageDown = 34
+    return:
+      type: System.Int32
+    content.vb: Public Const PageDown As Integer = 34
+- uid: FluentGpu.Foundation.Keys.End
+  commentId: F:FluentGpu.Foundation.Keys.End
+  id: End
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: End
+  nameWithType: Keys.End
+  fullName: FluentGpu.Foundation.Keys.End
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: End
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 116
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int End = 35
+    return:
+      type: System.Int32
+    content.vb: Public Const End As Integer = 35
+- uid: FluentGpu.Foundation.Keys.Home
+  commentId: F:FluentGpu.Foundation.Keys.Home
+  id: Home
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: Home
+  nameWithType: Keys.Home
+  fullName: FluentGpu.Foundation.Keys.Home
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Home
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 116
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int Home = 36
+    return:
+      type: System.Int32
+    content.vb: Public Const Home As Integer = 36
+- uid: FluentGpu.Foundation.Keys.Left
+  commentId: F:FluentGpu.Foundation.Keys.Left
+  id: Left
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: Left
+  nameWithType: Keys.Left
+  fullName: FluentGpu.Foundation.Keys.Left
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Left
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 117
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int Left = 37
+    return:
+      type: System.Int32
+    content.vb: Public Const Left As Integer = 37
+- uid: FluentGpu.Foundation.Keys.Up
+  commentId: F:FluentGpu.Foundation.Keys.Up
+  id: Up
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: Up
+  nameWithType: Keys.Up
+  fullName: FluentGpu.Foundation.Keys.Up
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Up
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 117
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int Up = 38
+    return:
+      type: System.Int32
+    content.vb: Public Const Up As Integer = 38
+- uid: FluentGpu.Foundation.Keys.Right
+  commentId: F:FluentGpu.Foundation.Keys.Right
+  id: Right
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: Right
+  nameWithType: Keys.Right
+  fullName: FluentGpu.Foundation.Keys.Right
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Right
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 117
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int Right = 39
+    return:
+      type: System.Int32
+    content.vb: Public Const Right As Integer = 39
+- uid: FluentGpu.Foundation.Keys.Down
+  commentId: F:FluentGpu.Foundation.Keys.Down
+  id: Down
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: Down
+  nameWithType: Keys.Down
+  fullName: FluentGpu.Foundation.Keys.Down
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Down
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 117
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int Down = 40
+    return:
+      type: System.Int32
+    content.vb: Public Const Down As Integer = 40
+- uid: FluentGpu.Foundation.Keys.PrintScreen
+  commentId: F:FluentGpu.Foundation.Keys.PrintScreen
+  id: PrintScreen
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: PrintScreen
+  nameWithType: Keys.PrintScreen
+  fullName: FluentGpu.Foundation.Keys.PrintScreen
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PrintScreen
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 118
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int PrintScreen = 44
+    return:
+      type: System.Int32
+    content.vb: Public Const PrintScreen As Integer = 44
+- uid: FluentGpu.Foundation.Keys.Insert
+  commentId: F:FluentGpu.Foundation.Keys.Insert
+  id: Insert
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: Insert
+  nameWithType: Keys.Insert
+  fullName: FluentGpu.Foundation.Keys.Insert
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Insert
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 118
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int Insert = 45
+    return:
+      type: System.Int32
+    content.vb: Public Const Insert As Integer = 45
+- uid: FluentGpu.Foundation.Keys.Delete
+  commentId: F:FluentGpu.Foundation.Keys.Delete
+  id: Delete
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: Delete
+  nameWithType: Keys.Delete
+  fullName: FluentGpu.Foundation.Keys.Delete
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Delete
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 118
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int Delete = 46
+    return:
+      type: System.Int32
+    content.vb: Public Const Delete As Integer = 46
+- uid: FluentGpu.Foundation.Keys.D0
+  commentId: F:FluentGpu.Foundation.Keys.D0
+  id: D0
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: D0
+  nameWithType: Keys.D0
+  fullName: FluentGpu.Foundation.Keys.D0
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: D0
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 120
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int D0 = 48
+    return:
+      type: System.Int32
+    content.vb: Public Const D0 As Integer = 48
+- uid: FluentGpu.Foundation.Keys.D1
+  commentId: F:FluentGpu.Foundation.Keys.D1
+  id: D1
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: D1
+  nameWithType: Keys.D1
+  fullName: FluentGpu.Foundation.Keys.D1
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: D1
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 120
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int D1 = 49
+    return:
+      type: System.Int32
+    content.vb: Public Const D1 As Integer = 49
+- uid: FluentGpu.Foundation.Keys.D2
+  commentId: F:FluentGpu.Foundation.Keys.D2
+  id: D2
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: D2
+  nameWithType: Keys.D2
+  fullName: FluentGpu.Foundation.Keys.D2
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: D2
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 120
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int D2 = 50
+    return:
+      type: System.Int32
+    content.vb: Public Const D2 As Integer = 50
+- uid: FluentGpu.Foundation.Keys.D3
+  commentId: F:FluentGpu.Foundation.Keys.D3
+  id: D3
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: D3
+  nameWithType: Keys.D3
+  fullName: FluentGpu.Foundation.Keys.D3
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: D3
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 120
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int D3 = 51
+    return:
+      type: System.Int32
+    content.vb: Public Const D3 As Integer = 51
+- uid: FluentGpu.Foundation.Keys.D4
+  commentId: F:FluentGpu.Foundation.Keys.D4
+  id: D4
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: D4
+  nameWithType: Keys.D4
+  fullName: FluentGpu.Foundation.Keys.D4
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: D4
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 120
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int D4 = 52
+    return:
+      type: System.Int32
+    content.vb: Public Const D4 As Integer = 52
+- uid: FluentGpu.Foundation.Keys.D5
+  commentId: F:FluentGpu.Foundation.Keys.D5
+  id: D5
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: D5
+  nameWithType: Keys.D5
+  fullName: FluentGpu.Foundation.Keys.D5
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: D5
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 120
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int D5 = 53
+    return:
+      type: System.Int32
+    content.vb: Public Const D5 As Integer = 53
+- uid: FluentGpu.Foundation.Keys.D6
+  commentId: F:FluentGpu.Foundation.Keys.D6
+  id: D6
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: D6
+  nameWithType: Keys.D6
+  fullName: FluentGpu.Foundation.Keys.D6
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: D6
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 120
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int D6 = 54
+    return:
+      type: System.Int32
+    content.vb: Public Const D6 As Integer = 54
+- uid: FluentGpu.Foundation.Keys.D7
+  commentId: F:FluentGpu.Foundation.Keys.D7
+  id: D7
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: D7
+  nameWithType: Keys.D7
+  fullName: FluentGpu.Foundation.Keys.D7
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: D7
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 120
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int D7 = 55
+    return:
+      type: System.Int32
+    content.vb: Public Const D7 As Integer = 55
+- uid: FluentGpu.Foundation.Keys.D8
+  commentId: F:FluentGpu.Foundation.Keys.D8
+  id: D8
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: D8
+  nameWithType: Keys.D8
+  fullName: FluentGpu.Foundation.Keys.D8
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: D8
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 120
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int D8 = 56
+    return:
+      type: System.Int32
+    content.vb: Public Const D8 As Integer = 56
+- uid: FluentGpu.Foundation.Keys.D9
+  commentId: F:FluentGpu.Foundation.Keys.D9
+  id: D9
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: D9
+  nameWithType: Keys.D9
+  fullName: FluentGpu.Foundation.Keys.D9
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: D9
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 120
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int D9 = 57
+    return:
+      type: System.Int32
+    content.vb: Public Const D9 As Integer = 57
+- uid: FluentGpu.Foundation.Keys.A
+  commentId: F:FluentGpu.Foundation.Keys.A
+  id: A
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: A
+  nameWithType: Keys.A
+  fullName: FluentGpu.Foundation.Keys.A
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: A
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 122
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int A = 65
+    return:
+      type: System.Int32
+    content.vb: Public Const A As Integer = 65
+- uid: FluentGpu.Foundation.Keys.B
+  commentId: F:FluentGpu.Foundation.Keys.B
+  id: B
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: B
+  nameWithType: Keys.B
+  fullName: FluentGpu.Foundation.Keys.B
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: B
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 122
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int B = 66
+    return:
+      type: System.Int32
+    content.vb: Public Const B As Integer = 66
+- uid: FluentGpu.Foundation.Keys.C
+  commentId: F:FluentGpu.Foundation.Keys.C
+  id: C
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: C
+  nameWithType: Keys.C
+  fullName: FluentGpu.Foundation.Keys.C
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: C
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 122
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int C = 67
+    return:
+      type: System.Int32
+    content.vb: Public Const C As Integer = 67
+- uid: FluentGpu.Foundation.Keys.D
+  commentId: F:FluentGpu.Foundation.Keys.D
+  id: D
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: D
+  nameWithType: Keys.D
+  fullName: FluentGpu.Foundation.Keys.D
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: D
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 122
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int D = 68
+    return:
+      type: System.Int32
+    content.vb: Public Const D As Integer = 68
+- uid: FluentGpu.Foundation.Keys.E
+  commentId: F:FluentGpu.Foundation.Keys.E
+  id: E
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: E
+  nameWithType: Keys.E
+  fullName: FluentGpu.Foundation.Keys.E
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: E
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 122
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int E = 69
+    return:
+      type: System.Int32
+    content.vb: Public Const E As Integer = 69
+- uid: FluentGpu.Foundation.Keys.F
+  commentId: F:FluentGpu.Foundation.Keys.F
+  id: F
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: F
+  nameWithType: Keys.F
+  fullName: FluentGpu.Foundation.Keys.F
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: F
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 122
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int F = 70
+    return:
+      type: System.Int32
+    content.vb: Public Const F As Integer = 70
+- uid: FluentGpu.Foundation.Keys.G
+  commentId: F:FluentGpu.Foundation.Keys.G
+  id: G
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: G
+  nameWithType: Keys.G
+  fullName: FluentGpu.Foundation.Keys.G
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: G
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 122
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int G = 71
+    return:
+      type: System.Int32
+    content.vb: Public Const G As Integer = 71
+- uid: FluentGpu.Foundation.Keys.H
+  commentId: F:FluentGpu.Foundation.Keys.H
+  id: H
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: H
+  nameWithType: Keys.H
+  fullName: FluentGpu.Foundation.Keys.H
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: H
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 122
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int H = 72
+    return:
+      type: System.Int32
+    content.vb: Public Const H As Integer = 72
+- uid: FluentGpu.Foundation.Keys.I
+  commentId: F:FluentGpu.Foundation.Keys.I
+  id: I
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: I
+  nameWithType: Keys.I
+  fullName: FluentGpu.Foundation.Keys.I
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: I
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 122
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int I = 73
+    return:
+      type: System.Int32
+    content.vb: Public Const I As Integer = 73
+- uid: FluentGpu.Foundation.Keys.J
+  commentId: F:FluentGpu.Foundation.Keys.J
+  id: J
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: J
+  nameWithType: Keys.J
+  fullName: FluentGpu.Foundation.Keys.J
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: J
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 122
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int J = 74
+    return:
+      type: System.Int32
+    content.vb: Public Const J As Integer = 74
+- uid: FluentGpu.Foundation.Keys.K
+  commentId: F:FluentGpu.Foundation.Keys.K
+  id: K
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: K
+  nameWithType: Keys.K
+  fullName: FluentGpu.Foundation.Keys.K
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: K
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 122
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int K = 75
+    return:
+      type: System.Int32
+    content.vb: Public Const K As Integer = 75
+- uid: FluentGpu.Foundation.Keys.L
+  commentId: F:FluentGpu.Foundation.Keys.L
+  id: L
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: L
+  nameWithType: Keys.L
+  fullName: FluentGpu.Foundation.Keys.L
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: L
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 122
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int L = 76
+    return:
+      type: System.Int32
+    content.vb: Public Const L As Integer = 76
+- uid: FluentGpu.Foundation.Keys.M
+  commentId: F:FluentGpu.Foundation.Keys.M
+  id: M
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: M
+  nameWithType: Keys.M
+  fullName: FluentGpu.Foundation.Keys.M
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: M
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 123
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int M = 77
+    return:
+      type: System.Int32
+    content.vb: Public Const M As Integer = 77
+- uid: FluentGpu.Foundation.Keys.N
+  commentId: F:FluentGpu.Foundation.Keys.N
+  id: N
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: N
+  nameWithType: Keys.N
+  fullName: FluentGpu.Foundation.Keys.N
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: N
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 123
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int N = 78
+    return:
+      type: System.Int32
+    content.vb: Public Const N As Integer = 78
+- uid: FluentGpu.Foundation.Keys.O
+  commentId: F:FluentGpu.Foundation.Keys.O
+  id: O
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: O
+  nameWithType: Keys.O
+  fullName: FluentGpu.Foundation.Keys.O
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: O
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 123
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int O = 79
+    return:
+      type: System.Int32
+    content.vb: Public Const O As Integer = 79
+- uid: FluentGpu.Foundation.Keys.P
+  commentId: F:FluentGpu.Foundation.Keys.P
+  id: P
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: P
+  nameWithType: Keys.P
+  fullName: FluentGpu.Foundation.Keys.P
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: P
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 123
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int P = 80
+    return:
+      type: System.Int32
+    content.vb: Public Const P As Integer = 80
+- uid: FluentGpu.Foundation.Keys.Q
+  commentId: F:FluentGpu.Foundation.Keys.Q
+  id: Q
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: Q
+  nameWithType: Keys.Q
+  fullName: FluentGpu.Foundation.Keys.Q
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Q
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 123
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int Q = 81
+    return:
+      type: System.Int32
+    content.vb: Public Const Q As Integer = 81
+- uid: FluentGpu.Foundation.Keys.R
+  commentId: F:FluentGpu.Foundation.Keys.R
+  id: R
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: R
+  nameWithType: Keys.R
+  fullName: FluentGpu.Foundation.Keys.R
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: R
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 123
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int R = 82
+    return:
+      type: System.Int32
+    content.vb: Public Const R As Integer = 82
+- uid: FluentGpu.Foundation.Keys.S
+  commentId: F:FluentGpu.Foundation.Keys.S
+  id: S
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: S
+  nameWithType: Keys.S
+  fullName: FluentGpu.Foundation.Keys.S
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: S
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 123
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int S = 83
+    return:
+      type: System.Int32
+    content.vb: Public Const S As Integer = 83
+- uid: FluentGpu.Foundation.Keys.T
+  commentId: F:FluentGpu.Foundation.Keys.T
+  id: T
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: T
+  nameWithType: Keys.T
+  fullName: FluentGpu.Foundation.Keys.T
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: T
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 123
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int T = 84
+    return:
+      type: System.Int32
+    content.vb: Public Const T As Integer = 84
+- uid: FluentGpu.Foundation.Keys.U
+  commentId: F:FluentGpu.Foundation.Keys.U
+  id: U
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: U
+  nameWithType: Keys.U
+  fullName: FluentGpu.Foundation.Keys.U
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: U
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 123
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int U = 85
+    return:
+      type: System.Int32
+    content.vb: Public Const U As Integer = 85
+- uid: FluentGpu.Foundation.Keys.V
+  commentId: F:FluentGpu.Foundation.Keys.V
+  id: V
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: V
+  nameWithType: Keys.V
+  fullName: FluentGpu.Foundation.Keys.V
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: V
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 123
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int V = 86
+    return:
+      type: System.Int32
+    content.vb: Public Const V As Integer = 86
+- uid: FluentGpu.Foundation.Keys.W
+  commentId: F:FluentGpu.Foundation.Keys.W
+  id: W
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: W
+  nameWithType: Keys.W
+  fullName: FluentGpu.Foundation.Keys.W
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: W
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 123
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int W = 87
+    return:
+      type: System.Int32
+    content.vb: Public Const W As Integer = 87
+- uid: FluentGpu.Foundation.Keys.X
+  commentId: F:FluentGpu.Foundation.Keys.X
+  id: X
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: X
+  nameWithType: Keys.X
+  fullName: FluentGpu.Foundation.Keys.X
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: X
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 123
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int X = 88
+    return:
+      type: System.Int32
+    content.vb: Public Const X As Integer = 88
+- uid: FluentGpu.Foundation.Keys.Y
+  commentId: F:FluentGpu.Foundation.Keys.Y
+  id: Y
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: Y
+  nameWithType: Keys.Y
+  fullName: FluentGpu.Foundation.Keys.Y
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Y
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 124
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int Y = 89
+    return:
+      type: System.Int32
+    content.vb: Public Const Y As Integer = 89
+- uid: FluentGpu.Foundation.Keys.Z
+  commentId: F:FluentGpu.Foundation.Keys.Z
+  id: Z
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: Z
+  nameWithType: Keys.Z
+  fullName: FluentGpu.Foundation.Keys.Z
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Z
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 124
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int Z = 90
+    return:
+      type: System.Int32
+    content.vb: Public Const Z As Integer = 90
+- uid: FluentGpu.Foundation.Keys.LeftWin
+  commentId: F:FluentGpu.Foundation.Keys.LeftWin
+  id: LeftWin
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: LeftWin
+  nameWithType: Keys.LeftWin
+  fullName: FluentGpu.Foundation.Keys.LeftWin
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LeftWin
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 125
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int LeftWin = 91
+    return:
+      type: System.Int32
+    content.vb: Public Const LeftWin As Integer = 91
+- uid: FluentGpu.Foundation.Keys.RightWin
+  commentId: F:FluentGpu.Foundation.Keys.RightWin
+  id: RightWin
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: RightWin
+  nameWithType: Keys.RightWin
+  fullName: FluentGpu.Foundation.Keys.RightWin
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RightWin
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 125
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int RightWin = 92
+    return:
+      type: System.Int32
+    content.vb: Public Const RightWin As Integer = 92
+- uid: FluentGpu.Foundation.Keys.Apps
+  commentId: F:FluentGpu.Foundation.Keys.Apps
+  id: Apps
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: Apps
+  nameWithType: Keys.Apps
+  fullName: FluentGpu.Foundation.Keys.Apps
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Apps
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 127
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: The dedicated context-menu key (VK_APPS) — opens the focused element's context flyout.
+  example: []
+  syntax:
+    content: public const int Apps = 93
+    return:
+      type: System.Int32
+    content.vb: Public Const Apps As Integer = 93
+- uid: FluentGpu.Foundation.Keys.F1
+  commentId: F:FluentGpu.Foundation.Keys.F1
+  id: F1
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: F1
+  nameWithType: Keys.F1
+  fullName: FluentGpu.Foundation.Keys.F1
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: F1
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 128
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int F1 = 112
+    return:
+      type: System.Int32
+    content.vb: Public Const F1 As Integer = 112
+- uid: FluentGpu.Foundation.Keys.F2
+  commentId: F:FluentGpu.Foundation.Keys.F2
+  id: F2
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: F2
+  nameWithType: Keys.F2
+  fullName: FluentGpu.Foundation.Keys.F2
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: F2
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 128
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int F2 = 113
+    return:
+      type: System.Int32
+    content.vb: Public Const F2 As Integer = 113
+- uid: FluentGpu.Foundation.Keys.F3
+  commentId: F:FluentGpu.Foundation.Keys.F3
+  id: F3
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: F3
+  nameWithType: Keys.F3
+  fullName: FluentGpu.Foundation.Keys.F3
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: F3
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 128
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int F3 = 114
+    return:
+      type: System.Int32
+    content.vb: Public Const F3 As Integer = 114
+- uid: FluentGpu.Foundation.Keys.F4
+  commentId: F:FluentGpu.Foundation.Keys.F4
+  id: F4
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: F4
+  nameWithType: Keys.F4
+  fullName: FluentGpu.Foundation.Keys.F4
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: F4
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 128
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int F4 = 115
+    return:
+      type: System.Int32
+    content.vb: Public Const F4 As Integer = 115
+- uid: FluentGpu.Foundation.Keys.F5
+  commentId: F:FluentGpu.Foundation.Keys.F5
+  id: F5
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: F5
+  nameWithType: Keys.F5
+  fullName: FluentGpu.Foundation.Keys.F5
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: F5
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 128
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int F5 = 116
+    return:
+      type: System.Int32
+    content.vb: Public Const F5 As Integer = 116
+- uid: FluentGpu.Foundation.Keys.F6
+  commentId: F:FluentGpu.Foundation.Keys.F6
+  id: F6
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: F6
+  nameWithType: Keys.F6
+  fullName: FluentGpu.Foundation.Keys.F6
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: F6
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 128
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int F6 = 117
+    return:
+      type: System.Int32
+    content.vb: Public Const F6 As Integer = 117
+- uid: FluentGpu.Foundation.Keys.F7
+  commentId: F:FluentGpu.Foundation.Keys.F7
+  id: F7
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: F7
+  nameWithType: Keys.F7
+  fullName: FluentGpu.Foundation.Keys.F7
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: F7
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 128
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int F7 = 118
+    return:
+      type: System.Int32
+    content.vb: Public Const F7 As Integer = 118
+- uid: FluentGpu.Foundation.Keys.F8
+  commentId: F:FluentGpu.Foundation.Keys.F8
+  id: F8
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: F8
+  nameWithType: Keys.F8
+  fullName: FluentGpu.Foundation.Keys.F8
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: F8
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 128
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int F8 = 119
+    return:
+      type: System.Int32
+    content.vb: Public Const F8 As Integer = 119
+- uid: FluentGpu.Foundation.Keys.F9
+  commentId: F:FluentGpu.Foundation.Keys.F9
+  id: F9
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: F9
+  nameWithType: Keys.F9
+  fullName: FluentGpu.Foundation.Keys.F9
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: F9
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 129
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int F9 = 120
+    return:
+      type: System.Int32
+    content.vb: Public Const F9 As Integer = 120
+- uid: FluentGpu.Foundation.Keys.F10
+  commentId: F:FluentGpu.Foundation.Keys.F10
+  id: F10
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: F10
+  nameWithType: Keys.F10
+  fullName: FluentGpu.Foundation.Keys.F10
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: F10
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 129
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int F10 = 121
+    return:
+      type: System.Int32
+    content.vb: Public Const F10 As Integer = 121
+- uid: FluentGpu.Foundation.Keys.F11
+  commentId: F:FluentGpu.Foundation.Keys.F11
+  id: F11
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: F11
+  nameWithType: Keys.F11
+  fullName: FluentGpu.Foundation.Keys.F11
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: F11
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 129
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int F11 = 122
+    return:
+      type: System.Int32
+    content.vb: Public Const F11 As Integer = 122
+- uid: FluentGpu.Foundation.Keys.F12
+  commentId: F:FluentGpu.Foundation.Keys.F12
+  id: F12
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: F12
+  nameWithType: Keys.F12
+  fullName: FluentGpu.Foundation.Keys.F12
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: F12
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 129
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int F12 = 123
+    return:
+      type: System.Int32
+    content.vb: Public Const F12 As Integer = 123
+- uid: FluentGpu.Foundation.Keys.GamepadA
+  commentId: F:FluentGpu.Foundation.Keys.GamepadA
+  id: GamepadA
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: GamepadA
+  nameWithType: Keys.GamepadA
+  fullName: FluentGpu.Foundation.Keys.GamepadA
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GamepadA
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 131
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int GamepadA = 195
+    return:
+      type: System.Int32
+    content.vb: Public Const GamepadA As Integer = 195
+- uid: FluentGpu.Foundation.Keys.GamepadB
+  commentId: F:FluentGpu.Foundation.Keys.GamepadB
+  id: GamepadB
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: GamepadB
+  nameWithType: Keys.GamepadB
+  fullName: FluentGpu.Foundation.Keys.GamepadB
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GamepadB
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 131
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int GamepadB = 196
+    return:
+      type: System.Int32
+    content.vb: Public Const GamepadB As Integer = 196
+- uid: FluentGpu.Foundation.Keys.GamepadX
+  commentId: F:FluentGpu.Foundation.Keys.GamepadX
+  id: GamepadX
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: GamepadX
+  nameWithType: Keys.GamepadX
+  fullName: FluentGpu.Foundation.Keys.GamepadX
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GamepadX
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 131
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int GamepadX = 197
+    return:
+      type: System.Int32
+    content.vb: Public Const GamepadX As Integer = 197
+- uid: FluentGpu.Foundation.Keys.GamepadY
+  commentId: F:FluentGpu.Foundation.Keys.GamepadY
+  id: GamepadY
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: GamepadY
+  nameWithType: Keys.GamepadY
+  fullName: FluentGpu.Foundation.Keys.GamepadY
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GamepadY
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 131
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int GamepadY = 198
+    return:
+      type: System.Int32
+    content.vb: Public Const GamepadY As Integer = 198
+- uid: FluentGpu.Foundation.Keys.GamepadDPadUp
+  commentId: F:FluentGpu.Foundation.Keys.GamepadDPadUp
+  id: GamepadDPadUp
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: GamepadDPadUp
+  nameWithType: Keys.GamepadDPadUp
+  fullName: FluentGpu.Foundation.Keys.GamepadDPadUp
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GamepadDPadUp
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 132
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int GamepadDPadUp = 203
+    return:
+      type: System.Int32
+    content.vb: Public Const GamepadDPadUp As Integer = 203
+- uid: FluentGpu.Foundation.Keys.GamepadDPadDown
+  commentId: F:FluentGpu.Foundation.Keys.GamepadDPadDown
+  id: GamepadDPadDown
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: GamepadDPadDown
+  nameWithType: Keys.GamepadDPadDown
+  fullName: FluentGpu.Foundation.Keys.GamepadDPadDown
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GamepadDPadDown
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 132
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int GamepadDPadDown = 204
+    return:
+      type: System.Int32
+    content.vb: Public Const GamepadDPadDown As Integer = 204
+- uid: FluentGpu.Foundation.Keys.GamepadDPadLeft
+  commentId: F:FluentGpu.Foundation.Keys.GamepadDPadLeft
+  id: GamepadDPadLeft
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: GamepadDPadLeft
+  nameWithType: Keys.GamepadDPadLeft
+  fullName: FluentGpu.Foundation.Keys.GamepadDPadLeft
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GamepadDPadLeft
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 132
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int GamepadDPadLeft = 205
+    return:
+      type: System.Int32
+    content.vb: Public Const GamepadDPadLeft As Integer = 205
+- uid: FluentGpu.Foundation.Keys.GamepadDPadRight
+  commentId: F:FluentGpu.Foundation.Keys.GamepadDPadRight
+  id: GamepadDPadRight
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: GamepadDPadRight
+  nameWithType: Keys.GamepadDPadRight
+  fullName: FluentGpu.Foundation.Keys.GamepadDPadRight
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GamepadDPadRight
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 132
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int GamepadDPadRight = 206
+    return:
+      type: System.Int32
+    content.vb: Public Const GamepadDPadRight As Integer = 206
+- uid: FluentGpu.Foundation.Keys.GamepadLeftThumbUp
+  commentId: F:FluentGpu.Foundation.Keys.GamepadLeftThumbUp
+  id: GamepadLeftThumbUp
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: GamepadLeftThumbUp
+  nameWithType: Keys.GamepadLeftThumbUp
+  fullName: FluentGpu.Foundation.Keys.GamepadLeftThumbUp
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GamepadLeftThumbUp
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 133
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int GamepadLeftThumbUp = 211
+    return:
+      type: System.Int32
+    content.vb: Public Const GamepadLeftThumbUp As Integer = 211
+- uid: FluentGpu.Foundation.Keys.GamepadLeftThumbDown
+  commentId: F:FluentGpu.Foundation.Keys.GamepadLeftThumbDown
+  id: GamepadLeftThumbDown
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: GamepadLeftThumbDown
+  nameWithType: Keys.GamepadLeftThumbDown
+  fullName: FluentGpu.Foundation.Keys.GamepadLeftThumbDown
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GamepadLeftThumbDown
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 133
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int GamepadLeftThumbDown = 212
+    return:
+      type: System.Int32
+    content.vb: Public Const GamepadLeftThumbDown As Integer = 212
+- uid: FluentGpu.Foundation.Keys.GamepadLeftThumbRight
+  commentId: F:FluentGpu.Foundation.Keys.GamepadLeftThumbRight
+  id: GamepadLeftThumbRight
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: GamepadLeftThumbRight
+  nameWithType: Keys.GamepadLeftThumbRight
+  fullName: FluentGpu.Foundation.Keys.GamepadLeftThumbRight
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GamepadLeftThumbRight
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 133
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int GamepadLeftThumbRight = 213
+    return:
+      type: System.Int32
+    content.vb: Public Const GamepadLeftThumbRight As Integer = 213
+- uid: FluentGpu.Foundation.Keys.GamepadLeftThumbLeft
+  commentId: F:FluentGpu.Foundation.Keys.GamepadLeftThumbLeft
+  id: GamepadLeftThumbLeft
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: GamepadLeftThumbLeft
+  nameWithType: Keys.GamepadLeftThumbLeft
+  fullName: FluentGpu.Foundation.Keys.GamepadLeftThumbLeft
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GamepadLeftThumbLeft
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 133
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int GamepadLeftThumbLeft = 214
+    return:
+      type: System.Int32
+    content.vb: Public Const GamepadLeftThumbLeft As Integer = 214
+- uid: FluentGpu.Foundation.Keys.IsAccessKeyCandidate(System.Int32)
+  commentId: M:FluentGpu.Foundation.Keys.IsAccessKeyCandidate(System.Int32)
+  id: IsAccessKeyCandidate(System.Int32)
+  parent: FluentGpu.Foundation.Keys
+  langs:
+  - csharp
+  - vb
+  name: IsAccessKeyCandidate(int)
+  nameWithType: Keys.IsAccessKeyCandidate(int)
+  fullName: FluentGpu.Foundation.Keys.IsAccessKeyCandidate(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsAccessKeyCandidate
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 136
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: True for VK 'A'..'Z' / '0'..'9' — the access-key (Alt mnemonic) candidates.
+  example: []
+  syntax:
+    content: public static bool IsAccessKeyCandidate(int vk)
+    parameters:
+    - id: vk
+      type: System.Int32
+    return:
+      type: System.Boolean
+    content.vb: Public Shared Function IsAccessKeyCandidate(vk As Integer) As Boolean
+  overload: FluentGpu.Foundation.Keys.IsAccessKeyCandidate*
+  nameWithType.vb: Keys.IsAccessKeyCandidate(Integer)
+  fullName.vb: FluentGpu.Foundation.Keys.IsAccessKeyCandidate(Integer)
+  name.vb: IsAccessKeyCandidate(Integer)
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.MemberwiseClone
+  commentId: M:System.Object.MemberwiseClone
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  name: MemberwiseClone()
+  nameWithType: object.MemberwiseClone()
+  fullName: object.MemberwiseClone()
+  nameWithType.vb: Object.MemberwiseClone()
+  fullName.vb: Object.MemberwiseClone()
+  spec.csharp:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Foundation.Keys.IsAccessKeyCandidate*
+  commentId: Overload:FluentGpu.Foundation.Keys.IsAccessKeyCandidate
+  href: FluentGpu.Foundation.Keys.html#FluentGpu_Foundation_Keys_IsAccessKeyCandidate_System_Int32_
+  name: IsAccessKeyCandidate
+  nameWithType: Keys.IsAccessKeyCandidate
+  fullName: FluentGpu.Foundation.Keys.IsAccessKeyCandidate
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean

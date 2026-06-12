@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Layout internals | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Layout internals | FluentGpu Developer Docs ">
+      
+      
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="../toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/docs/site/engine-contributors/layout-internals.md/#L1">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+
+      <div class="content">
+        <div class="actionbar">
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="">
+<h1 id="layout-internals">Layout internals</h1>
+
+<p><a href="index.html">← Contributing to the engine</a></p>
+<p>Layout is <strong>phase 6</strong> of the frame loop: between reconcile (which patches the retained scene) and record (which walks it into a DrawList), the layout engine fills every node's <code>Bounds</code> — a node-<strong>local</strong> rect in its parent's coordinate space. It is the cleanest seam in the system: <code>FluentGpu.Layout</code> references only <code>Foundation</code> + <code>Scene</code> + the text-measure interface, with <strong>zero</strong> Windows/GPU dependency, so the macOS port is a text-leaf swap with no layout changes.</p>
+<p>This page is the as-built tour for someone <strong>changing</strong> the engine. It assumes you have read <a href="../../guide/rendering-and-performance.md">rendering &amp; performance</a> (the frame pipeline, the three dirty axes, the boundary firewall from above) and want to know how the two descents, the scoped-relayout walk, and the virtualization participant are wired — and exactly which file to open. The architecture <strong>authority</strong> is <a href="../../../design/subsystems/layout.md"><code>design/subsystems/layout.md</code></a> (and <a href="../../../design/subsystems/virtualization.md"><code>virtualization.md</code></a>); this page is the working view over the live source and <strong>flags where the live core is narrower than the design of record</strong>. Where they disagree, the source wins.</p>
+<blockquote>
+<p><strong>Where it all lives.</strong> <code>src/FluentGpu.Layout/FlexLayout.cs</code> (the two descents + grid + scroll + the virtualization arrange) · <code>src/FluentGpu.Layout/LayoutInvalidator.cs</code> (the scoped-relayout boundary walk) · <code>src/FluentGpu.Scene/VirtualLayout.cs</code> (the <code>IVirtualLayout</code> seam + built-in layouts) · <code>src/FluentGpu.Hosting/AppHost.cs</code> (the phase-6 call site). Verify in <code>src/FluentGpu.VerticalSlice/Program.cs</code>.</p>
+</blockquote>
+<hr>
+<h2 id="incremental-layout-flexlayoutrun-full-vs-runsubtree-scoped">Incremental layout (<code>FlexLayout.Run</code> full vs <code>RunSubtree</code> scoped)</h2>
+<p><code>FlexLayout</code> (<a href="../../../src/FluentGpu.Layout/FlexLayout.cs"><code>FlexLayout.cs</code></a>) exposes exactly three public entry points, and the whole incremental story is the choice between them:</p>
+<pre><code class="lang-csharp">public void Run(NodeHandle root);                 // content-size the root (golden flexbox checks)
+public void Run(NodeHandle root, Size2 window);   // fill the window (the top-level app behavior)
+public void RunSubtree(NodeHandle node);          // re-solve ONE subtree against its already-placed bounds
+</code></pre>
+<ul>
+<li><strong><code>Run(root, window)</code></strong> is the full-tree solve: a <code>Measure</code> descent then an <code>Arrange</code> descent from the root. It runs only on <strong>first frame, window resize, DPI change, or a root structural change</strong> — the cases where the available space at the root itself changed.</li>
+<li><strong><code>RunSubtree(node)</code></strong> re-solves <em>only</em> the subtree rooted at <code>node</code>, against the bounds the parent already gave it:</li>
+</ul>
+<pre><code class="lang-csharp">public void RunSubtree(NodeHandle node)
+{
+    if (node.IsNull) return;
+    ref LayoutInput li = ref _scene.Layout(node);
+    ref RectF b = ref _scene.Bounds(node);
+    float w = float.IsNaN(li.Width) ? b.W : li.Width;
+    float h = float.IsNaN(li.Height) ? b.H : li.Height;
+    Measure(node, w);
+    Arrange(node, b.X, b.Y, w, h);
+}
+</code></pre>
+<p>The key line is that it arranges at <code>(b.X, b.Y)</code> — the node's existing origin — so <strong>the parent is never disturbed</strong>. The node keeps its slot; only its descendants are re-measured and re-placed. This is the per-frame-affordable relayout that lets a deep <code>setState</code> reflow its own card without re-laying-out the page. (It also accepts a <code>LayoutInput.Width</code> override: a <code>SizeMode.Relayout</code> animation writes the interpolated width there each tick, and <code>RunSubtree</code> honors it over the bounds — that is how smooth size animations reflow their content.)</p>
+<p>The phase-6 driver in <code>AppHost.RunFrame</code> (<a href="../../../src/FluentGpu.Hosting/AppHost.cs"><code>AppHost.cs</code></a> ~L427) picks the entry point:</p>
+<pre><code class="lang-csharp">bool layoutNeeded = _needFullLayout || reconciled || _scene.AnyLayoutDirty;
+if (layoutNeeded &amp;&amp; !_scene.Root.IsNull)
+{
+    if (_needFullLayout || !_everLaidOut)
+        _layout.Run(_scene.Root, layoutSize);   // 6 full layout: first frame / resize / DPI / root change
+    else
+        _invalidator.RunDirty(layoutSize);       // 6 scoped relayout: only dirty subtrees, firewalled at boundaries
+    _scene.ClearLayoutDirty();
+    // …D1 realize-after-layout loop (virtualization, below)…
+}
+</code></pre>
+<p>An idle frame, or a frame whose only work was a bound transform/opacity write, sets nothing <code>LayoutDirty</code> and runs <strong>zero</strong> layout.</p>
+<hr>
+<h2 id="the-flex--grid-model-ported-yoga-measure--arrange">The flex + grid model (ported Yoga, measure / arrange)</h2>
+<p>The flex algorithm is the <strong>ported Reactor/Yoga</strong> flexbox, kept numerically faithful but rewritten onto the SoA scene columns instead of a <code>YogaNode</code> class graph. The live implementation is two private descents over the scene store:</p>
+<ol>
+<li><strong><code>Measure(node, availW)</code></strong> — bottom-up. Fills each node's <code>Bounds.W/H</code> with its base (hypothetical) border-box size: resolve <code>Width</code>/<code>Height</code>/min/max, measure text leaves, or sum children along the main axis and take the max on the cross axis. Direction <code>0</code> = row (main axis = X), <code>1</code> = column (main axis = Y).</li>
+<li><strong><code>Arrange(node, x, y, finalW, finalH)</code></strong> — top-down. Distributes free space by <code>FlexGrow</code>/<code>FlexShrink</code>, positions along the main axis by <code>Justify</code>, aligns the cross axis by <code>AlignItems</code>/<code>AlignSelf</code> (including <code>Stretch</code>), applies margins and gap, and writes the final <code>Bounds</code>.</li>
+</ol>
+<p>The dispatch happens at the top of both <code>Measure</code> and <code>Arrange</code>: a node with a scroll side-table is a viewport (<code>MeasureViewport</code>/<code>ArrangeViewport</code>), one with a grid side-table is a grid (<code>MeasureGrid</code>/<code>ArrangeGrid</code>), a <code>NodeFlags.ZStack</code> node overlays its children (<code>MeasureZStack</code>/<code>ArrangeZStack</code>), and <code>li.Wrap</code> routes to the multi-line <code>MeasureWrap</code>/<code>ArrangeWrap</code>. Everything else is plain flex.</p>
+<p>The knobs are the <code>Foundation</code> enums (<a href="../../../src/FluentGpu.Foundation/LayoutTypes.cs"><code>LayoutTypes.cs</code></a>):</p>
+<pre><code class="lang-csharp">public enum FlexJustify : byte { Start = 0, Center, End, SpaceBetween, SpaceAround, SpaceEvenly }
+public enum FlexAlign   : byte { Auto = 0, Start, Center, End, Stretch }   // Auto on a child = inherit container's AlignItems
+</code></pre>
+<p><code>Justify</code> is realized by <code>Distribute(justify, leftover, n) → (lead, between)</code> (the leading offset + inter-item spacing), and <code>AlignSelf == Auto</code> inherits the container's <code>AlignItems</code> at placement time. A subtlety worth knowing before you touch <code>Arrange</code>: a row with a definite width pre-computes a <code>growAvail</code> (the content width minus the fixed siblings and gaps) and measures grow children against <em>that</em>, not the whole row — otherwise a fixed pane plus grow content would wrap to the entire window. A column re-measures stretch children against the <strong>final</strong> cross width during arrange (a <code>NavigationView</code> content frame's width is only known after its fixed pane consumed its 320px), so wrapped text breaks at the real frame width.</p>
+<p><strong>Grid is a distinct algorithm, not nested-flex faking.</strong> <code>MeasureGrid</code>/<code>ArrangeGrid</code> resolve real tracks via <code>ResolveColumns</code>, sized by <code>TrackSize</code> (<a href="../../../src/FluentGpu.Foundation/TrackSize.cs"><code>TrackSize.cs</code></a>):</p>
+<pre><code class="lang-csharp">public enum TrackKind : byte { Pixel = 0, Star = 1, Auto = 2 }
+TrackSize.Px(80)    // fixed px/DIP
+TrackSize.Star(2f)  // fractional — shares leftover space by weight
+TrackSize.Auto      // sized to its widest cell
+</code></pre>
+<p><code>true-tracks</code> means every cell in a column shares that column's resolved width, so the grid stays aligned across rows. <code>GridColCount</code> also handles the responsive auto-fill case (<code>MinColWidth &gt; 0</code> packs as many equal <code>1fr</code> columns as fit, CSS <code>repeat(auto-fill, minmax(min, 1fr))</code>). The <code>ZStack</code> path (<code>Ui.ZStack</code>) overlays children at the origin and honors <code>AlignSelf</code> as the child's vertical placement — it is the shell shape behind the gallery (a fixed nav pane plus a grow content frame).</p>
+<blockquote>
+<p><strong>Adding a flex/grid feature</strong> (a new <code>Justify</code> mode, a wrap rule, a track kind) is local to <code>FlexLayout.cs</code> plus the <code>Foundation</code> enum it reads. <code>AspectRatio</code>, percentage lengths (the design's <code>LengthValue</code>), absolute/overlay positioning, and <code>AlignContent</code> for multi-line cross alignment are in the <strong>design of record</strong> (<a href="../../../design/subsystems/layout.md"><code>layout.md</code> §3/§10</a>) but <strong>not yet in the live core</strong> — the live <code>LayoutInput</code> carries plain <code>float Width/Height</code> with <code>NaN</code> = auto, not the unit-tagged <code>LengthValue</code>. Don't restate the design struct as if it ships; add the field, then add the check.</p>
+</blockquote>
+<hr>
+<h2 id="the-measurefunc--text-measure-cache-bridge">The <code>MeasureFunc</code> / text-measure-cache bridge</h2>
+<p>A text leaf (<code>VisualKind.Text</code>) is the one place layout calls <strong>out</strong> of <code>FluentGpu.Layout</code>. In the live code that call is <code>_fonts.Measure(text, style, maxWidth)</code> through the <code>IFontSystem</code> seam — the engine's equivalent of Yoga's per-node <code>MeasureFunc</code>, but as a <strong>central dispatch</strong> (no delegate-per-node). It is gated by a per-node <strong>text measure cache</strong> so a scoped relayout skips re-shaping unchanged text:</p>
+<pre><code class="lang-csharp">ref TextMeasureCache mc = ref _scene.MeasureCacheRef(node);
+if (mc.Valid &amp;&amp; mc.Text == paint.Text &amp;&amp; mc.MaxW == maxW &amp;&amp; mc.Style == li.TextStyle)
+{
+    w = mc.Size.Width; h = mc.Size.Height;          // cache hit — no reshape
+}
+else
+{
+    var m = _fonts.Measure(paint.Text, li.TextStyle, maxW);
+    w = m.Size.Width; h = m.Size.Height;
+    mc = new TextMeasureCache { Valid = true, Text = paint.Text, Style = li.TextStyle, MaxW = maxW,
+        Size = new Size2(w, h), UnderlineY = m.UnderlineY, UnderlineThickness = m.UnderlineThickness, StrikeY = m.StrikeY };
+}
+</code></pre>
+<p>The cache key is the pure tuple <code>(text, style, availWidth)</code>, so it is <strong>self-invalidating</strong>: change any of them and the next measure misses and reshapes. It is a genuine win on the real DirectWrite path (shaping is expensive) and neutral on the headless path (the headless font system measures by a deterministic metric). The cache row also retains the face's decoration metrics (underline/strike positions) so the recorder can place those bars at record time without re-touching the font seam.</p>
+<p><code>maxW</code> is <code>PositiveInfinity</code> for <code>TextWrap.NoWrap</code> and the definite content width otherwise — that is what tells DirectWrite where to break. The seam is the only thing the macOS port reimplements here; everything else is column reads/writes.</p>
+<hr>
+<h2 id="scoped-relayout-the-layoutdirty-worklist-and-layoutinvalidator-up-walk">Scoped relayout: the <code>LayoutDirty</code> worklist and <code>LayoutInvalidator</code> up-walk</h2>
+<p><code>SceneStore</code> keeps a <code>LayoutDirty</code> worklist (the nodes a reconcile / width-height / text bind marked this frame). <code>LayoutInvalidator.RunDirty</code> (<a href="../../../src/FluentGpu.Layout/LayoutInvalidator.cs"><code>LayoutInvalidator.cs</code></a>) consumes it: for each dirty node it walks <strong>up</strong> to the nearest layout boundary, dedupes the resulting boundary roots, and re-solves each:</p>
+<pre><code class="lang-csharp">public void RunDirty(Size2 window)
+{
+    var dirty = _scene.LayoutDirtyNodes;
+    if (dirty.Count == 0) return;                      // O(0) idle
+
+    _roots.Clear();
+    for (int i = 0; i &lt; dirty.Count; i++)
+    {
+        var n = dirty[i];
+        if (!_scene.IsLive(n)) continue;
+        var root = FindRelayoutRoot(n);                // up-walk to the firewall
+        if (_scene.IsLive(root) &amp;&amp; !_roots.Contains(root)) _roots.Add(root);
+    }
+
+    for (int i = 0; i &lt; _roots.Count; i++)
+    {
+        var r = _roots[i];
+        if (!_scene.IsLive(r)) continue;
+        if (r == _scene.Root) _layout.Run(r, window);  // boundary is the root → solve against the window
+        else _layout.RunSubtree(r);                    // else reflow against the node's own bounds
+    }
+}
+</code></pre>
+<p>Cost is <strong>O(change)</strong>, not O(tree): an idle worklist returns immediately, and a localized change re-solves only its boundary subtree. Running an ancestor root and a descendant root in the same pass is harmless (layout is idempotent), so the invalidator keeps it simple and only dedupes exact roots. If a dirty node has <strong>no</strong> bounded ancestor, the up-walk reaches the root and you fall back to a full <code>Run(root, window)</code> — still correct, just not scoped. (Note the live invalidator implements the <strong>up-rule</strong> plus the boundary firewall; the design's full two-rule graph with the explicit <em>down-rule</em> and Yoga's generation-counter measurement ring is in <a href="../../../design/subsystems/layout.md"><code>layout.md</code> §4</a> and not yet a separate mechanism in the live core — the live down-side is the per-measure recursion plus the text cache.)</p>
+<hr>
+<h2 id="the-layout-boundary-predicate-the-firewall--exact-form">The layout-boundary predicate (the firewall) — exact form</h2>
+<p>The firewall is one predicate. A <strong>layout boundary</strong> is a node whose own size cannot change because of a descendant, so the up-walk stops there and the parent is never disturbed. The live form (<a href="../../../src/FluentGpu.Layout/LayoutInvalidator.cs"><code>LayoutInvalidator.cs</code></a>):</p>
+<pre><code class="lang-csharp">private static bool IsLayoutBoundary(in LayoutInput s, NodeFlags f)
+    =&gt; !float.IsNaN(s.Width) &amp;&amp; !float.IsNaN(s.Height)   // both dimensions explicit (not auto)
+    &amp;&amp; s.FlexGrow == 0f &amp;&amp; s.FlexShrink == 0f            // doesn't stretch/shrink to its parent
+    &amp;&amp; (f &amp; NodeFlags.ClipsToBounds) != 0;              // contains its own overflow
+</code></pre>
+<p><code>FindRelayoutRoot</code> stops at the first of: the scene <strong>root</strong>, a <strong>scroll/virtual viewport</strong> (<code>_scene.HasScroll(cur)</code> — always a boundary, see below), or a node satisfying <code>IsLayoutBoundary</code>. So the practical rule an engine change must preserve: <strong>a fixed-size, non-flexing, clipped container is a wall.</strong> Give cards, panes, list rows, and fixed regions an explicit <code>Width</code>+<code>Height</code> and <code>ClipToBounds = true</code> and a change inside them stops at their boundary. This is the exact mechanism the &quot;compositor bypass&quot; rests on — without a boundary the up-walk reaches the root and the firewall is gone.</p>
+<p>(The design of record adds two more disqualifiers — an <code>AspectRatio</code>-coupled node and a percentage-sized node are <em>not</em> boundaries — but neither aspect-ratio nor percentage lengths exist in the live <code>LayoutInput</code>, so the live predicate is the three clauses above. When those land, this predicate is the one place to extend.)</p>
+<hr>
+<h2 id="the-scroll-ownership-split-input-owns-offset-layout-writes-contentsize">The scroll-ownership split (Input owns offset, Layout writes ContentSize)</h2>
+<p>Scrolling is <strong>layout-free</strong>, and the ownership is a hard split you must not blur when touching either side:</p>
+<ul>
+<li><strong>Layout writes <code>ContentSize</code>.</strong> <code>ArrangeViewport</code> arranges the scroll content at the <strong>content-box origin</strong> (<code>padL, padT</code> in the content's local space) and publishes the arranged extent onto the viewport's <code>ScrollState</code> (<code>sc.ContentW/ContentH</code>, <code>sc.ViewportW/ViewportH</code>). The viewport's own size is its box (explicit/flex), <strong>independent of content</strong> — a <code>ScrollView</code> takes the size its parent flex gives it and pushes overflow to the scroll system rather than growing the page to its full content height. (<code>MeasureViewport</code> has a <code>ContentSized</code> opt-in for popup list presenters that <em>do</em> auto-size to rows then clamp by <code>MaxHeight</code>.)</li>
+<li><strong>Input owns the offset.</strong> The <code>-ScrollOffset</code> translation is the content node's <code>LocalTransform</code>, written by Input (wheel/drag) or Animation (fling) — <strong>never by layout</strong>. That write marks only <code>TransformDirty</code>/<code>PaintDirty</code>, so a within-content scroll that doesn't change the realized window is a <strong>transform-only frame</strong>: no render, no reconcile, no relayout, just a re-record (and the batcher re-applies the new world transform to the cached quads).</li>
+</ul>
+<p><code>ArrangeViewport</code> does re-clamp the offset to the (possibly changed) content on a resize/relayout and reflect it back into the content transform — so a wrapped reflow that shrinks the content doesn't leave the view scrolled past the end — but it reads the offset Input owns; it never authors it. The viewport carries <code>ClipsToBounds</code>, so it is both a clip and a layout boundary: realize/derealize of rows can't escape it. The split is pinned in <a href="../../../design/subsystems/layout.md"><code>layout.md</code> §6</a>: <em>Input owns <code>ScrollOffset</code>; Layout writes <code>ContentSize</code>; Render reads the clip.</em></p>
+<hr>
+<h2 id="rtl-resolution-at-writelayout-logical--physical--design-of-record-not-yet-live">RTL resolution at WriteLayout (logical → physical) — design of record, not yet live</h2>
+<p>The design of record specifies that <strong><code>FlowDirection</code> (RTL) is resolved logical→physical at the reconciler's <code>WriteLayout</code> boundary</strong> — <code>ResolveLogical</code> mirrors flex direction, justify/align, and the start/end edges <em>before</em> the column is written, so the ported flex core stays purely physical and golden-parity-clean (<a href="../../../design/subsystems/layout.md"><code>layout.md</code> §10A</a>). An engine contributor should know this is the intended seam: RTL is a <strong>reconciler-side rewrite of <code>LayoutInput</code></strong>, not a branch inside <code>FlexLayout</code>.</p>
+<p><strong>It is not implemented in the live tree.</strong> There is no <code>FlowDirection</code>/<code>ResolveLogical</code> in <code>FluentGpu.Layout</code> or the reconciler today (the only <code>Rtl</code>/<code>FlowDirection</code> references in <code>src/</code> are in the text itemizer and the slider's directional fill). So <code>FlexLayout</code> is physical-only and LTR. If you implement RTL, do it at <code>WriteLayout</code> per the design — keep the firewall predicate and the two descents untouched — and add a parity check (a mirrored tree's <code>Bounds</code> against the LTR mirror). Until then, do not document RTL as a shipping capability.</p>
+<hr>
+<h2 id="the-virtualization-layout-participant-ivirtuallayout--imeasuredvirtuallayout">The virtualization layout participant (<code>IVirtualLayout</code> / <code>IMeasuredVirtualLayout</code>)</h2>
+<p>A virtualized collection is <strong>one</strong> retained viewport node with a window of keyed children; the layout half is a pluggable participant. The seam lives in <code>src/FluentGpu.Scene/VirtualLayout.cs</code>:</p>
+<pre><code class="lang-csharp">public interface IVirtualLayout
+{
+    float  ContentExtent(int itemCount, float crossSize);                 // the published ContentSize
+    void   Window(int itemCount, float crossSize, float viewportExtent,    // the [first,last) realize range
+                  float scrollOffset, int overscan, out int first, out int last);
+    RectF  ItemRect(int index, float crossSize);                          // item rect, LOCAL to the content origin
+}
+</code></pre>
+<p>Every method is <strong>pure, allocation-free arithmetic</strong> returning structs / out-params, so a custom layout costs zero per-frame managed allocation — honoring the core contract. The engine calls it only on realize/arrange frames; a steady in-window scroll is transform-only and never touches it. Built-ins in the same file: <code>StackVirtualLayout</code> (uniform 1-D, O(1) windowing — the track-list shape), <code>GridVirtualLayout</code> / <code>HorizontalGridVirtualLayout</code> (uniform 2-D, virtualized by row/column), <code>LinedFlowLayout</code> (the ItemsView photo-wall), <code>SpanningGridVirtualLayout</code> (hero-as-first-row spanning).</p>
+<p>Variable-extent layouts implement the widened seam:</p>
+<pre><code class="lang-csharp">public interface IMeasuredVirtualLayout : IVirtualLayout
+{
+    void  SetMeasured(int index, float mainExtent, float crossSize);   // estimate-then-correct (O(log n))
+    float OffsetOf(int index, float crossSize);                        // prefix sum over corrected extents
+    int   IndexAt(float offset, float crossSize);                      // the scroll-anchor candidate
+}
+</code></pre>
+<p><code>ArrangeViewport</code> dispatches to the right arrange path by feature: <code>ArrangeVirtualMeasured</code> (an <code>IMeasuredVirtualLayout</code>), <code>ArrangeVirtualLayout</code> (a fixed-geometry <code>IVirtualLayout</code>), <code>ArrangeVirtualVariable</code> (the legacy <code>Layout == null</code> Fenwick path), or <code>ArrangePlainScroll</code> (no virtualization). The measured/variable paths run <strong>estimate-then-correct with scroll-anchoring</strong>: capture the topmost-visible item and its sub-item offset <em>before</em> corrections, measure each realized row, feed the real extent back through <code>SetMeasured</code> (O(log n)), then re-pin the offset so a correction to a row <strong>above</strong> the viewport doesn't jump the visible top:</p>
+<pre><code class="lang-csharp">float pinned = layout.OffsetOf(anchorIndex, cross) + anchorWithin;   // re-pin after corrections
+pinned = Math.Clamp(pinned, 0f, maxOff);
+ref ScrollState scw = ref _scene.ScrollRef(node);
+if (horizontal) scw.OffsetX = pinned; else scw.OffsetY = pinned;
+</code></pre>
+<p>Built-in measured layouts (also in <code>VirtualLayout.cs</code>): <code>MeasuredStackVirtualLayout</code> (the Fenwick variable list) and <code>GroupedListVirtualLayout</code> (group headers as a measured item <em>kind</em> plus a <code>StickyHeaderIndexAt</code> sticky-pin hook). These are <strong>stateful</strong> (they own an <code>ExtentTable</code>) — create one once and reuse it across renders (hoist in a <code>UseMemo</code>); the table self-rebuilds only on item-count change.</p>
+<p>The realize <strong>window</strong> is <code>VirtualWindowing.NeedsRealize</code> plus the <code>D1</code> realize-after-layout loop in <code>AppHost.Paint</code>: <code>ArrangeViewport</code> computes the visible range against the viewport it just published and flags <code>NodeFlags.VirtualRangeDirty</code> if the realized window no longer covers it; the host re-realizes + re-runs scoped layout in the <strong>same</strong> frame (bounded to two passes) so the first presented frame shows real rows. The app-facing factories (<code>Virtual.List</code>, <code>Virtual.Grid</code>, <code>Virtual.Measured</code>, <code>Virtual.ListBound</code>, …) live in <code>src/FluentGpu.Controls/Virtual.cs</code> and just construct a <code>VirtualListEl</code> with one of these layouts — the reconciler diffs that element directly.</p>
+<blockquote>
+<p><strong>Where to change what.</strong> A new <em>placement shape</em> (staggered wall, calendar) ⇒ implement <code>IVirtualLayout</code> (or <code>IMeasuredVirtualLayout</code> if extents vary) in <code>VirtualLayout.cs</code> and expose a <code>Virtual.*</code> factory in <code>Virtual.cs</code>. The <em>arrange wiring</em> (how the engine drives a layout) is <code>ArrangeViewport</code> and friends in <code>FlexLayout.cs</code>. The hook-level realize/recycle window is the reconciler. The policy split (uniform vs variable, what a regroup invalidates) is owned by <a href="../../../design/subsystems/virtualization.md"><code>virtualization.md</code></a>; the <strong>math</strong> (this seam, the Fenwick offset↔index, anchoring) is owned by <a href="../../../design/subsystems/layout.md"><code>layout.md</code> §8</a>. For the app-author view of these factories, see <a href="../app-authors/virtualized-lists-and-itemsview.html">virtualized lists &amp; ItemsView</a>.</p>
+</blockquote>
+<hr>
+<h2 id="verifying-flexchecks-wrapchecks-gridchecks-sizemodechecks-reflowchecks">Verifying: <code>FlexChecks</code>, <code>WrapChecks</code>, <code>GridChecks</code>, <code>SizeModeChecks</code>, <code>ReflowChecks</code></h2>
+<p>There is no build/test for layout other than the <strong>headless harness</strong> — <code>src/FluentGpu.VerticalSlice/Program.cs</code>. After any layout change:</p>
+<pre><code class="lang-bash">dotnet build src/FluentGpu.VerticalSlice          # clean build first
+dotnet run   --project src/FluentGpu.VerticalSlice # expect: ALL CHECKS PASSED
+</code></pre>
+<p>The layout checks build a tree, run a frame headless (no GPU, no window), and assert on post-layout <code>Bounds</code> read back from <code>host.Scene</code> (<code>AbsoluteRect</code>/<code>Bounds</code>). The ones to extend when you touch layout, all in <code>Program.cs</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Check group</th>
+<th>What it pins</th>
+<th>Example assertion</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>FlexChecks</code></td>
+<td>justify / grow / align / padding+gap</td>
+<td>a 300-wide <code>SpaceBetween</code> row → children at <code>x = 0</code> and <code>260</code>; two <code>Grow=1</code> → <code>150</code>+<code>150</code>; <code>align-items: center</code> in a 100-tall row → <code>y = 40</code></td>
+</tr>
+<tr>
+<td><code>WrapChecks</code> / <code>ConstrainedWrapChecks</code></td>
+<td>multi-line flow; grow children wrapping text to <code>availW − fixed siblings</code></td>
+<td>three 40-wide tiles in a 100-wide wrap row → third tile at <code>(0, 20)</code>; the gallery shell's wrapped caption measures to the content frame width</td>
+</tr>
+<tr>
+<td><code>GridChecks</code> / <code>AutoGridChecks</code> / <code>GridStretchChecks</code></td>
+<td>star tracks + row-major auto-flow; auto-fill count; stretch-width grid measuring real content height</td>
+<td>star columns split width (<code>x = 0,110,220</code>, <code>w = 100</code>); a stretch-width 8-cell/4-col grid measures <code>H = 192</code> so the sibling below doesn't overlap</td>
+</tr>
+<tr>
+<td><code>SizeModeChecks</code> / <code>ReflowChecks</code></td>
+<td><code>SizeMode.Relayout</code>/<code>Reflow</code> animations re-solving a boundary scope each tick; settle restores the declared input</td>
+<td>a collapsing wrapper eases its height monotonically, the trailing sibling shift rides the interp, and settle restores the declared <code>NaN</code>(auto) <code>LayoutInput.Height</code></td>
+</tr>
+<tr>
+<td><code>VirtualChecks</code> (checks 38–40a)</td>
+<td>windowing + recycle at scale; transform-only in-window scroll</td>
+<td>10k×40px rows realize <code>≥10 &amp;&amp; &lt;40</code> children with <code>ContentH = N×40</code>; an in-window wheel is <code>!Rendered</code> with the content <code>LocalTransform.Dy</code> shifted; a fling keeps live nodes bounded (<code>&lt; 90</code>, no leak)</td>
+</tr>
+</tbody>
+</table>
+<p>When you change reactivity-adjacent layout, also assert on <code>FrameStats</code>: a bound scroll/animation frame must be <code>Rendered == false</code> (compositor bypass), and a steady frame must have <code>HotPhaseAllocBytes == 0</code> (the near-zero-alloc contract — phases 6–13 allocate <strong>no</strong> managed memory; a boundary-crossing virtual realize is bounded Gen0 at the reconcile edge, <em>not</em> the paint half). Add a <code>Check(&quot;…&quot;, condition, detail)</code> for the exact behavior you changed and call it from <code>Main</code>. The harness asserts the <strong>logic and the recorded DrawList</strong>, not on-screen D3D12 pixels — that is a separate manual &quot;needs-pixels&quot; pass on the real Windows path.</p>
+<hr>
+<h2 id="canon-link-layout-subsystem-design-of-record">Canon link: layout subsystem (design-of-record)</h2>
+<ul>
+<li><a href="../../../design/subsystems/layout.md"><code>design/subsystems/layout.md</code></a> — the architecture authority for this subsystem: the ported-Yoga 11-step body, the <code>LayoutInput</code>/<code>LayoutAux</code> hot/cold split + <code>LayoutCacheEntry</code> measurement ring, the two-rule invalidation graph, incremental pixel-snap, scroll-as-transform, grid true-tracks, the virtualization participant math, the <code>MeasureKind</code> text seam, absolute/overlay positioning, and the RTL <code>WriteLayout</code> resolution. Several of these (percentage <code>LengthValue</code>, the generation-counter ring, the explicit down-rule, RTL, aspect-ratio) are <strong>design-of-record ahead of the live core</strong> — this page flags those gaps inline; treat the live source as the truth for what ships.</li>
+<li><a href="../../../design/subsystems/virtualization.md"><code>design/subsystems/virtualization.md</code></a> — the virtualization runtime authority (the hook trio, recycle-correctness invariants, uniform-vs-variable policy, grouping, the +1-frame incremental-load contract). It <strong>references</strong> <code>layout.md</code> for the extent-table mechanics this page describes.</li>
+<li><a href="../../../design/SPEC-INDEX.md"><code>SPEC-INDEX.md</code></a> — the precedence authority when two docs disagree on a cross-cutting contract.</li>
+<li><a href="../../../design/subsystems/README.md"><code>subsystems/README.md</code></a> — the contract-ownership map (which doc owns each artifact) and the implementer reading order.</li>
+</ul>
+<p><strong>Next:</strong> <a href="../../guide/rendering-and-performance.md">rendering &amp; performance</a> for the full frame pipeline · the <a href="../../guide/README.md#-agent--file--ownership-map-where-to-change-what">file &amp; ownership map</a> for routing any change to its one owning file.</p>
+
+</article>
+
+
+        <div class="next-article d-print-none border-top" id="nextArticle"></div>
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

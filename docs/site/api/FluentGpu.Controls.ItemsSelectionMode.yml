@@ -1,0 +1,170 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.ItemsSelectionMode
+  commentId: T:FluentGpu.Controls.ItemsSelectionMode
+  id: ItemsSelectionMode
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.ItemsSelectionMode.Extended
+  - FluentGpu.Controls.ItemsSelectionMode.Multiple
+  - FluentGpu.Controls.ItemsSelectionMode.None
+  - FluentGpu.Controls.ItemsSelectionMode.Single
+  langs:
+  - csharp
+  - vb
+  name: ItemsSelectionMode
+  nameWithType: ItemsSelectionMode
+  fullName: FluentGpu.Controls.ItemsSelectionMode
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ItemsSelectionMode
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>ItemsViewSelectionMode</code> (ItemsView.idl:6-12): None / Single / Multiple / Extended.
+        ItemsView defaults to Single (ItemsView.h <code>s_defaultSelectionMode</code>).
+  example: []
+  syntax:
+    content: 'public enum ItemsSelectionMode : byte'
+    content.vb: Public Enum ItemsSelectionMode As Byte
+- uid: FluentGpu.Controls.ItemsSelectionMode.None
+  commentId: F:FluentGpu.Controls.ItemsSelectionMode.None
+  id: None
+  parent: FluentGpu.Controls.ItemsSelectionMode
+  langs:
+  - csharp
+  - vb
+  name: None
+  nameWithType: ItemsSelectionMode.None
+  fullName: FluentGpu.Controls.ItemsSelectionMode.None
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: None
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: None = 0
+    return:
+      type: FluentGpu.Controls.ItemsSelectionMode
+- uid: FluentGpu.Controls.ItemsSelectionMode.Single
+  commentId: F:FluentGpu.Controls.ItemsSelectionMode.Single
+  id: Single
+  parent: FluentGpu.Controls.ItemsSelectionMode
+  langs:
+  - csharp
+  - vb
+  name: Single
+  nameWithType: ItemsSelectionMode.Single
+  fullName: FluentGpu.Controls.ItemsSelectionMode.Single
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Single
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Single = 1
+    return:
+      type: FluentGpu.Controls.ItemsSelectionMode
+- uid: FluentGpu.Controls.ItemsSelectionMode.Multiple
+  commentId: F:FluentGpu.Controls.ItemsSelectionMode.Multiple
+  id: Multiple
+  parent: FluentGpu.Controls.ItemsSelectionMode
+  langs:
+  - csharp
+  - vb
+  name: Multiple
+  nameWithType: ItemsSelectionMode.Multiple
+  fullName: FluentGpu.Controls.ItemsSelectionMode.Multiple
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Multiple
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Multiple = 2
+    return:
+      type: FluentGpu.Controls.ItemsSelectionMode
+- uid: FluentGpu.Controls.ItemsSelectionMode.Extended
+  commentId: F:FluentGpu.Controls.ItemsSelectionMode.Extended
+  id: Extended
+  parent: FluentGpu.Controls.ItemsSelectionMode
+  langs:
+  - csharp
+  - vb
+  name: Extended
+  nameWithType: ItemsSelectionMode.Extended
+  fullName: FluentGpu.Controls.ItemsSelectionMode.Extended
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Extended
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Extended = 3
+    return:
+      type: FluentGpu.Controls.ItemsSelectionMode
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.ItemsSelectionMode
+  commentId: T:FluentGpu.Controls.ItemsSelectionMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ItemsSelectionMode.html
+  name: ItemsSelectionMode
+  nameWithType: ItemsSelectionMode
+  fullName: FluentGpu.Controls.ItemsSelectionMode

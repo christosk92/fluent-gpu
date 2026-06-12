@@ -1,0 +1,112 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Animation.IntegrationMode
+  commentId: T:FluentGpu.Animation.IntegrationMode
+  id: IntegrationMode
+  parent: FluentGpu.Animation
+  children:
+  - FluentGpu.Animation.IntegrationMode.Eased
+  - FluentGpu.Animation.IntegrationMode.Spring
+  langs:
+  - csharp
+  - vb
+  name: IntegrationMode
+  nameWithType: IntegrationMode
+  fullName: FluentGpu.Animation.IntegrationMode
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IntegrationMode
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: 'public enum IntegrationMode : byte'
+    content.vb: Public Enum IntegrationMode As Byte
+- uid: FluentGpu.Animation.IntegrationMode.Eased
+  commentId: F:FluentGpu.Animation.IntegrationMode.Eased
+  id: Eased
+  parent: FluentGpu.Animation.IntegrationMode
+  langs:
+  - csharp
+  - vb
+  name: Eased
+  nameWithType: IntegrationMode.Eased
+  fullName: FluentGpu.Animation.IntegrationMode.Eased
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Eased
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: Eased = 0
+    return:
+      type: FluentGpu.Animation.IntegrationMode
+- uid: FluentGpu.Animation.IntegrationMode.Spring
+  commentId: F:FluentGpu.Animation.IntegrationMode.Spring
+  id: Spring
+  parent: FluentGpu.Animation.IntegrationMode
+  langs:
+  - csharp
+  - vb
+  name: Spring
+  nameWithType: IntegrationMode.Spring
+  fullName: FluentGpu.Animation.IntegrationMode.Spring
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Spring
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: Spring = 1
+    return:
+      type: FluentGpu.Animation.IntegrationMode
+references:
+- uid: FluentGpu.Animation
+  commentId: N:FluentGpu.Animation
+  href: FluentGpu.html
+  name: FluentGpu.Animation
+  nameWithType: FluentGpu.Animation
+  fullName: FluentGpu.Animation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Animation
+    name: Animation
+    href: FluentGpu.Animation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Animation
+    name: Animation
+    href: FluentGpu.Animation.html
+- uid: FluentGpu.Animation.IntegrationMode
+  commentId: T:FluentGpu.Animation.IntegrationMode
+  parent: FluentGpu.Animation
+  href: FluentGpu.Animation.IntegrationMode.html
+  name: IntegrationMode
+  nameWithType: IntegrationMode
+  fullName: FluentGpu.Animation.IntegrationMode

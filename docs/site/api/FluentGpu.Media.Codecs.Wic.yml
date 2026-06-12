@@ -1,0 +1,23 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Media.Codecs.Wic
+  commentId: N:FluentGpu.Media.Codecs.Wic
+  id: FluentGpu.Media.Codecs.Wic
+  children:
+  - FluentGpu.Media.Codecs.Wic.WicImageCodec
+  langs:
+  - csharp
+  - vb
+  name: FluentGpu.Media.Codecs.Wic
+  nameWithType: FluentGpu.Media.Codecs.Wic
+  fullName: FluentGpu.Media.Codecs.Wic
+  type: Namespace
+  assemblies:
+  - FluentGpu.Media.Codecs.Wic
+references:
+- uid: FluentGpu.Media.Codecs.Wic.WicImageCodec
+  commentId: T:FluentGpu.Media.Codecs.Wic.WicImageCodec
+  href: FluentGpu.Media.Codecs.Wic.WicImageCodec.html
+  name: WicImageCodec
+  nameWithType: WicImageCodec
+  fullName: FluentGpu.Media.Codecs.Wic.WicImageCodec

@@ -40,15 +40,16 @@ which our layout engine measures/arranges and our GPU renderer paints.
  │  PAL (iface)  IPlatformApp / IPlatformWindow / IPlatformAppLoop / IImeSession ...        │
  │  TEXT (iface) IFontSystem / ITextShaper / IGlyphRasterizer / IGlyphAtlas                 │
  ├──────────────────────────────────────────────────────────────────────────────────────┤
- │  WINDOWS LEAVES (reference impl)         │  macOS LEAVES (future, no code above changes) │
- │  Rhi.D3D12   (ComPtr<ID3D12*>, PSO,      │  Rhi.Metal   (id<MTLDevice/...>)              │
+ │  FluentGpu.Windows  (the OS backend;     │  FluentGpu.Windows.Mac (future whole-backend  │
+ │  folders below — refs Engine + 1 TerraFX)│  swap — no Engine/Controls code changes)      │
+ │  D3D12/      (ComPtr<ID3D12*>, PSO,      │  Metal/      (id<MTLDevice/...>)              │
  │              RTV/DSV heaps, D3D12MA)     │                                               │
- │  Pal.Windows (HWND, WM_*, raw input,     │  Pal.Cocoa   (NSWindow/NSView, NSEvent,       │
+ │  Pal/        (HWND, WM_*, raw input,     │  Cocoa/      (NSWindow/NSView, NSEvent,       │
  │              DXGI flip + DComp present,  │              CVDisplayLink, NSTextInputClient)│
  │              PerMonitorV2, TSF/Imm32)    │                                               │
- │  Text.DirectWrite (DWrite shape+raster)  │  Text.CoreText                                │
- │  Accessibility.Uia                       │  Accessibility.NSAccessibility                │
- │  Win32.Interop (vendored ComputeSharp    │                                               │
+ │  DirectWrite/ (DWrite shape+raster)      │  CoreText/                                    │
+ │  Uia/  ·  Wic/ (WIC image codecs)        │  NSAccessibility/  ·  CG/ (CGImageSource)     │
+ │  Interop/ (vendored ComputeSharp         │                                               │
  │              bindings + DComp/DWrite/UIA)│                                               │
  └──────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -67,7 +68,7 @@ which our layout engine measures/arranges and our GPU renderer paints.
    (callee) direction uses hand-built static vtables + `[UnmanagedCallersOnly(CallConvMemberFunction)]` +
    `GCHandle` (the verified `PixelShaderEffect` recipe). **All cold/warm COM (UIA, TSF, OLE, DWrite
    *setup*) uses `[GeneratedComInterface]`/`[GeneratedComClass]`** — the source-generated, AOT-recommended
-   path — isolated in `FluentGpu.PlatformIntegration`. **`System.Runtime.InteropServices.ComWrappers` is
+   path — isolated in `FluentGpu.Windows` (the Uia/ folder). **`System.Runtime.InteropServices.ComWrappers` is
    rejected on the hot path only** (to avoid the RCW-cache `GetOrCreateObjectForComInstance` lookup and
    keep call-site control — *not* a per-call alloc, which .NET 10 does not incur), and is adopted via the
    source generators for everything cold.
@@ -123,79 +124,93 @@ constant flips it on); v1 keeps the quarantine at 0.
 
 ## 3. MODULE / ASSEMBLY LAYOUT
 
-The design-core acyclic graph (the boxes below — now including `Animation`, `Hooks`, and the
-top-of-graph `FluentGpu.Controls`) plus the OS/test-leaf assemblies; strictly acyclic. **NEW** = built
-from scratch; **EXTRACT** = forked/vendored from a reference repo; **PORT** = algorithm reused, substrate
-rewritten. (The repo currently has **27 projects** — the design-core graph + OS leaves + the testing/headless
-leaves + the apps. The old "18 assemblies" count predated the `Animation`/`Hooks`/`Controls` splits and the
-test/leaf growth; it is restated consistently here, in `foundations.md` §CONTRACT-SUMMARY item 8, and in
-`design/README.md`.)
+The repo is **4 libraries + 4 satellites = 8 projects** (`src/FluentGpu.slnx`, under 5 solution folders:
+`/UI-Rendering/` `/Controls-Windowing/` `/Windows-APIs/` `/Tooling/` `/Apps/`). The design-core acyclic
+graph that earlier shipped as ~14 separate engine projects is now **folders inside the one
+`FluentGpu.Engine` library** (`RootNamespace=FluentGpu`; namespaces unchanged); the boxes below are those
+folders. The Windows OS leaves likewise collapse into **`FluentGpu.Windows`** folders. **NEW** = built from
+scratch; **EXTRACT** = forked/vendored from a reference repo; **PORT** = algorithm reused, substrate
+rewritten. (Earlier passes counted **27 projects**/the older "18 assemblies" <!-- canon-allow: superseded assembly count, narrating the old layout -->; that physical split was consolidated — only the
+library boundary that is load-bearing for trimming/portability is kept as a `.csproj` edge.)
 
 ```
+  FluentGpu.Engine  (ONE library, RootNamespace=FluentGpu; the boxes are FOLDERS, namespaces verbatim)
+  ───────────────────────────────────────────────────────────────────────────────────────────────────
                          ┌──────────────┐
-                         │  Foundation  │  NEW  (no deps) — Handle, SlabAllocator, ArenaAllocator,
+                         │ Foundation/  │  NEW  (no deps) — Handle, SlabAllocator, ArenaAllocator,
                          └──────┬───────┘       ObjectPool, HandleTable, StringId/StringTable,
                                 │               Size2/Scale/PointPx, Affine2D/Edges4/CornerRadius4,
         ┌──────────┬───────────┼───────────┬──────────┬──────────┐  interning tables, NodePaintSpec POD
         ▼          ▼           ▼           ▼          ▼          ▼
-     ┌─────┐   ┌─────┐    ┌───────┐   ┌──────┐   ┌──────┐   ┌──────┐
-     │ Pal │   │ Rhi │    │ Text  │   │Scene │   │Layout│   │ Input│   (Pal/Rhi/Text = iface-only)
-     │iface│   │iface│    │ iface │   │ SoA  │   │      │   │      │   Scene/Layout/Input/Anim/Dsl/
+     ┌─────┐   ┌─────┐    ┌───────┐   ┌──────┐   ┌──────┐   ┌──────┐  (Seams/Pal, Seams/Rhi, Seams/Text
+     │Seams│   │Seams│    │ Seams │   │Scene/│   │Layout│   │Input/│   = iface-only folders)
+     │/Pal │   │/Rhi │    │ /Text │   │ SoA  │   │  /   │   │      │   Scene/Layout/Input/Animation/Dsl/
      └──┬──┘   └──┬──┘    └───┬───┘   └──┬───┘   └──┬───┘   └──┬───┘   Hooks = portable, NEW/PORT
         │         │           │          │          │          │
         │      ┌──┴──┐     ┌──┴───┐   ┌──┴────────┐ │       ┌──┴────┐
-        │      │     │     │      │   │ Animation │ │       │  Dsl  │ NEW (deps: Foundation only)
+        │      │     │     │      │   │Animation/ │ │       │ Dsl/  │ NEW (deps: Foundation only)
         │      ▼     ▼     ▼      ▼   └─────┬─────┘ │       └──┬────┘
         │   ┌─────────────────────────┐    │       │       ┌──┴────┐
-        │   │        Render           │ NEW│       │       │ Hooks │ PORT (Reactor RenderContext)
+        │   │        Render/          │ NEW│       │       │Hooks/ │ PORT (Reactor RenderContext)
         │   │ DrawList POD + batcher   │◄───┘       │       └──┬────┘
-        │   │ + tessellator (refs Rhi  │            │          │
+        │   │ + tessellator (sees Rhi  │            │          │
         │   │ iface + Text iface only) │            └────┐  ┌──┘
         │   └────────────┬─────────────┘                 ▼  ▼
         │                │                          ┌──────────────┐
-        │                │                          │  Reconciler  │ PORT (control flow) + re-author
-        │                │                          │ ISceneBackend│  (keyed LIS, deps, scene write)
-        │                │                          └──────┬───────┘
-        │                │                                 ▼
-        │                │                          ┌──────────────┐
-        │                │                          │   Controls   │ NEW (FluentGpu.Controls — top of the
-        │                │                          │ Button/Slider│  graph; refs Foundation, Dsl, Hooks,
-        │                │                          │ Nav/Repeater │  Animation, Scene, Reconciler — one-way:
-        │                │                          └──────┬───────┘  Reconciler refs only VirtualListEl,
-        │                └──────────────┬──────────────────┘          so Controls→Reconciler stays acyclic)
+        │                │                          │ Reconciler/  │ PORT (control flow) + re-author
+        │                │                          │ ISceneBackend│  (keyed LIS, deps, scene write;
+        │                │                          └──────┬───────┘   declares VirtualListEl)
+        │                │                                 │
+        │                └──────────────┬──────────────────┘
         │                               ▼
         │                        ┌──────────────┐
-        └───────────────────────►│   Hosting    │ NEW (composition root; the ONLY assembly that
-                                 │ (frame loop) │      references the leaves below)
+        └───────────────────────►│  Hosting/    │ NEW (composition root; the ONLY folder that
+                                 │ (frame loop) │      binds the OS backend below)
                                  └──────┬───────┘
-        ┌──────────────┬───────────────┼───────────────┬──────────────────┐
-        ▼              ▼               ▼               ▼                  ▼
- ┌────────────┐ ┌───────────┐ ┌──────────────┐ ┌──────────────┐ ┌─────────────────┐
- │ Pal.Windows│ │ Rhi.D3D12 │ │Text.DirectWr.│ │Accessibility.│ │ Win32.Interop   │
- │   (LEAF)   │ │  (LEAF)   │ │   (LEAF)     │ │ Uia (LEAF)   │ │ EXTRACT+NEW LEAF │
- │  NEW+EXTR  │ │ EXTRACT+  │ │ NEW          │ │ NEW          │ │ vendored CS      │
- │            │ │   FORK    │ │              │ │              │ │ bindings + DComp │
- │            │ │           │ │              │ │              │ │ /DWrite/TSF/UIA  │
- └────────────┘ └───────────┘ └──────────────┘ └──────────────┘ └─────────────────┘
-       └──────────────┴───────────────┴───────────────┴── all reference Win32.Interop ──┘
- ┌────────────┐   plus testing leaves referenced only by test hosts:
- │Rhi.Headless│   NEW — WARP-backed + CPU/null encoder (golden structural + smoke pixel tests)
- │Pal.Headless│   NEW — synthetic window/input/DPI events
- └────────────┘
+                                        │  (+ Media/ and the Headless/{Rhi,Pal,Text}/ test backends
+                                        │     all live in Engine; Headless referenced by test hosts only)
+  ──────────────────────────────────────┼────────────────────────────────────────────────────────────
+        ┌───────────────────────────────┼───────────────────────────┐
+        ▼                               ▼                           ▼
+ ┌──────────────┐              ┌──────────────────┐        ┌──────────────────────┐
+ │FluentGpu.    │ NEW — top of │ FluentGpu.Windows│        │ FluentGpu.WindowsApi │ NEW — empty OS-services
+ │Controls      │ the portable │  (swappable OS   │        │  (Notifications/     │  scaffold; refs Engine.
+ │ Button/Slider│ kit; refs    │   BACKEND; refs  │        │   Credentials/       │  (MSIX packaging is
+ │ Nav/Repeater │ Engine ONLY; │   Engine + ONE   │        │   Packaging/         │   APP-SIDE, not here.)
+ │ (TerraFX-    │ stays acyclic│   TerraFX pkg)   │        │   Activation/)       │
+ │  free)       │              │ Interop/ Pal/    │        └──────────────────────┘
+ └──────────────┘              │ D3D12/ DirectWr./│
+                               │ Wic/ Uia/        │ folders (EXTRACT+NEW: vendored CS bindings + DComp/
+                               └──────────────────┘ DWrite/TSF/UIA/WIC; D3D12 EXTRACT+FORK, DWrite NEW)
+                                        ▲
+                               Engine NEVER references Windows (compiler-enforced); the backend is bound
+                               at the composition root (FluentGpu.WindowsApp) and swappable wholesale.
+
+  Satellites:  FluentGpu.SourceGen + FluentGpu.Interop.SourceGen (netstandard2.0 Roslyn analyzers — cannot
+               merge into a net10 lib);  FluentGpu.VerticalSlice (AOT validation harness exe — refs
+               Engine+Controls, transitive closure stays TerraFX-free);  FluentGpu.WindowsApp (WinExe
+               gallery / composition root — refs Engine+Controls+Windows).
 ```
 
-**Acyclicity invariants (enforced):**
-- `Render` references `Rhi` (interface) and `Text` (interface) — **never** `Rhi.D3D12` / `Text.DirectWrite`.
-- `Dsl` and `Hooks` know nothing of `Scene`/`Render`/`Rhi`; they depend only on `Foundation`. The
-  **`Reconciler` is the only bridge** to `SceneStore` via `ISceneBackend`.
-- **Scene-writing generated code lives in `Reconciler`/leaf-backend, NOT in `Dsl`** (corrects the DSL
+**Acyclicity invariants:**
+- **Compiler-enforced (`.csproj` reference edges):** `FluentGpu.Engine` **never** references `FluentGpu.Windows`
+  — the entire OS backend is bound only at the composition root and is swappable wholesale (see
+  `macos-debt-ledger.md`). `FluentGpu.Controls` references `FluentGpu.Engine` only and stays TerraFX-free.
+- **Review-enforced (intra-`Engine` folder/namespace discipline, no longer separate-assembly edges):**
+  `Render/` sees `Rhi`/`Text` *interfaces* (the `Seams/` folders) — **never** the Windows `D3D12/` /
+  `DirectWrite/` impls (which live in a different library it cannot reference anyway). `Dsl/` and `Hooks/`
+  know nothing of `Scene`/`Render`/`Rhi`; they depend only on `Foundation`. The **`Reconciler/` is the only
+  bridge** to `SceneStore` via `ISceneBackend`. `Controls → Reconciler` is one-way (`Controls` references
+  `VirtualListEl`, which is **declared in `Reconciler/`** — so the dependency runs Controls→Reconciler, with
+  no back-edge; the graph stays acyclic).
+- **Scene-writing generated code lives in `Reconciler/`/the OS backend, NOT in `Dsl/`** (corrects the DSL
   agent's layering cycle). `Element` records carry data only (`[Prop]`s + `ModifierRef` + `Key`); the
   per-element column writer is a generated `switch(ElementTypeId)` in the reconciler, or writes a
   Foundation-level `NodePaintSpec` POD the reconciler copies into `SceneStore`.
 - The `SourceGen` analyzers are build-time only. **Two analyzer DLLs**: `FluentGpu.SourceGen` (portable:
-  Element/Modifier/Diff/Theme/HookDeps/ElementTypeId, Win32-free) and `FluentGpu.Interop.SourceGen`
-  (the COM-binding generator), referenced **only** by the Windows leaves — keeping the portable toolchain
-  free of Win32 COM concepts.
+  Element/Modifier/Diff/Theme/HookDeps/ElementTypeId, Win32-free, referenced by `Engine`) and
+  `FluentGpu.Interop.SourceGen` (the COM-binding generator), referenced **only** by `FluentGpu.Windows` —
+  keeping the portable toolchain free of Win32 COM concepts.
 
 ---
 
@@ -226,7 +241,7 @@ delivers with deterministic barriers.
 
 | Component | Decision | Depend / Vendor | Rationale |
 |---|---|---|---|
-| `ComPtr<T>`, `IComObject`, `[NativeTypeName]`/`[VtblIndex]` attrs | **EXTRACT verbatim** into `Win32.Interop` | **Vendor** | Only COM lifetime primitive (per contract). `unsafe struct`, no GC alloc, AOT-trivial. |
+| `ComPtr<T>`, `IComObject`, `[NativeTypeName]`/`[VtblIndex]` attrs | **EXTRACT verbatim** into `FluentGpu.Windows` (Interop/) | **Vendor** | Only COM lifetime primitive (per contract). `unsafe struct`, no GC alloc, AOT-trivial. |
 | `ComputeSharp.Win32.D3D12` / `.Win32.D2D1` bindings (`ID3D12*`, `IDXGI*`, `ID2D1*`) | **Reuse as-is** (extract source) | **Vendor** | ClangSharp-generated, calli-based, AOT-proven (ships in Store/Paint.NET). |
 | `GraphicsDevice` device/queue/fence/descriptor-heap/command-list-pool plumbing | **EXTRACT + FORK** | **Vendor+fork** | ComputeSharp has COMPUTE+COPY queues, CBV/SRV/UAV heap only. **Fork adds:** DIRECT queue, RTV+DSV descriptor heaps, graphics `ID3D12GraphicsCommandList` recording, DIRECT-typed command-list pool. Keep fence-wait, device-lost (`fence→MaxValue`+`RegisterWaitForSingleObject`), per-LUID device cache. |
 | `ComputeSharp.D3D12MemoryAllocator` (D3D12MA) | **Reuse as-is** | **Depend (NuGet)** if stable, else vendor | Pooled GPU resource alloc; wire via `DeviceHelper.ConfigureAllocatorFactory`. Manages textures/buffers we create — **not** DXGI back buffers (special-cased in the deferred-delete ring). |
@@ -244,7 +259,7 @@ delivers with deterministic barriers.
 | Reactor Yoga (pure-C# flexbox) | **PORT algorithm; REWRITE substrate** | n/a | 11-step `CalculateLayoutImpl`, free-space distribution, baseline, abs-pos, §4.5 min, pixel-snap math, 8-entry measurement ring **kept**. `YogaNode`/`YogaStyle`/`LayoutResults` classes + `List<YogaNode>` + `[ThreadStatic] Stack<>` pool → SoA columns + `ref struct LayoutNode` facade + arena scratch. |
 | Reactor Input (gesture/focus/command vocab) | **PORT (re-type to `Vec2`); re-implement engines** | n/a | `Command` record reused unchanged (pure data). Gesture structs re-typed off `Windows.Foundation.Point`; FSM + **from-scratch inertia integrator** built. Focus/announce hooks keep names, reimplemented over `FocusEngine`/`IA11yBackend`. |
 
-**Depend-on vs vendor:** vendor (source-extract into `Win32.Interop`) the COM bindings + `ComPtr<T>` so
+**Depend-on vs vendor:** vendor (source-extract into `FluentGpu.Windows` Interop/) the COM bindings + `ComPtr<T>` so
 we can fork/extend freely and pin trimming. Depend-on (NuGet) is acceptable only for D3D12MA if its
 package proves AOT-stable in the spike; otherwise vendor it too. No NuGet dependency that drags WinRT
 or `SwapChainPanel`.
@@ -490,8 +505,8 @@ public interface ICommandEncoder { void BeginRenderPass(in RenderPassDesc p); vo
 `D3D12_RESOURCE_STATES`}`. `Destroy(h)` gen-bumps and pushes onto a **deferred-delete ring keyed by
 in-flight fence value** (per-swapchain for DXGI-owned back buffers, which release via the swapchain, never
 D3D12MA). `HandleTable.Free` runs typed teardown (`slot.Res.Dispose()`) **before** reclaiming the slot
-(folds the ComPtr-leak blocker). The deferred-release ring is a required Rhi.D3D12 facility used for ring
-growth, layer-RT recycle, and device-lost rebuild.
+(folds the ComPtr-leak blocker). The deferred-release ring is a required D3D12/ (FluentGpu.Windows) facility
+used for ring growth, layer-RT recycle, and device-lost rebuild.
 
 ### 4.8 Frame lifecycle & threading model (13 phases)
 
@@ -538,9 +553,9 @@ observe a reallocated slot. UIA/TSF callbacks from the OS are marshaled onto the
 
 ## 5. SUBSYSTEM SPECS
 
-### 5.1 PAL / RHI / Windowing + Present (Pal.Windows + Rhi.D3D12)
+### 5.1 PAL / RHI / Windowing + Present (FluentGpu.Windows: Pal/ + D3D12/)
 
-**Window (Pal.Windows):** `RegisterClassExW` once (own redraw via DXGI; `CS_HREDRAW|CS_VREDRAW` off),
+**Window (FluentGpu.Windows Pal/):** `RegisterClassExW` once (own redraw via DXGI; `CS_HREDRAW|CS_VREDRAW` off),
 `CreateWindowExW`, `SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)` (manifest-free). Static
 `[UnmanagedCallersOnly]` `WndProc` registered in `WNDCLASSEXW.lpfnWndProc`, dispatching via a `GCHandle`
 in `GWLP_USERDATA` (Normal handle, lifetime = window). DIP→px conversion happens **once** at the pump
@@ -586,7 +601,7 @@ adapter / WARP) → recreate per-window swapchains → **re-realize GPU resource
 recompile from cached DXIL blobs) → mark whole tree dirty. Invariant: **the RHI stores only realizations;
 every GPU object is reconstructible from CPU-side retained data.**
 
-**Fork scope (stated honestly):** Rhi.D3D12 hand-authors against the verified d3d12.h ABI (each vtable index
+**Fork scope (stated honestly):** the D3D12/ backend hand-authors against the verified d3d12.h ABI (each vtable index
 checked): **Device** += `CreateGraphicsPipelineState`, `CreateRenderTargetView`, `CreateDepthStencilView`;
 **GraphicsCommandList** += `OMSetRenderTargets`, `RSSetViewports`, `RSSetScissorRects`, `IASetVertexBuffers`,
 `IASetIndexBuffer`, `ClearRenderTargetView`, `ClearDepthStencilView`; ~30–40 graphics structs/enums
@@ -600,7 +615,7 @@ checked): **Device** += `CreateGraphicsPipelineState`, `CreateRenderTargetView`,
 visual-with-swapchain; `id<CAMetalDrawable>` ≙ `CurrentBackBuffer`; `MTLRenderPassDescriptor` ≙
 `RenderPassDesc`.
 
-### 5.2 GPU 2D Rendering Engine (Render — portable; Rhi.D3D12 executes)
+### 5.2 GPU 2D Rendering Engine (Render — portable; FluentGpu.Windows D3D12/ executes)
 
 **Primitives & AA:** analytic **SDF AA for the rect family** (rounded rects, borders) — `length(float2(ddx(sd),
 ddy(sd)))` true gradient magnitude (folded: not `fwidth` L1) so rotated content is correct. **Glyphs use
@@ -663,7 +678,7 @@ embedded as source-gen'd `byte[]`.
 per-draw, one descriptor table for the glyph atlas + brush/gradient textures — baked into every PSO; maps to
 Metal argument buffers later.
 
-### 5.3 Text & Glyph Subsystem (Text iface; Text.DirectWrite leaf)
+### 5.3 Text & Glyph Subsystem (Text iface; FluentGpu.Windows DirectWrite/ backend)
 
 **Seam:** as §4.6. **DWrite leaf:** ~25 hand-authored vtbl structs against **`IDWriteFactory2+`** (folded:
 pinned for `IDWriteFontFallback` + `IDWriteFontFace2` color support). **Callee-side CCW** (DWrite calls back
@@ -918,10 +933,10 @@ while/&&/?:`/after a conditional return), with the runtime `HookOrderException` 
 the renderer lands; validate authored DWrite/DComp vtbl IL against a spike before pinning per-leaf figures);
 `sizoscope`/`.mstat` gate kept; `[SkipLocalsInit]`, size-tuned `Directory.Build.props`.
 
-### 5.8 Input, Focus, IME, Hit-Testing, Accessibility (Input portable; Pal.Windows + Accessibility.Uia leaves)
+### 5.8 Input, Focus, IME, Hit-Testing, Accessibility (Input portable; FluentGpu.Windows Pal/ + Uia/ backends)
 
 **Input is 100% portable, COM-free** — operates on `SceneStore` + `InputEvent`. TSF/UIA/OLE confined to
-`Pal.Windows`/`Accessibility` leaves via seam interfaces (`IImeSession`/`IClipboard`/`IA11yBackend`/
+the `FluentGpu.Windows` Pal/ + Uia/ folders via seam interfaces (`IImeSession`/`IClipboard`/`IA11yBackend`/
 `IDragDropBackend`), referenced only by `Hosting`.
 
 **Hit-testing** (folds the coordinate-convention fix, P8): reverse-z descent over topology; `ptLocal =
@@ -999,7 +1014,7 @@ threaded input path, **not** free-threaded `event Action`. Drag source via `IDro
 (`WM_UNICHAR` optional).
 
 **COM standardization (folded):** hand-built vtable / `ComPtr<T>` for **both** directions (consume via
-`lpVtbl[n]`; implement via static CCW vtables) — matches what `Win32.Interop` vendors; no ComWrappers.
+`lpVtbl[n]`; implement via static CCW vtables) — matches what `FluentGpu.Windows` (Interop/) vendors; no ComWrappers.
 
 ---
 
@@ -1008,7 +1023,7 @@ threaded input path, **not** free-threaded `event Action`. Drag source via `IDro
 ```
 T0  USER CLICKS (mouse down+up over a Button)                                   [OS / display]
  │
- 1  Pal.Windows WndProc ([UnmanagedCallersOnly] static) gets WM_POINTERDOWN/UP   [OS wait? NO: UI thread,
+ 1  Windows Pal/ WndProc ([UnmanagedCallersOnly] static) gets WM_POINTERDOWN/UP  [OS wait? NO: UI thread,
     → GetPointerInfo → translate to InputEvent{PointerDown/Up, pos in px}         message pump]
     → DIP-convert once → write POD into InputEventRing (move-coalesced)
  │  (phase 1: IPlatformWindow.PumpInto(ring) returns; device-lost flag read = clear)
@@ -1060,7 +1075,7 @@ T0  USER CLICKS (mouse down+up over a Button)                                   
     now from the GlyphRunTable (atlas pinned this frame).
  ▼
 10  submit: IGpuDevice.SubmitDrawList(frontArenaSpan, sortKeysSpan, ctx)                            [UI thread →
-    → Rhi.D3D12 leaf walks POD opcodes with concrete devirtualized types → pooled                  GPU queue]
+    → Windows D3D12/ walks POD opcodes with concrete devirtualized types → pooled                  GPU queue]
     ID3D12GraphicsCommandList: Barrier(backbuffer PRESENT→RT), BeginRenderPass(RTV=_UNORM_SRGB,
     clear), SetPipeline(SDF PSO), BindConstants/BindTexture(glyph atlas), DrawInstanced × batches,
     Barrier(RT→PRESENT) → ExecuteCommandLists → queue.Signal(fence, ++v)
@@ -1116,8 +1131,8 @@ delegate path at step 2d — one declaration, three modalities.
   (draw-call count, batch coalescing, barrier ordering, PSO dedup, layout `Bounds` parity against Reactor
   Yoga golden values at scale 1.25/1.5/1.75) — the primary regression net; **(2) WARP readback = tolerance-
   based SMOKE only** (did it render, rough histograms — **not** exact golden hashes; WARP is not bit-identical
-  to hardware). `Pal.Headless` + `Rhi.Headless` run the **entire 13-phase frame lifecycle** with no window and
-  no GPU on a CI build agent — the payoff of the seam.
+  to hardware). The headless backends (`FluentGpu.Engine` Headless/Pal/ + Headless/Rhi/) run the **entire
+  13-phase frame lifecycle** with no window and no GPU on a CI build agent — the payoff of the seam.
 
 ---
 
@@ -1160,8 +1175,8 @@ permitted per-frame GC is freshly-captured user closures at the edge (phases 2/4
 **Binary/IL budget:** ratcheted CI gate via `sizoscope`/`.mstat` — start ~8 MB whole-exe (CoreCLR-AOT base
 ~1.2–2 MB + the authored DWrite/DComp/UIA vtbl IL + renderer/atlas/tessellator/batcher), tighten as the
 renderer lands. The aspirational ≤5.5 MB is a target, not a guarantee; the largest IL items are
-`Win32.Interop` (graphics + present + DComp/DWrite/UIA bindings — trims to only the vtable methods actually
-called) and the DWrite binding surface (validated against a spike before pinning a figure).
+the `FluentGpu.Windows` Interop/ bindings (graphics + present + DComp/DWrite/UIA — trims to only the vtable
+methods actually called) and the DWrite binding surface (validated against a spike before pinning a figure).
 
 ---
 
@@ -1213,15 +1228,15 @@ now so DWrite's `Analyze*` carries v1).
 The smallest end-to-end proof that validates the architecture (one window, one clickable, styled,
 text-bearing, flex-laid-out, reconciled Button). Build order, each step a checkpoint:
 
-1. **Window + GPU clear.** `Pal.Windows.CreateWindow` (HWND, PerMonitorV2, static `WndProc`+`GCHandle`) →
-   `Rhi.D3D12` device (DIRECT queue, RTV heap, D3D12MA) → `CreateSwapChainForComposition` (`BGRA8_UNORM`,
+1. **Window + GPU clear.** the Windows Pal/ `CreateWindow` (HWND, PerMonitorV2, static `WndProc`+`GCHandle`) →
+   the Windows D3D12/ device (DIRECT queue, RTV heap, D3D12MA) → `CreateSwapChainForComposition` (`BGRA8_UNORM`,
    `FLIP_DISCARD`, frame-latency waitable) → DComp `Target`/`Visual`/`Commit` → RTV as `_UNORM_SRGB` →
    per-frame: `MsgWaitForMultipleObjectsEx`, barrier, `BeginRenderPass(clear)`, barrier, present. *Proves:
    PAL/RHI seam, hand-vtable COM under AOT, DComp present, color contract, device-lost backstop.*
 2. **One rounded rect.** Author the SDF quad VS+PS in HLSL → DXC → DXIL `byte[]`; one PSO; one
    `FillRoundRectCmd` → `SubmitDrawList` → instanced quad with analytic SDF AA, linear blend, sRGB scan-out.
    *Proves: the graphics-pipeline fork, the DrawList POD path, SDF AA, the linear/sRGB pipeline.*
-3. **One text run.** `Text.DirectWrite`: `IDWriteFactory2` → shape "Click me" (itemize→shape, `ShapedRunBuilder`
+3. **One text run.** the Windows DirectWrite/ backend: `IDWriteFactory2` → shape "Click me" (itemize→shape, `ShapedRunBuilder`
    spans, callee CCW for analysis) → rasterize into the `R8_UNORM` glyph atlas → `DrawGlyphRunCmd` (UVs
    resolved at batch, gamma-correct coverage blend). *Proves: text seam, DWrite callee CCW under AOT, atlas,
    glyph blend exception, BiDi/visual-order contract.*
@@ -1239,6 +1254,6 @@ text-bearing, flex-laid-out, reconciled Button). Build order, each step a checkp
    input pipeline, the click→setState→repaint round-trip, zero per-frame allocation in the hot phases.*
 
 Passing #6 with the DEBUG alloc-tripwire green on phases 6–13, on both the real D3D12 path **and** the
-`Pal.Headless`+`Rhi.Headless` CPU path (structural asserts), is the architecture sanity anchor: it exercises
+headless CPU path (`FluentGpu.Engine` Headless/Pal/ + Headless/Rhi/, structural asserts), is the architecture sanity anchor: it exercises
 every seam (PAL, RHI, Text), the SoA store, the ported layout, the retargeted reconciler/hooks, the custom
 GPU renderer, and the present path — end to end, NativeAOT-clean, zero per-frame GC.

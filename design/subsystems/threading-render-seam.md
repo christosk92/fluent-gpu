@@ -2,7 +2,7 @@
 
 Assemblies: **`FluentGpu.Hosting`** (owns the threads, the publisher, the quarantine ledger, the
 device-lost rendezvous, the worker pool) · **`FluentGpu.Render`** (the render-thread frame body:
-record → batch → submit-call; owns the DrawList arenas) · **`FluentGpu.Rhi.D3D12`** (leaf; owns every
+record → batch → submit-call; owns the DrawList arenas) · **`FluentGpu.Windows` (D3D12/ folder)** (leaf; owns every
 `ComPtr`, the GPU fence, the deferred-delete ring, the texture-staging ring, the DComp present-tree).
 
 This is the deep, buildable design behind **`hardened-v1-plan.md` §2 (threading model) and §4.1 (the
@@ -90,7 +90,7 @@ safety argument; the rest of the doc is mechanism.
 | `WorldTransform[]` (composed phase 7) | UI | render (copied) | value-copy at PUBLISH |
 | LayoutCache, ComponentTable, HookCells | UI | UI only | none |
 | Brush/Clip/GlyphRun/Path **intern + content tables** | UI (append+mutate side) | render (read by handle) | **append-mostly, content-immutable; epoch-stamped** (§7) |
-| InputEventRing | Pal.Windows (write) / UI (read) | — | host-owned POD ring, drained once/frame |
+| InputEventRing | FluentGpu.Windows/Pal/ (write) / UI (read) | — | host-owned POD ring, drained once/frame |
 | DrawList arenas (ring >=3) | render | render | render-private; UI never swaps/resets one |
 | every `ComPtr`, RhiHandleTable, PSO, UploadRing, staging ring, atlas pages, GPU fence | render | render | none — COM never crosses the seam |
 | `_publishedIdx`, sealed SceneFrame slot bytes | UI (write) → render (read) | — | Volatile release/acquire (§2) |
@@ -505,7 +505,7 @@ quarantine §5), and the **GPU resource** must survive until no in-flight GPU su
 (render→GPU, the deferred-delete ring). A split resource must clear **both fences, ordered.**
 
 ```csharp
-// render-thread-only (lives in Rhi.D3D12 leaf; the ONLY thread that Disposes a ComPtr)
+// render-thread-only (lives in FluentGpu.Windows D3D12/ leaf; the ONLY thread that Disposes a ComPtr)
 public sealed class RhiHandleTable<TNative>
 {
     private readonly DeferredDeleteRing _ring;   // entries keyed by (gpuFenceValue, sceneFrameSeq)

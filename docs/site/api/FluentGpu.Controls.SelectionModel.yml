@@ -1,0 +1,1836 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.SelectionModel
+  commentId: T:FluentGpu.Controls.SelectionModel
+  id: SelectionModel
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.SelectionModel.AnchorIndex
+  - FluentGpu.Controls.SelectionModel.ClearSelection
+  - FluentGpu.Controls.SelectionModel.Deselect(System.Int32)
+  - FluentGpu.Controls.SelectionModel.DeselectAll
+  - FluentGpu.Controls.SelectionModel.DeselectRange(System.Int32,System.Int32)
+  - FluentGpu.Controls.SelectionModel.DeselectRangeFromAnchorTo(System.Int32)
+  - FluentGpu.Controls.SelectionModel.FirstSelectedIndex
+  - FluentGpu.Controls.SelectionModel.GetRange(System.Int32)
+  - FluentGpu.Controls.SelectionModel.GetSelectedIndices(System.Collections.Generic.List{System.Int32})
+  - FluentGpu.Controls.SelectionModel.InvertSelection
+  - FluentGpu.Controls.SelectionModel.IsSelected(System.Int32)
+  - FluentGpu.Controls.SelectionModel.ItemCount
+  - FluentGpu.Controls.SelectionModel.LastSelectedIndex
+  - FluentGpu.Controls.SelectionModel.Mode
+  - FluentGpu.Controls.SelectionModel.OnFocusedAction(System.Int32,System.Boolean,System.Boolean)
+  - FluentGpu.Controls.SelectionModel.OnInteractedAction(System.Int32,System.Boolean,System.Boolean)
+  - FluentGpu.Controls.SelectionModel.RangeCount
+  - FluentGpu.Controls.SelectionModel.RemapMove(System.Int32,System.Int32)
+  - FluentGpu.Controls.SelectionModel.Select(System.Int32)
+  - FluentGpu.Controls.SelectionModel.SelectAll
+  - FluentGpu.Controls.SelectionModel.SelectRange(System.Int32,System.Int32)
+  - FluentGpu.Controls.SelectionModel.SelectRangeFromAnchorTo(System.Int32)
+  - FluentGpu.Controls.SelectionModel.SelectedCount
+  - FluentGpu.Controls.SelectionModel.SelectionChanged
+  - FluentGpu.Controls.SelectionModel.SingleSelectionFollowsFocus
+  - FluentGpu.Controls.SelectionModel.Toggle(System.Int32)
+  - FluentGpu.Controls.SelectionModel.Version
+  langs:
+  - csharp
+  - vb
+  name: SelectionModel
+  nameWithType: SelectionModel
+  fullName: FluentGpu.Controls.SelectionModel
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SelectionModel
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Index/RANGE-based selection state (E11-L3) — WinUI's <code>SelectionModel</code> flattened to one level (our items
+
+    controls are flat projections; TreeView flattens before selecting). DECOUPLED FROM REALIZATION: selection is a
+
+    sorted list of disjoint inclusive index ranges, so <xref href="FluentGpu.Controls.SelectionModel.SelectAll" data-throw-if-not-resolved="false"></xref> over 50k rows stores ONE range and
+
+    realizes nothing — realized items read their state on prepare via <xref href="FluentGpu.Controls.SelectionModel.IsSelected(System.Int32)" data-throw-if-not-resolved="false"></xref> (O(log ranges)).
+
+
+    Signals-first: every mutation bumps <xref href="FluentGpu.Controls.SelectionModel.Version" data-throw-if-not-resolved="false"></xref>; a composing control reads <code>Version.Value</code> in its
+
+    render so a selection change re-renders exactly that control (which re-skins only its realized window).
+
+    <xref href="FluentGpu.Controls.SelectionModel.SelectionChanged" data-throw-if-not-resolved="false"></xref> fires once per mutating call that actually changed state (WinUI SelectionChanged).
+
+
+    Pointer/keyboard semantics are the verified WinUI selector trio (controls\dev\ItemsView):
+
+    <xref href="FluentGpu.Controls.SelectionModel.OnInteractedAction(System.Int32%2cSystem.Boolean%2cSystem.Boolean)" data-throw-if-not-resolved="false"></xref> / <xref href="FluentGpu.Controls.SelectionModel.OnFocusedAction(System.Int32%2cSystem.Boolean%2cSystem.Boolean)" data-throw-if-not-resolved="false"></xref> implement SingleSelector.cpp:25-57,
+
+    MultipleSelector.cpp:18-92 and ExtendedSelector.cpp:18-83 — anchor+shift ranges, ctrl toggles, focus-follow.
+  example: []
+  syntax:
+    content: public sealed class SelectionModel
+    content.vb: Public NotInheritable Class SelectionModel
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.SelectionModel.Version
+  commentId: P:FluentGpu.Controls.SelectionModel.Version
+  id: Version
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: Version
+  nameWithType: SelectionModel.Version
+  fullName: FluentGpu.Controls.SelectionModel.Version
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Version
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 29
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Bumped on every actual change — read it in a render to subscribe that component (signals-first).
+  example: []
+  syntax:
+    content: public Signal<int> Version { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Signals.Signal{System.Int32}
+    content.vb: Public ReadOnly Property Version As Signal(Of Integer)
+  overload: FluentGpu.Controls.SelectionModel.Version*
+- uid: FluentGpu.Controls.SelectionModel.SelectionChanged
+  commentId: F:FluentGpu.Controls.SelectionModel.SelectionChanged
+  id: SelectionChanged
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: SelectionChanged
+  nameWithType: SelectionModel.SelectionChanged
+  fullName: FluentGpu.Controls.SelectionModel.SelectionChanged
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SelectionChanged
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Fired once per mutating call that changed the selection (WinUI <code>SelectionModel.SelectionChanged</code>).
+  example: []
+  syntax:
+    content: public Action? SelectionChanged
+    return:
+      type: System.Action
+    content.vb: Public SelectionChanged As Action
+- uid: FluentGpu.Controls.SelectionModel.ItemCount
+  commentId: P:FluentGpu.Controls.SelectionModel.ItemCount
+  id: ItemCount
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: ItemCount
+  nameWithType: SelectionModel.ItemCount
+  fullName: FluentGpu.Controls.SelectionModel.ItemCount
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ItemCount
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: The collection size selection indices are clamped to. Shrinking trims out-of-range selection.
+  example: []
+  syntax:
+    content: public int ItemCount { get; set; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property ItemCount As Integer
+  overload: FluentGpu.Controls.SelectionModel.ItemCount*
+- uid: FluentGpu.Controls.SelectionModel.AnchorIndex
+  commentId: P:FluentGpu.Controls.SelectionModel.AnchorIndex
+  id: AnchorIndex
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: AnchorIndex
+  nameWithType: SelectionModel.AnchorIndex
+  fullName: FluentGpu.Controls.SelectionModel.AnchorIndex
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AnchorIndex
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 50
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: The shift-range anchor (WinUI <code>SelectionModel.AnchorIndex</code>). −1 = none. Single item ops move it.
+  example: []
+  syntax:
+    content: public int AnchorIndex { get; set; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property AnchorIndex As Integer
+  overload: FluentGpu.Controls.SelectionModel.AnchorIndex*
+- uid: FluentGpu.Controls.SelectionModel.Mode
+  commentId: P:FluentGpu.Controls.SelectionModel.Mode
+  id: Mode
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: Mode
+  nameWithType: SelectionModel.Mode
+  fullName: FluentGpu.Controls.SelectionModel.Mode
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Mode
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Selection mode. Coercing to <xref href="FluentGpu.Controls.ItemsSelectionMode.Single" data-throw-if-not-resolved="false"></xref> keeps only the first selected
+        item; None leaves existing (programmatic) selection readable but routes interactions to a null selector.
+  example: []
+  syntax:
+    content: public ItemsSelectionMode Mode { get; set; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.ItemsSelectionMode
+    content.vb: Public Property Mode As ItemsSelectionMode
+  overload: FluentGpu.Controls.SelectionModel.Mode*
+- uid: FluentGpu.Controls.SelectionModel.SingleSelectionFollowsFocus
+  commentId: P:FluentGpu.Controls.SelectionModel.SingleSelectionFollowsFocus
+  id: SingleSelectionFollowsFocus
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: SingleSelectionFollowsFocus
+  nameWithType: SelectionModel.SingleSelectionFollowsFocus
+  fullName: FluentGpu.Controls.SelectionModel.SingleSelectionFollowsFocus
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SingleSelectionFollowsFocus
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 74
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    In Single mode, moving keyboard focus without Ctrl selects the focused item
+        (WinUI SingleSelector.h <code>m_followFocus</code>, default true).
+  example: []
+  syntax:
+    content: public bool SingleSelectionFollowsFocus { get; set; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property SingleSelectionFollowsFocus As Boolean
+  overload: FluentGpu.Controls.SelectionModel.SingleSelectionFollowsFocus*
+- uid: FluentGpu.Controls.SelectionModel.IsSelected(System.Int32)
+  commentId: M:FluentGpu.Controls.SelectionModel.IsSelected(System.Int32)
+  id: IsSelected(System.Int32)
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: IsSelected(int)
+  nameWithType: SelectionModel.IsSelected(int)
+  fullName: FluentGpu.Controls.SelectionModel.IsSelected(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsSelected
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 78
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool IsSelected(int index)
+    parameters:
+    - id: index
+      type: System.Int32
+    return:
+      type: System.Boolean
+    content.vb: Public Function IsSelected(index As Integer) As Boolean
+  overload: FluentGpu.Controls.SelectionModel.IsSelected*
+  nameWithType.vb: SelectionModel.IsSelected(Integer)
+  fullName.vb: FluentGpu.Controls.SelectionModel.IsSelected(Integer)
+  name.vb: IsSelected(Integer)
+- uid: FluentGpu.Controls.SelectionModel.SelectedCount
+  commentId: P:FluentGpu.Controls.SelectionModel.SelectedCount
+  id: SelectedCount
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: SelectedCount
+  nameWithType: SelectionModel.SelectedCount
+  fullName: FluentGpu.Controls.SelectionModel.SelectedCount
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SelectedCount
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 85
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Total selected items (sum over ranges, O(ranges) — never walks indices).
+  example: []
+  syntax:
+    content: public int SelectedCount { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property SelectedCount As Integer
+  overload: FluentGpu.Controls.SelectionModel.SelectedCount*
+- uid: FluentGpu.Controls.SelectionModel.FirstSelectedIndex
+  commentId: P:FluentGpu.Controls.SelectionModel.FirstSelectedIndex
+  id: FirstSelectedIndex
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: FirstSelectedIndex
+  nameWithType: SelectionModel.FirstSelectedIndex
+  fullName: FluentGpu.Controls.SelectionModel.FirstSelectedIndex
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FirstSelectedIndex
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 95
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public int FirstSelectedIndex { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property FirstSelectedIndex As Integer
+  overload: FluentGpu.Controls.SelectionModel.FirstSelectedIndex*
+- uid: FluentGpu.Controls.SelectionModel.LastSelectedIndex
+  commentId: P:FluentGpu.Controls.SelectionModel.LastSelectedIndex
+  id: LastSelectedIndex
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: LastSelectedIndex
+  nameWithType: SelectionModel.LastSelectedIndex
+  fullName: FluentGpu.Controls.SelectionModel.LastSelectedIndex
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LastSelectedIndex
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 96
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public int LastSelectedIndex { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property LastSelectedIndex As Integer
+  overload: FluentGpu.Controls.SelectionModel.LastSelectedIndex*
+- uid: FluentGpu.Controls.SelectionModel.RangeCount
+  commentId: P:FluentGpu.Controls.SelectionModel.RangeCount
+  id: RangeCount
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: RangeCount
+  nameWithType: SelectionModel.RangeCount
+  fullName: FluentGpu.Controls.SelectionModel.RangeCount
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RangeCount
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 97
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public int RangeCount { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property RangeCount As Integer
+  overload: FluentGpu.Controls.SelectionModel.RangeCount*
+- uid: FluentGpu.Controls.SelectionModel.GetRange(System.Int32)
+  commentId: M:FluentGpu.Controls.SelectionModel.GetRange(System.Int32)
+  id: GetRange(System.Int32)
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: GetRange(int)
+  nameWithType: SelectionModel.GetRange(int)
+  fullName: FluentGpu.Controls.SelectionModel.GetRange(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GetRange
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 99
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: The i-th selected range (inclusive) — for tests/serialization without realizing indices.
+  example: []
+  syntax:
+    content: public (int Start, int End) GetRange(int i)
+    parameters:
+    - id: i
+      type: System.Int32
+    return:
+      type: System.ValueTuple{System.Int32,System.Int32}
+    content.vb: Public Function GetRange(i As Integer) As (Start As Integer, [End] As Integer)
+  overload: FluentGpu.Controls.SelectionModel.GetRange*
+  nameWithType.vb: SelectionModel.GetRange(Integer)
+  fullName.vb: FluentGpu.Controls.SelectionModel.GetRange(Integer)
+  name.vb: GetRange(Integer)
+- uid: FluentGpu.Controls.SelectionModel.GetSelectedIndices(System.Collections.Generic.List{System.Int32})
+  commentId: M:FluentGpu.Controls.SelectionModel.GetSelectedIndices(System.Collections.Generic.List{System.Int32})
+  id: GetSelectedIndices(System.Collections.Generic.List{System.Int32})
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: GetSelectedIndices(List<int>)
+  nameWithType: SelectionModel.GetSelectedIndices(List<int>)
+  fullName: FluentGpu.Controls.SelectionModel.GetSelectedIndices(System.Collections.Generic.List<int>)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GetSelectedIndices
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 103
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Append every selected index into <code class="paramref">into</code> (cleared first). The WinUI
+        <code>SelectedItems</code> projection — call only when a materialized list is genuinely needed.
+  example: []
+  syntax:
+    content: public void GetSelectedIndices(List<int> into)
+    parameters:
+    - id: into
+      type: System.Collections.Generic.List{System.Int32}
+    content.vb: Public Sub GetSelectedIndices(into As List(Of Integer))
+  overload: FluentGpu.Controls.SelectionModel.GetSelectedIndices*
+  nameWithType.vb: SelectionModel.GetSelectedIndices(List(Of Integer))
+  fullName.vb: FluentGpu.Controls.SelectionModel.GetSelectedIndices(System.Collections.Generic.List(Of Integer))
+  name.vb: GetSelectedIndices(List(Of Integer))
+- uid: FluentGpu.Controls.SelectionModel.Select(System.Int32)
+  commentId: M:FluentGpu.Controls.SelectionModel.Select(System.Int32)
+  id: Select(System.Int32)
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: Select(int)
+  nameWithType: SelectionModel.Select(int)
+  fullName: FluentGpu.Controls.SelectionModel.Select(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Select
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 114
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Select one item. In Single mode this REPLACES the selection (WinUI <code>SingleSelect</code>).
+  example: []
+  syntax:
+    content: public void Select(int index)
+    parameters:
+    - id: index
+      type: System.Int32
+    content.vb: Public Sub [Select](index As Integer)
+  overload: FluentGpu.Controls.SelectionModel.Select*
+  nameWithType.vb: SelectionModel.Select(Integer)
+  fullName.vb: FluentGpu.Controls.SelectionModel.Select(Integer)
+  name.vb: Select(Integer)
+- uid: FluentGpu.Controls.SelectionModel.Deselect(System.Int32)
+  commentId: M:FluentGpu.Controls.SelectionModel.Deselect(System.Int32)
+  id: Deselect(System.Int32)
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: Deselect(int)
+  nameWithType: SelectionModel.Deselect(int)
+  fullName: FluentGpu.Controls.SelectionModel.Deselect(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Deselect
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 129
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public void Deselect(int index)
+    parameters:
+    - id: index
+      type: System.Int32
+    content.vb: Public Sub Deselect(index As Integer)
+  overload: FluentGpu.Controls.SelectionModel.Deselect*
+  nameWithType.vb: SelectionModel.Deselect(Integer)
+  fullName.vb: FluentGpu.Controls.SelectionModel.Deselect(Integer)
+  name.vb: Deselect(Integer)
+- uid: FluentGpu.Controls.SelectionModel.Toggle(System.Int32)
+  commentId: M:FluentGpu.Controls.SelectionModel.Toggle(System.Int32)
+  id: Toggle(System.Int32)
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: Toggle(int)
+  nameWithType: SelectionModel.Toggle(int)
+  fullName: FluentGpu.Controls.SelectionModel.Toggle(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Toggle
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 137
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public void Toggle(int index)
+    parameters:
+    - id: index
+      type: System.Int32
+    content.vb: Public Sub Toggle(index As Integer)
+  overload: FluentGpu.Controls.SelectionModel.Toggle*
+  nameWithType.vb: SelectionModel.Toggle(Integer)
+  fullName.vb: FluentGpu.Controls.SelectionModel.Toggle(Integer)
+  name.vb: Toggle(Integer)
+- uid: FluentGpu.Controls.SelectionModel.SelectRange(System.Int32,System.Int32)
+  commentId: M:FluentGpu.Controls.SelectionModel.SelectRange(System.Int32,System.Int32)
+  id: SelectRange(System.Int32,System.Int32)
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: SelectRange(int, int)
+  nameWithType: SelectionModel.SelectRange(int, int)
+  fullName: FluentGpu.Controls.SelectionModel.SelectRange(int, int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SelectRange
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 144
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Select an inclusive index range (clamped). Stores RANGES — O(ranges), realizes nothing.
+  example: []
+  syntax:
+    content: public void SelectRange(int start, int end)
+    parameters:
+    - id: start
+      type: System.Int32
+    - id: end
+      type: System.Int32
+    content.vb: Public Sub SelectRange(start As Integer, [end] As Integer)
+  overload: FluentGpu.Controls.SelectionModel.SelectRange*
+  nameWithType.vb: SelectionModel.SelectRange(Integer, Integer)
+  fullName.vb: FluentGpu.Controls.SelectionModel.SelectRange(Integer, Integer)
+  name.vb: SelectRange(Integer, Integer)
+- uid: FluentGpu.Controls.SelectionModel.DeselectRange(System.Int32,System.Int32)
+  commentId: M:FluentGpu.Controls.SelectionModel.DeselectRange(System.Int32,System.Int32)
+  id: DeselectRange(System.Int32,System.Int32)
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: DeselectRange(int, int)
+  nameWithType: SelectionModel.DeselectRange(int, int)
+  fullName: FluentGpu.Controls.SelectionModel.DeselectRange(int, int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DeselectRange
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 149
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public void DeselectRange(int start, int end)
+    parameters:
+    - id: start
+      type: System.Int32
+    - id: end
+      type: System.Int32
+    content.vb: Public Sub DeselectRange(start As Integer, [end] As Integer)
+  overload: FluentGpu.Controls.SelectionModel.DeselectRange*
+  nameWithType.vb: SelectionModel.DeselectRange(Integer, Integer)
+  fullName.vb: FluentGpu.Controls.SelectionModel.DeselectRange(Integer, Integer)
+  name.vb: DeselectRange(Integer, Integer)
+- uid: FluentGpu.Controls.SelectionModel.SelectRangeFromAnchorTo(System.Int32)
+  commentId: M:FluentGpu.Controls.SelectionModel.SelectRangeFromAnchorTo(System.Int32)
+  id: SelectRangeFromAnchorTo(System.Int32)
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: SelectRangeFromAnchorTo(int)
+  nameWithType: SelectionModel.SelectRangeFromAnchorTo(int)
+  fullName: FluentGpu.Controls.SelectionModel.SelectRangeFromAnchorTo(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SelectRangeFromAnchorTo
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 155
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'WinUI <code>SelectRangeFromAnchorTo</code>: select [anchor, index] (order-normalized); anchor stays.'
+  example: []
+  syntax:
+    content: public void SelectRangeFromAnchorTo(int index)
+    parameters:
+    - id: index
+      type: System.Int32
+    content.vb: Public Sub SelectRangeFromAnchorTo(index As Integer)
+  overload: FluentGpu.Controls.SelectionModel.SelectRangeFromAnchorTo*
+  nameWithType.vb: SelectionModel.SelectRangeFromAnchorTo(Integer)
+  fullName.vb: FluentGpu.Controls.SelectionModel.SelectRangeFromAnchorTo(Integer)
+  name.vb: SelectRangeFromAnchorTo(Integer)
+- uid: FluentGpu.Controls.SelectionModel.DeselectRangeFromAnchorTo(System.Int32)
+  commentId: M:FluentGpu.Controls.SelectionModel.DeselectRangeFromAnchorTo(System.Int32)
+  id: DeselectRangeFromAnchorTo(System.Int32)
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: DeselectRangeFromAnchorTo(int)
+  nameWithType: SelectionModel.DeselectRangeFromAnchorTo(int)
+  fullName: FluentGpu.Controls.SelectionModel.DeselectRangeFromAnchorTo(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DeselectRangeFromAnchorTo
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 162
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'WinUI <code>DeselectRangeFromAnchorTo</code>: deselect [anchor, index]; anchor stays.'
+  example: []
+  syntax:
+    content: public void DeselectRangeFromAnchorTo(int index)
+    parameters:
+    - id: index
+      type: System.Int32
+    content.vb: Public Sub DeselectRangeFromAnchorTo(index As Integer)
+  overload: FluentGpu.Controls.SelectionModel.DeselectRangeFromAnchorTo*
+  nameWithType.vb: SelectionModel.DeselectRangeFromAnchorTo(Integer)
+  fullName.vb: FluentGpu.Controls.SelectionModel.DeselectRangeFromAnchorTo(Integer)
+  name.vb: DeselectRangeFromAnchorTo(Integer)
+- uid: FluentGpu.Controls.SelectionModel.SelectAll
+  commentId: M:FluentGpu.Controls.SelectionModel.SelectAll
+  id: SelectAll
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: SelectAll()
+  nameWithType: SelectionModel.SelectAll()
+  fullName: FluentGpu.Controls.SelectionModel.SelectAll()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SelectAll
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 169
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: ONE stored range regardless of count — select-all over 50k realizes nothing.
+  example: []
+  syntax:
+    content: public void SelectAll()
+    content.vb: Public Sub SelectAll()
+  overload: FluentGpu.Controls.SelectionModel.SelectAll*
+- uid: FluentGpu.Controls.SelectionModel.DeselectAll
+  commentId: M:FluentGpu.Controls.SelectionModel.DeselectAll
+  id: DeselectAll
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: DeselectAll()
+  nameWithType: SelectionModel.DeselectAll()
+  fullName: FluentGpu.Controls.SelectionModel.DeselectAll()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DeselectAll
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 178
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public void DeselectAll()
+    content.vb: Public Sub DeselectAll()
+  overload: FluentGpu.Controls.SelectionModel.DeselectAll*
+- uid: FluentGpu.Controls.SelectionModel.ClearSelection
+  commentId: M:FluentGpu.Controls.SelectionModel.ClearSelection
+  id: ClearSelection
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: ClearSelection()
+  nameWithType: SelectionModel.ClearSelection()
+  fullName: FluentGpu.Controls.SelectionModel.ClearSelection()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ClearSelection
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 186
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Alias for <xref href="FluentGpu.Controls.SelectionModel.DeselectAll" data-throw-if-not-resolved="false"></xref> (WinUI <code>ClearSelection</code>).
+  example: []
+  syntax:
+    content: public void ClearSelection()
+    content.vb: Public Sub ClearSelection()
+  overload: FluentGpu.Controls.SelectionModel.ClearSelection*
+- uid: FluentGpu.Controls.SelectionModel.InvertSelection
+  commentId: M:FluentGpu.Controls.SelectionModel.InvertSelection
+  id: InvertSelection
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: InvertSelection()
+  nameWithType: SelectionModel.InvertSelection()
+  fullName: FluentGpu.Controls.SelectionModel.InvertSelection()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InvertSelection
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 189
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'Complement over [0, ItemCount): the gaps become the ranges — O(ranges), realizes nothing.'
+  example: []
+  syntax:
+    content: public void InvertSelection()
+    content.vb: Public Sub InvertSelection()
+  overload: FluentGpu.Controls.SelectionModel.InvertSelection*
+- uid: FluentGpu.Controls.SelectionModel.RemapMove(System.Int32,System.Int32)
+  commentId: M:FluentGpu.Controls.SelectionModel.RemapMove(System.Int32,System.Int32)
+  id: RemapMove(System.Int32,System.Int32)
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: RemapMove(int, int)
+  nameWithType: SelectionModel.RemapMove(int, int)
+  fullName: FluentGpu.Controls.SelectionModel.RemapMove(int, int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RemapMove
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 207
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Remap selected indices after a collection RemoveAt(<code class="paramref">from</code>) + Insert(<code class="paramref">to</code>)
+        reorder, preserving selected ITEM identity rather than the old slot. Cold drop path.
+  example: []
+  syntax:
+    content: public void RemapMove(int from, int to)
+    parameters:
+    - id: from
+      type: System.Int32
+    - id: to
+      type: System.Int32
+    content.vb: Public Sub RemapMove(from As Integer, [to] As Integer)
+  overload: FluentGpu.Controls.SelectionModel.RemapMove*
+  nameWithType.vb: SelectionModel.RemapMove(Integer, Integer)
+  fullName.vb: FluentGpu.Controls.SelectionModel.RemapMove(Integer, Integer)
+  name.vb: RemapMove(Integer, Integer)
+- uid: FluentGpu.Controls.SelectionModel.OnInteractedAction(System.Int32,System.Boolean,System.Boolean)
+  commentId: M:FluentGpu.Controls.SelectionModel.OnInteractedAction(System.Int32,System.Boolean,System.Boolean)
+  id: OnInteractedAction(System.Int32,System.Boolean,System.Boolean)
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: OnInteractedAction(int, bool, bool)
+  nameWithType: SelectionModel.OnInteractedAction(int, bool, bool)
+  fullName: FluentGpu.Controls.SelectionModel.OnInteractedAction(int, bool, bool)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnInteractedAction
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 246
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Pointer tap / Space / Enter on item <code class="paramref">index</code> with the live modifier chord.
+  example: []
+  syntax:
+    content: public void OnInteractedAction(int index, bool ctrl, bool shift)
+    parameters:
+    - id: index
+      type: System.Int32
+    - id: ctrl
+      type: System.Boolean
+    - id: shift
+      type: System.Boolean
+    content.vb: Public Sub OnInteractedAction(index As Integer, ctrl As Boolean, shift As Boolean)
+  overload: FluentGpu.Controls.SelectionModel.OnInteractedAction*
+  nameWithType.vb: SelectionModel.OnInteractedAction(Integer, Boolean, Boolean)
+  fullName.vb: FluentGpu.Controls.SelectionModel.OnInteractedAction(Integer, Boolean, Boolean)
+  name.vb: OnInteractedAction(Integer, Boolean, Boolean)
+- uid: FluentGpu.Controls.SelectionModel.OnFocusedAction(System.Int32,System.Boolean,System.Boolean)
+  commentId: M:FluentGpu.Controls.SelectionModel.OnFocusedAction(System.Int32,System.Boolean,System.Boolean)
+  id: OnFocusedAction(System.Int32,System.Boolean,System.Boolean)
+  parent: FluentGpu.Controls.SelectionModel
+  langs:
+  - csharp
+  - vb
+  name: OnFocusedAction(int, bool, bool)
+  nameWithType: SelectionModel.OnFocusedAction(int, bool, bool)
+  fullName: FluentGpu.Controls.SelectionModel.OnFocusedAction(int, bool, bool)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectionModel.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnFocusedAction
+    path: ../../src/FluentGpu.Controls/SelectionModel.cs
+    startLine: 310
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Keyboard focus moved to item <code class="paramref">index</code> (arrows/Home/End/typeahead).
+  example: []
+  syntax:
+    content: public void OnFocusedAction(int index, bool ctrl, bool shift)
+    parameters:
+    - id: index
+      type: System.Int32
+    - id: ctrl
+      type: System.Boolean
+    - id: shift
+      type: System.Boolean
+    content.vb: Public Sub OnFocusedAction(index As Integer, ctrl As Boolean, shift As Boolean)
+  overload: FluentGpu.Controls.SelectionModel.OnFocusedAction*
+  nameWithType.vb: SelectionModel.OnFocusedAction(Integer, Boolean, Boolean)
+  fullName.vb: FluentGpu.Controls.SelectionModel.OnFocusedAction(Integer, Boolean, Boolean)
+  name.vb: OnFocusedAction(Integer, Boolean, Boolean)
+references:
+- uid: FluentGpu.Controls.SelectionModel.SelectAll
+  commentId: M:FluentGpu.Controls.SelectionModel.SelectAll
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_SelectAll
+  name: SelectAll()
+  nameWithType: SelectionModel.SelectAll()
+  fullName: FluentGpu.Controls.SelectionModel.SelectAll()
+  spec.csharp:
+  - uid: FluentGpu.Controls.SelectionModel.SelectAll
+    name: SelectAll
+    href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_SelectAll
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.SelectionModel.SelectAll
+    name: SelectAll
+    href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_SelectAll
+  - name: (
+  - name: )
+- uid: FluentGpu.Controls.SelectionModel.IsSelected(System.Int32)
+  commentId: M:FluentGpu.Controls.SelectionModel.IsSelected(System.Int32)
+  isExternal: true
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_IsSelected_System_Int32_
+  name: IsSelected(int)
+  nameWithType: SelectionModel.IsSelected(int)
+  fullName: FluentGpu.Controls.SelectionModel.IsSelected(int)
+  nameWithType.vb: SelectionModel.IsSelected(Integer)
+  fullName.vb: FluentGpu.Controls.SelectionModel.IsSelected(Integer)
+  name.vb: IsSelected(Integer)
+  spec.csharp:
+  - uid: FluentGpu.Controls.SelectionModel.IsSelected(System.Int32)
+    name: IsSelected
+    href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_IsSelected_System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.SelectionModel.IsSelected(System.Int32)
+    name: IsSelected
+    href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_IsSelected_System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: FluentGpu.Controls.SelectionModel.Version
+  commentId: P:FluentGpu.Controls.SelectionModel.Version
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_Version
+  name: Version
+  nameWithType: SelectionModel.Version
+  fullName: FluentGpu.Controls.SelectionModel.Version
+- uid: FluentGpu.Controls.SelectionModel.SelectionChanged
+  commentId: F:FluentGpu.Controls.SelectionModel.SelectionChanged
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_SelectionChanged
+  name: SelectionChanged
+  nameWithType: SelectionModel.SelectionChanged
+  fullName: FluentGpu.Controls.SelectionModel.SelectionChanged
+- uid: FluentGpu.Controls.SelectionModel.OnInteractedAction(System.Int32,System.Boolean,System.Boolean)
+  commentId: M:FluentGpu.Controls.SelectionModel.OnInteractedAction(System.Int32,System.Boolean,System.Boolean)
+  isExternal: true
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_OnInteractedAction_System_Int32_System_Boolean_System_Boolean_
+  name: OnInteractedAction(int, bool, bool)
+  nameWithType: SelectionModel.OnInteractedAction(int, bool, bool)
+  fullName: FluentGpu.Controls.SelectionModel.OnInteractedAction(int, bool, bool)
+  nameWithType.vb: SelectionModel.OnInteractedAction(Integer, Boolean, Boolean)
+  fullName.vb: FluentGpu.Controls.SelectionModel.OnInteractedAction(Integer, Boolean, Boolean)
+  name.vb: OnInteractedAction(Integer, Boolean, Boolean)
+  spec.csharp:
+  - uid: FluentGpu.Controls.SelectionModel.OnInteractedAction(System.Int32,System.Boolean,System.Boolean)
+    name: OnInteractedAction
+    href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_OnInteractedAction_System_Int32_System_Boolean_System_Boolean_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.SelectionModel.OnInteractedAction(System.Int32,System.Boolean,System.Boolean)
+    name: OnInteractedAction
+    href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_OnInteractedAction_System_Int32_System_Boolean_System_Boolean_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+- uid: FluentGpu.Controls.SelectionModel.OnFocusedAction(System.Int32,System.Boolean,System.Boolean)
+  commentId: M:FluentGpu.Controls.SelectionModel.OnFocusedAction(System.Int32,System.Boolean,System.Boolean)
+  isExternal: true
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_OnFocusedAction_System_Int32_System_Boolean_System_Boolean_
+  name: OnFocusedAction(int, bool, bool)
+  nameWithType: SelectionModel.OnFocusedAction(int, bool, bool)
+  fullName: FluentGpu.Controls.SelectionModel.OnFocusedAction(int, bool, bool)
+  nameWithType.vb: SelectionModel.OnFocusedAction(Integer, Boolean, Boolean)
+  fullName.vb: FluentGpu.Controls.SelectionModel.OnFocusedAction(Integer, Boolean, Boolean)
+  name.vb: OnFocusedAction(Integer, Boolean, Boolean)
+  spec.csharp:
+  - uid: FluentGpu.Controls.SelectionModel.OnFocusedAction(System.Int32,System.Boolean,System.Boolean)
+    name: OnFocusedAction
+    href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_OnFocusedAction_System_Int32_System_Boolean_System_Boolean_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.SelectionModel.OnFocusedAction(System.Int32,System.Boolean,System.Boolean)
+    name: OnFocusedAction
+    href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_OnFocusedAction_System_Int32_System_Boolean_System_Boolean_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Controls.SelectionModel.Version*
+  commentId: Overload:FluentGpu.Controls.SelectionModel.Version
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_Version
+  name: Version
+  nameWithType: SelectionModel.Version
+  fullName: FluentGpu.Controls.SelectionModel.Version
+- uid: FluentGpu.Signals.Signal{System.Int32}
+  commentId: T:FluentGpu.Signals.Signal{System.Int32}
+  parent: FluentGpu.Signals
+  definition: FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<int>
+  nameWithType: Signal<int>
+  fullName: FluentGpu.Signals.Signal<int>
+  nameWithType.vb: Signal(Of Integer)
+  fullName.vb: FluentGpu.Signals.Signal(Of Integer)
+  name.vb: Signal(Of Integer)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: FluentGpu.Signals.Signal`1
+  commentId: T:FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<T>
+  nameWithType: Signal<T>
+  fullName: FluentGpu.Signals.Signal<T>
+  nameWithType.vb: Signal(Of T)
+  fullName.vb: FluentGpu.Signals.Signal(Of T)
+  name.vb: Signal(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Signals
+  commentId: N:FluentGpu.Signals
+  href: FluentGpu.html
+  name: FluentGpu.Signals
+  nameWithType: FluentGpu.Signals
+  fullName: FluentGpu.Signals
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+- uid: System.Action
+  commentId: T:System.Action
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action
+  name: Action
+  nameWithType: Action
+  fullName: System.Action
+- uid: FluentGpu.Controls.SelectionModel.ItemCount*
+  commentId: Overload:FluentGpu.Controls.SelectionModel.ItemCount
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_ItemCount
+  name: ItemCount
+  nameWithType: SelectionModel.ItemCount
+  fullName: FluentGpu.Controls.SelectionModel.ItemCount
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Controls.SelectionModel.AnchorIndex*
+  commentId: Overload:FluentGpu.Controls.SelectionModel.AnchorIndex
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_AnchorIndex
+  name: AnchorIndex
+  nameWithType: SelectionModel.AnchorIndex
+  fullName: FluentGpu.Controls.SelectionModel.AnchorIndex
+- uid: FluentGpu.Controls.ItemsSelectionMode.Single
+  commentId: F:FluentGpu.Controls.ItemsSelectionMode.Single
+  href: FluentGpu.Controls.ItemsSelectionMode.html#FluentGpu_Controls_ItemsSelectionMode_Single
+  name: Single
+  nameWithType: ItemsSelectionMode.Single
+  fullName: FluentGpu.Controls.ItemsSelectionMode.Single
+- uid: FluentGpu.Controls.SelectionModel.Mode*
+  commentId: Overload:FluentGpu.Controls.SelectionModel.Mode
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_Mode
+  name: Mode
+  nameWithType: SelectionModel.Mode
+  fullName: FluentGpu.Controls.SelectionModel.Mode
+- uid: FluentGpu.Controls.ItemsSelectionMode
+  commentId: T:FluentGpu.Controls.ItemsSelectionMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ItemsSelectionMode.html
+  name: ItemsSelectionMode
+  nameWithType: ItemsSelectionMode
+  fullName: FluentGpu.Controls.ItemsSelectionMode
+- uid: FluentGpu.Controls.SelectionModel.SingleSelectionFollowsFocus*
+  commentId: Overload:FluentGpu.Controls.SelectionModel.SingleSelectionFollowsFocus
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_SingleSelectionFollowsFocus
+  name: SingleSelectionFollowsFocus
+  nameWithType: SelectionModel.SingleSelectionFollowsFocus
+  fullName: FluentGpu.Controls.SelectionModel.SingleSelectionFollowsFocus
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Controls.SelectionModel.IsSelected*
+  commentId: Overload:FluentGpu.Controls.SelectionModel.IsSelected
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_IsSelected_System_Int32_
+  name: IsSelected
+  nameWithType: SelectionModel.IsSelected
+  fullName: FluentGpu.Controls.SelectionModel.IsSelected
+- uid: FluentGpu.Controls.SelectionModel.SelectedCount*
+  commentId: Overload:FluentGpu.Controls.SelectionModel.SelectedCount
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_SelectedCount
+  name: SelectedCount
+  nameWithType: SelectionModel.SelectedCount
+  fullName: FluentGpu.Controls.SelectionModel.SelectedCount
+- uid: FluentGpu.Controls.SelectionModel.FirstSelectedIndex*
+  commentId: Overload:FluentGpu.Controls.SelectionModel.FirstSelectedIndex
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_FirstSelectedIndex
+  name: FirstSelectedIndex
+  nameWithType: SelectionModel.FirstSelectedIndex
+  fullName: FluentGpu.Controls.SelectionModel.FirstSelectedIndex
+- uid: FluentGpu.Controls.SelectionModel.LastSelectedIndex*
+  commentId: Overload:FluentGpu.Controls.SelectionModel.LastSelectedIndex
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_LastSelectedIndex
+  name: LastSelectedIndex
+  nameWithType: SelectionModel.LastSelectedIndex
+  fullName: FluentGpu.Controls.SelectionModel.LastSelectedIndex
+- uid: FluentGpu.Controls.SelectionModel.RangeCount*
+  commentId: Overload:FluentGpu.Controls.SelectionModel.RangeCount
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_RangeCount
+  name: RangeCount
+  nameWithType: SelectionModel.RangeCount
+  fullName: FluentGpu.Controls.SelectionModel.RangeCount
+- uid: FluentGpu.Controls.SelectionModel.GetRange*
+  commentId: Overload:FluentGpu.Controls.SelectionModel.GetRange
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_GetRange_System_Int32_
+  name: GetRange
+  nameWithType: SelectionModel.GetRange
+  fullName: FluentGpu.Controls.SelectionModel.GetRange
+- uid: System.ValueTuple{System.Int32,System.Int32}
+  commentId: T:System.ValueTuple{System.Int32,System.Int32}
+  parent: System
+  definition: System.ValueTuple`2
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: (int Start, int End)
+  nameWithType: (int Start, int End)
+  fullName: (int Start, int End)
+  nameWithType.vb: (Start As Integer, End As Integer)
+  fullName.vb: (Start As Integer, End As Integer)
+  name.vb: (Start As Integer, End As Integer)
+  spec.csharp:
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: " "
+  - uid: System.ValueTuple{System.Int32,System.Int32}.Start
+    name: Start
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple-system.int32,system.int32-.start
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: " "
+  - uid: System.ValueTuple{System.Int32,System.Int32}.End
+    name: End
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple-system.int32,system.int32-.end
+  - name: )
+  spec.vb:
+  - name: (
+  - uid: System.ValueTuple{System.Int32,System.Int32}.Start
+    name: Start
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple-system.int32,system.int32-.start
+  - name: " "
+  - name: As
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.ValueTuple{System.Int32,System.Int32}.End
+    name: End
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple-system.int32,system.int32-.end
+  - name: " "
+  - name: As
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: System.ValueTuple`2
+  commentId: T:System.ValueTuple`2
+  name: (T1, T2)
+  nameWithType: (T1, T2)
+  fullName: (T1, T2)
+  spec.csharp:
+  - name: (
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: )
+  spec.vb:
+  - name: (
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: )
+- uid: FluentGpu.Controls.SelectionModel.GetSelectedIndices*
+  commentId: Overload:FluentGpu.Controls.SelectionModel.GetSelectedIndices
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_GetSelectedIndices_System_Collections_Generic_List_System_Int32__
+  name: GetSelectedIndices
+  nameWithType: SelectionModel.GetSelectedIndices
+  fullName: FluentGpu.Controls.SelectionModel.GetSelectedIndices
+- uid: System.Collections.Generic.List{System.Int32}
+  commentId: T:System.Collections.Generic.List{System.Int32}
+  parent: System.Collections.Generic
+  definition: System.Collections.Generic.List`1
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  name: List<int>
+  nameWithType: List<int>
+  fullName: System.Collections.Generic.List<int>
+  nameWithType.vb: List(Of Integer)
+  fullName.vb: System.Collections.Generic.List(Of Integer)
+  name.vb: List(Of Integer)
+  spec.csharp:
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: System.Collections.Generic.List`1
+  commentId: T:System.Collections.Generic.List`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  name: List<T>
+  nameWithType: List<T>
+  fullName: System.Collections.Generic.List<T>
+  nameWithType.vb: List(Of T)
+  fullName.vb: System.Collections.Generic.List(Of T)
+  name.vb: List(Of T)
+  spec.csharp:
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Collections.Generic
+  commentId: N:System.Collections.Generic
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System.Collections.Generic
+  nameWithType: System.Collections.Generic
+  fullName: System.Collections.Generic
+  spec.csharp:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+  spec.vb:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+- uid: FluentGpu.Controls.SelectionModel.Select*
+  commentId: Overload:FluentGpu.Controls.SelectionModel.Select
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_Select_System_Int32_
+  name: Select
+  nameWithType: SelectionModel.Select
+  fullName: FluentGpu.Controls.SelectionModel.Select
+- uid: FluentGpu.Controls.SelectionModel.Deselect*
+  commentId: Overload:FluentGpu.Controls.SelectionModel.Deselect
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_Deselect_System_Int32_
+  name: Deselect
+  nameWithType: SelectionModel.Deselect
+  fullName: FluentGpu.Controls.SelectionModel.Deselect
+- uid: FluentGpu.Controls.SelectionModel.Toggle*
+  commentId: Overload:FluentGpu.Controls.SelectionModel.Toggle
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_Toggle_System_Int32_
+  name: Toggle
+  nameWithType: SelectionModel.Toggle
+  fullName: FluentGpu.Controls.SelectionModel.Toggle
+- uid: FluentGpu.Controls.SelectionModel.SelectRange*
+  commentId: Overload:FluentGpu.Controls.SelectionModel.SelectRange
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_SelectRange_System_Int32_System_Int32_
+  name: SelectRange
+  nameWithType: SelectionModel.SelectRange
+  fullName: FluentGpu.Controls.SelectionModel.SelectRange
+- uid: FluentGpu.Controls.SelectionModel.DeselectRange*
+  commentId: Overload:FluentGpu.Controls.SelectionModel.DeselectRange
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_DeselectRange_System_Int32_System_Int32_
+  name: DeselectRange
+  nameWithType: SelectionModel.DeselectRange
+  fullName: FluentGpu.Controls.SelectionModel.DeselectRange
+- uid: FluentGpu.Controls.SelectionModel.SelectRangeFromAnchorTo*
+  commentId: Overload:FluentGpu.Controls.SelectionModel.SelectRangeFromAnchorTo
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_SelectRangeFromAnchorTo_System_Int32_
+  name: SelectRangeFromAnchorTo
+  nameWithType: SelectionModel.SelectRangeFromAnchorTo
+  fullName: FluentGpu.Controls.SelectionModel.SelectRangeFromAnchorTo
+- uid: FluentGpu.Controls.SelectionModel.DeselectRangeFromAnchorTo*
+  commentId: Overload:FluentGpu.Controls.SelectionModel.DeselectRangeFromAnchorTo
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_DeselectRangeFromAnchorTo_System_Int32_
+  name: DeselectRangeFromAnchorTo
+  nameWithType: SelectionModel.DeselectRangeFromAnchorTo
+  fullName: FluentGpu.Controls.SelectionModel.DeselectRangeFromAnchorTo
+- uid: FluentGpu.Controls.SelectionModel.SelectAll*
+  commentId: Overload:FluentGpu.Controls.SelectionModel.SelectAll
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_SelectAll
+  name: SelectAll
+  nameWithType: SelectionModel.SelectAll
+  fullName: FluentGpu.Controls.SelectionModel.SelectAll
+- uid: FluentGpu.Controls.SelectionModel.DeselectAll*
+  commentId: Overload:FluentGpu.Controls.SelectionModel.DeselectAll
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_DeselectAll
+  name: DeselectAll
+  nameWithType: SelectionModel.DeselectAll
+  fullName: FluentGpu.Controls.SelectionModel.DeselectAll
+- uid: FluentGpu.Controls.SelectionModel.DeselectAll
+  commentId: M:FluentGpu.Controls.SelectionModel.DeselectAll
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_DeselectAll
+  name: DeselectAll()
+  nameWithType: SelectionModel.DeselectAll()
+  fullName: FluentGpu.Controls.SelectionModel.DeselectAll()
+  spec.csharp:
+  - uid: FluentGpu.Controls.SelectionModel.DeselectAll
+    name: DeselectAll
+    href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_DeselectAll
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.SelectionModel.DeselectAll
+    name: DeselectAll
+    href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_DeselectAll
+  - name: (
+  - name: )
+- uid: FluentGpu.Controls.SelectionModel.ClearSelection*
+  commentId: Overload:FluentGpu.Controls.SelectionModel.ClearSelection
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_ClearSelection
+  name: ClearSelection
+  nameWithType: SelectionModel.ClearSelection
+  fullName: FluentGpu.Controls.SelectionModel.ClearSelection
+- uid: FluentGpu.Controls.SelectionModel.InvertSelection*
+  commentId: Overload:FluentGpu.Controls.SelectionModel.InvertSelection
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_InvertSelection
+  name: InvertSelection
+  nameWithType: SelectionModel.InvertSelection
+  fullName: FluentGpu.Controls.SelectionModel.InvertSelection
+- uid: FluentGpu.Controls.SelectionModel.RemapMove*
+  commentId: Overload:FluentGpu.Controls.SelectionModel.RemapMove
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_RemapMove_System_Int32_System_Int32_
+  name: RemapMove
+  nameWithType: SelectionModel.RemapMove
+  fullName: FluentGpu.Controls.SelectionModel.RemapMove
+- uid: FluentGpu.Controls.SelectionModel.OnInteractedAction*
+  commentId: Overload:FluentGpu.Controls.SelectionModel.OnInteractedAction
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_OnInteractedAction_System_Int32_System_Boolean_System_Boolean_
+  name: OnInteractedAction
+  nameWithType: SelectionModel.OnInteractedAction
+  fullName: FluentGpu.Controls.SelectionModel.OnInteractedAction
+- uid: FluentGpu.Controls.SelectionModel.OnFocusedAction*
+  commentId: Overload:FluentGpu.Controls.SelectionModel.OnFocusedAction
+  href: FluentGpu.Controls.SelectionModel.html#FluentGpu_Controls_SelectionModel_OnFocusedAction_System_Int32_System_Boolean_System_Boolean_
+  name: OnFocusedAction
+  nameWithType: SelectionModel.OnFocusedAction
+  fullName: FluentGpu.Controls.SelectionModel.OnFocusedAction

@@ -461,7 +461,7 @@ owned by `com-interop.md`; this is the DSL `WGPU####` set). Error unless noted:
 | ID | Rule |
 |----|------|
 | WGPU0001 | `[Element]` type must be `sealed partial record` deriving `Element`. |
-| WGPU0002 | `[Prop]` type must be diffable (value/`StringId`/handle/`BrushSpec`/delegate); no `string`/heavy COM types (cross-platform + paint-path-string ban, `foundations.md` §1). |
+| WGPU0002 | `[Prop]` type must be diffable (value/`StringId`/handle/`BrushSpec`/delegate); no `string`/heavy COM types (cross-platform + paint-path-string ban, `foundations.md` §1). `Prop<T>` (the unified reactive channel, reconciler-hooks.md §0bis) is a PERMITTED `[Prop]` type: a value struct whose `object?` payload diffs by reference — the shipped engine relies on element value-equality nowhere (only `ReferenceEquals` shortcuts), so a fresh thunk making records reference-unequal is a non-issue for `DiffProps`. |
 | WGPU0003 | Duplicate `ElementTypeId` across `[Element]` types. |
 | WGPU0004 | `.Set(Action<TWinUI>)` removed → suggest `.Set(Action<SceneWriter>)` / `with`. |
 | WGPU0005 | Hook called outside `Component.Render` / conditionally (rules-of-hooks; Reactor's runtime `HookOrderException` promoted to a *compile-time* error). |
@@ -710,7 +710,7 @@ and AOT-clean.
   <SkipLocalsInit>true</SkipLocalsInit>            <!-- module-wide; hot stackalloc paths skip zero-init -->
 </PropertyGroup>
 ```
-`[assembly: DisableRuntimeMarshalling]` on `FluentGpu.Renderer`/`Pal` (hand-vtable `calli`, all blittable);
+`[assembly: DisableRuntimeMarshalling]` on `FluentGpu.Engine` (Render/ + Seams/) (hand-vtable `calli`, all blittable);
 the source-gen COM hierarchy lives in a separate assembly **without** that attribute (it uses `in`/`out`).
 `[module: SkipLocalsInit]` in every runtime assembly. Runtime, once at engine init:
 ```csharp
@@ -732,7 +732,7 @@ GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;   // suppress FOREGR
   deps:** `Foundation`, `Dsl`, `Hooks`, **`Animation`, `Scene`, `Reconciler`** — *not* the earlier
   "`Dsl`/`Hooks`/`Foundation` only" claim. The relaxation is ratified: NavigationView/PageHost are `Component`s and
   the Repeater/`Virtual` factory need Reconciler types; `IVirtualLayout` lives in `Scene`. It stays **acyclic** —
-  Reconciler references only `VirtualListEl` (which stays in Reconciler), so `Controls → Reconciler` is one-way.
+  `VirtualListEl` is **declared in `Reconciler`** (and consumed by `Controls` via the `Virtual` factory), so `Controls → Reconciler` is one-way with no back-edge.
   It is **not** feature-switched (controls are pay-for-what-you-reference via the trimmer). Its own per-control
   footprint rides the §3.6 per-element ≤1.5 KB marginal target. (Aspirational lookless kit sequences *after* the
   L1/L2/L4/L6 seams stabilize; the as-shipped Phase 0 hoist ships now — see `controls.md`.)
@@ -766,8 +766,8 @@ GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;   // suppress FOREGR
 | `FluentGpu.Localization` (`Embedded` mode, per declared culture blob) | ~40–180 KB / culture (separate tier) |
 | `FluentGpu.Controls` (per control referenced) | ≤ 1.5 KB marginal/control (rides the per-element ratchet) |
 | `FluentGpu.Devtools` (`EnableDevtools` off) | **0 KB** (feature-switched out of release) |
-| `FluentGpu.Win32.D3D12` (extracted, graphics-trimmed) | ≤ 250 KB |
-| `FluentGpu.Win32.DWrite` + `DComp` (authored) | ≤ 120 KB |
+| `FluentGpu.Windows` D3D12/ (extracted, graphics-trimmed) | ≤ 250 KB |
+| `FluentGpu.Windows` DirectWrite/ + DComp (authored) | ≤ 120 KB |
 | **Whole "rounded-rect + text" self-contained AOT exe** (`Invariant`/no-controls baseline) | **≤ 5.5 MB** |
 
 Measurement pipeline (the CI gate lives in `FluentGpu.Validation`/`validation.md`; this doc sets the
@@ -1012,7 +1012,7 @@ lists, deps, scene writes) is arena/slab/span.
                       runs on any OS)                                    │
  FluentGpu.Localization  baked CLDR blobs + Loc.* (pure data, any OS)    │  IPlatformLocale impl (NSLocale vs
  FluentGpu.Controls  portable (refs Foundation/Dsl/Hooks/Animation/      │   WM_SETTINGCHANGE) is a Pal leaf
-   Scene/Reconciler — one-way; Reconciler refs only VirtualListEl).      │
+   Scene/Reconciler — one-way; VirtualListEl declared in Reconciler).    │
  FluentGpu.Devtools  portable (refs Dsl/Hooks/Foundation)                │
  ───────────────────────────────────────────────────────────────────── │ ──────────────────────────────
  SceneWriter gen      portable (writes portable SoA POD)                 │

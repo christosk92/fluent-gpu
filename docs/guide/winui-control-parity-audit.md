@@ -24,7 +24,7 @@ FluentGpu now has one real interaction animation path:
   `PressedOpacity`, `HoverScale`, `PressScale`, per-node hover/press duration, and easing.
 - `PolylineStrokeEl` supports transform/opacity plus hover/press scale, and the animation system supports stroke trim
   keyframes.
-- `TextEl` has static `Color` and reactive `ColorBind`, but no built-in hover/pressed/disabled/focused text-state
+- `TextEl` has the unified `Color` channel (static/thunk/signal), but no built-in hover/pressed/disabled/focused text-state
   ramps.
 - `BoxEl` has handlers for click, key, char input, pointer down, drag, focusability, repeat, hit testing, and a basic
   role field.

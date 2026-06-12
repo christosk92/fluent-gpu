@@ -1,0 +1,618 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.FlyoutPlacement
+  commentId: T:FluentGpu.Controls.FlyoutPlacement
+  id: FlyoutPlacement
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.FlyoutPlacement.Bottom
+  - FluentGpu.Controls.FlyoutPlacement.BottomCenter
+  - FluentGpu.Controls.FlyoutPlacement.BottomEdgeAlignedLeft
+  - FluentGpu.Controls.FlyoutPlacement.BottomEdgeAlignedRight
+  - FluentGpu.Controls.FlyoutPlacement.BottomLeft
+  - FluentGpu.Controls.FlyoutPlacement.BottomStretch
+  - FluentGpu.Controls.FlyoutPlacement.Full
+  - FluentGpu.Controls.FlyoutPlacement.Left
+  - FluentGpu.Controls.FlyoutPlacement.LeftEdgeAlignedBottom
+  - FluentGpu.Controls.FlyoutPlacement.LeftEdgeAlignedTop
+  - FluentGpu.Controls.FlyoutPlacement.OverlapStretch
+  - FluentGpu.Controls.FlyoutPlacement.Right
+  - FluentGpu.Controls.FlyoutPlacement.RightEdgeAlignedBottom
+  - FluentGpu.Controls.FlyoutPlacement.RightEdgeAlignedTop
+  - FluentGpu.Controls.FlyoutPlacement.Top
+  - FluentGpu.Controls.FlyoutPlacement.TopCenter
+  - FluentGpu.Controls.FlyoutPlacement.TopEdgeAlignedLeft
+  - FluentGpu.Controls.FlyoutPlacement.TopEdgeAlignedRight
+  - FluentGpu.Controls.FlyoutPlacement.TopLeft
+  langs:
+  - csharp
+  - vb
+  name: FlyoutPlacement
+  nameWithType: FlyoutPlacement
+  fullName: FluentGpu.Controls.FlyoutPlacement
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FlyoutPlacement
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Where a flyout opens relative to its anchor — the full WinUI <code>FlyoutPlacementMode</code> matrix
+
+    (FlyoutBase_Partial.cpp:84-110 maps each mode to a major side + an edge justification) plus the engine's
+
+    pre-existing aliases kept for source compatibility:
+
+
+    <ul><li><xref href="FluentGpu.Controls.FlyoutPlacement.BottomLeft" data-throw-if-not-resolved="false"></xref>/<xref href="FluentGpu.Controls.FlyoutPlacement.TopLeft" data-throw-if-not-resolved="false"></xref> ≡ WinUI <code>BottomEdgeAlignedLeft</code>/<code>TopEdgeAlignedLeft</code>.</li><li><xref href="FluentGpu.Controls.FlyoutPlacement.BottomCenter" data-throw-if-not-resolved="false"></xref>/<xref href="FluentGpu.Controls.FlyoutPlacement.TopCenter" data-throw-if-not-resolved="false"></xref> ≡ WinUI <code>Bottom</code>/<code>Top</code> (center-justified).</li><li><xref href="FluentGpu.Controls.FlyoutPlacement.BottomStretch" data-throw-if-not-resolved="false"></xref> = the attached ComboBox/AutoSuggest dropdown (flush, width-matched, corner-joined)
+      — not a FlyoutBase mode; WinUI ComboBox places its own popup over/under the field.</li></ul>
+  example: []
+  syntax:
+    content: 'public enum FlyoutPlacement : byte'
+    content.vb: Public Enum FlyoutPlacement As Byte
+- uid: FluentGpu.Controls.FlyoutPlacement.BottomLeft
+  commentId: F:FluentGpu.Controls.FlyoutPlacement.BottomLeft
+  id: BottomLeft
+  parent: FluentGpu.Controls.FlyoutPlacement
+  langs:
+  - csharp
+  - vb
+  name: BottomLeft
+  nameWithType: FlyoutPlacement.BottomLeft
+  fullName: FluentGpu.Controls.FlyoutPlacement.BottomLeft
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BottomLeft
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: BottomLeft = 0
+    return:
+      type: FluentGpu.Controls.FlyoutPlacement
+- uid: FluentGpu.Controls.FlyoutPlacement.BottomStretch
+  commentId: F:FluentGpu.Controls.FlyoutPlacement.BottomStretch
+  id: BottomStretch
+  parent: FluentGpu.Controls.FlyoutPlacement
+  langs:
+  - csharp
+  - vb
+  name: BottomStretch
+  nameWithType: FlyoutPlacement.BottomStretch
+  fullName: FluentGpu.Controls.FlyoutPlacement.BottomStretch
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BottomStretch
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: BottomStretch = 1
+    return:
+      type: FluentGpu.Controls.FlyoutPlacement
+- uid: FluentGpu.Controls.FlyoutPlacement.BottomCenter
+  commentId: F:FluentGpu.Controls.FlyoutPlacement.BottomCenter
+  id: BottomCenter
+  parent: FluentGpu.Controls.FlyoutPlacement
+  langs:
+  - csharp
+  - vb
+  name: BottomCenter
+  nameWithType: FlyoutPlacement.BottomCenter
+  fullName: FluentGpu.Controls.FlyoutPlacement.BottomCenter
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BottomCenter
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: BottomCenter = 2
+    return:
+      type: FluentGpu.Controls.FlyoutPlacement
+- uid: FluentGpu.Controls.FlyoutPlacement.TopLeft
+  commentId: F:FluentGpu.Controls.FlyoutPlacement.TopLeft
+  id: TopLeft
+  parent: FluentGpu.Controls.FlyoutPlacement
+  langs:
+  - csharp
+  - vb
+  name: TopLeft
+  nameWithType: FlyoutPlacement.TopLeft
+  fullName: FluentGpu.Controls.FlyoutPlacement.TopLeft
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TopLeft
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: TopLeft = 3
+    return:
+      type: FluentGpu.Controls.FlyoutPlacement
+- uid: FluentGpu.Controls.FlyoutPlacement.TopCenter
+  commentId: F:FluentGpu.Controls.FlyoutPlacement.TopCenter
+  id: TopCenter
+  parent: FluentGpu.Controls.FlyoutPlacement
+  langs:
+  - csharp
+  - vb
+  name: TopCenter
+  nameWithType: FlyoutPlacement.TopCenter
+  fullName: FluentGpu.Controls.FlyoutPlacement.TopCenter
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TopCenter
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 21
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: TopCenter = 4
+    return:
+      type: FluentGpu.Controls.FlyoutPlacement
+- uid: FluentGpu.Controls.FlyoutPlacement.Top
+  commentId: F:FluentGpu.Controls.FlyoutPlacement.Top
+  id: Top
+  parent: FluentGpu.Controls.FlyoutPlacement
+  langs:
+  - csharp
+  - vb
+  name: Top
+  nameWithType: FlyoutPlacement.Top
+  fullName: FluentGpu.Controls.FlyoutPlacement.Top
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Top
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 24
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Top = 5
+    return:
+      type: FluentGpu.Controls.FlyoutPlacement
+- uid: FluentGpu.Controls.FlyoutPlacement.Bottom
+  commentId: F:FluentGpu.Controls.FlyoutPlacement.Bottom
+  id: Bottom
+  parent: FluentGpu.Controls.FlyoutPlacement
+  langs:
+  - csharp
+  - vb
+  name: Bottom
+  nameWithType: FlyoutPlacement.Bottom
+  fullName: FluentGpu.Controls.FlyoutPlacement.Bottom
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Bottom
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 25
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Bottom = 6
+    return:
+      type: FluentGpu.Controls.FlyoutPlacement
+- uid: FluentGpu.Controls.FlyoutPlacement.Left
+  commentId: F:FluentGpu.Controls.FlyoutPlacement.Left
+  id: Left
+  parent: FluentGpu.Controls.FlyoutPlacement
+  langs:
+  - csharp
+  - vb
+  name: Left
+  nameWithType: FlyoutPlacement.Left
+  fullName: FluentGpu.Controls.FlyoutPlacement.Left
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Left
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 26
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Left = 7
+    return:
+      type: FluentGpu.Controls.FlyoutPlacement
+- uid: FluentGpu.Controls.FlyoutPlacement.Right
+  commentId: F:FluentGpu.Controls.FlyoutPlacement.Right
+  id: Right
+  parent: FluentGpu.Controls.FlyoutPlacement
+  langs:
+  - csharp
+  - vb
+  name: Right
+  nameWithType: FlyoutPlacement.Right
+  fullName: FluentGpu.Controls.FlyoutPlacement.Right
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Right
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Right = 8
+    return:
+      type: FluentGpu.Controls.FlyoutPlacement
+- uid: FluentGpu.Controls.FlyoutPlacement.TopEdgeAlignedLeft
+  commentId: F:FluentGpu.Controls.FlyoutPlacement.TopEdgeAlignedLeft
+  id: TopEdgeAlignedLeft
+  parent: FluentGpu.Controls.FlyoutPlacement
+  langs:
+  - csharp
+  - vb
+  name: TopEdgeAlignedLeft
+  nameWithType: FlyoutPlacement.TopEdgeAlignedLeft
+  fullName: FluentGpu.Controls.FlyoutPlacement.TopEdgeAlignedLeft
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TopEdgeAlignedLeft
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 28
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: TopEdgeAlignedLeft = 9
+    return:
+      type: FluentGpu.Controls.FlyoutPlacement
+- uid: FluentGpu.Controls.FlyoutPlacement.TopEdgeAlignedRight
+  commentId: F:FluentGpu.Controls.FlyoutPlacement.TopEdgeAlignedRight
+  id: TopEdgeAlignedRight
+  parent: FluentGpu.Controls.FlyoutPlacement
+  langs:
+  - csharp
+  - vb
+  name: TopEdgeAlignedRight
+  nameWithType: FlyoutPlacement.TopEdgeAlignedRight
+  fullName: FluentGpu.Controls.FlyoutPlacement.TopEdgeAlignedRight
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TopEdgeAlignedRight
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 29
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: TopEdgeAlignedRight = 10
+    return:
+      type: FluentGpu.Controls.FlyoutPlacement
+- uid: FluentGpu.Controls.FlyoutPlacement.BottomEdgeAlignedLeft
+  commentId: F:FluentGpu.Controls.FlyoutPlacement.BottomEdgeAlignedLeft
+  id: BottomEdgeAlignedLeft
+  parent: FluentGpu.Controls.FlyoutPlacement
+  langs:
+  - csharp
+  - vb
+  name: BottomEdgeAlignedLeft
+  nameWithType: FlyoutPlacement.BottomEdgeAlignedLeft
+  fullName: FluentGpu.Controls.FlyoutPlacement.BottomEdgeAlignedLeft
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BottomEdgeAlignedLeft
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 30
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: BottomEdgeAlignedLeft = 11
+    return:
+      type: FluentGpu.Controls.FlyoutPlacement
+- uid: FluentGpu.Controls.FlyoutPlacement.BottomEdgeAlignedRight
+  commentId: F:FluentGpu.Controls.FlyoutPlacement.BottomEdgeAlignedRight
+  id: BottomEdgeAlignedRight
+  parent: FluentGpu.Controls.FlyoutPlacement
+  langs:
+  - csharp
+  - vb
+  name: BottomEdgeAlignedRight
+  nameWithType: FlyoutPlacement.BottomEdgeAlignedRight
+  fullName: FluentGpu.Controls.FlyoutPlacement.BottomEdgeAlignedRight
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BottomEdgeAlignedRight
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 31
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: BottomEdgeAlignedRight = 12
+    return:
+      type: FluentGpu.Controls.FlyoutPlacement
+- uid: FluentGpu.Controls.FlyoutPlacement.LeftEdgeAlignedTop
+  commentId: F:FluentGpu.Controls.FlyoutPlacement.LeftEdgeAlignedTop
+  id: LeftEdgeAlignedTop
+  parent: FluentGpu.Controls.FlyoutPlacement
+  langs:
+  - csharp
+  - vb
+  name: LeftEdgeAlignedTop
+  nameWithType: FlyoutPlacement.LeftEdgeAlignedTop
+  fullName: FluentGpu.Controls.FlyoutPlacement.LeftEdgeAlignedTop
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LeftEdgeAlignedTop
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: LeftEdgeAlignedTop = 13
+    return:
+      type: FluentGpu.Controls.FlyoutPlacement
+- uid: FluentGpu.Controls.FlyoutPlacement.LeftEdgeAlignedBottom
+  commentId: F:FluentGpu.Controls.FlyoutPlacement.LeftEdgeAlignedBottom
+  id: LeftEdgeAlignedBottom
+  parent: FluentGpu.Controls.FlyoutPlacement
+  langs:
+  - csharp
+  - vb
+  name: LeftEdgeAlignedBottom
+  nameWithType: FlyoutPlacement.LeftEdgeAlignedBottom
+  fullName: FluentGpu.Controls.FlyoutPlacement.LeftEdgeAlignedBottom
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LeftEdgeAlignedBottom
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: LeftEdgeAlignedBottom = 14
+    return:
+      type: FluentGpu.Controls.FlyoutPlacement
+- uid: FluentGpu.Controls.FlyoutPlacement.RightEdgeAlignedTop
+  commentId: F:FluentGpu.Controls.FlyoutPlacement.RightEdgeAlignedTop
+  id: RightEdgeAlignedTop
+  parent: FluentGpu.Controls.FlyoutPlacement
+  langs:
+  - csharp
+  - vb
+  name: RightEdgeAlignedTop
+  nameWithType: FlyoutPlacement.RightEdgeAlignedTop
+  fullName: FluentGpu.Controls.FlyoutPlacement.RightEdgeAlignedTop
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RightEdgeAlignedTop
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 34
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: RightEdgeAlignedTop = 15
+    return:
+      type: FluentGpu.Controls.FlyoutPlacement
+- uid: FluentGpu.Controls.FlyoutPlacement.RightEdgeAlignedBottom
+  commentId: F:FluentGpu.Controls.FlyoutPlacement.RightEdgeAlignedBottom
+  id: RightEdgeAlignedBottom
+  parent: FluentGpu.Controls.FlyoutPlacement
+  langs:
+  - csharp
+  - vb
+  name: RightEdgeAlignedBottom
+  nameWithType: FlyoutPlacement.RightEdgeAlignedBottom
+  fullName: FluentGpu.Controls.FlyoutPlacement.RightEdgeAlignedBottom
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RightEdgeAlignedBottom
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: RightEdgeAlignedBottom = 16
+    return:
+      type: FluentGpu.Controls.FlyoutPlacement
+- uid: FluentGpu.Controls.FlyoutPlacement.Full
+  commentId: F:FluentGpu.Controls.FlyoutPlacement.Full
+  id: Full
+  parent: FluentGpu.Controls.FlyoutPlacement
+  langs:
+  - csharp
+  - vb
+  name: Full
+  nameWithType: FlyoutPlacement.Full
+  fullName: FluentGpu.Controls.FlyoutPlacement.Full
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Full
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Full = 17
+    return:
+      type: FluentGpu.Controls.FlyoutPlacement
+- uid: FluentGpu.Controls.FlyoutPlacement.OverlapStretch
+  commentId: F:FluentGpu.Controls.FlyoutPlacement.OverlapStretch
+  id: OverlapStretch
+  parent: FluentGpu.Controls.FlyoutPlacement
+  langs:
+  - csharp
+  - vb
+  name: OverlapStretch
+  nameWithType: FlyoutPlacement.OverlapStretch
+  fullName: FluentGpu.Controls.FlyoutPlacement.OverlapStretch
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OverlapStretch
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 42
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The non-editable ComboBox dropdown: width-matched and laid OVER the field — the popup's top-left sits
+        at the (caller-shifted) anchor origin so the SELECTED item lines up over the closed field (the WinUI ComboBox
+        positions its own popup via TemplateSettings.DropDownOffset, not FlyoutBase). Clamped into the container;
+        no corner join (the popup keeps OverlayCornerRadius on all corners and overlaps the field).
+  example: []
+  syntax:
+    content: OverlapStretch = 18
+    return:
+      type: FluentGpu.Controls.FlyoutPlacement
+references:
+- uid: FluentGpu.Controls.FlyoutPlacement.BottomLeft
+  commentId: F:FluentGpu.Controls.FlyoutPlacement.BottomLeft
+  href: FluentGpu.Controls.FlyoutPlacement.html#FluentGpu_Controls_FlyoutPlacement_BottomLeft
+  name: BottomLeft
+  nameWithType: FlyoutPlacement.BottomLeft
+  fullName: FluentGpu.Controls.FlyoutPlacement.BottomLeft
+- uid: FluentGpu.Controls.FlyoutPlacement.TopLeft
+  commentId: F:FluentGpu.Controls.FlyoutPlacement.TopLeft
+  href: FluentGpu.Controls.FlyoutPlacement.html#FluentGpu_Controls_FlyoutPlacement_TopLeft
+  name: TopLeft
+  nameWithType: FlyoutPlacement.TopLeft
+  fullName: FluentGpu.Controls.FlyoutPlacement.TopLeft
+- uid: FluentGpu.Controls.FlyoutPlacement.BottomCenter
+  commentId: F:FluentGpu.Controls.FlyoutPlacement.BottomCenter
+  href: FluentGpu.Controls.FlyoutPlacement.html#FluentGpu_Controls_FlyoutPlacement_BottomCenter
+  name: BottomCenter
+  nameWithType: FlyoutPlacement.BottomCenter
+  fullName: FluentGpu.Controls.FlyoutPlacement.BottomCenter
+- uid: FluentGpu.Controls.FlyoutPlacement.TopCenter
+  commentId: F:FluentGpu.Controls.FlyoutPlacement.TopCenter
+  href: FluentGpu.Controls.FlyoutPlacement.html#FluentGpu_Controls_FlyoutPlacement_TopCenter
+  name: TopCenter
+  nameWithType: FlyoutPlacement.TopCenter
+  fullName: FluentGpu.Controls.FlyoutPlacement.TopCenter
+- uid: FluentGpu.Controls.FlyoutPlacement.BottomStretch
+  commentId: F:FluentGpu.Controls.FlyoutPlacement.BottomStretch
+  href: FluentGpu.Controls.FlyoutPlacement.html#FluentGpu_Controls_FlyoutPlacement_BottomStretch
+  name: BottomStretch
+  nameWithType: FlyoutPlacement.BottomStretch
+  fullName: FluentGpu.Controls.FlyoutPlacement.BottomStretch
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.FlyoutPlacement
+  commentId: T:FluentGpu.Controls.FlyoutPlacement
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.FlyoutPlacement.html
+  name: FlyoutPlacement
+  nameWithType: FlyoutPlacement
+  fullName: FluentGpu.Controls.FlyoutPlacement

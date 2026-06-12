@@ -1,0 +1,1354 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.RepeatLayout
+  commentId: T:FluentGpu.Controls.RepeatLayout
+  id: RepeatLayout
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.RepeatLayout.Columns
+  - FluentGpu.Controls.RepeatLayout.Custom(FluentGpu.Scene.IVirtualLayout,System.Boolean)
+  - FluentGpu.Controls.RepeatLayout.CustomLayout
+  - FluentGpu.Controls.RepeatLayout.Extent
+  - FluentGpu.Controls.RepeatLayout.Gap
+  - FluentGpu.Controls.RepeatLayout.Grid(System.Int32,System.Single,System.Single)
+  - FluentGpu.Controls.RepeatLayout.Horizontal
+  - FluentGpu.Controls.RepeatLayout.HorizontalGrid(System.Int32,System.Single,System.Single)
+  - FluentGpu.Controls.RepeatLayout.Inline(System.Boolean,System.Single)
+  - FluentGpu.Controls.RepeatLayout.Kind
+  - FluentGpu.Controls.RepeatLayout.LinedFlow(System.Single,System.Func{System.Int32,System.Single},System.Single,System.Single)
+  - FluentGpu.Controls.RepeatLayout.Measured(FluentGpu.Scene.IMeasuredVirtualLayout,System.Boolean)
+  - FluentGpu.Controls.RepeatLayout.SpanGrid(System.Int32,System.Single,System.Single,System.Func{System.Int32,System.Int32})
+  - FluentGpu.Controls.RepeatLayout.Stack(System.Single,System.Boolean)
+  - FluentGpu.Controls.RepeatLayout.Wrap(System.Single)
+  langs:
+  - csharp
+  - vb
+  name: RepeatLayout
+  nameWithType: RepeatLayout
+  fullName: FluentGpu.Controls.RepeatLayout
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RepeatLayout
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A pluggable layout for <xref href="FluentGpu.Controls.Repeater.ItemsRepeater(System.Int32%2cSystem.Func%7bSystem.Int32%2cFluentGpu.Dsl.Element%7d%2cFluentGpu.Controls.RepeatLayout%40%2cSystem.Func%7bSystem.Int32%2cSystem.String%7d%2cSystem.Int32%2cSystem.Action%7bSystem.Int32%7d%2cSystem.Action%7bSystem.Int32%7d%2cSystem.Action%7bSystem.Int32%2cSystem.Int32%7d%2cSystem.Action%7bSystem.Int32%2cSystem.Int32%7d%2cSystem.Nullable%7bFluentGpu.Controls.ItemCollectionTransition%7d)" data-throw-if-not-resolved="false"></xref> — the equivalent of WinUI's <code>Layout</code> object. A
+
+    readonly struct (no per-call allocation). Stack/Grid/Custom virtualize (only the window is realized); Wrap/Inline
+
+    are non-virtual (build the whole child list — use for SMALL collections like a nav pane or a toolbar).
+
+    Measured/LinedFlow/SpanGrid/HorizontalGrid ride the Custom slot (every layout object IS an
+
+    <xref href="FluentGpu.Scene.IVirtualLayout" data-throw-if-not-resolved="false"></xref>; variable-extent ones are <xref href="FluentGpu.Scene.IMeasuredVirtualLayout" data-throw-if-not-resolved="false"></xref> — E11-L0's one seam).
+
+    NOTE: the stateful layouts (Measured/LinedFlow/SpanGrid/Grouped) own realize tables — when the OWNING component
+
+    re-renders, hoist the layout instance (e.g. <code>UseMemo</code>) instead of calling the factory inline each render.
+  example: []
+  syntax:
+    content: public readonly struct RepeatLayout
+    content.vb: Public Structure RepeatLayout
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Controls.RepeatLayout.Kind
+  commentId: F:FluentGpu.Controls.RepeatLayout.Kind
+  id: Kind
+  parent: FluentGpu.Controls.RepeatLayout
+  langs:
+  - csharp
+  - vb
+  name: Kind
+  nameWithType: RepeatLayout.Kind
+  fullName: FluentGpu.Controls.RepeatLayout.Kind
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Kind
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public readonly RepeatKind Kind
+    return:
+      type: FluentGpu.Controls.RepeatKind
+    content.vb: Public ReadOnly Kind As RepeatKind
+- uid: FluentGpu.Controls.RepeatLayout.Extent
+  commentId: F:FluentGpu.Controls.RepeatLayout.Extent
+  id: Extent
+  parent: FluentGpu.Controls.RepeatLayout
+  langs:
+  - csharp
+  - vb
+  name: Extent
+  nameWithType: RepeatLayout.Extent
+  fullName: FluentGpu.Controls.RepeatLayout.Extent
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Extent
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 21
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public readonly float Extent
+    return:
+      type: System.Single
+    content.vb: Public ReadOnly Extent As Single
+- uid: FluentGpu.Controls.RepeatLayout.Gap
+  commentId: F:FluentGpu.Controls.RepeatLayout.Gap
+  id: Gap
+  parent: FluentGpu.Controls.RepeatLayout
+  langs:
+  - csharp
+  - vb
+  name: Gap
+  nameWithType: RepeatLayout.Gap
+  fullName: FluentGpu.Controls.RepeatLayout.Gap
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Gap
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public readonly float Gap
+    return:
+      type: System.Single
+    content.vb: Public ReadOnly Gap As Single
+- uid: FluentGpu.Controls.RepeatLayout.Columns
+  commentId: F:FluentGpu.Controls.RepeatLayout.Columns
+  id: Columns
+  parent: FluentGpu.Controls.RepeatLayout
+  langs:
+  - csharp
+  - vb
+  name: Columns
+  nameWithType: RepeatLayout.Columns
+  fullName: FluentGpu.Controls.RepeatLayout.Columns
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Columns
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public readonly int Columns
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Columns As Integer
+- uid: FluentGpu.Controls.RepeatLayout.Horizontal
+  commentId: F:FluentGpu.Controls.RepeatLayout.Horizontal
+  id: Horizontal
+  parent: FluentGpu.Controls.RepeatLayout
+  langs:
+  - csharp
+  - vb
+  name: Horizontal
+  nameWithType: RepeatLayout.Horizontal
+  fullName: FluentGpu.Controls.RepeatLayout.Horizontal
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Horizontal
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 24
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public readonly bool Horizontal
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Horizontal As Boolean
+- uid: FluentGpu.Controls.RepeatLayout.CustomLayout
+  commentId: F:FluentGpu.Controls.RepeatLayout.CustomLayout
+  id: CustomLayout
+  parent: FluentGpu.Controls.RepeatLayout
+  langs:
+  - csharp
+  - vb
+  name: CustomLayout
+  nameWithType: RepeatLayout.CustomLayout
+  fullName: FluentGpu.Controls.RepeatLayout.CustomLayout
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CustomLayout
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 25
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public readonly IVirtualLayout? CustomLayout
+    return:
+      type: FluentGpu.Scene.IVirtualLayout
+    content.vb: Public ReadOnly CustomLayout As IVirtualLayout
+- uid: FluentGpu.Controls.RepeatLayout.Stack(System.Single,System.Boolean)
+  commentId: M:FluentGpu.Controls.RepeatLayout.Stack(System.Single,System.Boolean)
+  id: Stack(System.Single,System.Boolean)
+  parent: FluentGpu.Controls.RepeatLayout
+  langs:
+  - csharp
+  - vb
+  name: Stack(float, bool)
+  nameWithType: RepeatLayout.Stack(float, bool)
+  fullName: FluentGpu.Controls.RepeatLayout.Stack(float, bool)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Stack
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 31
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Virtualized uniform stack (1-D).
+  example: []
+  syntax:
+    content: public static RepeatLayout Stack(float itemExtent, bool horizontal = false)
+    parameters:
+    - id: itemExtent
+      type: System.Single
+    - id: horizontal
+      type: System.Boolean
+    return:
+      type: FluentGpu.Controls.RepeatLayout
+    content.vb: Public Shared Function Stack(itemExtent As Single, horizontal As Boolean = False) As RepeatLayout
+  overload: FluentGpu.Controls.RepeatLayout.Stack*
+  nameWithType.vb: RepeatLayout.Stack(Single, Boolean)
+  fullName.vb: FluentGpu.Controls.RepeatLayout.Stack(Single, Boolean)
+  name.vb: Stack(Single, Boolean)
+- uid: FluentGpu.Controls.RepeatLayout.Grid(System.Int32,System.Single,System.Single)
+  commentId: M:FluentGpu.Controls.RepeatLayout.Grid(System.Int32,System.Single,System.Single)
+  id: Grid(System.Int32,System.Single,System.Single)
+  parent: FluentGpu.Controls.RepeatLayout
+  langs:
+  - csharp
+  - vb
+  name: Grid(int, float, float)
+  nameWithType: RepeatLayout.Grid(int, float, float)
+  fullName: FluentGpu.Controls.RepeatLayout.Grid(int, float, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Grid
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Virtualized uniform card grid (2-D, by row).
+  example: []
+  syntax:
+    content: public static RepeatLayout Grid(int columns, float itemHeight, float gap = 0)
+    parameters:
+    - id: columns
+      type: System.Int32
+    - id: itemHeight
+      type: System.Single
+    - id: gap
+      type: System.Single
+    return:
+      type: FluentGpu.Controls.RepeatLayout
+    content.vb: Public Shared Function Grid(columns As Integer, itemHeight As Single, gap As Single = 0) As RepeatLayout
+  overload: FluentGpu.Controls.RepeatLayout.Grid*
+  nameWithType.vb: RepeatLayout.Grid(Integer, Single, Single)
+  fullName.vb: FluentGpu.Controls.RepeatLayout.Grid(Integer, Single, Single)
+  name.vb: Grid(Integer, Single, Single)
+- uid: FluentGpu.Controls.RepeatLayout.Custom(FluentGpu.Scene.IVirtualLayout,System.Boolean)
+  commentId: M:FluentGpu.Controls.RepeatLayout.Custom(FluentGpu.Scene.IVirtualLayout,System.Boolean)
+  id: Custom(FluentGpu.Scene.IVirtualLayout,System.Boolean)
+  parent: FluentGpu.Controls.RepeatLayout
+  langs:
+  - csharp
+  - vb
+  name: Custom(IVirtualLayout, bool)
+  nameWithType: RepeatLayout.Custom(IVirtualLayout, bool)
+  fullName: FluentGpu.Controls.RepeatLayout.Custom(FluentGpu.Scene.IVirtualLayout, bool)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Custom
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Virtualized with ANY custom <xref href="FluentGpu.Scene.IVirtualLayout" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: public static RepeatLayout Custom(IVirtualLayout layout, bool horizontal = false)
+    parameters:
+    - id: layout
+      type: FluentGpu.Scene.IVirtualLayout
+    - id: horizontal
+      type: System.Boolean
+    return:
+      type: FluentGpu.Controls.RepeatLayout
+    content.vb: Public Shared Function Custom(layout As IVirtualLayout, horizontal As Boolean = False) As RepeatLayout
+  overload: FluentGpu.Controls.RepeatLayout.Custom*
+  nameWithType.vb: RepeatLayout.Custom(IVirtualLayout, Boolean)
+  fullName.vb: FluentGpu.Controls.RepeatLayout.Custom(FluentGpu.Scene.IVirtualLayout, Boolean)
+  name.vb: Custom(IVirtualLayout, Boolean)
+- uid: FluentGpu.Controls.RepeatLayout.Measured(FluentGpu.Scene.IMeasuredVirtualLayout,System.Boolean)
+  commentId: M:FluentGpu.Controls.RepeatLayout.Measured(FluentGpu.Scene.IMeasuredVirtualLayout,System.Boolean)
+  id: Measured(FluentGpu.Scene.IMeasuredVirtualLayout,System.Boolean)
+  parent: FluentGpu.Controls.RepeatLayout
+  langs:
+  - csharp
+  - vb
+  name: Measured(IMeasuredVirtualLayout, bool)
+  nameWithType: RepeatLayout.Measured(IMeasuredVirtualLayout, bool)
+  fullName: FluentGpu.Controls.RepeatLayout.Measured(FluentGpu.Scene.IMeasuredVirtualLayout, bool)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Measured
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 37
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Virtualized with a variable-extent <xref href="FluentGpu.Scene.IMeasuredVirtualLayout" data-throw-if-not-resolved="false"></xref> (estimate-then-correct + anchoring).
+  example: []
+  syntax:
+    content: public static RepeatLayout Measured(IMeasuredVirtualLayout layout, bool horizontal = false)
+    parameters:
+    - id: layout
+      type: FluentGpu.Scene.IMeasuredVirtualLayout
+    - id: horizontal
+      type: System.Boolean
+    return:
+      type: FluentGpu.Controls.RepeatLayout
+    content.vb: Public Shared Function Measured(layout As IMeasuredVirtualLayout, horizontal As Boolean = False) As RepeatLayout
+  overload: FluentGpu.Controls.RepeatLayout.Measured*
+  nameWithType.vb: RepeatLayout.Measured(IMeasuredVirtualLayout, Boolean)
+  fullName.vb: FluentGpu.Controls.RepeatLayout.Measured(FluentGpu.Scene.IMeasuredVirtualLayout, Boolean)
+  name.vb: Measured(IMeasuredVirtualLayout, Boolean)
+- uid: FluentGpu.Controls.RepeatLayout.LinedFlow(System.Single,System.Func{System.Int32,System.Single},System.Single,System.Single)
+  commentId: M:FluentGpu.Controls.RepeatLayout.LinedFlow(System.Single,System.Func{System.Int32,System.Single},System.Single,System.Single)
+  id: LinedFlow(System.Single,System.Func{System.Int32,System.Single},System.Single,System.Single)
+  parent: FluentGpu.Controls.RepeatLayout
+  langs:
+  - csharp
+  - vb
+  name: LinedFlow(float, Func<int, float>?, float, float)
+  nameWithType: RepeatLayout.LinedFlow(float, Func<int, float>?, float, float)
+  fullName: FluentGpu.Controls.RepeatLayout.LinedFlow(float, System.Func<int, float>?, float, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LinedFlow
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 40
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The WinUI <code>LinedFlowLayout</code> photo-wall (uniform-height lines, aspect-ratio widths). Stateful —
+        hoist when the owner re-renders (see the struct remarks).
+  example: []
+  syntax:
+    content: public static RepeatLayout LinedFlow(float lineHeight, Func<int, float>? aspectRatio = null, float lineSpacing = 0, float minItemSpacing = 0)
+    parameters:
+    - id: lineHeight
+      type: System.Single
+    - id: aspectRatio
+      type: System.Func{System.Int32,System.Single}
+    - id: lineSpacing
+      type: System.Single
+    - id: minItemSpacing
+      type: System.Single
+    return:
+      type: FluentGpu.Controls.RepeatLayout
+    content.vb: Public Shared Function LinedFlow(lineHeight As Single, aspectRatio As Func(Of Integer, Single) = Nothing, lineSpacing As Single = 0, minItemSpacing As Single = 0) As RepeatLayout
+  overload: FluentGpu.Controls.RepeatLayout.LinedFlow*
+  nameWithType.vb: RepeatLayout.LinedFlow(Single, Func(Of Integer, Single), Single, Single)
+  fullName.vb: FluentGpu.Controls.RepeatLayout.LinedFlow(Single, System.Func(Of Integer, Single), Single, Single)
+  name.vb: LinedFlow(Single, Func(Of Integer, Single), Single, Single)
+- uid: FluentGpu.Controls.RepeatLayout.SpanGrid(System.Int32,System.Single,System.Single,System.Func{System.Int32,System.Int32})
+  commentId: M:FluentGpu.Controls.RepeatLayout.SpanGrid(System.Int32,System.Single,System.Single,System.Func{System.Int32,System.Int32})
+  id: SpanGrid(System.Int32,System.Single,System.Single,System.Func{System.Int32,System.Int32})
+  parent: FluentGpu.Controls.RepeatLayout
+  langs:
+  - csharp
+  - vb
+  name: SpanGrid(int, float, float, Func<int, int>)
+  nameWithType: RepeatLayout.SpanGrid(int, float, float, Func<int, int>)
+  fullName: FluentGpu.Controls.RepeatLayout.SpanGrid(int, float, float, System.Func<int, int>)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpanGrid
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Uniform-row grid with item spanning (hero rows). Stateful — hoist when the owner re-renders.
+  example: []
+  syntax:
+    content: public static RepeatLayout SpanGrid(int columns, float rowHeight, float gap, Func<int, int> spanOf)
+    parameters:
+    - id: columns
+      type: System.Int32
+    - id: rowHeight
+      type: System.Single
+    - id: gap
+      type: System.Single
+    - id: spanOf
+      type: System.Func{System.Int32,System.Int32}
+    return:
+      type: FluentGpu.Controls.RepeatLayout
+    content.vb: Public Shared Function SpanGrid(columns As Integer, rowHeight As Single, gap As Single, spanOf As Func(Of Integer, Integer)) As RepeatLayout
+  overload: FluentGpu.Controls.RepeatLayout.SpanGrid*
+  nameWithType.vb: RepeatLayout.SpanGrid(Integer, Single, Single, Func(Of Integer, Integer))
+  fullName.vb: FluentGpu.Controls.RepeatLayout.SpanGrid(Integer, Single, Single, System.Func(Of Integer, Integer))
+  name.vb: SpanGrid(Integer, Single, Single, Func(Of Integer, Integer))
+- uid: FluentGpu.Controls.RepeatLayout.HorizontalGrid(System.Int32,System.Single,System.Single)
+  commentId: M:FluentGpu.Controls.RepeatLayout.HorizontalGrid(System.Int32,System.Single,System.Single)
+  id: HorizontalGrid(System.Int32,System.Single,System.Single)
+  parent: FluentGpu.Controls.RepeatLayout
+  langs:
+  - csharp
+  - vb
+  name: HorizontalGrid(int, float, float)
+  nameWithType: RepeatLayout.HorizontalGrid(int, float, float)
+  fullName: FluentGpu.Controls.RepeatLayout.HorizontalGrid(int, float, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HorizontalGrid
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 46
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Horizontally-scrolling uniform grid (a shelf <code class="paramref">rows</code> cells tall), by column.
+  example: []
+  syntax:
+    content: public static RepeatLayout HorizontalGrid(int rows, float itemWidth, float gap = 0)
+    parameters:
+    - id: rows
+      type: System.Int32
+    - id: itemWidth
+      type: System.Single
+    - id: gap
+      type: System.Single
+    return:
+      type: FluentGpu.Controls.RepeatLayout
+    content.vb: Public Shared Function HorizontalGrid(rows As Integer, itemWidth As Single, gap As Single = 0) As RepeatLayout
+  overload: FluentGpu.Controls.RepeatLayout.HorizontalGrid*
+  nameWithType.vb: RepeatLayout.HorizontalGrid(Integer, Single, Single)
+  fullName.vb: FluentGpu.Controls.RepeatLayout.HorizontalGrid(Integer, Single, Single)
+  name.vb: HorizontalGrid(Integer, Single, Single)
+- uid: FluentGpu.Controls.RepeatLayout.Wrap(System.Single)
+  commentId: M:FluentGpu.Controls.RepeatLayout.Wrap(System.Single)
+  id: Wrap(System.Single)
+  parent: FluentGpu.Controls.RepeatLayout
+  langs:
+  - csharp
+  - vb
+  name: Wrap(float)
+  nameWithType: RepeatLayout.Wrap(float)
+  fullName: FluentGpu.Controls.RepeatLayout.Wrap(float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Wrap
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 49
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Non-virtual wrap (flex-wrap) — for small collections.
+  example: []
+  syntax:
+    content: public static RepeatLayout Wrap(float gap = 8)
+    parameters:
+    - id: gap
+      type: System.Single
+    return:
+      type: FluentGpu.Controls.RepeatLayout
+    content.vb: Public Shared Function Wrap(gap As Single = 8) As RepeatLayout
+  overload: FluentGpu.Controls.RepeatLayout.Wrap*
+  nameWithType.vb: RepeatLayout.Wrap(Single)
+  fullName.vb: FluentGpu.Controls.RepeatLayout.Wrap(Single)
+  name.vb: Wrap(Single)
+- uid: FluentGpu.Controls.RepeatLayout.Inline(System.Boolean,System.Single)
+  commentId: M:FluentGpu.Controls.RepeatLayout.Inline(System.Boolean,System.Single)
+  id: Inline(System.Boolean,System.Single)
+  parent: FluentGpu.Controls.RepeatLayout
+  langs:
+  - csharp
+  - vb
+  name: Inline(bool, float)
+  nameWithType: RepeatLayout.Inline(bool, float)
+  fullName: FluentGpu.Controls.RepeatLayout.Inline(bool, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Inline
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Non-virtual stack (column/row) — for small collections (nav panes, toolbars).
+  example: []
+  syntax:
+    content: public static RepeatLayout Inline(bool horizontal = false, float gap = 0)
+    parameters:
+    - id: horizontal
+      type: System.Boolean
+    - id: gap
+      type: System.Single
+    return:
+      type: FluentGpu.Controls.RepeatLayout
+    content.vb: Public Shared Function Inline(horizontal As Boolean = False, gap As Single = 0) As RepeatLayout
+  overload: FluentGpu.Controls.RepeatLayout.Inline*
+  nameWithType.vb: RepeatLayout.Inline(Boolean, Single)
+  fullName.vb: FluentGpu.Controls.RepeatLayout.Inline(Boolean, Single)
+  name.vb: Inline(Boolean, Single)
+references:
+- uid: FluentGpu.Controls.Repeater.ItemsRepeater(System.Int32,System.Func{System.Int32,FluentGpu.Dsl.Element},FluentGpu.Controls.RepeatLayout@,System.Func{System.Int32,System.String},System.Int32,System.Action{System.Int32},System.Action{System.Int32},System.Action{System.Int32,System.Int32},System.Action{System.Int32,System.Int32},System.Nullable{FluentGpu.Controls.ItemCollectionTransition})
+  commentId: M:FluentGpu.Controls.Repeater.ItemsRepeater(System.Int32,System.Func{System.Int32,FluentGpu.Dsl.Element},FluentGpu.Controls.RepeatLayout@,System.Func{System.Int32,System.String},System.Int32,System.Action{System.Int32},System.Action{System.Int32},System.Action{System.Int32,System.Int32},System.Action{System.Int32,System.Int32},System.Nullable{FluentGpu.Controls.ItemCollectionTransition})
+  isExternal: true
+  href: FluentGpu.Controls.Repeater.html#FluentGpu_Controls_Repeater_ItemsRepeater_System_Int32_System_Func_System_Int32_FluentGpu_Dsl_Element__FluentGpu_Controls_RepeatLayout__System_Func_System_Int32_System_String__System_Int32_System_Action_System_Int32__System_Action_System_Int32__System_Action_System_Int32_System_Int32__System_Action_System_Int32_System_Int32__System_Nullable_FluentGpu_Controls_ItemCollectionTransition__
+  name: ItemsRepeater(int, Func<int, Element>, in RepeatLayout, Func<int, string>, int, Action<int>, Action<int>, Action<int, int>, Action<int, int>, ItemCollectionTransition?)
+  nameWithType: Repeater.ItemsRepeater(int, Func<int, Element>, in RepeatLayout, Func<int, string>, int, Action<int>, Action<int>, Action<int, int>, Action<int, int>, ItemCollectionTransition?)
+  fullName: FluentGpu.Controls.Repeater.ItemsRepeater(int, System.Func<int, FluentGpu.Dsl.Element>, in FluentGpu.Controls.RepeatLayout, System.Func<int, string>, int, System.Action<int>, System.Action<int>, System.Action<int, int>, System.Action<int, int>, FluentGpu.Controls.ItemCollectionTransition?)
+  nameWithType.vb: Repeater.ItemsRepeater(Integer, Func(Of Integer, Element), RepeatLayout, Func(Of Integer, String), Integer, Action(Of Integer), Action(Of Integer), Action(Of Integer, Integer), Action(Of Integer, Integer), ItemCollectionTransition?)
+  fullName.vb: FluentGpu.Controls.Repeater.ItemsRepeater(Integer, System.Func(Of Integer, FluentGpu.Dsl.Element), FluentGpu.Controls.RepeatLayout, System.Func(Of Integer, String), Integer, System.Action(Of Integer), System.Action(Of Integer), System.Action(Of Integer, Integer), System.Action(Of Integer, Integer), FluentGpu.Controls.ItemCollectionTransition?)
+  name.vb: ItemsRepeater(Integer, Func(Of Integer, Element), RepeatLayout, Func(Of Integer, String), Integer, Action(Of Integer), Action(Of Integer), Action(Of Integer, Integer), Action(Of Integer, Integer), ItemCollectionTransition?)
+  spec.csharp:
+  - uid: FluentGpu.Controls.Repeater.ItemsRepeater(System.Int32,System.Func{System.Int32,FluentGpu.Dsl.Element},FluentGpu.Controls.RepeatLayout@,System.Func{System.Int32,System.String},System.Int32,System.Action{System.Int32},System.Action{System.Int32},System.Action{System.Int32,System.Int32},System.Action{System.Int32,System.Int32},System.Nullable{FluentGpu.Controls.ItemCollectionTransition})
+    name: ItemsRepeater
+    href: FluentGpu.Controls.Repeater.html#FluentGpu_Controls_Repeater_ItemsRepeater_System_Int32_System_Func_System_Int32_FluentGpu_Dsl_Element__FluentGpu_Controls_RepeatLayout__System_Func_System_Int32_System_String__System_Int32_System_Action_System_Int32__System_Action_System_Int32__System_Action_System_Int32_System_Int32__System_Action_System_Int32_System_Int32__System_Nullable_FluentGpu_Controls_ItemCollectionTransition__
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: '>'
+  - name: ','
+  - name: " "
+  - name: in
+  - name: " "
+  - uid: FluentGpu.Controls.RepeatLayout
+    name: RepeatLayout
+    href: FluentGpu.Controls.RepeatLayout.html
+  - name: ','
+  - name: " "
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Controls.ItemCollectionTransition
+    name: ItemCollectionTransition
+    href: FluentGpu.Controls.ItemCollectionTransition.html
+  - name: '?'
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.Repeater.ItemsRepeater(System.Int32,System.Func{System.Int32,FluentGpu.Dsl.Element},FluentGpu.Controls.RepeatLayout@,System.Func{System.Int32,System.String},System.Int32,System.Action{System.Int32},System.Action{System.Int32},System.Action{System.Int32,System.Int32},System.Action{System.Int32,System.Int32},System.Nullable{FluentGpu.Controls.ItemCollectionTransition})
+    name: ItemsRepeater
+    href: FluentGpu.Controls.Repeater.html#FluentGpu_Controls_Repeater_ItemsRepeater_System_Int32_System_Func_System_Int32_FluentGpu_Dsl_Element__FluentGpu_Controls_RepeatLayout__System_Func_System_Int32_System_String__System_Int32_System_Action_System_Int32__System_Action_System_Int32__System_Action_System_Int32_System_Int32__System_Action_System_Int32_System_Int32__System_Nullable_FluentGpu_Controls_ItemCollectionTransition__
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Controls.RepeatLayout
+    name: RepeatLayout
+    href: FluentGpu.Controls.RepeatLayout.html
+  - name: ','
+  - name: " "
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Controls.ItemCollectionTransition
+    name: ItemCollectionTransition
+    href: FluentGpu.Controls.ItemCollectionTransition.html
+  - name: '?'
+  - name: )
+- uid: FluentGpu.Scene.IVirtualLayout
+  commentId: T:FluentGpu.Scene.IVirtualLayout
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.IVirtualLayout.html
+  name: IVirtualLayout
+  nameWithType: IVirtualLayout
+  fullName: FluentGpu.Scene.IVirtualLayout
+- uid: FluentGpu.Scene.IMeasuredVirtualLayout
+  commentId: T:FluentGpu.Scene.IMeasuredVirtualLayout
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.IMeasuredVirtualLayout.html
+  name: IMeasuredVirtualLayout
+  nameWithType: IMeasuredVirtualLayout
+  fullName: FluentGpu.Scene.IMeasuredVirtualLayout
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Controls.RepeatKind
+  commentId: T:FluentGpu.Controls.RepeatKind
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.RepeatKind.html
+  name: RepeatKind
+  nameWithType: RepeatKind
+  fullName: FluentGpu.Controls.RepeatKind
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Controls.RepeatLayout.Stack*
+  commentId: Overload:FluentGpu.Controls.RepeatLayout.Stack
+  href: FluentGpu.Controls.RepeatLayout.html#FluentGpu_Controls_RepeatLayout_Stack_System_Single_System_Boolean_
+  name: Stack
+  nameWithType: RepeatLayout.Stack
+  fullName: FluentGpu.Controls.RepeatLayout.Stack
+- uid: FluentGpu.Controls.RepeatLayout
+  commentId: T:FluentGpu.Controls.RepeatLayout
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.RepeatLayout.html
+  name: RepeatLayout
+  nameWithType: RepeatLayout
+  fullName: FluentGpu.Controls.RepeatLayout
+- uid: FluentGpu.Controls.RepeatLayout.Grid*
+  commentId: Overload:FluentGpu.Controls.RepeatLayout.Grid
+  href: FluentGpu.Controls.RepeatLayout.html#FluentGpu_Controls_RepeatLayout_Grid_System_Int32_System_Single_System_Single_
+  name: Grid
+  nameWithType: RepeatLayout.Grid
+  fullName: FluentGpu.Controls.RepeatLayout.Grid
+- uid: FluentGpu.Controls.RepeatLayout.Custom*
+  commentId: Overload:FluentGpu.Controls.RepeatLayout.Custom
+  href: FluentGpu.Controls.RepeatLayout.html#FluentGpu_Controls_RepeatLayout_Custom_FluentGpu_Scene_IVirtualLayout_System_Boolean_
+  name: Custom
+  nameWithType: RepeatLayout.Custom
+  fullName: FluentGpu.Controls.RepeatLayout.Custom
+- uid: FluentGpu.Controls.RepeatLayout.Measured*
+  commentId: Overload:FluentGpu.Controls.RepeatLayout.Measured
+  href: FluentGpu.Controls.RepeatLayout.html#FluentGpu_Controls_RepeatLayout_Measured_FluentGpu_Scene_IMeasuredVirtualLayout_System_Boolean_
+  name: Measured
+  nameWithType: RepeatLayout.Measured
+  fullName: FluentGpu.Controls.RepeatLayout.Measured
+- uid: FluentGpu.Controls.RepeatLayout.LinedFlow*
+  commentId: Overload:FluentGpu.Controls.RepeatLayout.LinedFlow
+  href: FluentGpu.Controls.RepeatLayout.html#FluentGpu_Controls_RepeatLayout_LinedFlow_System_Single_System_Func_System_Int32_System_Single__System_Single_System_Single_
+  name: LinedFlow
+  nameWithType: RepeatLayout.LinedFlow
+  fullName: FluentGpu.Controls.RepeatLayout.LinedFlow
+- uid: System.Func{System.Int32,System.Single}
+  commentId: T:System.Func{System.Int32,System.Single}
+  parent: System
+  definition: System.Func`2
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<int, float>
+  nameWithType: Func<int, float>
+  fullName: System.Func<int, float>
+  nameWithType.vb: Func(Of Integer, Single)
+  fullName.vb: System.Func(Of Integer, Single)
+  name.vb: Func(Of Integer, Single)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: System.Func`2
+  commentId: T:System.Func`2
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<T, TResult>
+  nameWithType: Func<T, TResult>
+  fullName: System.Func<T, TResult>
+  nameWithType.vb: Func(Of T, TResult)
+  fullName.vb: System.Func(Of T, TResult)
+  name.vb: Func(Of T, TResult)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - name: T
+  - name: ','
+  - name: " "
+  - name: TResult
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: ','
+  - name: " "
+  - name: TResult
+  - name: )
+- uid: FluentGpu.Controls.RepeatLayout.SpanGrid*
+  commentId: Overload:FluentGpu.Controls.RepeatLayout.SpanGrid
+  href: FluentGpu.Controls.RepeatLayout.html#FluentGpu_Controls_RepeatLayout_SpanGrid_System_Int32_System_Single_System_Single_System_Func_System_Int32_System_Int32__
+  name: SpanGrid
+  nameWithType: RepeatLayout.SpanGrid
+  fullName: FluentGpu.Controls.RepeatLayout.SpanGrid
+- uid: System.Func{System.Int32,System.Int32}
+  commentId: T:System.Func{System.Int32,System.Int32}
+  parent: System
+  definition: System.Func`2
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<int, int>
+  nameWithType: Func<int, int>
+  fullName: System.Func<int, int>
+  nameWithType.vb: Func(Of Integer, Integer)
+  fullName.vb: System.Func(Of Integer, Integer)
+  name.vb: Func(Of Integer, Integer)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: FluentGpu.Controls.RepeatLayout.HorizontalGrid*
+  commentId: Overload:FluentGpu.Controls.RepeatLayout.HorizontalGrid
+  href: FluentGpu.Controls.RepeatLayout.html#FluentGpu_Controls_RepeatLayout_HorizontalGrid_System_Int32_System_Single_System_Single_
+  name: HorizontalGrid
+  nameWithType: RepeatLayout.HorizontalGrid
+  fullName: FluentGpu.Controls.RepeatLayout.HorizontalGrid
+- uid: FluentGpu.Controls.RepeatLayout.Wrap*
+  commentId: Overload:FluentGpu.Controls.RepeatLayout.Wrap
+  href: FluentGpu.Controls.RepeatLayout.html#FluentGpu_Controls_RepeatLayout_Wrap_System_Single_
+  name: Wrap
+  nameWithType: RepeatLayout.Wrap
+  fullName: FluentGpu.Controls.RepeatLayout.Wrap
+- uid: FluentGpu.Controls.RepeatLayout.Inline*
+  commentId: Overload:FluentGpu.Controls.RepeatLayout.Inline
+  href: FluentGpu.Controls.RepeatLayout.html#FluentGpu_Controls_RepeatLayout_Inline_System_Boolean_System_Single_
+  name: Inline
+  nameWithType: RepeatLayout.Inline
+  fullName: FluentGpu.Controls.RepeatLayout.Inline

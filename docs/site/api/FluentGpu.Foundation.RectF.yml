@@ -1,0 +1,974 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.RectF
+  commentId: T:FluentGpu.Foundation.RectF
+  id: RectF
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.RectF.#ctor(System.Single,System.Single,System.Single,System.Single)
+  - FluentGpu.Foundation.RectF.Bottom
+  - FluentGpu.Foundation.RectF.Contains(FluentGpu.Foundation.Point2)
+  - FluentGpu.Foundation.RectF.FromLTRB(System.Single,System.Single,System.Single,System.Single)
+  - FluentGpu.Foundation.RectF.H
+  - FluentGpu.Foundation.RectF.Infinite
+  - FluentGpu.Foundation.RectF.Intersect(FluentGpu.Foundation.RectF@)
+  - FluentGpu.Foundation.RectF.IsEmpty
+  - FluentGpu.Foundation.RectF.IsInfinite
+  - FluentGpu.Foundation.RectF.Overlaps(FluentGpu.Foundation.RectF@)
+  - FluentGpu.Foundation.RectF.Right
+  - FluentGpu.Foundation.RectF.Size
+  - FluentGpu.Foundation.RectF.W
+  - FluentGpu.Foundation.RectF.X
+  - FluentGpu.Foundation.RectF.Y
+  langs:
+  - csharp
+  - vb
+  name: RectF
+  nameWithType: RectF
+  fullName: FluentGpu.Foundation.RectF
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RectF
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: 'Axis-aligned rectangle in DIPs. Local to its node (P8: Bounds are node-LOCAL).'
+  example: []
+  syntax:
+    content: 'public readonly record struct RectF : IEquatable<RectF>'
+    content.vb: Public Structure RectF Implements IEquatable(Of RectF)
+  implements:
+  - System.IEquatable{FluentGpu.Foundation.RectF}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Foundation.RectF.#ctor(System.Single,System.Single,System.Single,System.Single)
+  commentId: M:FluentGpu.Foundation.RectF.#ctor(System.Single,System.Single,System.Single,System.Single)
+  id: '#ctor(System.Single,System.Single,System.Single,System.Single)'
+  parent: FluentGpu.Foundation.RectF
+  langs:
+  - csharp
+  - vb
+  name: RectF(float, float, float, float)
+  nameWithType: RectF.RectF(float, float, float, float)
+  fullName: FluentGpu.Foundation.RectF.RectF(float, float, float, float)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: 'Axis-aligned rectangle in DIPs. Local to its node (P8: Bounds are node-LOCAL).'
+  example: []
+  syntax:
+    content: public RectF(float X, float Y, float W, float H)
+    parameters:
+    - id: X
+      type: System.Single
+    - id: Y
+      type: System.Single
+    - id: W
+      type: System.Single
+    - id: H
+      type: System.Single
+    content.vb: Public Sub New(X As Single, Y As Single, W As Single, H As Single)
+  overload: FluentGpu.Foundation.RectF.#ctor*
+  nameWithType.vb: RectF.New(Single, Single, Single, Single)
+  fullName.vb: FluentGpu.Foundation.RectF.New(Single, Single, Single, Single)
+  name.vb: New(Single, Single, Single, Single)
+- uid: FluentGpu.Foundation.RectF.X
+  commentId: P:FluentGpu.Foundation.RectF.X
+  id: X
+  parent: FluentGpu.Foundation.RectF
+  langs:
+  - csharp
+  - vb
+  name: X
+  nameWithType: RectF.X
+  fullName: FluentGpu.Foundation.RectF.X
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: X
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float X { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property X As Single
+  overload: FluentGpu.Foundation.RectF.X*
+- uid: FluentGpu.Foundation.RectF.Y
+  commentId: P:FluentGpu.Foundation.RectF.Y
+  id: Y
+  parent: FluentGpu.Foundation.RectF
+  langs:
+  - csharp
+  - vb
+  name: Y
+  nameWithType: RectF.Y
+  fullName: FluentGpu.Foundation.RectF.Y
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Y
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float Y { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Y As Single
+  overload: FluentGpu.Foundation.RectF.Y*
+- uid: FluentGpu.Foundation.RectF.W
+  commentId: P:FluentGpu.Foundation.RectF.W
+  id: W
+  parent: FluentGpu.Foundation.RectF
+  langs:
+  - csharp
+  - vb
+  name: W
+  nameWithType: RectF.W
+  fullName: FluentGpu.Foundation.RectF.W
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: W
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float W { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property W As Single
+  overload: FluentGpu.Foundation.RectF.W*
+- uid: FluentGpu.Foundation.RectF.H
+  commentId: P:FluentGpu.Foundation.RectF.H
+  id: H
+  parent: FluentGpu.Foundation.RectF
+  langs:
+  - csharp
+  - vb
+  name: H
+  nameWithType: RectF.H
+  fullName: FluentGpu.Foundation.RectF.H
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: H
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float H { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property H As Single
+  overload: FluentGpu.Foundation.RectF.H*
+- uid: FluentGpu.Foundation.RectF.Right
+  commentId: P:FluentGpu.Foundation.RectF.Right
+  id: Right
+  parent: FluentGpu.Foundation.RectF
+  langs:
+  - csharp
+  - vb
+  name: Right
+  nameWithType: RectF.Right
+  fullName: FluentGpu.Foundation.RectF.Right
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Right
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float Right { get; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public ReadOnly Property Right As Single
+  overload: FluentGpu.Foundation.RectF.Right*
+- uid: FluentGpu.Foundation.RectF.Bottom
+  commentId: P:FluentGpu.Foundation.RectF.Bottom
+  id: Bottom
+  parent: FluentGpu.Foundation.RectF
+  langs:
+  - csharp
+  - vb
+  name: Bottom
+  nameWithType: RectF.Bottom
+  fullName: FluentGpu.Foundation.RectF.Bottom
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Bottom
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float Bottom { get; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public ReadOnly Property Bottom As Single
+  overload: FluentGpu.Foundation.RectF.Bottom*
+- uid: FluentGpu.Foundation.RectF.Size
+  commentId: P:FluentGpu.Foundation.RectF.Size
+  id: Size
+  parent: FluentGpu.Foundation.RectF
+  langs:
+  - csharp
+  - vb
+  name: Size
+  nameWithType: RectF.Size
+  fullName: FluentGpu.Foundation.RectF.Size
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Size
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public Size2 Size { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Size2
+    content.vb: Public ReadOnly Property Size As Size2
+  overload: FluentGpu.Foundation.RectF.Size*
+- uid: FluentGpu.Foundation.RectF.Contains(FluentGpu.Foundation.Point2)
+  commentId: M:FluentGpu.Foundation.RectF.Contains(FluentGpu.Foundation.Point2)
+  id: Contains(FluentGpu.Foundation.Point2)
+  parent: FluentGpu.Foundation.RectF
+  langs:
+  - csharp
+  - vb
+  name: Contains(Point2)
+  nameWithType: RectF.Contains(Point2)
+  fullName: FluentGpu.Foundation.RectF.Contains(FluentGpu.Foundation.Point2)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Contains
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public bool Contains(Point2 p)
+    parameters:
+    - id: p
+      type: FluentGpu.Foundation.Point2
+    return:
+      type: System.Boolean
+    content.vb: Public Function Contains(p As Point2) As Boolean
+  overload: FluentGpu.Foundation.RectF.Contains*
+- uid: FluentGpu.Foundation.RectF.FromLTRB(System.Single,System.Single,System.Single,System.Single)
+  commentId: M:FluentGpu.Foundation.RectF.FromLTRB(System.Single,System.Single,System.Single,System.Single)
+  id: FromLTRB(System.Single,System.Single,System.Single,System.Single)
+  parent: FluentGpu.Foundation.RectF
+  langs:
+  - csharp
+  - vb
+  name: FromLTRB(float, float, float, float)
+  nameWithType: RectF.FromLTRB(float, float, float, float)
+  fullName: FluentGpu.Foundation.RectF.FromLTRB(float, float, float, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FromLTRB
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 21
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public static RectF FromLTRB(float l, float t, float r, float b)
+    parameters:
+    - id: l
+      type: System.Single
+    - id: t
+      type: System.Single
+    - id: r
+      type: System.Single
+    - id: b
+      type: System.Single
+    return:
+      type: FluentGpu.Foundation.RectF
+    content.vb: Public Shared Function FromLTRB(l As Single, t As Single, r As Single, b As Single) As RectF
+  overload: FluentGpu.Foundation.RectF.FromLTRB*
+  nameWithType.vb: RectF.FromLTRB(Single, Single, Single, Single)
+  fullName.vb: FluentGpu.Foundation.RectF.FromLTRB(Single, Single, Single, Single)
+  name.vb: FromLTRB(Single, Single, Single, Single)
+- uid: FluentGpu.Foundation.RectF.IsEmpty
+  commentId: P:FluentGpu.Foundation.RectF.IsEmpty
+  id: IsEmpty
+  parent: FluentGpu.Foundation.RectF
+  langs:
+  - csharp
+  - vb
+  name: IsEmpty
+  nameWithType: RectF.IsEmpty
+  fullName: FluentGpu.Foundation.RectF.IsEmpty
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsEmpty
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public bool IsEmpty { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property IsEmpty As Boolean
+  overload: FluentGpu.Foundation.RectF.IsEmpty*
+- uid: FluentGpu.Foundation.RectF.Overlaps(FluentGpu.Foundation.RectF@)
+  commentId: M:FluentGpu.Foundation.RectF.Overlaps(FluentGpu.Foundation.RectF@)
+  id: Overlaps(FluentGpu.Foundation.RectF@)
+  parent: FluentGpu.Foundation.RectF
+  langs:
+  - csharp
+  - vb
+  name: Overlaps(in RectF)
+  nameWithType: RectF.Overlaps(in RectF)
+  fullName: FluentGpu.Foundation.RectF.Overlaps(in FluentGpu.Foundation.RectF)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Overlaps
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 26
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: True if the two rects share any area (touching edges do not count).
+  example: []
+  syntax:
+    content: public bool Overlaps(in RectF o)
+    parameters:
+    - id: o
+      type: FluentGpu.Foundation.RectF
+    return:
+      type: System.Boolean
+    content.vb: Public Function Overlaps(o As RectF) As Boolean
+  overload: FluentGpu.Foundation.RectF.Overlaps*
+  nameWithType.vb: RectF.Overlaps(RectF)
+  fullName.vb: FluentGpu.Foundation.RectF.Overlaps(FluentGpu.Foundation.RectF)
+  name.vb: Overlaps(RectF)
+- uid: FluentGpu.Foundation.RectF.Intersect(FluentGpu.Foundation.RectF@)
+  commentId: M:FluentGpu.Foundation.RectF.Intersect(FluentGpu.Foundation.RectF@)
+  id: Intersect(FluentGpu.Foundation.RectF@)
+  parent: FluentGpu.Foundation.RectF
+  langs:
+  - csharp
+  - vb
+  name: Intersect(in RectF)
+  nameWithType: RectF.Intersect(in RectF)
+  fullName: FluentGpu.Foundation.RectF.Intersect(in FluentGpu.Foundation.RectF)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Intersect
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 29
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: The overlap of two rects (an empty rect if they do not overlap). Clip-stack intersection.
+  example: []
+  syntax:
+    content: public RectF Intersect(in RectF o)
+    parameters:
+    - id: o
+      type: FluentGpu.Foundation.RectF
+    return:
+      type: FluentGpu.Foundation.RectF
+    content.vb: Public Function Intersect(o As RectF) As RectF
+  overload: FluentGpu.Foundation.RectF.Intersect*
+  nameWithType.vb: RectF.Intersect(RectF)
+  fullName.vb: FluentGpu.Foundation.RectF.Intersect(FluentGpu.Foundation.RectF)
+  name.vb: Intersect(RectF)
+- uid: FluentGpu.Foundation.RectF.Infinite
+  commentId: P:FluentGpu.Foundation.RectF.Infinite
+  id: Infinite
+  parent: FluentGpu.Foundation.RectF
+  langs:
+  - csharp
+  - vb
+  name: Infinite
+  nameWithType: RectF.Infinite
+  fullName: FluentGpu.Foundation.RectF.Infinite
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Infinite
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 37
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: A sentinel "unbounded" clip — larger than any real surface; intersecting with it is a no-op.
+  example: []
+  syntax:
+    content: public static RectF Infinite { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.RectF
+    content.vb: Public Shared ReadOnly Property Infinite As RectF
+  overload: FluentGpu.Foundation.RectF.Infinite*
+- uid: FluentGpu.Foundation.RectF.IsInfinite
+  commentId: P:FluentGpu.Foundation.RectF.IsInfinite
+  id: IsInfinite
+  parent: FluentGpu.Foundation.RectF
+  langs:
+  - csharp
+  - vb
+  name: IsInfinite
+  nameWithType: RectF.IsInfinite
+  fullName: FluentGpu.Foundation.RectF.IsInfinite
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsInfinite
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 40
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: True for the <xref href="FluentGpu.Foundation.RectF.Infinite" data-throw-if-not-resolved="false"></xref> sentinel (a node with no authored clip-rect override).
+  example: []
+  syntax:
+    content: public bool IsInfinite { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property IsInfinite As Boolean
+  overload: FluentGpu.Foundation.RectF.IsInfinite*
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.IEquatable{FluentGpu.Foundation.RectF}
+  commentId: T:System.IEquatable{FluentGpu.Foundation.RectF}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<RectF>
+  nameWithType: IEquatable<RectF>
+  fullName: System.IEquatable<FluentGpu.Foundation.RectF>
+  nameWithType.vb: IEquatable(Of RectF)
+  fullName.vb: System.IEquatable(Of FluentGpu.Foundation.RectF)
+  name.vb: IEquatable(Of RectF)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Foundation.RectF
+    name: RectF
+    href: FluentGpu.Foundation.RectF.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.RectF
+    name: RectF
+    href: FluentGpu.Foundation.RectF.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Foundation.RectF.#ctor*
+  commentId: Overload:FluentGpu.Foundation.RectF.#ctor
+  href: FluentGpu.Foundation.RectF.html#FluentGpu_Foundation_RectF__ctor_System_Single_System_Single_System_Single_System_Single_
+  name: RectF
+  nameWithType: RectF.RectF
+  fullName: FluentGpu.Foundation.RectF.RectF
+  nameWithType.vb: RectF.New
+  fullName.vb: FluentGpu.Foundation.RectF.New
+  name.vb: New
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.RectF.X*
+  commentId: Overload:FluentGpu.Foundation.RectF.X
+  href: FluentGpu.Foundation.RectF.html#FluentGpu_Foundation_RectF_X
+  name: X
+  nameWithType: RectF.X
+  fullName: FluentGpu.Foundation.RectF.X
+- uid: FluentGpu.Foundation.RectF.Y*
+  commentId: Overload:FluentGpu.Foundation.RectF.Y
+  href: FluentGpu.Foundation.RectF.html#FluentGpu_Foundation_RectF_Y
+  name: Y
+  nameWithType: RectF.Y
+  fullName: FluentGpu.Foundation.RectF.Y
+- uid: FluentGpu.Foundation.RectF.W*
+  commentId: Overload:FluentGpu.Foundation.RectF.W
+  href: FluentGpu.Foundation.RectF.html#FluentGpu_Foundation_RectF_W
+  name: W
+  nameWithType: RectF.W
+  fullName: FluentGpu.Foundation.RectF.W
+- uid: FluentGpu.Foundation.RectF.H*
+  commentId: Overload:FluentGpu.Foundation.RectF.H
+  href: FluentGpu.Foundation.RectF.html#FluentGpu_Foundation_RectF_H
+  name: H
+  nameWithType: RectF.H
+  fullName: FluentGpu.Foundation.RectF.H
+- uid: FluentGpu.Foundation.RectF.Right*
+  commentId: Overload:FluentGpu.Foundation.RectF.Right
+  href: FluentGpu.Foundation.RectF.html#FluentGpu_Foundation_RectF_Right
+  name: Right
+  nameWithType: RectF.Right
+  fullName: FluentGpu.Foundation.RectF.Right
+- uid: FluentGpu.Foundation.RectF.Bottom*
+  commentId: Overload:FluentGpu.Foundation.RectF.Bottom
+  href: FluentGpu.Foundation.RectF.html#FluentGpu_Foundation_RectF_Bottom
+  name: Bottom
+  nameWithType: RectF.Bottom
+  fullName: FluentGpu.Foundation.RectF.Bottom
+- uid: FluentGpu.Foundation.RectF.Size*
+  commentId: Overload:FluentGpu.Foundation.RectF.Size
+  href: FluentGpu.Foundation.RectF.html#FluentGpu_Foundation_RectF_Size
+  name: Size
+  nameWithType: RectF.Size
+  fullName: FluentGpu.Foundation.RectF.Size
+- uid: FluentGpu.Foundation.Size2
+  commentId: T:FluentGpu.Foundation.Size2
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Size2.html
+  name: Size2
+  nameWithType: Size2
+  fullName: FluentGpu.Foundation.Size2
+- uid: FluentGpu.Foundation.RectF.Contains*
+  commentId: Overload:FluentGpu.Foundation.RectF.Contains
+  href: FluentGpu.Foundation.RectF.html#FluentGpu_Foundation_RectF_Contains_FluentGpu_Foundation_Point2_
+  name: Contains
+  nameWithType: RectF.Contains
+  fullName: FluentGpu.Foundation.RectF.Contains
+- uid: FluentGpu.Foundation.Point2
+  commentId: T:FluentGpu.Foundation.Point2
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Point2.html
+  name: Point2
+  nameWithType: Point2
+  fullName: FluentGpu.Foundation.Point2
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Foundation.RectF.FromLTRB*
+  commentId: Overload:FluentGpu.Foundation.RectF.FromLTRB
+  href: FluentGpu.Foundation.RectF.html#FluentGpu_Foundation_RectF_FromLTRB_System_Single_System_Single_System_Single_System_Single_
+  name: FromLTRB
+  nameWithType: RectF.FromLTRB
+  fullName: FluentGpu.Foundation.RectF.FromLTRB
+- uid: FluentGpu.Foundation.RectF
+  commentId: T:FluentGpu.Foundation.RectF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.RectF.html
+  name: RectF
+  nameWithType: RectF
+  fullName: FluentGpu.Foundation.RectF
+- uid: FluentGpu.Foundation.RectF.IsEmpty*
+  commentId: Overload:FluentGpu.Foundation.RectF.IsEmpty
+  href: FluentGpu.Foundation.RectF.html#FluentGpu_Foundation_RectF_IsEmpty
+  name: IsEmpty
+  nameWithType: RectF.IsEmpty
+  fullName: FluentGpu.Foundation.RectF.IsEmpty
+- uid: FluentGpu.Foundation.RectF.Overlaps*
+  commentId: Overload:FluentGpu.Foundation.RectF.Overlaps
+  href: FluentGpu.Foundation.RectF.html#FluentGpu_Foundation_RectF_Overlaps_FluentGpu_Foundation_RectF__
+  name: Overlaps
+  nameWithType: RectF.Overlaps
+  fullName: FluentGpu.Foundation.RectF.Overlaps
+- uid: FluentGpu.Foundation.RectF.Intersect*
+  commentId: Overload:FluentGpu.Foundation.RectF.Intersect
+  href: FluentGpu.Foundation.RectF.html#FluentGpu_Foundation_RectF_Intersect_FluentGpu_Foundation_RectF__
+  name: Intersect
+  nameWithType: RectF.Intersect
+  fullName: FluentGpu.Foundation.RectF.Intersect
+- uid: FluentGpu.Foundation.RectF.Infinite*
+  commentId: Overload:FluentGpu.Foundation.RectF.Infinite
+  href: FluentGpu.Foundation.RectF.html#FluentGpu_Foundation_RectF_Infinite
+  name: Infinite
+  nameWithType: RectF.Infinite
+  fullName: FluentGpu.Foundation.RectF.Infinite
+- uid: FluentGpu.Foundation.RectF.Infinite
+  commentId: P:FluentGpu.Foundation.RectF.Infinite
+  href: FluentGpu.Foundation.RectF.html#FluentGpu_Foundation_RectF_Infinite
+  name: Infinite
+  nameWithType: RectF.Infinite
+  fullName: FluentGpu.Foundation.RectF.Infinite
+- uid: FluentGpu.Foundation.RectF.IsInfinite*
+  commentId: Overload:FluentGpu.Foundation.RectF.IsInfinite
+  href: FluentGpu.Foundation.RectF.html#FluentGpu_Foundation_RectF_IsInfinite
+  name: IsInfinite
+  nameWithType: RectF.IsInfinite
+  fullName: FluentGpu.Foundation.RectF.IsInfinite

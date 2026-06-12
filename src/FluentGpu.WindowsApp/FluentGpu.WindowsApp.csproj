@@ -1,25 +1,18 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
+    <!-- WinExe = Windows GUI subsystem: no console window spawns when the app is launched.
+         FG_*_DIAG output still works when stdout/stderr are redirected to a file (e.g. > run.log);
+         a bare terminal launch shows nothing unless AttachConsole(ATTACH_PARENT_PROCESS) is added. -->
+    <OutputType>WinExe</OutputType>
   </PropertyGroup>
   <ItemGroup>
     <!-- Bundled gallery assets (WinUI-Gallery control tile images, header art) copied next to the exe. -->
     <Content Include="assets\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+  <!-- The composition root: wires the Windows backend (D3D12/Win32/DWrite/WIC) into the portable engine + kit. -->
   <ItemGroup>
-    <ProjectReference Include="..\FluentGpu.Foundation\FluentGpu.Foundation.csproj" />
-    <ProjectReference Include="..\FluentGpu.Dsl\FluentGpu.Dsl.csproj" />
-    <ProjectReference Include="..\FluentGpu.Hooks\FluentGpu.Hooks.csproj" />
-    <ProjectReference Include="..\FluentGpu.Scene\FluentGpu.Scene.csproj" />
-    <ProjectReference Include="..\FluentGpu.Reconciler\FluentGpu.Reconciler.csproj" />
+    <ProjectReference Include="..\FluentGpu.Engine\FluentGpu.Engine.csproj" />
     <ProjectReference Include="..\FluentGpu.Controls\FluentGpu.Controls.csproj" />
-    <ProjectReference Include="..\FluentGpu.Text\FluentGpu.Text.csproj" />
-    <ProjectReference Include="..\FluentGpu.Text.DirectWrite\FluentGpu.Text.DirectWrite.csproj" />
-    <ProjectReference Include="..\FluentGpu.Hosting\FluentGpu.Hosting.csproj" />
-    <ProjectReference Include="..\FluentGpu.Media\FluentGpu.Media.csproj" />
-    <ProjectReference Include="..\FluentGpu.Media.Codecs.Wic\FluentGpu.Media.Codecs.Wic.csproj" />
-    <ProjectReference Include="..\FluentGpu.Pal.Windows\FluentGpu.Pal.Windows.csproj" />
-    <ProjectReference Include="..\FluentGpu.Rhi.Gdi\FluentGpu.Rhi.Gdi.csproj" />
-    <ProjectReference Include="..\FluentGpu.Rhi.D3D12\FluentGpu.Rhi.D3D12.csproj" />
+    <ProjectReference Include="..\FluentGpu.Windows\FluentGpu.Windows.csproj" />
   </ItemGroup>
 </Project>

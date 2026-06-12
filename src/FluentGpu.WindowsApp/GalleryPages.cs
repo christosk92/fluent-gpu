@@ -1,9 +1,10 @@
-﻿using System;
+using System;
 using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Signals;
 using FluentGpu.Reconciler;
 using static FluentGpu.Dsl.Ui;
 
@@ -904,7 +905,10 @@ sealed class ImagesPage : Component
             Corners = CornerRadius4.All(10),
             Children =
             [
-                Image(Cover(i, 150), 150f, 150f, 8f, AlbumPlaceholders[i % AlbumPlaceholders.Length]),
+                // Responsive art: no fixed extent — it fills the card's (fluid) width and stays square (aspect 1), with the
+                // cover crop (object-fit: cover). Decodes at 300px regardless of the on-screen size. No more overflow when
+                // the cell shrinks below a hard-coded tile size.
+                Image(Cover(i, 150), ImageFit.Cover, aspect: 1f, decodePx: 300f, corners: 8f, placeholder: AlbumPlaceholders[i % AlbumPlaceholders.Length]),
                 Text($"Album {AlbumTitles[i % AlbumTitles.Length]}").Strong(),
                 Text(Artists[i % Artists.Length]).Foreground(Grey).FontSize(12f)
             ],
@@ -952,7 +956,10 @@ sealed class ImagesPage : Component
         for (int i = 0; i < cards.Length; i++)
             cards[i] = AlbumCard(i);
 
-        var gallery = UniformGrid(4, 16f, 240f, cards);
+        // Responsive auto-fill grid: the column count reflows with the width (packs as many ≥180px columns as fit) and
+        // rows size to content (NaN row height), so the square art tiles grow/shrink with their cells instead of a
+        // fixed tile overflowing a fixed column count.
+        var gallery = AutoGrid(180f, 16f, float.NaN, cards);
 
         var cornerVariants = new BoxEl
         {
@@ -989,7 +996,7 @@ sealed class ImagesPage : Component
                     .Foreground(Grey),
                 Section(
                     "Album grid",
-                    "A UniformGrid of 8 album cards. Each card stacks the art tile over a strong title and a muted artist line.",
+                    "A responsive grid of 8 album cards: the column count reflows with the width and each art tile fills its cell as a square (object-fit: cover) — resize the window and the tiles scale instead of overflowing.",
                     gallery),
                 Section(
                     "Corner-radius variants",
@@ -1094,7 +1101,7 @@ sealed class VirtualizationPage : Component
     static string Cover(int i) => $"https://picsum.photos/seed/fgrow{i % 120}/80/80";
 
     // BOUND row template (Virtual.ListBound): built ONCE per visible slot with an index SIGNAL — scrolling rebinds the
-    // slot by writing the signal, so only these TextBind/FillBind/SourceBind thunks re-run (no element rebuild, no
+    // slot by writing the signal, so only these bound Text/Fill/Source thunks re-run (no element rebuild, no
     // reconcile, no node churn). This is the recycler fast path a 100k thumb-drag storm exercises.
     static Element Row(FluentGpu.Signals.IReadSignal<int> idx)
     {
@@ -1105,20 +1112,20 @@ sealed class VirtualizationPage : Component
             Gap = 12f,
             AlignItems = FlexAlign.Center,
             Padding = new Edges4(16, 0, 16, 0),
-            FillBind = () => (idx.Value % 2 == 0) ? RowEven : RowOdd,
+            Fill = Prop.Of(() => (idx.Value % 2 == 0) ? RowEven : RowOdd),
             HoverFill = RowHover,
             Children =
             [
                 new BoxEl
                 {
                     Width = 64f,
-                    Children = [new TextEl("") { Size = 13f, Color = IndexGrey, TextBind = () => $"{idx.Value + 1}" }],
+                    Children = [new TextEl("") { Size = 13f, Color = IndexGrey, Text = Prop.Of(() => $"{idx.Value + 1}") }],
                 },
                 // real thumbnail; tint shows until it decodes, then cross-fades in
                 new ImageEl
                 {
                     Width = 32f, Height = 32f, Corners = CornerRadius4.All(8f),
-                    SourceBind = () => Cover(idx.Value), PlaceholderBind = () => TileTint(idx.Value),
+                    Source = Prop.Of(() => Cover(idx.Value)), Placeholder = Prop.Of(() => TileTint(idx.Value)),
                 },
                 new BoxEl
                 {
@@ -1128,7 +1135,7 @@ sealed class VirtualizationPage : Component
                     Justify = FlexJustify.Center,
                     Children =
                     [
-                        new TextEl("") { Size = 14f, Color = Theme.WindowText, TextBind = () => $"Item {idx.Value}" },
+                        new TextEl("") { Size = 14f, Color = Theme.WindowText, Text = Prop.Of(() => $"Item {idx.Value}") },
                         new TextEl("subtitle") { Size = 12f, Color = SubGrey },
                     ],
                 },
@@ -1377,6 +1384,7 @@ sealed class StatePage : Component
             Embed.Comp(() => new StatePage_CounterHost()),
             Embed.Comp(() => new StatePage_SignalHost()),
             Embed.Comp(() => new StatePage_BindHost()),
+            Embed.Comp(() => new StatePage_ThreeFormsHost()),
             Embed.Comp(() => new StatePage_MemoHost()),
             Embed.Comp(() => new StatePage_ShowHost()),
             Embed.Comp(() => new StatePage_ForHost()),
@@ -1395,7 +1403,7 @@ sealed class StatePage : Component
         [
             TableRow(true, "Mechanism", "Re-runs", "Cost"),
             Divider(),
-            TableRow(false, "Binding — TransformBind / OpacityBind / FillBind / TextBind", "one effect → one node property", "compositor-only (no render, no reconcile, no layout)"),
+            TableRow(false, "Binding — Transform / Opacity / Fill / Text set to a Func or signal", "one effect → one node property", "compositor-only (no render, no reconcile, no layout)"),
             Divider(),
             TableRow(false, "Granular re-render — UseState / UseSignal read in Render()", "the owning component's subtree", "render + reconcile + scoped relayout of that subtree"),
             Divider(),
@@ -1446,7 +1454,7 @@ sealed class StatePage : Component
         [
             BodyStrong("Rules that prevent most state bugs"),
             Rule(".Value subscribes the current computation; .Peek() reads without subscribing. A bind thunk must read .Value."),
-            Rule("ReactiveComponent.Setup() runs ONCE — show changing values via a bind (TextBind = () => sig.Value), never Ui.Text(sig.Value)."),
+            Rule("ReactiveComponent.Setup() runs ONCE — show changing values via a bound prop (Text = sig, or Text = Prop.Of(() => …) for derived text), never Ui.Text(sig.Value)."),
             Rule("Never write a signal during render (infinite loop) — write from an event handler or UseEffect."),
             Rule("Parent→child data flows through signals or context, never constructor args — those freeze at mount."),
             Rule("Prefer Transform/Opacity/Fill binds for hot values; Width/Height/Text binds cost a scoped relayout."),
@@ -1529,12 +1537,12 @@ sealed class StatePage_SignalHost : Component
 
             Button.Accent("n.Value++", () => n.Value = n.Peek() + 1);
 
-            new TextEl("") { TextBind = () => $"n = {n.Value}" };   // only this thunk re-runs on writes
+            new TextEl("") { Text = Prop.Of(() => $"n = {n.Value}") };   // only this thunk re-runs on writes
             """);
     }
 }
 
-/// <summary>Compositor-only bindings: a FloatSignal drives TransformBind/FillBind — no render, no layout.</summary>
+/// <summary>Compositor-only bindings: a FloatSignal drives the bound Transform/Fill — no render, no layout.</summary>
 sealed class StatePage_BindHost : Component
 {
     static readonly ColorF Grey = ColorF.FromRgba(96, 96, 104);
@@ -1553,14 +1561,14 @@ sealed class StatePage_BindHost : Component
                 new BoxEl
                 {
                     Width = 32f, Height = 32f, Margin = Edges4.All(2), Corners = Radii.ControlAll,
-                    FillBind = () => ColorF.Lerp(Grey, Tok.AccentDefault, x.Value),
-                    TransformBind = () => Affine2D.Translation(x.Value * 184f, 0f),
+                    Fill = Prop.Of(() => ColorF.Lerp(Grey, Tok.AccentDefault, x.Value)),
+                    Transform = Prop.Of(() => Affine2D.Translation(x.Value * 184f, 0f)),
                 },
             ],
         };
-        return ControlExample.Build("Compositor-only binding — Slider.Bind + TransformBind",
+        return ControlExample.Build("Compositor-only binding — Slider.Bind + a bound Transform",
             VStack(14, Slider.Bind(x), track),
-            description: "The slider drag writes the FloatSignal (no setState per move); the box rides TransformBind + FillBind. Frames while dragging are compositor-only: no render, no reconcile, no layout.",
+            description: "The slider drag writes the FloatSignal (no setState per move); the box rides bound Transform + Fill thunks. Frames while dragging are compositor-only: no render, no reconcile, no layout.",
             output: VStack(4, GalleryPage.LiveText(() => $"x = {x.Value:0.00}"), Caption($"host renders: {_renders}").Tertiary()),
             code: """
             var x = UseFloatSignal(0.3f);   // hot scalar → bind it, don't setState per move
@@ -1570,9 +1578,51 @@ sealed class StatePage_BindHost : Component
             new BoxEl
             {
                 Width = 32, Height = 32,
-                TransformBind = () => Affine2D.Translation(x.Value * 184f, 0f),  // compositor-only
-                FillBind = () => ColorF.Lerp(grey, Tok.AccentDefault, x.Value),  // compositor-only
+                Transform = Prop.Of(() => Affine2D.Translation(x.Value * 184f, 0f)),  // compositor-only
+                Fill = Prop.Of(() => ColorF.Lerp(grey, Tok.AccentDefault, x.Value)),  // compositor-only
             };
+            """);
+    }
+}
+
+/// <summary>The unified property surface: ONE channel (Opacity), driven all three ways — static value (re-render
+/// tier), derived Func thunk, and signal-direct (both compositor-only). The render counter is the proof: the static
+/// button re-renders this host; the slider scrub never does.</summary>
+sealed class StatePage_ThreeFormsHost : Component
+{
+    int _renders;
+
+    public override Element Render()
+    {
+        _renders++;
+        var (staticOp, setStaticOp) = UseState(1.0f);
+        var op = UseFloatSignal(0.8f);
+
+        // The helper takes Prop<float> — every form flows through the SAME parameter type.
+        static Element Chip(string label, Prop<float> opacity) => VStack(4,
+            new BoxEl { Width = 56f, Height = 36f, Corners = Radii.ControlAll, Fill = Tok.AccentDefault, Opacity = opacity },
+            Caption(label).Tertiary());
+
+        return ControlExample.Build("One channel, three forms — Opacity",
+            VStack(14,
+                HStack(20,
+                    Chip("value (re-render)", staticOp),                  // float        → Prop<float>
+                    Chip("Func (compositor)", Prop.Of(() => op.Value * op.Value)),   // derived thunk
+                    Chip("signal (compositor)", op)),                     // FloatSignal  → Prop<float>, no closure
+                HStack(12,
+                    Button.Standard($"static → {(staticOp > 0.7f ? "0.4" : "1.0")}", () => setStaticOp(staticOp > 0.7f ? 0.4f : 1.0f)),
+                    Slider.Bind(op))),
+            description: "Every bindable channel is one Prop<T> property accepting a static value, a Func<T> thunk, or a concrete signal. " +
+                         "The static form re-asserts on re-render (the button bumps the counter); the two bound forms ride the compositor — " +
+                         "scrubbing the slider updates both right-hand chips with zero host re-renders.",
+            output: VStack(4, GalleryPage.LiveText(() => $"op = {op.Value:0.00}"), Caption($"host renders: {_renders}").Tertiary()),
+            code: """
+            var (staticOp, setStaticOp) = UseState(1.0f);   // value → re-render tier
+            var op = UseFloatSignal(0.8f);                  // signal → compositor tier
+
+            new BoxEl { Opacity = staticOp };                          // 1) static value
+            new BoxEl { Opacity = Prop.Of(() => op.Value * op.Value) };// 2) derived Func (Prop.Of wraps inline lambdas)
+            new BoxEl { Opacity = op };                                // 3) signal-direct — no closure at all
             """);
     }
 }
@@ -1598,14 +1648,14 @@ sealed class StatePage_MemoHost : Component
                     Button.Standard("b++", () => b.Value = b.Peek() + 1),
                 ],
             },
-            description: "A memo caches its value and recomputes lazily when an input signal changes; readers subscribe through it. The readout is a TextBind through the memo — the host still never re-renders.",
+            description: "A memo caches its value and recomputes lazily when an input signal changes; readers subscribe through it. The readout binds Text through the memo — the host still never re-renders.",
             output: VStack(4, GalleryPage.LiveText(() => $"{a.Value} × {b.Value} = {product.Value}"), Caption($"host renders: {_renders}").Tertiary()),
             code: """
             var a = UseSignal(2);
             var b = UseSignal(3);
             var product = UseComputed(() => a.Value * b.Value);   // Memo<int>: cached, lazy
 
-            new TextEl("") { TextBind = () => $"{a.Value} × {b.Value} = {product.Value}" };
+            new TextEl("") { Text = Prop.Of(() => $"{a.Value} × {b.Value} = {product.Value}") };
             """);
     }
 }

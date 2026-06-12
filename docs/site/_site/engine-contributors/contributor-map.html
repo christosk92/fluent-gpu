@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Contributor Map: Where to Change What | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Contributor Map: Where to Change What | FluentGpu Developer Docs ">
+      
+      
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="../toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/docs/site/engine-contributors/contributor-map.md/#L1">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+
+      <div class="content">
+        <div class="actionbar">
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="">
+<h1 id="contributor-map-where-to-change-what">Contributor Map: Where to Change What</h1>
+
+<p>This is the engine-contributor's first stop. You are here to change FluentGpu's <strong>internals</strong>, not to build an app
+with it — if you want to build an app, start at <a href="../app-authors/index.html">Building apps with FluentGpu</a>.</p>
+<p>FluentGpu enforces a strict <strong>single-owner</strong> model: every shared artifact (a signal primitive, an <code>Element</code> shape, a
+reconciler path, a scene column, a render opcode, a PAL/RHI/Text seam) is defined in <strong>exactly one place</strong> and
+referenced everywhere else. The #1 review finding on this codebase is the same artifact defined two ways in two files.
+So before you touch anything, the rule is: <strong>find the one owner, change it there, verify against the headless harness.</strong></p>
+<p>This page maps subsystem → owning file, walks the 29-project assembly graph, and then gives the precise, file-level
+&quot;where do I change <em>this</em>&quot; for each layer, ending with two recipes (adding an <code>Element</code> type; the canon gate after
+editing <code>design/</code>). The architecture <em>reasoning</em> lives in the <a href="../../../design/README.md">design corpus</a> — this page
+links to it rather than restating it.</p>
+<blockquote>
+<p>The same map exists in compressed form as the guide hub's
+<a href="../../guide/README.md#-agent--file--ownership-map-where-to-change-what">file &amp; ownership map</a> and the
+<a href="../index.html#for-engine-contributors">docs hub's &quot;where to change what&quot; table</a>. This page is the long-form version
+with the <em>why</em> and the <em>how to verify</em>.</p>
+</blockquote>
+<hr>
+<h2 id="the-file--ownership-map">The file &amp; ownership map</h2>
+<p>Each row is <strong>one owner</strong>. Change the artifact there; reference it elsewhere. (Paths are relative to the repo root.)</p>
+<table>
+<thead>
+<tr>
+<th>Subsystem</th>
+<th>The <code>src/</code> file that owns it</th>
+<th>Key types</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Reactive runtime (signals, effects, scheduler)</td>
+<td><code>src/FluentGpu.Foundation/Signals/{ReactiveCore,Signal,Effect,Memo}.cs</code></td>
+<td><code>Reactive</code>, <code>Computation</code>, <code>ReactiveRuntime</code>, <code>Signal&lt;T&gt;</code>, <code>FloatSignal</code>, <code>Effect</code>, <code>Memo&lt;T&gt;</code></td>
+</tr>
+<tr>
+<td>The unified bindable channel</td>
+<td><code>src/FluentGpu.Foundation/Signals/Prop.cs</code></td>
+<td><code>Prop&lt;T&gt;</code>, <code>Prop.Of</code></td>
+</tr>
+<tr>
+<td>Hooks (<code>UseState</code>/<code>UseSignal</code>/<code>UseContext</code>/…)</td>
+<td><code>src/FluentGpu.Hooks/RenderContext.cs</code> (impl) + <code>Component.cs</code> (surface)</td>
+<td><code>RenderContext</code>, hook cells</td>
+</tr>
+<tr>
+<td>Component model</td>
+<td><code>src/FluentGpu.Hooks/Component.cs</code></td>
+<td><code>Component</code>, <code>ReactiveComponent</code>, <code>RunsOnce</code></td>
+</tr>
+<tr>
+<td>Reconcile, render-effects, <code>For</code>/<code>Show</code>, context, bindings</td>
+<td><code>src/FluentGpu.Reconciler/Reconciler.cs</code></td>
+<td><code>TreeReconciler</code></td>
+</tr>
+<tr>
+<td><code>Element</code> shapes / props</td>
+<td><code>src/FluentGpu.Dsl/Element.cs</code>, and <code>src/FluentGpu.Hooks/{ComponentEl,Context,ControlFlow}.cs</code></td>
+<td><code>Element</code>, <code>BoxEl</code>, <code>TextEl</code>, <code>GridEl</code>, <code>ImageEl</code>, <code>ScrollEl</code>, <code>ShowEl</code>, <code>ForEl</code>, …</td>
+</tr>
+<tr>
+<td>DSL helpers (<code>Ui.*</code>) / modifiers</td>
+<td><code>src/FluentGpu.Dsl/{Factories,Modifiers}.cs</code></td>
+<td><code>Ui</code>, modifier extensions</td>
+</tr>
+<tr>
+<td>Controls (Button/Slider/Nav/Virtual…)</td>
+<td><code>src/FluentGpu.Controls/*.cs</code></td>
+<td>composition only — <strong>no</strong> new opcode/column/seam</td>
+</tr>
+<tr>
+<td>Layout (flex/grid/measure)</td>
+<td><code>src/FluentGpu.Layout/FlexLayout.cs</code></td>
+<td><code>FlexLayout.Run</code> / <code>RunSubtree</code></td>
+</tr>
+<tr>
+<td>Scoped relayout / boundary firewall</td>
+<td><code>src/FluentGpu.Layout/LayoutInvalidator.cs</code></td>
+<td><code>LayoutInvalidator</code>, <code>IsLayoutBoundary</code></td>
+</tr>
+<tr>
+<td>Retained scene (SoA tree, columns, dirty flags)</td>
+<td><code>src/FluentGpu.Scene/{SceneStore,Columns}.cs</code></td>
+<td><code>SceneStore</code>, <code>ISceneBackend</code>, <code>LayoutInput</code>, <code>NodePaint</code>, <code>NodeFlags</code>, <code>VisualKind</code></td>
+</tr>
+<tr>
+<td>Record → DrawList</td>
+<td><code>src/FluentGpu.Render/SceneRecorder.cs</code></td>
+<td><code>SceneRecorder</code></td>
+</tr>
+<tr>
+<td>Rounded-rect / border raster</td>
+<td><code>src/FluentGpu.Render/SceneRecorder.cs</code> + <code>src/FluentGpu.Rhi.D3D12/*Pipeline.cs</code></td>
+<td>the SDF ring + gradient PSOs</td>
+</tr>
+<tr>
+<td>Frame loop, scheduling</td>
+<td><code>src/FluentGpu.Hosting/AppHost.cs</code></td>
+<td><code>AppHost.RunFrame</code> / <code>Paint</code>, <code>FrameStats</code></td>
+</tr>
+<tr>
+<td>Theming tokens / colors</td>
+<td><code>src/FluentGpu.Dsl/{Tokens,Theme}.cs</code></td>
+<td><code>Tok</code>, <code>TokenSet</code></td>
+</tr>
+<tr>
+<td>Tests / golden checks</td>
+<td><code>src/FluentGpu.VerticalSlice/Program.cs</code></td>
+<td><code>Check(...)</code></td>
+</tr>
+</tbody>
+</table>
+<p>The cross-cutting <strong>contract</strong> owners (every opcode, RHI method, PAL seam, hook, source generator, scene column,
+assembly → its one authoritative design doc) live in the
+<a href="../../../design/subsystems/README.md#2-contract-ownership-map">subsystem ownership map</a>, and the precedence authority
+when two docs disagree is <a href="../../../design/SPEC-INDEX.md"><code>SPEC-INDEX.md</code></a>. Consult those before any <em>cross-cutting</em>
+change; this page is for the <em>code-file</em> change.</p>
+<hr>
+<h2 id="the-29-project-assembly-graph">The 29-project assembly graph</h2>
+<p>The solution (<a href="../../../src/FluentGpu.slnx"><code>src/FluentGpu.slnx</code></a>) is an <strong>acyclic</strong> graph of 29 projects, grouped into
+six solution folders. (The guide's &quot;18-assembly&quot; figure counts the original core engine; the solution as-built has
+grown the seams, headless backends, and tooling out to 29 — <code>FluentGpu.slnx</code> is the source of truth.)</p>
+<p><strong>Core</strong> (12) — the engine proper, platform-agnostic:</p>
+<table>
+<thead>
+<tr>
+<th>Project</th>
+<th>What's in it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>FluentGpu.Foundation</code></td>
+<td>handles, allocators, <code>ColorF</code>/<code>Affine2D</code>/geometry, <code>StringTable</code>, <strong>the signals reactive core</strong> (<code>Signals/</code>) and <code>Prop&lt;T&gt;</code></td>
+</tr>
+<tr>
+<td><code>FluentGpu.Scene</code></td>
+<td>the retained SoA <code>SceneStore</code>, the columns, <code>ImageCache</code>, <code>VirtualLayout</code></td>
+</tr>
+<tr>
+<td><code>FluentGpu.Layout</code></td>
+<td><code>FlexLayout</code>, <code>LayoutInvalidator</code> (scoped relayout), <code>ExtentTable</code></td>
+</tr>
+<tr>
+<td><code>FluentGpu.Render</code></td>
+<td><code>SceneRecorder</code> (scene → DrawList)</td>
+</tr>
+<tr>
+<td><code>FluentGpu.Dsl</code></td>
+<td><code>Element</code> records, <code>Ui.*</code> builders, <code>Modifiers</code>, theming (<code>Tok</code>/<code>Theme</code>)</td>
+</tr>
+<tr>
+<td><code>FluentGpu.Hooks</code></td>
+<td><code>Component</code>/<code>ReactiveComponent</code>, <code>RenderContext</code> + hooks, <code>ComponentEl</code>/<code>Context</code>/<code>ControlFlow</code></td>
+</tr>
+<tr>
+<td><code>FluentGpu.Reconciler</code></td>
+<td>the reconciler (render-effects, keyed diff, <code>For</code>/<code>Show</code>, bindings), <code>VirtualListEl</code></td>
+</tr>
+<tr>
+<td><code>FluentGpu.Controls</code></td>
+<td>Button/IconButton/ToggleButton/Slider/ScrollBar/NavigationView/Repeater/Virtual/Navigator</td>
+</tr>
+<tr>
+<td><code>FluentGpu.Input</code></td>
+<td>hit-testing, the dispatcher, focus, gestures</td>
+</tr>
+<tr>
+<td><code>FluentGpu.Animation</code></td>
+<td><code>AnimEngine</code>, springs, keyframes, the motion channels</td>
+</tr>
+<tr>
+<td><code>FluentGpu.Hosting</code></td>
+<td><code>AppHost</code> (the frame loop), <code>FrameStats</code>, <code>FrameDiagnostics</code></td>
+</tr>
+<tr>
+<td><code>FluentGpu.Media</code></td>
+<td>the image/video pipeline (decode, residency, mosaic)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Seams</strong> (3) — the abstract platform boundaries (no platform code): <code>FluentGpu.Rhi</code>, <code>FluentGpu.Pal</code>, <code>FluentGpu.Text</code>.</p>
+<p><strong>Backends.Windows</strong> (7) — the real Win32/D3D12 leaves behind those seams: <code>FluentGpu.Rhi.D3D12</code>, <code>FluentGpu.Pal.Windows</code>,
+<code>FluentGpu.Text.DirectWrite</code>, <code>FluentGpu.Media.Codecs.Wic</code>, <code>FluentGpu.Win32.Interop</code>, <code>FluentGpu.Accessibility.Uia</code>,
+<code>FluentGpu.Rhi.Gdi</code>.</p>
+<p><strong>Backends.Headless</strong> (3) — the GPU/window/font-free fakes the golden-check harness runs against:
+<code>FluentGpu.Rhi.Headless</code>, <code>FluentGpu.Pal.Headless</code>, <code>FluentGpu.Text.Headless</code>.</p>
+<p><strong>Tooling</strong> (2) — Roslyn source generators / analyzers: <code>FluentGpu.SourceGen</code>, <code>FluentGpu.Interop.SourceGen</code>.</p>
+<p><strong>Apps</strong> (2) — <code>FluentGpu.VerticalSlice</code> (the headless golden-check harness — <strong>your verification target</strong>) and
+<code>FluentGpu.WindowsApp</code> (the on-screen gallery + <code>FluentApp.Run</code>).</p>
+<p>The invariant the whole graph protects: <strong>Core never references a Windows backend.</strong> Code flows Core → Seam interface;
+the concrete leaf is injected at composition time in <code>FluentGpu.Hosting</code> (or by the headless harness). Keep it acyclic
+— if a feature seems to need a Core → backend reference, you've put the artifact in the wrong layer.</p>
+<hr>
+<h2 id="signals--reactive-core--fluentgpufoundationsignals">Signals &amp; reactive core — <code>FluentGpu.Foundation/Signals</code></h2>
+<p>This is the load-bearing centre: <strong>every</strong> update in the engine is one reactive computation re-running because a signal
+it read changed. There is no full-app re-render and no global dirty flag.</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Owns</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ReactiveCore.cs</code></td>
+<td><code>Computation</code> (the base for effects/memos/render-effects), <code>ReactiveRuntime</code> (the per-host scheduler + pending queue + <code>Flush</code>), <code>Reactive.Untrack</code>/<code>OnCleanup</code>, the thread-static <code>Tracking.Current</code></td>
+</tr>
+<tr>
+<td><code>Signal.cs</code></td>
+<td><code>Signal&lt;T&gt;</code> and <code>FloatSignal</code> — observable cells</td>
+</tr>
+<tr>
+<td><code>Effect.cs</code></td>
+<td><code>Effect</code> (a reactive side-effect; a property <em>binding</em> is one) and <code>ManagedEffect</code> (the base a component render-effect subclasses)</td>
+</tr>
+<tr>
+<td><code>Memo.cs</code></td>
+<td><code>Memo&lt;T&gt;</code> — a lazy, cached derived value</td>
+</tr>
+<tr>
+<td><code>Prop.cs</code></td>
+<td><code>Prop&lt;T&gt;</code> — the one bindable channel a property exposes (value, <code>Func&lt;T&gt;</code>, or signal)</td>
+</tr>
+</tbody>
+</table>
+<p>The contracts that constrain edits here (all observable in the source):</p>
+<ul>
+<li><strong>Reading subscribes; peeking doesn't.</strong> <code>Signal&lt;T&gt;.Value</code>'s getter calls <code>Subscribe()</code> (links <code>Tracking.Current</code>);
+<code>Peek()</code> returns the field with no link. Anything that &quot;should update but doesn't&quot; read <code>.Peek()</code> where it needed
+<code>.Value</code>.</li>
+<li><strong>Writes are deferred.</strong> <code>Signal&lt;T&gt;.Value</code>'s setter calls <code>NotifySubscribers()</code> → <code>MarkStale()</code> on each subscriber,
+which (for effects) enqueues onto <code>ReactiveRuntime</code> — it does <strong>not</strong> run the effect inline. The host drains the
+queue once per frame via <code>ReactiveRuntime.Flush()</code> (phase 3). This is what keeps reconcile/layout on their phases and
+the paint half allocation-free.</li>
+<li><strong>The write path must stay alloc-free.</strong> <code>NotifySubscribers</code> iterates the live <code>_subs</code> list (no defensive copy);
+<code>FloatSignal</code> skips the comparer/boxing indirection entirely so a per-pointer-move scrub write allocates nothing.
+Keep it that way — a steady-frame allocation here trips the harness's <code>HotPhaseAllocBytes == 0</code> assertion.</li>
+<li><strong>Memos are pull-based.</strong> <code>Memo&lt;T&gt;</code> recomputes lazily on read when <code>State == Stale</code> and only notifies <em>its</em>
+subscribers when the cached value actually changes; its <code>RunStale()</code> is a no-op (it never self-schedules).</li>
+<li><strong>Ownership is explicit.</strong> <code>Computation</code>'s ctor takes an <code>owner</code> and only auto-cascades disposal when one is passed.
+Hook-created computations (memos, bindings) persist across a component's re-renders and are disposed by the
+reconciler on unmount, <strong>not</strong> auto-disposed by the enclosing render-effect's next run.</li>
+</ul>
+<p>If you change scheduling semantics (batching, the flush guard, when <code>FrameRequested</code> fires), you are changing the
+canonical reactive model — mirror it into <a href="../../../design/subsystems/reconciler-hooks.md"><code>reconciler-hooks.md</code> §0bis</a>
+(the as-built signals owner) and run the canon gate.</p>
+<hr>
+<h2 id="hooks--components--fluentgpuhooks">Hooks &amp; components — <code>FluentGpu.Hooks</code></h2>
+<p>The hook surface lives on <code>Component</code> (<code>Component.cs</code>) and is implemented in <code>RenderContext</code> (<code>RenderContext.cs</code>).</p>
+<ul>
+<li><strong><code>Component.cs</code></strong> is the authoring surface: <code>UseState</code>/<code>UseSignal</code>/<code>UseFloatSignal</code>/<code>UseComputed</code>/<code>UseEffect</code>/
+<code>UseLayoutEffect</code>/<code>UseReducer</code>/<code>UseMemo</code>/<code>UseRef</code>/<code>UseContext</code> plus the animation/media hooks, all forwarding to
+<code>Context</code>. It also defines <code>RunsOnce</code> — <code>false</code> for a classic <code>Component</code> (its render-effect re-subscribes and
+re-runs on its own state/context changes), sealed <code>true</code> on <code>ReactiveComponent</code> (the reconciler runs its body
+<em>untracked</em>, so it never re-renders; reactivity comes purely from the bindings/<code>For</code>/<code>Show</code> inside).</li>
+<li><strong><code>RenderContext.cs</code></strong> is the per-component hook store: an ordered <code>List&lt;HookCell&gt;</code> walked by <code>_cursor</code> each render,
+so <strong>hooks must run in stable call order</strong> (no hooks inside <code>if</code>/loops — same rule as React). Each hook kind has its
+cell type (<code>SignalCell&lt;T&gt;</code>, <code>FloatSignalCell</code>, <code>MemoHookCell&lt;T&gt;</code>, <code>EffectCell</code>, <code>MemoCell&lt;T&gt;</code>, <code>RefHolderCell</code>,
+<code>AnimValueCell</code>). It also carries <code>PendingEffects</code> (drained after present, phase 12) and <code>PendingLayoutEffects</code>
+(drained after layout, phase 6.5).</li>
+</ul>
+<p>A <code>UseState</code> is a <code>Signal&lt;T&gt;</code> whose only subscriber is <em>this</em> component's render-effect — that is <em>why</em> <code>setState</code>
+re-renders only this component's subtree (granular), never the app. Adding a hook means: a new cell type in
+<code>RenderContext.cs</code>, a method on <code>RenderContext</code>, and a thin forwarder on <code>Component</code>. Hook <em>semantics</em> (DepKey,
+memo-skip) are owned by <a href="../../../design/subsystems/reconciler-hooks.md"><code>reconciler-hooks.md</code></a>.</p>
+<hr>
+<h2 id="reconciler-forshow-bindings-context--fluentgpureconciler">Reconciler, For/Show, bindings, context — <code>FluentGpu.Reconciler</code></h2>
+<p><code>TreeReconciler</code> (in <code>Reconciler.cs</code>) is the heart: it patches the retained <code>SceneStore</code> from the immutable <code>Element</code>
+tree. It is signals-first — every component is a reactive render-effect that re-renders + reconciles <strong>only its own
+subtree</strong>; bindings and <code>For</code>/<code>Show</code> are effects too.</p>
+<p>The dispatch you'll touch most:</p>
+<ul>
+<li><strong><code>Mount(NodeHandle, Element)</code></strong> type-tests the element and routes the structural kinds to their handlers
+(<code>MountComponent</code>/<code>MountProvider</code>/<code>MountScroll</code>/<code>MountVirtual</code>/<code>MountShow</code>/<code>MountFor</code>); everything else goes through
+the generic path: <code>WriteColumns</code> → <code>BindNode</code> → recurse over <code>ChildrenOf</code>.</li>
+<li><strong><code>Update(NodeHandle, Element, Element)</code></strong> mirrors <code>Mount</code>: a reused component is a <strong>no-op</strong> (it's autonomous — it
+re-renders via its own effect; a parent re-render does not touch it), <code>For</code>/<code>Show</code> are no-ops on a parent re-render
+(their boundary effect manages children reactively), and the generic path is
+<code>WriteColumns(node, newEl, isMount:false, oldEl)</code> → <code>ReconcileChildren(ChildrenOf(newEl), ChildrenOf(oldEl))</code>.</li>
+<li><strong><code>WriteColumns(NodeHandle, Element, bool isMount, Element? old)</code></strong> is the big <code>switch (el)</code> that writes an element's
+fields into the scene's SoA columns (<code>Paint</code>, <code>Layout</code>, interaction). This is where a new <code>Element</code> type's static
+props land.</li>
+<li><strong><code>BindNode(NodeHandle, Element)</code></strong> wires a reactive <code>Effect</code> for each <em>bound</em> channel (<code>Prop&lt;T&gt;.IsBound</code>). The
+effect reads the thunk/signal inside itself (so it re-subscribes) and writes one scene field. Note the dirty split
+it encodes: <code>Transform</code>/<code>Opacity</code>/<code>Fill</code> mark <code>TransformDirty</code>/<code>PaintDirty</code> only (<strong>compositor-only</strong> — no relayout);
+<code>Width</code>/<code>Height</code> mark <code>LayoutDirty</code> (a <strong>scoped</strong> relayout). That split is the whole performance story.</li>
+<li><strong><code>ChildrenOf(Element?)</code></strong> returns the positional children of a container (<code>BoxEl.Children</code> / <code>GridEl.Children</code>),
+empty for leaves.</li>
+</ul>
+<p><code>ShowEl</code>/<code>ForEl</code> are records in <code>FluentGpu.Hooks/ControlFlow.cs</code> (with the <code>Flow.Show</code> / <code>Flow.For</code> fluent factory);
+the reconciler runs their <code>When</code>/<code>Count</code>/<code>ItemAt</code> thunks inside a boundary effect and re-realizes through the keyed
+diff. Context providers publish a <code>Signal&lt;object?&gt;</code> per provider node; a consumer resolves by walking ancestors
+(<code>ResolveContext</code>). The keyed-LIS child reconciler and the <code>Mutate()</code> epoch chokepoint are specified in
+<a href="../../../design/subsystems/reconciler-hooks.md"><code>reconciler-hooks.md</code></a>.</p>
+<hr>
+<h2 id="element-shapes--dsl--fluentgpudsl">Element shapes &amp; DSL — <code>FluentGpu.Dsl</code></h2>
+<p>An <code>Element</code> (in <code>Element.cs</code>) is an <strong>immutable description</strong> of a UI node — cheap to build, never touches the scene
+directly. The base carries <code>Key</code> and an abstract <code>ushort ElementTypeId</code> (a source-gen-style stable id for the
+reconciler's integer type-dispatch). The records and their ids today:</p>
+<table>
+<thead>
+<tr>
+<th><code>ElementTypeId</code></th>
+<th>Record</th>
+<th>File</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>BoxEl</code></td>
+<td><code>FluentGpu.Dsl/Element.cs</code></td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>TextEl</code></td>
+<td><code>FluentGpu.Dsl/Element.cs</code></td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>ComponentEl</code></td>
+<td><code>FluentGpu.Hooks/ComponentEl.cs</code></td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>ContextProviderEl</code></td>
+<td><code>FluentGpu.Hooks/Context.cs</code></td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>ScrollEl</code></td>
+<td><code>FluentGpu.Dsl/Element.cs</code></td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>VirtualListEl</code></td>
+<td><code>FluentGpu.Reconciler/VirtualListEl.cs</code></td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>ShowEl</code></td>
+<td><code>FluentGpu.Hooks/ControlFlow.cs</code></td>
+</tr>
+<tr>
+<td>8</td>
+<td><code>ImageEl</code></td>
+<td><code>FluentGpu.Dsl/Element.cs</code></td>
+</tr>
+<tr>
+<td>9</td>
+<td><code>GridEl</code></td>
+<td><code>FluentGpu.Dsl/Element.cs</code></td>
+</tr>
+<tr>
+<td>10</td>
+<td><code>ForEl</code></td>
+<td><code>FluentGpu.Hooks/ControlFlow.cs</code></td>
+</tr>
+<tr>
+<td>11</td>
+<td><code>PolylineStrokeEl</code></td>
+<td><code>FluentGpu.Dsl/Element.cs</code></td>
+</tr>
+<tr>
+<td>12</td>
+<td><code>SpanTextEl</code></td>
+<td><code>FluentGpu.Dsl/Element.cs</code></td>
+</tr>
+</tbody>
+</table>
+<p>Bindable properties on these records are a single <code>Prop&lt;T&gt;</code> — e.g. <code>BoxEl.Fill</code> is <code>Prop&lt;ColorF&gt;</code>, <code>TextEl.Text</code> is
+<code>Prop&lt;string&gt;</code>, <code>ImageEl.Source</code> is <code>Prop&lt;string&gt;</code>. A <code>Prop&lt;T&gt;</code> accepts a static value, a <code>Func&lt;T&gt;</code> thunk (via
+<code>Prop.Of(...)</code> for an inline lambda), or a concrete signal — there is no separate <code>*Bind</code> property anymore (the canon
+gate enforces that; see below). The fluent builders that construct these records (<code>VStack</code>/<code>HStack</code>/<code>Text</code>/<code>Grid</code>/…)
+and the chainable modifiers live in <code>Factories.cs</code> / <code>Modifiers.cs</code> — pure element builders, no scene access.</p>
+<hr>
+<h2 id="controls--fluentgpucontrols-composition-only">Controls — <code>FluentGpu.Controls</code> (composition only)</h2>
+<p>Controls are <strong>pure composition</strong>: a <code>Button</code>, <code>Slider</code>, <code>NavigationView</code>, <code>Virtual</code>, etc. assemble existing
+<code>Element</code>s and hooks. The hard rule (asserted by the design ownership map) is that a control adds <strong>no</strong> new DrawList
+opcode, <strong>no</strong> new scene column, <strong>no</strong> new PAL/RHI seam, and <strong>no</strong> new hook — if you find yourself wanting one, the
+artifact belongs in its owning subsystem (renderer / scene / seam / hooks), and the control consumes it.</p>
+<p>Visual-state and motion authoring is done through existing engine primitives, not a hand-rolled state machine:
+<code>BoxEl.{Hover,Pressed}{Fill,BorderColor}</code> + the eased hover/press progress for ordinary interaction, and the
+<code>FluentGpu.Animation</code> <code>AnimEngine</code> (keyframes/springs/stroke-trim) for authored WinUI timelines. Building a
+WinUI-faithful control — where to find the exact templates/storyboards/timing tokens and how to verify them — is its
+own guide: <a href="../../guide/control-fidelity.md">control-fidelity.md</a>. The control kit's contract is owned by
+<a href="../../../design/subsystems/controls.md"><code>controls.md</code></a>.</p>
+<hr>
+<h2 id="layout--fluentgpulayout">Layout — <code>FluentGpu.Layout</code></h2>
+<p><code>FlexLayout</code> (in <code>FlexLayout.cs</code>) is a flexbox engine over the SoA scene columns: a bottom-up <strong>Measure</strong> descent then
+a top-down <strong>Arrange</strong> descent (distribute free space by grow/shrink, position by justify-content, align the cross axis
+by align-items/align-self). <code>Run(root)</code> content-sizes; <code>Run(root, window)</code> fills the window. Grid is the <code>GridEl</code> path.</p>
+<p>The performance half is <code>LayoutInvalidator</code> (in <code>LayoutInvalidator.cs</code>): it consumes the scene's <code>LayoutDirty</code>
+worklist and, for each dirty node, walks <strong>up to the nearest layout boundary</strong> — a fixed-size, non-flexing,
+clip-to-bounds container whose own size can't change because of a descendant — then re-solves just that subtree via
+<code>FlexLayout.RunSubtree</code>. That boundary is the <strong>firewall</strong>: a <code>setState</code> deep inside a fixed-size card relayouts only
+the card, never the page (<code>IsLayoutBoundary</code> is the exact predicate: explicit <code>Width</code>+<code>Height</code>, zero grow+shrink,
+<code>ClipsToBounds</code>). With no bounded ancestor it falls back to a full layout. The incremental-layout contract is owned by
+<a href="../../../design/subsystems/layout.md"><code>layout.md</code></a>.</p>
+<hr>
+<h2 id="retained-scene--fluentgpuscene">Retained scene — <code>FluentGpu.Scene</code></h2>
+<p><code>SceneStore</code> (in <code>SceneStore.cs</code>) is the <strong>struct-of-arrays</strong> retained RenderNode tree the reconciler patches: one
+spine (a <code>gen</code> array + free-list, <code>Handle = {index, gen}</code>) indexes all the parallel columns. It implements the narrow
+<code>ISceneBackend</code> op set (<code>CreateNode</code>/<code>FreeSubtree</code>/<code>AppendChild</code>/<code>Layout</code>/<code>Paint</code>/<code>Interaction</code>/<code>Mark</code>/<code>FirstChild</code>/…)
+— that interface is the reconciler's <strong>only</strong> window onto the tree (handle-in / handle-out, POD-only).</p>
+<p><code>Columns.cs</code> defines the column structs and the per-node enums: <code>LayoutInput</code> (flex inputs), <code>NodePaint</code>,
+<code>InteractionInfo</code>, <code>NodeFlags</code> (the dirty bits: <code>LayoutDirty</code>/<code>PaintDirty</code>/<code>TransformDirty</code>/… plus
+<code>ClipsToBounds</code>/<code>Focused</code>/…), <code>VisualKind</code> (<code>None</code>/<code>Box</code>/<code>Text</code>/<code>Image</code>/<code>PolylineStroke</code>), and the
+<code>TextMeasureCache</code>. Side-tables keyed by node index hold the sparse rich paint (shadows, gradients, brush anims) and
+the managed edge payloads (the click/key handler <code>Action</code>s — GC refs live only at the edge, never in a hot column).</p>
+<p>Adding a column = a new parallel array on <code>SceneStore</code>, grown in lockstep with the spine, written by <code>WriteColumns</code> in
+the reconciler, and read by the recorder/layout. A <em>cross-cutting</em> column (one a snapshot must capture, or a new
+opcode reads) is owned by <a href="../../../design/subsystems/scene-memory.md"><code>scene-memory.md</code></a> — register it there.</p>
+<hr>
+<h2 id="record--drawlist--fluentgpurender">Record → DrawList — <code>FluentGpu.Render</code></h2>
+<p><code>SceneRecorder</code> (in <code>SceneRecorder.cs</code>) is phase 8 (record): it walks the retained <code>SceneStore</code> and emits the DrawList.
+It composites <strong>like a browser</strong> — each node's geometry is emitted in LOCAL space with a world transform
+(<code>parent ∘ translate ∘ LocalTransform</code>, scale/rotate about the node centre) and a cumulative opacity, so
+transform/opacity changes animate <strong>without relayout or re-record of content</strong>. Hover/press cross-fade via the eased
+interaction row; a focused node gets the dual-stroke focus ring.</p>
+<p>The recorder is also where the rounded-rect / border <em>emission</em> happens; the <em>raster</em> (the hollow SDF ring, gradient
+strokes, AA, clip) is the D3D12 pipelines in <code>src/FluentGpu.Rhi.D3D12/*Pipeline.cs</code>. The DrawList <strong>encoding
+framework</strong> (the command header, byte arenas, the parallel sortkey array, the opcode enum, the clean-span+epoch reuse
+rule) is owned by <a href="../../../design/subsystems/scene-memory.md"><code>scene-memory.md</code></a>; each opcode's <strong>payload struct
+shape</strong> (and the color contract) is owned by <a href="../../../design/subsystems/gpu-renderer.md"><code>gpu-renderer.md</code></a>. Add an
+opcode in those owners; the recorder is the <em>emit</em> site, not the definition site.</p>
+<hr>
+<h2 id="frame-loop--fluentgpuhosting">Frame loop — <code>FluentGpu.Hosting</code></h2>
+<p><code>AppHost</code> (in <code>AppHost.cs</code>) is the composition root <strong>and</strong> the single-UI-thread frame loop. <code>RunFrame()</code> runs one
+full frame and returns <code>FrameStats</code>; <code>Paint(clicks)</code> is the pump-free half the window's <code>PaintRequested</code> callback uses
+during the OS modal move/resize loop. The phase order, read straight from <code>RunFrame</code>:</p>
+<ul>
+<li><strong>Phase 3 — <code>_runtime.Flush()</code></strong>: drain the reactive runtime; scheduled render-effects reconcile their subtrees and
+bindings apply.</li>
+<li><strong>Phase 6 — layout</strong>: <code>_layout.Run(root, size)</code> on the first frame / resize / DPI / root change, else
+<code>_invalidator.RunDirty(size)</code> for a scoped relayout of just the dirty subtrees.</li>
+<li><strong>Phase 6.5 — layout effects</strong>: <code>DrainLayoutEffects()</code> (Bounds are now valid).</li>
+<li><strong>Phase 7 — animation</strong>: <code>_anim.Tick</code>, the interaction/brush/scroll/repeat/caret tickers — transform/opacity/
+presented-size only, <strong>never</strong> relayout.</li>
+<li><strong>Then</strong> record (phase 8) → batch/submit/present.</li>
+</ul>
+<p><code>FrameStats</code> is the diagnostics surface you assert against in tests: <code>Rendered</code> (a reconcile or layout happened this
+frame — <code>false</code> ⇒ a compositor-only frame), <code>ComponentsRendered</code> (granularity metric), and <strong><code>HotPhaseAllocBytes</code>
+(must be 0 on steady frames)</strong>, plus the record-phase counts. The canonical 13-phase loop + the threading seam are
+owned by <a href="../../../design/subsystems/threading-render-seam.md"><code>threading-render-seam.md</code></a>; <code>AppHost</code> is the
+single-thread as-built that implements it.</p>
+<hr>
+<h2 id="theming-tokens--fluentgpudsltokenscs">Theming tokens — <code>FluentGpu.Dsl/Tokens.cs</code></h2>
+<p><code>Tok</code> (in <code>Tokens.cs</code>) is the active design-token table + the theme switch. A <code>TokenSet</code> is an immutable, baked
+palette of every semantic Fluent brush for one theme (the WinUI <code>*_themeresources</code> mirror), built once and never
+mutated. Author code reads tokens through the static getters (<code>Tok.FillCardDefault</code>, <code>Tok.TextPrimary</code>, …) which
+resolve against the active <code>Tok.T</code> at zero per-read cost.</p>
+<ul>
+<li><strong><code>Tok.Use(ThemeKind)</code></strong> re-themes the whole app with <strong>one pointer write</strong> (swaps <code>T</code> between the prebuilt
+<code>Light</code>/<code>Dark</code> sets).</li>
+<li><strong><code>Tok.SetAccent(ColorF?)</code></strong> injects the live OS accent (or a developer global override); every accent token
+recomputes from it. <code>Tok.SetWindowBackground(ColorF)</code> is the Mica→Transparent override. These are mutable overrides
+<em>on top of</em> the set, so they survive a theme swap.</li>
+</ul>
+<blockquote>
+<p>Note the honest caveat in the source: a <code>TextEl</code>/<code>SpanTextEl</code> default foreground (<code>Tok.TextPrimary</code>) is resolved at
+element <strong>construction</strong>, so a runtime <code>Tok.Use</code> switch does not by itself re-render — a live theme switcher must
+force a full re-render or construction-resolved colors go stale.</p>
+</blockquote>
+<p>Add a token = a <code>required</code> field on <code>TokenSet</code>, a value in both <code>BuildDark()</code>/<code>BuildLight()</code>, and a static getter on
+<code>Tok</code>. The reactive/dynamic-color theming subsystem is owned by
+<a href="../../../design/subsystems/theming.md"><code>theming.md</code></a>; the slice's <code>Tok</code>/<code>Theme</code> is the as-built baked-palette layer.</p>
+<hr>
+<h2 id="tests--golden-checks--fluentgpuverticalslice">Tests / golden checks — <code>FluentGpu.VerticalSlice</code></h2>
+<p>The <code>FluentGpu.VerticalSlice</code> app is the <strong>single source of truth for &quot;does the engine still work&quot;</strong> — ~60 end-to-end
+golden checks across every seam (layout, reconcile, signals, scroll, virtualization, images, controls, navigation,
+animation), run entirely on the <strong>headless</strong> backends (no GPU, no window). Run it:</p>
+<pre><code class="lang-bash">dotnet build src/FluentGpu.VerticalSlice                 # clean build first
+dotnet run   --project src/FluentGpu.VerticalSlice       # expect: ALL CHECKS PASSED
+</code></pre>
+<p>Each check is a one-liner; the harness prints <code>[PASS]</code>/<code>[FAIL]</code> and exits non-zero if any failed:</p>
+<pre><code class="lang-csharp">static void Check(string name, bool ok, string? detail = null)
+{
+    Console.WriteLine($&quot;  [{(ok ? &quot;PASS&quot; : &quot;FAIL&quot;)}] {name}{(detail is null ? &quot;&quot; : $&quot;  ({detail})&quot;)}&quot;);
+    if (!ok) s_failures++;
+}
+// …at the end of Main:
+//   if (s_failures == 0) { Console.WriteLine(&quot;ALL CHECKS PASSED …&quot;); return 0; }
+//   Console.WriteLine($&quot;{s_failures} CHECK(S) FAILED.&quot;); return 1;
+</code></pre>
+<p>Real examples from <code>Program.cs</code> show the style — drive the headless <code>AppHost</code>, then assert on <code>host.Scene</code> bounds or
+the <code>HeadlessGpuDevice</code>'s recorded <code>LastGlyphs</code>/<code>LastRects</code>:</p>
+<pre><code class="lang-csharp">Check(&quot;11. flex-grow splits free space&quot;, Near(g0.W, 150) &amp;&amp; Near(g1.W, 150) &amp;&amp; Near(g1.X, 150), $&quot;w0={g0.W:0.#} x1={g1.X:0.#}&quot;);
+Check(&quot;17. keyed reconcile reorders, preserving identity&quot;, reordered, &quot;[a,b,c] → [c,a,b]&quot;);
+Check(&quot;22. opacity timeline samples t0, eases &amp; completes (no relayout)&quot;, startOk &amp;&amp; midOk &amp;&amp; doneOk, $&quot;@50ms={op:0.00}&quot;);
+</code></pre>
+<p><strong>Add a check</strong> by writing a <code>Check(&quot;…&quot;, condition, detail)</code> in <code>src/FluentGpu.VerticalSlice/Program.cs</code> and calling it
+from <code>Main</code>. If you touched reactivity/layout/render, also assert on <code>FrameStats</code> for the interaction you changed —
+<code>Rendered</code>, <code>ComponentsRendered</code>, and <code>HotPhaseAllocBytes</code> (which <strong>must be 0</strong> on steady frames). The headless setup
+(swapping in <code>HeadlessPlatformApp</code>/<code>HeadlessWindow</code>/<code>HeadlessGpuDevice</code>/<code>HeadlessFontSystem</code>) is shown in
+<a href="../../guide/getting-started.md">getting-started.md → Run headless</a>. GPU pixels are <strong>not</strong> asserted here — that is a
+separate manual &quot;needs-pixels&quot; pass on the real D3D12 path.</p>
+<blockquote>
+<p>After any engine change: run the harness and confirm <code>ALL CHECKS PASSED</code> before claiming success. It is fast
+(seconds), deterministic, and catches cross-seam regressions a focused test won't. The full validation program
+(spikes + per-PR gates) is owned by <a href="../../../design/subsystems/validation.md"><code>validation.md</code></a>.</p>
+</blockquote>
+<hr>
+<h2 id="recipe-add-a-new-element-type">Recipe: add a new <code>Element</code> type</h2>
+<p>Walking the existing wiring (above) gives the exact steps. Say you're adding a leaf <code>MyLeafEl</code>:</p>
+<ol>
+<li><p><strong>Pick a free <code>ElementTypeId</code>.</strong> The ids 1–12 are taken (see the table above); the next free id is <strong>13</strong>. Define
+the record in <code>FluentGpu.Dsl/Element.cs</code> (or the relevant <code>FluentGpu.Hooks/*.cs</code> for a control-flow/context kind),
+override <code>ElementTypeId =&gt; 13</code>, and expose bindable props as <code>Prop&lt;T&gt;</code> (a static value / <code>Func&lt;T&gt;</code> / signal — never
+a <code>*Bind</code> twin).</p>
+<pre><code class="lang-csharp">public sealed record MyLeafEl : Element
+{
+    public override ushort ElementTypeId =&gt; 13;
+    public Prop&lt;ColorF&gt; Tint { get; init; } = Tok.TextPrimary;   // a bindable channel
+    public float Size { get; init; } = 14f;
+    // …leaf layout participation (Width/Height/Grow/Shrink/Basis/AlignSelf/Margin) like the other leaves…
+}
+</code></pre>
+</li>
+<li><p><strong>Write its columns in the reconciler.</strong> Add a <code>case MyLeafEl m:</code> to <code>WriteColumns</code> in <code>Reconciler.cs</code> that sets the
+scene <code>Paint</code>/<code>Layout</code> fields (and the <code>VisualKind</code>) from the element. If the element draws something new, you may
+need a <code>VisualKind</code> member — but that, and any new opcode/column, must be added in its scene/renderer owner first
+(<a href="../../../design/subsystems/scene-memory.md"><code>scene-memory.md</code></a> /
+<a href="../../../design/subsystems/gpu-renderer.md"><code>gpu-renderer.md</code></a>).</p>
+</li>
+<li><p><strong>Bind its reactive channels.</strong> If <code>MyLeafEl</code> has bound props, add the <code>Prop&lt;T&gt;.IsBound</code> effect wiring to
+<code>BindNode</code> (mirror the <code>BoxEl</code>/<code>TextEl</code> blocks) — mark <code>PaintDirty</code>/<code>TransformDirty</code> for compositor-only channels,
+<code>LayoutDirty</code> for size channels.</p>
+</li>
+<li><p><strong>Teach the tree-shape helpers, if it's a container.</strong> A leaf needs nothing here. A <em>container</em> element must return
+its children from <code>ChildrenOf</code> (add a <code>MyContainerEl c =&gt; c.Children</code> arm) so <code>Mount</code>/<code>ReconcileChildren</code> recurse,
+and <code>Update</code> must route it if it needs special structural handling (like <code>ScrollEl</code>/<code>VirtualListEl</code>).</p>
+</li>
+<li><p><strong>Add a factory + a golden check.</strong> Expose a <code>Ui.MyLeaf(...)</code> builder in <code>Factories.cs</code>, then add a
+<code>Check(&quot;…&quot;, …)</code> in <code>Program.cs</code> that mounts it headlessly and asserts the recorded output (and <code>FrameStats</code> if it
+participates in reactivity). Run the harness.</p>
+</li>
+</ol>
+<p>The source-generator-driven <code>ElementTypeId</code> allocation and the keyed reconcile mechanics are specified in
+<a href="../../../design/subsystems/dsl-aot.md"><code>dsl-aot.md</code></a> and
+<a href="../../../design/subsystems/reconciler-hooks.md"><code>reconciler-hooks.md</code></a> — read them before adding a <em>cross-cutting</em>
+element kind.</p>
+<hr>
+<h2 id="the-canon-gate-after-editing-design">The canon gate after editing <code>design/</code></h2>
+<p>The corpus under <a href="../../../design/README.md"><code>design/</code></a> is the architecture source-of-truth, and it is <strong>canon-gated</strong>:
+a PowerShell drift gate fails the build if a known-stale/superseded token reappears anywhere in the <strong>live</strong> design
+tree (<code>design/archive/</code> is excluded). After editing any <code>design/*</code> doc, run it:</p>
+<pre><code class="lang-powershell">powershell -File design/check-canon.ps1                  # exit 0 = clean   (or: pwsh design/check-canon.ps1)
+</code></pre>
+<p>It protects the canonical bindings from being silently re-litigated — e.g. <code>Handle = {u32 index, u32 gen}</code> (the
+24-bit-gen form is superseded), the tiered COM ruling, the pure-scalar <code>DepKey</code>, and the <strong><code>Prop&lt;T&gt;</code> channel</strong> (the old
+dual <code>…Bind</code> property spelling is gone — <code>TransformBind</code>/<code>FillBit</code>/etc. reappearing anywhere live is a violation). To
+intentionally mention a superseded form in live prose (e.g. to explain a correction), put
+<code>&lt;!-- canon-allow: reason --&gt;</code> on that line. Superseding a value means: add the canonical value to
+<a href="../../../design/SPEC-INDEX.md"><code>SPEC-INDEX.md</code></a>, add a rule to <code>check-canon.ps1</code>, <strong>and</strong> move the old doc to
+<code>design/archive/</code>.</p>
+<blockquote>
+<p>This gate runs only for <code>design/</code> edits. Source changes are verified by the headless harness
+(<code>dotnet run --project src/FluentGpu.VerticalSlice</code>), not the canon gate. Most contributions touch one or the other;
+a change that edits both runs both.</p>
+</blockquote>
+<hr>
+<h2 id="see-also">See also</h2>
+<ul>
+<li><a href="../app-authors/index.html">Building apps with FluentGpu</a> — the app-author path (the signals mental model, runnable
+examples, the pitfalls table).</li>
+<li><a href="../../guide/README.md">Developer &amp; agent guide hub</a> — the compressed file &amp; ownership map and the agent rules.</li>
+<li><a href="../../guide/getting-started.md">Getting started</a> — the frame loop you call, running headless, the assembly layout.</li>
+<li><a href="../../../design/subsystems/README.md">Subsystem index + contract ownership map</a> and
+<a href="../../../design/SPEC-INDEX.md"><code>SPEC-INDEX.md</code></a> — the cross-cutting contract authorities.</li>
+<li><a href="../../../design/subsystems/reconciler-hooks.md"><code>reconciler-hooks.md</code> §0bis</a> — the as-built signals-first reactive
+model.</li>
+</ul>
+
+</article>
+
+
+        <div class="next-article d-print-none border-top" id="nextArticle"></div>
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

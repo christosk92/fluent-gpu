@@ -66,8 +66,8 @@ The hardest correctness facts this doc commits to:
 > `FluentGpu.Controls` as an "app-like leaf" referencing **only** `Dsl`/`Hooks`/`Foundation`. The **shipped**
 > assembly **also** references **`Reconciler`** (NavigationView/PageHost are `Component`s; the Repeater/`Virtual`
 > factory needs Reconciler types), **`Scene`** (`IVirtualLayout`), and **`Animation`**. It stays **acyclic**:
-> `Reconciler` references only `VirtualListEl` (which stays in `Reconciler`), so `Controls → Reconciler` is
-> one-way. The corrected dependency set is mirrored in `subsystems/README.md` §2.6 and `dsl-aot.md` §3.4. The
+> `VirtualListEl` (which `Controls` consumes via the `Virtual` factory) is **declared in `Reconciler`**, so the
+> `Controls → Reconciler` edge is one-way with no back-edge. The corrected dependency set is mirrored in `subsystems/README.md` §2.6 and `dsl-aot.md` §3.4. The
 > body below (§3–§13) still describes the aspirational lookless kit — see **§1.1** for what actually shipped.
 
 ### 1.1 As-shipped (Phase 0): the composition-factory hoist + per-control `Style` records
@@ -776,12 +776,12 @@ seams swap their OS leaves (the controls do not see the swap):
 
 | Seam consumed by controls | Windows leaf | macOS leaf | What stays portable (the control sees only this) |
 |---|---|---|---|
-| UIA patterns / providers | `Accessibility.Uia` | `Accessibility.NSAccessibility` | `A11yInfo` columns (ControlType/Patterns/Name/PositionInSet/…), topology walk |
+| UIA patterns / providers | `FluentGpu.Windows` Uia/ | `Accessibility.NSAccessibility` | `A11yInfo` columns (ControlType/Patterns/Name/PositionInSet/…), topology walk |
 | Editable text / IME | `ITextDocument` + Imm32/TSF | `ITextDocument` + `NSTextInputClient` | `ITextDocument`/`SelectionState`/`ITextReadSide` (text.md §15/§18) |
 | Clipboard / drag (TextBox, ListView) | OLE | `NSPasteboard`/`NSDragging*` | `IClipboard`/`IDragDropBackend` (input-a11y §12) |
 | Cursor | `Pal.SetCursor` (Win32) | `Pal.SetCursor` (NSCursor) | `CursorId` enum + the resolver route (input-a11y §18) |
 | System/accent/HC color tokens | Windows HC tokens | macOS appearance | `ControlTheme`/`PartToken.Brush` via theming.md |
-| Overlay window/z | `Pal.Windows` DComp visuals | `Pal.Cocoa` layers | `OverlayManager`/`OverlayPlacement` (input-a11y §4, layout §10B) |
+| Overlay window/z | `FluentGpu.Windows` Pal/ DComp visuals | `Pal.Cocoa` layers | `OverlayManager`/`OverlayPlacement` (input-a11y §4, layout §10B) |
 
 Forbidden above the seam (architecture-spec §9): no `HWND`/`NSWindow`/`HRESULT`/`ComPtr`/`IRawElementProvider*`/
 `NSAccessibility*`/WinRT type appears in a control. A control sees only `Element`, hooks, `Vec2`/`RectDip`/`Size2`,

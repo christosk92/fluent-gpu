@@ -1,0 +1,678 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Text.ItemRun
+  commentId: T:FluentGpu.Text.ItemRun
+  id: ItemRun
+  parent: FluentGpu.Text
+  children:
+  - FluentGpu.Text.ItemRun.#ctor(System.Int32,System.Int32,System.Byte,System.UInt16,System.Byte)
+  - FluentGpu.Text.ItemRun.BidiLevel
+  - FluentGpu.Text.ItemRun.IsRightToLeft
+  - FluentGpu.Text.ItemRun.Length
+  - FluentGpu.Text.ItemRun.ScriptId
+  - FluentGpu.Text.ItemRun.ScriptShapes
+  - FluentGpu.Text.ItemRun.Start
+  langs:
+  - csharp
+  - vb
+  name: ItemRun
+  nameWithType: ItemRun
+  fullName: FluentGpu.Text.ItemRun
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Text/Itemizer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ItemRun
+    path: ../../src/FluentGpu.Text/Itemizer.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: >-
+    One itemized run: a maximal span of the text with a single BiDi level AND a single script — the unit the shaper
+
+    consumes (one run = one face/script/direction). Produced by intersecting the BiDi-level runs with the script runs.
+
+    <xref href="FluentGpu.Text.ItemRun.ScriptId" data-throw-if-not-resolved="false"></xref>/<xref href="FluentGpu.Text.ItemRun.ScriptShapes" data-throw-if-not-resolved="false"></xref> are the opaque DirectWrite script id + shaping flags, carried as
+
+    portable scalars so this seam stays Windows/COM-free.
+  example: []
+  syntax:
+    content: 'public readonly record struct ItemRun : IEquatable<ItemRun>'
+    content.vb: Public Structure ItemRun Implements IEquatable(Of ItemRun)
+  implements:
+  - System.IEquatable{FluentGpu.Text.ItemRun}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Text.ItemRun.#ctor(System.Int32,System.Int32,System.Byte,System.UInt16,System.Byte)
+  commentId: M:FluentGpu.Text.ItemRun.#ctor(System.Int32,System.Int32,System.Byte,System.UInt16,System.Byte)
+  id: '#ctor(System.Int32,System.Int32,System.Byte,System.UInt16,System.Byte)'
+  parent: FluentGpu.Text.ItemRun
+  langs:
+  - csharp
+  - vb
+  name: ItemRun(int, int, byte, ushort, byte)
+  nameWithType: ItemRun.ItemRun(int, int, byte, ushort, byte)
+  fullName: FluentGpu.Text.ItemRun.ItemRun(int, int, byte, ushort, byte)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Text/Itemizer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Text/Itemizer.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: >-
+    One itemized run: a maximal span of the text with a single BiDi level AND a single script — the unit the shaper
+
+    consumes (one run = one face/script/direction). Produced by intersecting the BiDi-level runs with the script runs.
+
+    <xref href="FluentGpu.Text.ItemRun.ScriptId" data-throw-if-not-resolved="false"></xref>/<xref href="FluentGpu.Text.ItemRun.ScriptShapes" data-throw-if-not-resolved="false"></xref> are the opaque DirectWrite script id + shaping flags, carried as
+
+    portable scalars so this seam stays Windows/COM-free.
+  example: []
+  syntax:
+    content: public ItemRun(int Start, int Length, byte BidiLevel, ushort ScriptId, byte ScriptShapes)
+    parameters:
+    - id: Start
+      type: System.Int32
+    - id: Length
+      type: System.Int32
+    - id: BidiLevel
+      type: System.Byte
+    - id: ScriptId
+      type: System.UInt16
+    - id: ScriptShapes
+      type: System.Byte
+    content.vb: Public Sub New(Start As Integer, Length As Integer, BidiLevel As Byte, ScriptId As UShort, ScriptShapes As Byte)
+  overload: FluentGpu.Text.ItemRun.#ctor*
+  nameWithType.vb: ItemRun.New(Integer, Integer, Byte, UShort, Byte)
+  fullName.vb: FluentGpu.Text.ItemRun.New(Integer, Integer, Byte, UShort, Byte)
+  name.vb: New(Integer, Integer, Byte, UShort, Byte)
+- uid: FluentGpu.Text.ItemRun.Start
+  commentId: P:FluentGpu.Text.ItemRun.Start
+  id: Start
+  parent: FluentGpu.Text.ItemRun
+  langs:
+  - csharp
+  - vb
+  name: Start
+  nameWithType: ItemRun.Start
+  fullName: FluentGpu.Text.ItemRun.Start
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Text/Itemizer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Start
+    path: ../../src/FluentGpu.Text/Itemizer.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public int Start { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property Start As Integer
+  overload: FluentGpu.Text.ItemRun.Start*
+- uid: FluentGpu.Text.ItemRun.Length
+  commentId: P:FluentGpu.Text.ItemRun.Length
+  id: Length
+  parent: FluentGpu.Text.ItemRun
+  langs:
+  - csharp
+  - vb
+  name: Length
+  nameWithType: ItemRun.Length
+  fullName: FluentGpu.Text.ItemRun.Length
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Text/Itemizer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Length
+    path: ../../src/FluentGpu.Text/Itemizer.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public int Length { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property Length As Integer
+  overload: FluentGpu.Text.ItemRun.Length*
+- uid: FluentGpu.Text.ItemRun.BidiLevel
+  commentId: P:FluentGpu.Text.ItemRun.BidiLevel
+  id: BidiLevel
+  parent: FluentGpu.Text.ItemRun
+  langs:
+  - csharp
+  - vb
+  name: BidiLevel
+  nameWithType: ItemRun.BidiLevel
+  fullName: FluentGpu.Text.ItemRun.BidiLevel
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Text/Itemizer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BidiLevel
+    path: ../../src/FluentGpu.Text/Itemizer.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public byte BidiLevel { get; init; }
+    parameters: []
+    return:
+      type: System.Byte
+    content.vb: Public Property BidiLevel As Byte
+  overload: FluentGpu.Text.ItemRun.BidiLevel*
+- uid: FluentGpu.Text.ItemRun.ScriptId
+  commentId: P:FluentGpu.Text.ItemRun.ScriptId
+  id: ScriptId
+  parent: FluentGpu.Text.ItemRun
+  langs:
+  - csharp
+  - vb
+  name: ScriptId
+  nameWithType: ItemRun.ScriptId
+  fullName: FluentGpu.Text.ItemRun.ScriptId
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Text/Itemizer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ScriptId
+    path: ../../src/FluentGpu.Text/Itemizer.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public ushort ScriptId { get; init; }
+    parameters: []
+    return:
+      type: System.UInt16
+    content.vb: Public Property ScriptId As UShort
+  overload: FluentGpu.Text.ItemRun.ScriptId*
+- uid: FluentGpu.Text.ItemRun.ScriptShapes
+  commentId: P:FluentGpu.Text.ItemRun.ScriptShapes
+  id: ScriptShapes
+  parent: FluentGpu.Text.ItemRun
+  langs:
+  - csharp
+  - vb
+  name: ScriptShapes
+  nameWithType: ItemRun.ScriptShapes
+  fullName: FluentGpu.Text.ItemRun.ScriptShapes
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Text/Itemizer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ScriptShapes
+    path: ../../src/FluentGpu.Text/Itemizer.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public byte ScriptShapes { get; init; }
+    parameters: []
+    return:
+      type: System.Byte
+    content.vb: Public Property ScriptShapes As Byte
+  overload: FluentGpu.Text.ItemRun.ScriptShapes*
+- uid: FluentGpu.Text.ItemRun.IsRightToLeft
+  commentId: P:FluentGpu.Text.ItemRun.IsRightToLeft
+  id: IsRightToLeft
+  parent: FluentGpu.Text.ItemRun
+  langs:
+  - csharp
+  - vb
+  name: IsRightToLeft
+  nameWithType: ItemRun.IsRightToLeft
+  fullName: FluentGpu.Text.ItemRun.IsRightToLeft
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Text/Itemizer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsRightToLeft
+    path: ../../src/FluentGpu.Text/Itemizer.cs
+    startLine: 10
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public bool IsRightToLeft { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property IsRightToLeft As Boolean
+  overload: FluentGpu.Text.ItemRun.IsRightToLeft*
+references:
+- uid: FluentGpu.Text.ItemRun.ScriptId
+  commentId: P:FluentGpu.Text.ItemRun.ScriptId
+  href: FluentGpu.Text.ItemRun.html#FluentGpu_Text_ItemRun_ScriptId
+  name: ScriptId
+  nameWithType: ItemRun.ScriptId
+  fullName: FluentGpu.Text.ItemRun.ScriptId
+- uid: FluentGpu.Text.ItemRun.ScriptShapes
+  commentId: P:FluentGpu.Text.ItemRun.ScriptShapes
+  href: FluentGpu.Text.ItemRun.html#FluentGpu_Text_ItemRun_ScriptShapes
+  name: ScriptShapes
+  nameWithType: ItemRun.ScriptShapes
+  fullName: FluentGpu.Text.ItemRun.ScriptShapes
+- uid: FluentGpu.Text
+  commentId: N:FluentGpu.Text
+  href: FluentGpu.html
+  name: FluentGpu.Text
+  nameWithType: FluentGpu.Text
+  fullName: FluentGpu.Text
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+- uid: System.IEquatable{FluentGpu.Text.ItemRun}
+  commentId: T:System.IEquatable{FluentGpu.Text.ItemRun}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<ItemRun>
+  nameWithType: IEquatable<ItemRun>
+  fullName: System.IEquatable<FluentGpu.Text.ItemRun>
+  nameWithType.vb: IEquatable(Of ItemRun)
+  fullName.vb: System.IEquatable(Of FluentGpu.Text.ItemRun)
+  name.vb: IEquatable(Of ItemRun)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Text.ItemRun
+    name: ItemRun
+    href: FluentGpu.Text.ItemRun.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Text.ItemRun
+    name: ItemRun
+    href: FluentGpu.Text.ItemRun.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Text.ItemRun.#ctor*
+  commentId: Overload:FluentGpu.Text.ItemRun.#ctor
+  href: FluentGpu.Text.ItemRun.html#FluentGpu_Text_ItemRun__ctor_System_Int32_System_Int32_System_Byte_System_UInt16_System_Byte_
+  name: ItemRun
+  nameWithType: ItemRun.ItemRun
+  fullName: FluentGpu.Text.ItemRun.ItemRun
+  nameWithType.vb: ItemRun.New
+  fullName.vb: FluentGpu.Text.ItemRun.New
+  name.vb: New
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: System.Byte
+  commentId: T:System.Byte
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.byte
+  name: byte
+  nameWithType: byte
+  fullName: byte
+  nameWithType.vb: Byte
+  fullName.vb: Byte
+  name.vb: Byte
+- uid: System.UInt16
+  commentId: T:System.UInt16
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.uint16
+  name: ushort
+  nameWithType: ushort
+  fullName: ushort
+  nameWithType.vb: UShort
+  fullName.vb: UShort
+  name.vb: UShort
+- uid: FluentGpu.Text.ItemRun.Start*
+  commentId: Overload:FluentGpu.Text.ItemRun.Start
+  href: FluentGpu.Text.ItemRun.html#FluentGpu_Text_ItemRun_Start
+  name: Start
+  nameWithType: ItemRun.Start
+  fullName: FluentGpu.Text.ItemRun.Start
+- uid: FluentGpu.Text.ItemRun.Length*
+  commentId: Overload:FluentGpu.Text.ItemRun.Length
+  href: FluentGpu.Text.ItemRun.html#FluentGpu_Text_ItemRun_Length
+  name: Length
+  nameWithType: ItemRun.Length
+  fullName: FluentGpu.Text.ItemRun.Length
+- uid: FluentGpu.Text.ItemRun.BidiLevel*
+  commentId: Overload:FluentGpu.Text.ItemRun.BidiLevel
+  href: FluentGpu.Text.ItemRun.html#FluentGpu_Text_ItemRun_BidiLevel
+  name: BidiLevel
+  nameWithType: ItemRun.BidiLevel
+  fullName: FluentGpu.Text.ItemRun.BidiLevel
+- uid: FluentGpu.Text.ItemRun.ScriptId*
+  commentId: Overload:FluentGpu.Text.ItemRun.ScriptId
+  href: FluentGpu.Text.ItemRun.html#FluentGpu_Text_ItemRun_ScriptId
+  name: ScriptId
+  nameWithType: ItemRun.ScriptId
+  fullName: FluentGpu.Text.ItemRun.ScriptId
+- uid: FluentGpu.Text.ItemRun.ScriptShapes*
+  commentId: Overload:FluentGpu.Text.ItemRun.ScriptShapes
+  href: FluentGpu.Text.ItemRun.html#FluentGpu_Text_ItemRun_ScriptShapes
+  name: ScriptShapes
+  nameWithType: ItemRun.ScriptShapes
+  fullName: FluentGpu.Text.ItemRun.ScriptShapes
+- uid: FluentGpu.Text.ItemRun.IsRightToLeft*
+  commentId: Overload:FluentGpu.Text.ItemRun.IsRightToLeft
+  href: FluentGpu.Text.ItemRun.html#FluentGpu_Text_ItemRun_IsRightToLeft
+  name: IsRightToLeft
+  nameWithType: ItemRun.IsRightToLeft
+  fullName: FluentGpu.Text.ItemRun.IsRightToLeft
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean

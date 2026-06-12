@@ -1,0 +1,1584 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Scene.ImageCache
+  commentId: T:FluentGpu.Scene.ImageCache
+  id: ImageCache
+  parent: FluentGpu.Scene
+  children:
+  - FluentGpu.Scene.ImageCache.#ctor(FluentGpu.Scene.IImageDecoder,System.Int64)
+  - FluentGpu.Scene.ImageCache.AttemptsOf(FluentGpu.Scene.ImageHandle)
+  - FluentGpu.Scene.ImageCache.BucketFor(System.Int32)
+  - FluentGpu.Scene.ImageCache.Cancel(FluentGpu.Scene.ImageHandle)
+  - FluentGpu.Scene.ImageCache.Count
+  - FluentGpu.Scene.ImageCache.CrossFadeOf(FluentGpu.Scene.ImageHandle)
+  - FluentGpu.Scene.ImageCache.FailureOf(FluentGpu.Scene.ImageHandle)
+  - FluentGpu.Scene.ImageCache.HasActiveCrossfades
+  - FluentGpu.Scene.ImageCache.ImageStatusChanged
+  - FluentGpu.Scene.ImageCache.PendingCount
+  - FluentGpu.Scene.ImageCache.Pin(FluentGpu.Scene.ImageHandle)
+  - FluentGpu.Scene.ImageCache.Prefetch(System.String,System.Int32,System.Int32)
+  - FluentGpu.Scene.ImageCache.Pump
+  - FluentGpu.Scene.ImageCache.ReadyCount
+  - FluentGpu.Scene.ImageCache.RefsOf(FluentGpu.Scene.ImageHandle)
+  - FluentGpu.Scene.ImageCache.Request(System.String,System.Int32,System.Int32,FluentGpu.Scene.ImagePriority,System.String,System.Nullable{FluentGpu.Foundation.ImageTransition})
+  - FluentGpu.Scene.ImageCache.SetEvictSink(System.Action{System.Int32})
+  - FluentGpu.Scene.ImageCache.SetPixelSink(FluentGpu.Scene.ImageReadyHandler)
+  - FluentGpu.Scene.ImageCache.SizeOf(FluentGpu.Scene.ImageHandle)
+  - FluentGpu.Scene.ImageCache.StateOf(FluentGpu.Scene.ImageHandle)
+  - FluentGpu.Scene.ImageCache.Tick(System.Single)
+  - FluentGpu.Scene.ImageCache.Unpin(FluentGpu.Scene.ImageHandle)
+  - FluentGpu.Scene.ImageCache.UsedBytes
+  langs:
+  - csharp
+  - vb
+  name: ImageCache
+  nameWithType: ImageCache
+  fullName: FluentGpu.Scene.ImageCache
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ImageCache
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 77
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    Portable image residency: source→handle dedup, a Pending/Ready/Failed state machine, **liveness ref-counting**
+
+    (a pinned/on-screen image is never evicted — the single biggest real-world cache bug, per the research), and an
+
+    LRU byte budget over decoded images. Decode happens off-thread behind <xref href="FluentGpu.Scene.IImageDecoder" data-throw-if-not-resolved="false"></xref>; <xref href="FluentGpu.Scene.ImageCache.Pump" data-throw-if-not-resolved="false"></xref>
+
+    applies completions (+1-frame latency). The GPU texture upload is a needs-pixels leaf concern; this owns the logic.
+  example: []
+  syntax:
+    content: public sealed class ImageCache
+    content.vb: Public NotInheritable Class ImageCache
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Scene.ImageCache.ImageStatusChanged
+  commentId: E:FluentGpu.Scene.ImageCache.ImageStatusChanged
+  id: ImageStatusChanged
+  parent: FluentGpu.Scene.ImageCache
+  langs:
+  - csharp
+  - vb
+  name: ImageStatusChanged
+  nameWithType: ImageCache.ImageStatusChanged
+  fullName: FluentGpu.Scene.ImageCache.ImageStatusChanged
+  type: Event
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ImageStatusChanged
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 124
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    Raised (UI thread, during <xref href="FluentGpu.Scene.ImageCache.Pump" data-throw-if-not-resolved="false"></xref>) when an image reaches a terminal state — Ready or Failed.
+        Apps subscribe for a broken-art fallback, a retry/offline toast, or telemetry. See also <xref href="FluentGpu.Scene.ImageCache.FailureOf(FluentGpu.Scene.ImageHandle)" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: public event ImageStatusHandler? ImageStatusChanged
+    return:
+      type: FluentGpu.Scene.ImageStatusHandler
+    content.vb: Public Event ImageStatusChanged As ImageStatusHandler
+- uid: FluentGpu.Scene.ImageCache.#ctor(FluentGpu.Scene.IImageDecoder,System.Int64)
+  commentId: M:FluentGpu.Scene.ImageCache.#ctor(FluentGpu.Scene.IImageDecoder,System.Int64)
+  id: '#ctor(FluentGpu.Scene.IImageDecoder,System.Int64)'
+  parent: FluentGpu.Scene.ImageCache
+  langs:
+  - csharp
+  - vb
+  name: ImageCache(IImageDecoder, long)
+  nameWithType: ImageCache.ImageCache(IImageDecoder, long)
+  fullName: FluentGpu.Scene.ImageCache.ImageCache(FluentGpu.Scene.IImageDecoder, long)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 126
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public ImageCache(IImageDecoder decoder, long budgetBytes = 100663296)
+    parameters:
+    - id: decoder
+      type: FluentGpu.Scene.IImageDecoder
+    - id: budgetBytes
+      type: System.Int64
+    content.vb: Public Sub New(decoder As IImageDecoder, budgetBytes As Long = 100663296)
+  overload: FluentGpu.Scene.ImageCache.#ctor*
+  nameWithType.vb: ImageCache.New(IImageDecoder, Long)
+  fullName.vb: FluentGpu.Scene.ImageCache.New(FluentGpu.Scene.IImageDecoder, Long)
+  name.vb: New(IImageDecoder, Long)
+- uid: FluentGpu.Scene.ImageCache.SetPixelSink(FluentGpu.Scene.ImageReadyHandler)
+  commentId: M:FluentGpu.Scene.ImageCache.SetPixelSink(FluentGpu.Scene.ImageReadyHandler)
+  id: SetPixelSink(FluentGpu.Scene.ImageReadyHandler)
+  parent: FluentGpu.Scene.ImageCache
+  langs:
+  - csharp
+  - vb
+  name: SetPixelSink(ImageReadyHandler)
+  nameWithType: ImageCache.SetPixelSink(ImageReadyHandler)
+  fullName: FluentGpu.Scene.ImageCache.SetPixelSink(FluentGpu.Scene.ImageReadyHandler)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SetPixelSink
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 137
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    The host wires this to <code>IGpuDevice.UploadImage</code>; the cache forwards each decode's pixels through it
+        during <xref href="FluentGpu.Scene.ImageCache.Pump" data-throw-if-not-resolved="false"></xref> (transiently — the sink must copy, not store). Set once at composition.
+  example: []
+  syntax:
+    content: public void SetPixelSink(ImageReadyHandler sink)
+    parameters:
+    - id: sink
+      type: FluentGpu.Scene.ImageReadyHandler
+    content.vb: Public Sub SetPixelSink(sink As ImageReadyHandler)
+  overload: FluentGpu.Scene.ImageCache.SetPixelSink*
+- uid: FluentGpu.Scene.ImageCache.SetEvictSink(System.Action{System.Int32})
+  commentId: M:FluentGpu.Scene.ImageCache.SetEvictSink(System.Action{System.Int32})
+  id: SetEvictSink(System.Action{System.Int32})
+  parent: FluentGpu.Scene.ImageCache
+  langs:
+  - csharp
+  - vb
+  name: SetEvictSink(Action<int>)
+  nameWithType: ImageCache.SetEvictSink(Action<int>)
+  fullName: FluentGpu.Scene.ImageCache.SetEvictSink(System.Action<int>)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SetEvictSink
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 141
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    The host wires this to <code>IGpuDevice.EvictImage</code>; the cache calls it when residency evicts an image so
+        the backend frees the GPU texture. Set once at composition.
+  example: []
+  syntax:
+    content: public void SetEvictSink(Action<int> sink)
+    parameters:
+    - id: sink
+      type: System.Action{System.Int32}
+    content.vb: Public Sub SetEvictSink(sink As Action(Of Integer))
+  overload: FluentGpu.Scene.ImageCache.SetEvictSink*
+  nameWithType.vb: ImageCache.SetEvictSink(Action(Of Integer))
+  fullName.vb: FluentGpu.Scene.ImageCache.SetEvictSink(System.Action(Of Integer))
+  name.vb: SetEvictSink(Action(Of Integer))
+- uid: FluentGpu.Scene.ImageCache.UsedBytes
+  commentId: P:FluentGpu.Scene.ImageCache.UsedBytes
+  id: UsedBytes
+  parent: FluentGpu.Scene.ImageCache
+  langs:
+  - csharp
+  - vb
+  name: UsedBytes
+  nameWithType: ImageCache.UsedBytes
+  fullName: FluentGpu.Scene.ImageCache.UsedBytes
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UsedBytes
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 143
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public long UsedBytes { get; }
+    parameters: []
+    return:
+      type: System.Int64
+    content.vb: Public Property UsedBytes As Long
+  overload: FluentGpu.Scene.ImageCache.UsedBytes*
+- uid: FluentGpu.Scene.ImageCache.Count
+  commentId: P:FluentGpu.Scene.ImageCache.Count
+  id: Count
+  parent: FluentGpu.Scene.ImageCache
+  langs:
+  - csharp
+  - vb
+  name: Count
+  nameWithType: ImageCache.Count
+  fullName: FluentGpu.Scene.ImageCache.Count
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Count
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 144
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public int Count { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property Count As Integer
+  overload: FluentGpu.Scene.ImageCache.Count*
+- uid: FluentGpu.Scene.ImageCache.ReadyCount
+  commentId: P:FluentGpu.Scene.ImageCache.ReadyCount
+  id: ReadyCount
+  parent: FluentGpu.Scene.ImageCache
+  langs:
+  - csharp
+  - vb
+  name: ReadyCount
+  nameWithType: ImageCache.ReadyCount
+  fullName: FluentGpu.Scene.ImageCache.ReadyCount
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ReadyCount
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 145
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public int ReadyCount { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property ReadyCount As Integer
+  overload: FluentGpu.Scene.ImageCache.ReadyCount*
+- uid: FluentGpu.Scene.ImageCache.PendingCount
+  commentId: P:FluentGpu.Scene.ImageCache.PendingCount
+  id: PendingCount
+  parent: FluentGpu.Scene.ImageCache
+  langs:
+  - csharp
+  - vb
+  name: PendingCount
+  nameWithType: ImageCache.PendingCount
+  fullName: FluentGpu.Scene.ImageCache.PendingCount
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PendingCount
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 147
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: Entries still decoding (State==Pending) — O(1) maintained counter (was a per-call scan, wake-04).
+  example: []
+  syntax:
+    content: public int PendingCount { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property PendingCount As Integer
+  overload: FluentGpu.Scene.ImageCache.PendingCount*
+- uid: FluentGpu.Scene.ImageCache.Request(System.String,System.Int32,System.Int32,FluentGpu.Scene.ImagePriority,System.String,System.Nullable{FluentGpu.Foundation.ImageTransition})
+  commentId: M:FluentGpu.Scene.ImageCache.Request(System.String,System.Int32,System.Int32,FluentGpu.Scene.ImagePriority,System.String,System.Nullable{FluentGpu.Foundation.ImageTransition})
+  id: Request(System.String,System.Int32,System.Int32,FluentGpu.Scene.ImagePriority,System.String,System.Nullable{FluentGpu.Foundation.ImageTransition})
+  parent: FluentGpu.Scene.ImageCache
+  langs:
+  - csharp
+  - vb
+  name: Request(string, int, int, ImagePriority, string?, ImageTransition?)
+  nameWithType: ImageCache.Request(string, int, int, ImagePriority, string?, ImageTransition?)
+  fullName: FluentGpu.Scene.ImageCache.Request(string, int, int, FluentGpu.Scene.ImagePriority, string?, FluentGpu.Foundation.ImageTransition?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Request
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 153
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    Request (or dedup) a decode of <code class="paramref">source</code> at a target size; returns a stable handle. On
+        a cache MISS, an optional <code class="paramref">blurHash</code> is decoded ONCE into a tiny LQIP texture (uploaded under
+        this id) so a blurred preview shows instantly until the full-res art lands. A cache HIT returns before any of
+        this — so re-renders of the same image do no work.
+  example: []
+  syntax:
+    content: public ImageHandle Request(string source, int targetW, int targetH, ImagePriority priority = ImagePriority.Visible, string? blurHash = null, ImageTransition? transition = null)
+    parameters:
+    - id: source
+      type: System.String
+    - id: targetW
+      type: System.Int32
+    - id: targetH
+      type: System.Int32
+    - id: priority
+      type: FluentGpu.Scene.ImagePriority
+    - id: blurHash
+      type: System.String
+    - id: transition
+      type: System.Nullable{FluentGpu.Foundation.ImageTransition}
+    return:
+      type: FluentGpu.Scene.ImageHandle
+    content.vb: Public Function Request(source As String, targetW As Integer, targetH As Integer, priority As ImagePriority = ImagePriority.Visible, blurHash As String = Nothing, transition As ImageTransition? = Nothing) As ImageHandle
+  overload: FluentGpu.Scene.ImageCache.Request*
+  nameWithType.vb: ImageCache.Request(String, Integer, Integer, ImagePriority, String, ImageTransition?)
+  fullName.vb: FluentGpu.Scene.ImageCache.Request(String, Integer, Integer, FluentGpu.Scene.ImagePriority, String, FluentGpu.Foundation.ImageTransition?)
+  name.vb: Request(String, Integer, Integer, ImagePriority, String, ImageTransition?)
+- uid: FluentGpu.Scene.ImageCache.Prefetch(System.String,System.Int32,System.Int32)
+  commentId: M:FluentGpu.Scene.ImageCache.Prefetch(System.String,System.Int32,System.Int32)
+  id: Prefetch(System.String,System.Int32,System.Int32)
+  parent: FluentGpu.Scene.ImageCache
+  langs:
+  - csharp
+  - vb
+  name: Prefetch(string, int, int)
+  nameWithType: ImageCache.Prefetch(string, int, int)
+  fullName: FluentGpu.Scene.ImageCache.Prefetch(string, int, int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Prefetch
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 193
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    Warm the cache for a source the UI is ABOUT to need (the next scroll page) at <xref href="FluentGpu.Scene.ImagePriority.Prefetch" data-throw-if-not-resolved="false"></xref>
+        — decoded ahead, never pinned, so it's instantly Resident when a row scrolls in (Nuke/Coil prefetch). Evictable
+        until a real node pins it. No-op if already requested.
+  example: []
+  syntax:
+    content: public ImageHandle Prefetch(string source, int targetW, int targetH)
+    parameters:
+    - id: source
+      type: System.String
+    - id: targetW
+      type: System.Int32
+    - id: targetH
+      type: System.Int32
+    return:
+      type: FluentGpu.Scene.ImageHandle
+    content.vb: Public Function Prefetch(source As String, targetW As Integer, targetH As Integer) As ImageHandle
+  overload: FluentGpu.Scene.ImageCache.Prefetch*
+  nameWithType.vb: ImageCache.Prefetch(String, Integer, Integer)
+  fullName.vb: FluentGpu.Scene.ImageCache.Prefetch(String, Integer, Integer)
+  name.vb: Prefetch(String, Integer, Integer)
+- uid: FluentGpu.Scene.ImageCache.StateOf(FluentGpu.Scene.ImageHandle)
+  commentId: M:FluentGpu.Scene.ImageCache.StateOf(FluentGpu.Scene.ImageHandle)
+  id: StateOf(FluentGpu.Scene.ImageHandle)
+  parent: FluentGpu.Scene.ImageCache
+  langs:
+  - csharp
+  - vb
+  name: StateOf(ImageHandle)
+  nameWithType: ImageCache.StateOf(ImageHandle)
+  fullName: FluentGpu.Scene.ImageCache.StateOf(FluentGpu.Scene.ImageHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StateOf
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 196
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public ImageState StateOf(ImageHandle h)
+    parameters:
+    - id: h
+      type: FluentGpu.Scene.ImageHandle
+    return:
+      type: FluentGpu.Scene.ImageState
+    content.vb: Public Function StateOf(h As ImageHandle) As ImageState
+  overload: FluentGpu.Scene.ImageCache.StateOf*
+- uid: FluentGpu.Scene.ImageCache.SizeOf(FluentGpu.Scene.ImageHandle)
+  commentId: M:FluentGpu.Scene.ImageCache.SizeOf(FluentGpu.Scene.ImageHandle)
+  id: SizeOf(FluentGpu.Scene.ImageHandle)
+  parent: FluentGpu.Scene.ImageCache
+  langs:
+  - csharp
+  - vb
+  name: SizeOf(ImageHandle)
+  nameWithType: ImageCache.SizeOf(ImageHandle)
+  fullName: FluentGpu.Scene.ImageCache.SizeOf(FluentGpu.Scene.ImageHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SizeOf
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 197
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public (int W, int H) SizeOf(ImageHandle h)
+    parameters:
+    - id: h
+      type: FluentGpu.Scene.ImageHandle
+    return:
+      type: System.ValueTuple{System.Int32,System.Int32}
+    content.vb: Public Function SizeOf(h As ImageHandle) As (W As Integer, H As Integer)
+  overload: FluentGpu.Scene.ImageCache.SizeOf*
+- uid: FluentGpu.Scene.ImageCache.FailureOf(FluentGpu.Scene.ImageHandle)
+  commentId: M:FluentGpu.Scene.ImageCache.FailureOf(FluentGpu.Scene.ImageHandle)
+  id: FailureOf(FluentGpu.Scene.ImageHandle)
+  parent: FluentGpu.Scene.ImageCache
+  langs:
+  - csharp
+  - vb
+  name: FailureOf(ImageHandle)
+  nameWithType: ImageCache.FailureOf(ImageHandle)
+  fullName: FluentGpu.Scene.ImageCache.FailureOf(FluentGpu.Scene.ImageHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FailureOf
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 199
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: Why an image is <xref href="FluentGpu.Scene.ImageState.Failed" data-throw-if-not-resolved="false"></xref> (None otherwise) — for app fallbacks / retry UI.
+  example: []
+  syntax:
+    content: public ImageFailureKind FailureOf(ImageHandle h)
+    parameters:
+    - id: h
+      type: FluentGpu.Scene.ImageHandle
+    return:
+      type: FluentGpu.Scene.ImageFailureKind
+    content.vb: Public Function FailureOf(h As ImageHandle) As ImageFailureKind
+  overload: FluentGpu.Scene.ImageCache.FailureOf*
+- uid: FluentGpu.Scene.ImageCache.AttemptsOf(FluentGpu.Scene.ImageHandle)
+  commentId: M:FluentGpu.Scene.ImageCache.AttemptsOf(FluentGpu.Scene.ImageHandle)
+  id: AttemptsOf(FluentGpu.Scene.ImageHandle)
+  parent: FluentGpu.Scene.ImageCache
+  langs:
+  - csharp
+  - vb
+  name: AttemptsOf(ImageHandle)
+  nameWithType: ImageCache.AttemptsOf(ImageHandle)
+  fullName: FluentGpu.Scene.ImageCache.AttemptsOf(FluentGpu.Scene.ImageHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AttemptsOf
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 201
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: How many fetch attempts the decoder made (≥1 once resolved; &gt;1 means transient retries happened).
+  example: []
+  syntax:
+    content: public int AttemptsOf(ImageHandle h)
+    parameters:
+    - id: h
+      type: FluentGpu.Scene.ImageHandle
+    return:
+      type: System.Int32
+    content.vb: Public Function AttemptsOf(h As ImageHandle) As Integer
+  overload: FluentGpu.Scene.ImageCache.AttemptsOf*
+- uid: FluentGpu.Scene.ImageCache.Cancel(FluentGpu.Scene.ImageHandle)
+  commentId: M:FluentGpu.Scene.ImageCache.Cancel(FluentGpu.Scene.ImageHandle)
+  id: Cancel(FluentGpu.Scene.ImageHandle)
+  parent: FluentGpu.Scene.ImageCache
+  langs:
+  - csharp
+  - vb
+  name: Cancel(ImageHandle)
+  nameWithType: ImageCache.Cancel(ImageHandle)
+  fullName: FluentGpu.Scene.ImageCache.Cancel(FluentGpu.Scene.ImageHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Cancel
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 204
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: Cancel an in-flight decode (row recycled / unmounted) — frees worker + network effort under fast scroll.
+  example: []
+  syntax:
+    content: public void Cancel(ImageHandle h)
+    parameters:
+    - id: h
+      type: FluentGpu.Scene.ImageHandle
+    content.vb: Public Sub Cancel(h As ImageHandle)
+  overload: FluentGpu.Scene.ImageCache.Cancel*
+- uid: FluentGpu.Scene.ImageCache.BucketFor(System.Int32)
+  commentId: M:FluentGpu.Scene.ImageCache.BucketFor(System.Int32)
+  id: BucketFor(System.Int32)
+  parent: FluentGpu.Scene.ImageCache
+  langs:
+  - csharp
+  - vb
+  name: BucketFor(int)
+  nameWithType: ImageCache.BucketFor(int)
+  fullName: FluentGpu.Scene.ImageCache.BucketFor(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BucketFor
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 207
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: Round a display size up to a decode bucket (64/128/256/512) — the texture-pool / atlas granularity.
+  example: []
+  syntax:
+    content: public static int BucketFor(int px)
+    parameters:
+    - id: px
+      type: System.Int32
+    return:
+      type: System.Int32
+    content.vb: Public Shared Function BucketFor(px As Integer) As Integer
+  overload: FluentGpu.Scene.ImageCache.BucketFor*
+  nameWithType.vb: ImageCache.BucketFor(Integer)
+  fullName.vb: FluentGpu.Scene.ImageCache.BucketFor(Integer)
+  name.vb: BucketFor(Integer)
+- uid: FluentGpu.Scene.ImageCache.Tick(System.Single)
+  commentId: M:FluentGpu.Scene.ImageCache.Tick(System.Single)
+  id: Tick(System.Single)
+  parent: FluentGpu.Scene.ImageCache
+  langs:
+  - csharp
+  - vb
+  name: Tick(float)
+  nameWithType: ImageCache.Tick(float)
+  fullName: FluentGpu.Scene.ImageCache.Tick(float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Tick
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 210
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: Advance the cross-fade clock by <code class="paramref">dtMs</code> (call once per painted frame, before record).
+  example: []
+  syntax:
+    content: public void Tick(float dtMs)
+    parameters:
+    - id: dtMs
+      type: System.Single
+    content.vb: Public Sub Tick(dtMs As Single)
+  overload: FluentGpu.Scene.ImageCache.Tick*
+  nameWithType.vb: ImageCache.Tick(Single)
+  fullName.vb: FluentGpu.Scene.ImageCache.Tick(Single)
+  name.vb: Tick(Single)
+- uid: FluentGpu.Scene.ImageCache.CrossFadeOf(FluentGpu.Scene.ImageHandle)
+  commentId: M:FluentGpu.Scene.ImageCache.CrossFadeOf(FluentGpu.Scene.ImageHandle)
+  id: CrossFadeOf(FluentGpu.Scene.ImageHandle)
+  parent: FluentGpu.Scene.ImageCache
+  langs:
+  - csharp
+  - vb
+  name: CrossFadeOf(ImageHandle)
+  nameWithType: ImageCache.CrossFadeOf(ImageHandle)
+  fullName: FluentGpu.Scene.ImageCache.CrossFadeOf(FluentGpu.Scene.ImageHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CrossFadeOf
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 215
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    Placeholder→image reveal progress 0..1, eased by the image's <xref href="FluentGpu.Foundation.ImageTransition" data-throw-if-not-resolved="false"></xref> from when its
+        first texture appeared (the BlurHash LQIP, or the full-res decode). 1 once settled, instantly if the transition
+        is disabled, or if there's no texture yet.
+  example: []
+  syntax:
+    content: public float CrossFadeOf(ImageHandle h)
+    parameters:
+    - id: h
+      type: FluentGpu.Scene.ImageHandle
+    return:
+      type: System.Single
+    content.vb: Public Function CrossFadeOf(h As ImageHandle) As Single
+  overload: FluentGpu.Scene.ImageCache.CrossFadeOf*
+- uid: FluentGpu.Scene.ImageCache.HasActiveCrossfades
+  commentId: P:FluentGpu.Scene.ImageCache.HasActiveCrossfades
+  id: HasActiveCrossfades
+  parent: FluentGpu.Scene.ImageCache
+  langs:
+  - csharp
+  - vb
+  name: HasActiveCrossfades
+  nameWithType: ImageCache.HasActiveCrossfades
+  fullName: FluentGpu.Scene.ImageCache.HasActiveCrossfades
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HasActiveCrossfades
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 224
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    True while any image is still revealing — the host keeps painting so the fade animates to completion.
+        O(1): equivalent to the former per-frame scan (∃ enabled reveal with clockMs &lt; TextureMs+Dur) because that is
+        exactly (_clockMs &lt; max deadline). See <xref href="FluentGpu.Scene.ImageCache._maxCrossfadeDeadlineMs" data-throw-if-not-resolved="false"></xref> (wake-04).
+  example: []
+  syntax:
+    content: public bool HasActiveCrossfades { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property HasActiveCrossfades As Boolean
+  overload: FluentGpu.Scene.ImageCache.HasActiveCrossfades*
+- uid: FluentGpu.Scene.ImageCache.Pin(FluentGpu.Scene.ImageHandle)
+  commentId: M:FluentGpu.Scene.ImageCache.Pin(FluentGpu.Scene.ImageHandle)
+  id: Pin(FluentGpu.Scene.ImageHandle)
+  parent: FluentGpu.Scene.ImageCache
+  langs:
+  - csharp
+  - vb
+  name: Pin(ImageHandle)
+  nameWithType: ImageCache.Pin(ImageHandle)
+  fullName: FluentGpu.Scene.ImageCache.Pin(FluentGpu.Scene.ImageHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Pin
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 250
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: Pin = "on screen" (a realized node holds it); never evicted while pinned. Unpin on recycle/unmount.
+  example: []
+  syntax:
+    content: public void Pin(ImageHandle h)
+    parameters:
+    - id: h
+      type: FluentGpu.Scene.ImageHandle
+    content.vb: Public Sub Pin(h As ImageHandle)
+  overload: FluentGpu.Scene.ImageCache.Pin*
+- uid: FluentGpu.Scene.ImageCache.Unpin(FluentGpu.Scene.ImageHandle)
+  commentId: M:FluentGpu.Scene.ImageCache.Unpin(FluentGpu.Scene.ImageHandle)
+  id: Unpin(FluentGpu.Scene.ImageHandle)
+  parent: FluentGpu.Scene.ImageCache
+  langs:
+  - csharp
+  - vb
+  name: Unpin(ImageHandle)
+  nameWithType: ImageCache.Unpin(ImageHandle)
+  fullName: FluentGpu.Scene.ImageCache.Unpin(FluentGpu.Scene.ImageHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Unpin
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 251
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public void Unpin(ImageHandle h)
+    parameters:
+    - id: h
+      type: FluentGpu.Scene.ImageHandle
+    content.vb: Public Sub Unpin(h As ImageHandle)
+  overload: FluentGpu.Scene.ImageCache.Unpin*
+- uid: FluentGpu.Scene.ImageCache.RefsOf(FluentGpu.Scene.ImageHandle)
+  commentId: M:FluentGpu.Scene.ImageCache.RefsOf(FluentGpu.Scene.ImageHandle)
+  id: RefsOf(FluentGpu.Scene.ImageHandle)
+  parent: FluentGpu.Scene.ImageCache
+  langs:
+  - csharp
+  - vb
+  name: RefsOf(ImageHandle)
+  nameWithType: ImageCache.RefsOf(ImageHandle)
+  fullName: FluentGpu.Scene.ImageCache.RefsOf(FluentGpu.Scene.ImageHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RefsOf
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 252
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public int RefsOf(ImageHandle h)
+    parameters:
+    - id: h
+      type: FluentGpu.Scene.ImageHandle
+    return:
+      type: System.Int32
+    content.vb: Public Function RefsOf(h As ImageHandle) As Integer
+  overload: FluentGpu.Scene.ImageCache.RefsOf*
+- uid: FluentGpu.Scene.ImageCache.Pump
+  commentId: M:FluentGpu.Scene.ImageCache.Pump
+  id: Pump
+  parent: FluentGpu.Scene.ImageCache
+  langs:
+  - csharp
+  - vb
+  name: Pump()
+  nameWithType: ImageCache.Pump()
+  fullName: FluentGpu.Scene.ImageCache.Pump()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Pump
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 256
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    Apply finished decodes (UI thread, once per frame) then evict to budget. Returns completions this pump.
+        Allocation-free when idle (cached callback; empty-queue Pump does nothing) — safe in the hot phase.
+  example: []
+  syntax:
+    content: public int Pump()
+    return:
+      type: System.Int32
+    content.vb: Public Function Pump() As Integer
+  overload: FluentGpu.Scene.ImageCache.Pump*
+references:
+- uid: FluentGpu.Scene.IImageDecoder
+  commentId: T:FluentGpu.Scene.IImageDecoder
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.IImageDecoder.html
+  name: IImageDecoder
+  nameWithType: IImageDecoder
+  fullName: FluentGpu.Scene.IImageDecoder
+- uid: FluentGpu.Scene.ImageCache.Pump
+  commentId: M:FluentGpu.Scene.ImageCache.Pump
+  href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_Pump
+  name: Pump()
+  nameWithType: ImageCache.Pump()
+  fullName: FluentGpu.Scene.ImageCache.Pump()
+  spec.csharp:
+  - uid: FluentGpu.Scene.ImageCache.Pump
+    name: Pump
+    href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_Pump
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Scene.ImageCache.Pump
+    name: Pump
+    href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_Pump
+  - name: (
+  - name: )
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Scene.ImageCache.FailureOf(FluentGpu.Scene.ImageHandle)
+  commentId: M:FluentGpu.Scene.ImageCache.FailureOf(FluentGpu.Scene.ImageHandle)
+  href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_FailureOf_FluentGpu_Scene_ImageHandle_
+  name: FailureOf(ImageHandle)
+  nameWithType: ImageCache.FailureOf(ImageHandle)
+  fullName: FluentGpu.Scene.ImageCache.FailureOf(FluentGpu.Scene.ImageHandle)
+  spec.csharp:
+  - uid: FluentGpu.Scene.ImageCache.FailureOf(FluentGpu.Scene.ImageHandle)
+    name: FailureOf
+    href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_FailureOf_FluentGpu_Scene_ImageHandle_
+  - name: (
+  - uid: FluentGpu.Scene.ImageHandle
+    name: ImageHandle
+    href: FluentGpu.Scene.ImageHandle.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Scene.ImageCache.FailureOf(FluentGpu.Scene.ImageHandle)
+    name: FailureOf
+    href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_FailureOf_FluentGpu_Scene_ImageHandle_
+  - name: (
+  - uid: FluentGpu.Scene.ImageHandle
+    name: ImageHandle
+    href: FluentGpu.Scene.ImageHandle.html
+  - name: )
+- uid: FluentGpu.Scene.ImageStatusHandler
+  commentId: T:FluentGpu.Scene.ImageStatusHandler
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImageStatusHandler.html
+  name: ImageStatusHandler
+  nameWithType: ImageStatusHandler
+  fullName: FluentGpu.Scene.ImageStatusHandler
+- uid: FluentGpu.Scene.ImageCache.#ctor*
+  commentId: Overload:FluentGpu.Scene.ImageCache.#ctor
+  href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache__ctor_FluentGpu_Scene_IImageDecoder_System_Int64_
+  name: ImageCache
+  nameWithType: ImageCache.ImageCache
+  fullName: FluentGpu.Scene.ImageCache.ImageCache
+  nameWithType.vb: ImageCache.New
+  fullName.vb: FluentGpu.Scene.ImageCache.New
+  name.vb: New
+- uid: System.Int64
+  commentId: T:System.Int64
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int64
+  name: long
+  nameWithType: long
+  fullName: long
+  nameWithType.vb: Long
+  fullName.vb: Long
+  name.vb: Long
+- uid: FluentGpu.Scene.ImageCache.SetPixelSink*
+  commentId: Overload:FluentGpu.Scene.ImageCache.SetPixelSink
+  href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_SetPixelSink_FluentGpu_Scene_ImageReadyHandler_
+  name: SetPixelSink
+  nameWithType: ImageCache.SetPixelSink
+  fullName: FluentGpu.Scene.ImageCache.SetPixelSink
+- uid: FluentGpu.Scene.ImageReadyHandler
+  commentId: T:FluentGpu.Scene.ImageReadyHandler
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImageReadyHandler.html
+  name: ImageReadyHandler
+  nameWithType: ImageReadyHandler
+  fullName: FluentGpu.Scene.ImageReadyHandler
+- uid: FluentGpu.Scene.ImageCache.SetEvictSink*
+  commentId: Overload:FluentGpu.Scene.ImageCache.SetEvictSink
+  href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_SetEvictSink_System_Action_System_Int32__
+  name: SetEvictSink
+  nameWithType: ImageCache.SetEvictSink
+  fullName: FluentGpu.Scene.ImageCache.SetEvictSink
+- uid: System.Action{System.Int32}
+  commentId: T:System.Action{System.Int32}
+  parent: System
+  definition: System.Action`1
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<int>
+  nameWithType: Action<int>
+  fullName: System.Action<int>
+  nameWithType.vb: Action(Of Integer)
+  fullName.vb: System.Action(Of Integer)
+  name.vb: Action(Of Integer)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: System.Action`1
+  commentId: T:System.Action`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<T>
+  nameWithType: Action<T>
+  fullName: System.Action<T>
+  nameWithType.vb: Action(Of T)
+  fullName.vb: System.Action(Of T)
+  name.vb: Action(Of T)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Scene.ImageCache.UsedBytes*
+  commentId: Overload:FluentGpu.Scene.ImageCache.UsedBytes
+  href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_UsedBytes
+  name: UsedBytes
+  nameWithType: ImageCache.UsedBytes
+  fullName: FluentGpu.Scene.ImageCache.UsedBytes
+- uid: FluentGpu.Scene.ImageCache.Count*
+  commentId: Overload:FluentGpu.Scene.ImageCache.Count
+  href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_Count
+  name: Count
+  nameWithType: ImageCache.Count
+  fullName: FluentGpu.Scene.ImageCache.Count
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Scene.ImageCache.ReadyCount*
+  commentId: Overload:FluentGpu.Scene.ImageCache.ReadyCount
+  href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_ReadyCount
+  name: ReadyCount
+  nameWithType: ImageCache.ReadyCount
+  fullName: FluentGpu.Scene.ImageCache.ReadyCount
+- uid: FluentGpu.Scene.ImageCache.PendingCount*
+  commentId: Overload:FluentGpu.Scene.ImageCache.PendingCount
+  href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_PendingCount
+  name: PendingCount
+  nameWithType: ImageCache.PendingCount
+  fullName: FluentGpu.Scene.ImageCache.PendingCount
+- uid: FluentGpu.Scene.ImageCache.Request*
+  commentId: Overload:FluentGpu.Scene.ImageCache.Request
+  href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_Request_System_String_System_Int32_System_Int32_FluentGpu_Scene_ImagePriority_System_String_System_Nullable_FluentGpu_Foundation_ImageTransition__
+  name: Request
+  nameWithType: ImageCache.Request
+  fullName: FluentGpu.Scene.ImageCache.Request
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Scene.ImagePriority
+  commentId: T:FluentGpu.Scene.ImagePriority
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImagePriority.html
+  name: ImagePriority
+  nameWithType: ImagePriority
+  fullName: FluentGpu.Scene.ImagePriority
+- uid: System.Nullable{FluentGpu.Foundation.ImageTransition}
+  commentId: T:System.Nullable{FluentGpu.Foundation.ImageTransition}
+  parent: System
+  definition: System.Nullable`1
+  href: FluentGpu.Foundation.ImageTransition.html
+  name: ImageTransition?
+  nameWithType: ImageTransition?
+  fullName: FluentGpu.Foundation.ImageTransition?
+  spec.csharp:
+  - uid: FluentGpu.Foundation.ImageTransition
+    name: ImageTransition
+    href: FluentGpu.Foundation.ImageTransition.html
+  - name: '?'
+  spec.vb:
+  - uid: FluentGpu.Foundation.ImageTransition
+    name: ImageTransition
+    href: FluentGpu.Foundation.ImageTransition.html
+  - name: '?'
+- uid: FluentGpu.Scene.ImageHandle
+  commentId: T:FluentGpu.Scene.ImageHandle
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImageHandle.html
+  name: ImageHandle
+  nameWithType: ImageHandle
+  fullName: FluentGpu.Scene.ImageHandle
+- uid: System.Nullable`1
+  commentId: T:System.Nullable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  name: Nullable<T>
+  nameWithType: Nullable<T>
+  fullName: System.Nullable<T>
+  nameWithType.vb: Nullable(Of T)
+  fullName.vb: System.Nullable(Of T)
+  name.vb: Nullable(Of T)
+  spec.csharp:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Scene.ImagePriority.Prefetch
+  commentId: F:FluentGpu.Scene.ImagePriority.Prefetch
+  href: FluentGpu.Scene.ImagePriority.html#FluentGpu_Scene_ImagePriority_Prefetch
+  name: Prefetch
+  nameWithType: ImagePriority.Prefetch
+  fullName: FluentGpu.Scene.ImagePriority.Prefetch
+- uid: FluentGpu.Scene.ImageCache.Prefetch*
+  commentId: Overload:FluentGpu.Scene.ImageCache.Prefetch
+  href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_Prefetch_System_String_System_Int32_System_Int32_
+  name: Prefetch
+  nameWithType: ImageCache.Prefetch
+  fullName: FluentGpu.Scene.ImageCache.Prefetch
+- uid: FluentGpu.Scene.ImageCache.StateOf*
+  commentId: Overload:FluentGpu.Scene.ImageCache.StateOf
+  href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_StateOf_FluentGpu_Scene_ImageHandle_
+  name: StateOf
+  nameWithType: ImageCache.StateOf
+  fullName: FluentGpu.Scene.ImageCache.StateOf
+- uid: FluentGpu.Scene.ImageState
+  commentId: T:FluentGpu.Scene.ImageState
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImageState.html
+  name: ImageState
+  nameWithType: ImageState
+  fullName: FluentGpu.Scene.ImageState
+- uid: FluentGpu.Scene.ImageCache.SizeOf*
+  commentId: Overload:FluentGpu.Scene.ImageCache.SizeOf
+  href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_SizeOf_FluentGpu_Scene_ImageHandle_
+  name: SizeOf
+  nameWithType: ImageCache.SizeOf
+  fullName: FluentGpu.Scene.ImageCache.SizeOf
+- uid: System.ValueTuple{System.Int32,System.Int32}
+  commentId: T:System.ValueTuple{System.Int32,System.Int32}
+  parent: System
+  definition: System.ValueTuple`2
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: (int Start, int End)
+  nameWithType: (int Start, int End)
+  fullName: (int Start, int End)
+  nameWithType.vb: (Start As Integer, End As Integer)
+  fullName.vb: (Start As Integer, End As Integer)
+  name.vb: (Start As Integer, End As Integer)
+  spec.csharp:
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: " "
+  - uid: System.ValueTuple{System.Int32,System.Int32}.Start
+    name: Start
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple-system.int32,system.int32-.start
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: " "
+  - uid: System.ValueTuple{System.Int32,System.Int32}.End
+    name: End
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple-system.int32,system.int32-.end
+  - name: )
+  spec.vb:
+  - name: (
+  - uid: System.ValueTuple{System.Int32,System.Int32}.Start
+    name: Start
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple-system.int32,system.int32-.start
+  - name: " "
+  - name: As
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.ValueTuple{System.Int32,System.Int32}.End
+    name: End
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple-system.int32,system.int32-.end
+  - name: " "
+  - name: As
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: System.ValueTuple`2
+  commentId: T:System.ValueTuple`2
+  name: (T1, T2)
+  nameWithType: (T1, T2)
+  fullName: (T1, T2)
+  spec.csharp:
+  - name: (
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: )
+  spec.vb:
+  - name: (
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: )
+- uid: FluentGpu.Scene.ImageState.Failed
+  commentId: F:FluentGpu.Scene.ImageState.Failed
+  href: FluentGpu.Scene.ImageState.html#FluentGpu_Scene_ImageState_Failed
+  name: Failed
+  nameWithType: ImageState.Failed
+  fullName: FluentGpu.Scene.ImageState.Failed
+- uid: FluentGpu.Scene.ImageCache.FailureOf*
+  commentId: Overload:FluentGpu.Scene.ImageCache.FailureOf
+  href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_FailureOf_FluentGpu_Scene_ImageHandle_
+  name: FailureOf
+  nameWithType: ImageCache.FailureOf
+  fullName: FluentGpu.Scene.ImageCache.FailureOf
+- uid: FluentGpu.Scene.ImageFailureKind
+  commentId: T:FluentGpu.Scene.ImageFailureKind
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImageFailureKind.html
+  name: ImageFailureKind
+  nameWithType: ImageFailureKind
+  fullName: FluentGpu.Scene.ImageFailureKind
+- uid: FluentGpu.Scene.ImageCache.AttemptsOf*
+  commentId: Overload:FluentGpu.Scene.ImageCache.AttemptsOf
+  href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_AttemptsOf_FluentGpu_Scene_ImageHandle_
+  name: AttemptsOf
+  nameWithType: ImageCache.AttemptsOf
+  fullName: FluentGpu.Scene.ImageCache.AttemptsOf
+- uid: FluentGpu.Scene.ImageCache.Cancel*
+  commentId: Overload:FluentGpu.Scene.ImageCache.Cancel
+  href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_Cancel_FluentGpu_Scene_ImageHandle_
+  name: Cancel
+  nameWithType: ImageCache.Cancel
+  fullName: FluentGpu.Scene.ImageCache.Cancel
+- uid: FluentGpu.Scene.ImageCache.BucketFor*
+  commentId: Overload:FluentGpu.Scene.ImageCache.BucketFor
+  href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_BucketFor_System_Int32_
+  name: BucketFor
+  nameWithType: ImageCache.BucketFor
+  fullName: FluentGpu.Scene.ImageCache.BucketFor
+- uid: FluentGpu.Scene.ImageCache.Tick*
+  commentId: Overload:FluentGpu.Scene.ImageCache.Tick
+  href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_Tick_System_Single_
+  name: Tick
+  nameWithType: ImageCache.Tick
+  fullName: FluentGpu.Scene.ImageCache.Tick
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.ImageTransition
+  commentId: T:FluentGpu.Foundation.ImageTransition
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ImageTransition.html
+  name: ImageTransition
+  nameWithType: ImageTransition
+  fullName: FluentGpu.Foundation.ImageTransition
+- uid: FluentGpu.Scene.ImageCache.CrossFadeOf*
+  commentId: Overload:FluentGpu.Scene.ImageCache.CrossFadeOf
+  href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_CrossFadeOf_FluentGpu_Scene_ImageHandle_
+  name: CrossFadeOf
+  nameWithType: ImageCache.CrossFadeOf
+  fullName: FluentGpu.Scene.ImageCache.CrossFadeOf
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Scene.ImageCache._maxCrossfadeDeadlineMs
+  commentId: F:FluentGpu.Scene.ImageCache._maxCrossfadeDeadlineMs
+  name: _maxCrossfadeDeadlineMs
+  nameWithType: ImageCache._maxCrossfadeDeadlineMs
+  fullName: FluentGpu.Scene.ImageCache._maxCrossfadeDeadlineMs
+- uid: FluentGpu.Scene.ImageCache.HasActiveCrossfades*
+  commentId: Overload:FluentGpu.Scene.ImageCache.HasActiveCrossfades
+  href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_HasActiveCrossfades
+  name: HasActiveCrossfades
+  nameWithType: ImageCache.HasActiveCrossfades
+  fullName: FluentGpu.Scene.ImageCache.HasActiveCrossfades
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Scene.ImageCache.Pin*
+  commentId: Overload:FluentGpu.Scene.ImageCache.Pin
+  href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_Pin_FluentGpu_Scene_ImageHandle_
+  name: Pin
+  nameWithType: ImageCache.Pin
+  fullName: FluentGpu.Scene.ImageCache.Pin
+- uid: FluentGpu.Scene.ImageCache.Unpin*
+  commentId: Overload:FluentGpu.Scene.ImageCache.Unpin
+  href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_Unpin_FluentGpu_Scene_ImageHandle_
+  name: Unpin
+  nameWithType: ImageCache.Unpin
+  fullName: FluentGpu.Scene.ImageCache.Unpin
+- uid: FluentGpu.Scene.ImageCache.RefsOf*
+  commentId: Overload:FluentGpu.Scene.ImageCache.RefsOf
+  href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_RefsOf_FluentGpu_Scene_ImageHandle_
+  name: RefsOf
+  nameWithType: ImageCache.RefsOf
+  fullName: FluentGpu.Scene.ImageCache.RefsOf
+- uid: FluentGpu.Scene.ImageCache.Pump*
+  commentId: Overload:FluentGpu.Scene.ImageCache.Pump
+  href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_Pump
+  name: Pump
+  nameWithType: ImageCache.Pump
+  fullName: FluentGpu.Scene.ImageCache.Pump

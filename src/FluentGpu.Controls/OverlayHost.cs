@@ -150,6 +150,7 @@ internal sealed class OverlayEntry
     public float AnchorOffsetX;       // post-placement nudge, mirrored on flip (cascade 4px overlap)
     public float MeasuredW;
     public float MeasuredH;
+    public RectF LastAnchorRect;      // anchor rect at last placement — the live-anchor follow re-places on drift
     public bool OpensUp;
     public CornerJoin CornerJoin;     // which popup corners abut the anchor (corner-squaring for ComboBox/AutoSuggestBox)
     public NodeHandle SavedFocus;     // focus captured at open time → restored when the close STARTS (WinUI timing)
@@ -189,6 +190,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
     public AnimEngine? Anim;
     public InputHooks? Hooks;   // popup-window + work-area host seams (E4 windowed popups)
     public NodeHandle ScrimNode;
+    public RectF ViewportRect;  // last rendered viewport (the live-anchor follow places against it between renders)
 
     public OverlayServiceImpl(Signal<int> version) => _version = version;
 
@@ -422,7 +424,10 @@ internal sealed class OverlayServiceImpl : IOverlayService
         }
     }
 
-    /// <summary>Host phase 7.1: remove closing entries whose retained tracks have settled, before recording the frame.</summary>
+    /// <summary>Host phase 7.1: remove closing entries whose retained tracks have settled, before recording the frame —
+    /// and follow LIVE anchors: an open popup whose anchor node moved since its last placement re-places against the
+    /// cached measure (the WinUI slider thumb tooltip tracks the scrubbing thumb; an anchored flyout rides a reflow).
+    /// No OverlayHost re-render, no open-animation reseed; silent (zero writes) while the anchor is still.</summary>
     public void AfterAnimations()
     {
         if (Scene is not { } scene || Anim is not { } anim) return;
@@ -433,6 +438,49 @@ internal sealed class OverlayServiceImpl : IOverlayService
             bool surfaceSettled = e.SurfaceNode.IsNull || !scene.IsLive(e.SurfaceNode) || !anim.HasTracks(e.SurfaceNode);
             bool scrimSettled = e.Chrome != PopupChrome.Modal || ScrimNode.IsNull || !scene.IsLive(ScrimNode) || !anim.HasTracks(ScrimNode);
             if (surfaceSettled && scrimSettled) Finalize(e);
+        }
+
+        for (int i = 0; i < Entries.Count; i++)
+        {
+            var e = Entries[i];
+            // Node-anchored, open, in-tree entries only: rect-thunk anchors are pointer placements (no live target),
+            // Modal centers on the viewport, a Closing entry keeps its last placement while it fades.
+            if (e.Phase == OverlayPhase.Closing || e.Chrome == PopupChrome.Modal || e.AnchorRect is not null) continue;
+            if (e.WrapperNode.IsNull || !scene.IsLive(e.WrapperNode) || e.MeasuredW <= 0f) continue;
+            var anchor = e.Anchor();
+            if (anchor.IsNull || !scene.IsLive(anchor)) continue;
+            var aRect = scene.AbsoluteRect(anchor);
+            if (MathF.Abs(aRect.X - e.LastAnchorRect.X) < 0.5f && MathF.Abs(aRect.Y - e.LastAnchorRect.Y) < 0.5f
+                && MathF.Abs(aRect.W - e.LastAnchorRect.W) < 0.5f && MathF.Abs(aRect.H - e.LastAnchorRect.H) < 0.5f)
+                continue;
+
+            e.LastAnchorRect = aRect;
+            var popupSize = new Size2(e.MeasuredW, e.MeasuredH);
+            bool windowed = e.PopupWindowToken >= 0;
+            RectF container = ViewportRect;
+            if (windowed && Hooks is { GetWorkArea: { } workArea })
+                container = workArea(new Point2(aRect.X + aRect.W * 0.5f, aRect.Y + aRect.H * 0.5f));
+
+            var place = OverlayHost.ApplyAnchorOffsetX(
+                FlyoutPositioner.Place(in aRect, in popupSize, in container, e.Placement, isWindowed: windowed),
+                e.AnchorOffsetX, in aRect);
+            if (windowed)
+                Hooks!.SetPopupWindowBounds?.Invoke(e.PopupWindowToken, new RectF(place.X, place.Y, e.MeasuredW, e.MeasuredH));
+
+            e.OpensUp = place.OpensUp;
+            e.CornerJoin = place.CornerJoin;
+            e.PlacementInfo.Value = new OverlayPlacementInfo(
+                aRect.X + aRect.W * 0.5f - place.X,
+                aRect.Y + aRect.H * 0.5f - place.Y,
+                e.MeasuredW, e.MeasuredH, place.OpensUp);
+            ref NodePaint wp = ref scene.Paint(e.WrapperNode);
+            wp.LocalTransform = Affine2D.Translation(place.X, place.Y);
+            scene.Mark(e.WrapperNode, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+            if (!e.SurfaceNode.IsNull && scene.IsLive(e.SurfaceNode) && e.Chrome is PopupChrome.Flyout or PopupChrome.Dropdown)
+            {
+                scene.Paint(e.SurfaceNode).Corners = FlyoutSurface.CornersFor(e.CornerJoin);
+                scene.Mark(e.SurfaceNode, NodeFlags.PaintDirty);
+            }
         }
     }
 
@@ -525,6 +573,7 @@ public sealed class OverlayHost : Component
         svc.Hooks = hooks;                      // popup-window + work-area seams (E4 out-of-bounds popups)
         hooks.WindowBlurred = svc.OnWindowBlur; // window deactivation → light-dismiss overlays close (modal stays)
         var vp = UseContext(Viewport.Size);
+        svc.ViewportRect = new RectF(0f, 0f, vp.Width, vp.Height);   // the live-anchor follow places against it
 
         // After layout (Bounds valid): place each popup, then seed its open (clip-unfold + slide) / close (fade) animation.
         UseLayoutEffect(() =>
@@ -605,6 +654,7 @@ public sealed class OverlayHost : Component
 
                         e.OpensUp = place.OpensUp;
                         e.CornerJoin = place.CornerJoin;
+                        e.LastAnchorRect = aRect;   // baseline for the live-anchor follow (AfterAnimations)
                         e.PlacementInfo.Value = new OverlayPlacementInfo(
                             aRect.X + aRect.W * 0.5f - place.X,
                             aRect.Y + aRect.H * 0.5f - place.Y,
@@ -812,6 +862,15 @@ public sealed class OverlayHost : Component
                 OnRealized = h => svc.ScrimNode = h,
                 HitTestVisible = svc.AnyOpen,
                 TabStop = false,   // WinUI: the light-dismiss layer is never a tab stop (focus restore depends on it)
+                // Outside-press dismiss lives ENTIRELY on this scrim node (a Controls/OverlayHost concern reached through the
+                // dispatcher's hit-test → click/press delegates — there is no in-dispatcher overlay registry; input-a11y §4).
+                // The full-bleed scrim is the topmost hit-test target while a popup is open, so the press lands on IT, never
+                // the content beneath: a light-dismiss scrim's OnClick closes the top overlay (and the click is consumed by
+                // the scrim — no click-through), a modal scrim's OnPointerDown is a no-op that simply eats the press (modal
+                // blocks the gesture). This is device-agnostic: a TOUCH tap routes through the SAME GetClickHandler the mouse
+                // click does (the Phase-1 single-recognizer tap path), so touch light-dismiss is correct by construction with
+                // no touch-specific branch — the dismissing touch is consumed exactly like the mouse (WinUI
+                // CPopupRoot::OnPointerPressed sets Handled = didCloseAPopup for both, popup.cpp:5206).
                 OnClick = lightDismiss ? () => svc.CloseTop(OverlayCloseCause.LightDismiss) : (svc.AnyOpen ? () => { } : null),
                 OnPointerDown = svc.AnyOpen && !lightDismiss ? _ => { } : null,
             });
@@ -829,7 +888,7 @@ public sealed class OverlayHost : Component
     /// <summary>Cascading-menu overlap (CascadingMenuHelper.cpp:678 — sub-menu lands at owner edge − 4): nudge the
     /// placed popup on X, MIRRORED when the positioner flipped it to the anchor's LEFT side so the overlap still
     /// points back onto the owner.</summary>
-    static PopupPlacementResult ApplyAnchorOffsetX(PopupPlacementResult place, float offsetX, in RectF anchor)
+    internal static PopupPlacementResult ApplyAnchorOffsetX(PopupPlacementResult place, float offsetX, in RectF anchor)
     {
         if (offsetX == 0f) return place;
         bool leftOfAnchor = place.X + place.MeasuredW <= anchor.X + 0.5f;

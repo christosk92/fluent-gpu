@@ -17,7 +17,7 @@ property *binding* is a finer one. **No full-app re-render, no global dirty flag
 
 | Mechanism | Re-runs | Cost | For |
 |---|---|---|---|
-| Binding (`TransformBind`/`OpacityBind`/`FillBind`) | one effect → one node prop | compositor-only (no render/reconcile/layout) | slider scrub, scroll, progress, hover glow |
+| Binding (`Transform`/`Opacity`/`Fill` set to a Func/signal) | one effect → one node prop | compositor-only (no render/reconcile/layout) | slider scrub, scroll, progress, hover glow |
 | Granular re-render (`UseState`/`UseSignal`) | owning component's subtree | render + reconcile + scoped relayout of that subtree | normal state, value-displaying text |
 | Reactive control-flow (`Flow.For`/`Flow.Show`) | one boundary effect → keyed diff | structural reconcile of that boundary | dynamic lists / conditionals |
 
@@ -26,10 +26,10 @@ property *binding* is a finer one. **No full-app re-render, no global dirty flag
 1. To make something update, a signal it **reads** must change. `.Value` subscribes; `.Peek()` does not.
 2. `Component.Render()` re-runs on its **own** state/context only — never because a parent re-rendered.
    **Parent→child data flows via signals or context, never constructor args** (those freeze at mount).
-3. `ReactiveComponent.Setup()` runs **once**. Show dynamic values via a **binding** (`TextBind = () => sig.Value`),
+3. `ReactiveComponent.Setup()` runs **once**. Show dynamic values via a **bound prop** (`Text = sig` signal-direct, or `Text = Prop.Of(() => …)` for derived text),
    never `Ui.Text(sig.Value)`. (#1 signals-native mistake.)
 4. A bind thunk must read `.Value` (subscribes), not `.Peek()`.
-5. `TransformBind`/`OpacityBind`/`FillBind` = compositor-only. `WidthBind`/`HeightBind`/`TextBind` = scoped relayout.
+5. Every bindable channel is ONE `Prop<T>` prop taking a value, a `Func<T>` (`Prop.Of` for inline lambdas), or a concrete signal. Bound `Transform`/`Opacity`/`Fill` = compositor-only; bound `Width`/`Height`/`Text` = scoped relayout.
    Prefer a transform bind for hot values.
 6. Never write a signal during render (loops). Use an event handler or `UseEffect`.
 7. Hooks run in stable call order (no hooks in `if`/loops).
@@ -77,22 +77,24 @@ Useful: `FrameStats` from `RunFrame()` — `Rendered` (false ⇒ compositor-only
 
 ## Where to change what
 
+All engine subsystems now live under the single `src/FluentGpu.Engine` project (one folder per former project, namespaces unchanged); the Windows backend (D3D12/DirectWrite/etc.) is `src/FluentGpu.Windows`.
+
 | Area | File |
 |---|---|
-| Signals runtime | `src/FluentGpu.Foundation/Signals/{ReactiveCore,Signal,Effect,Memo}.cs` |
-| Hooks | `src/FluentGpu.Hooks/RenderContext.cs` (impl) + `Component.cs` (surface) |
-| Reconcile / render-effects / For/Show / bindings / context | `src/FluentGpu.Reconciler/Reconciler.cs` |
-| Element shapes / props / binds | `src/FluentGpu.Dsl/Element.cs`, `ControlFlow.cs`, `Context.cs`, `ComponentEl.cs` |
-| DSL helpers / modifiers | `src/FluentGpu.Dsl/Factories.cs`, `Modifiers.cs` |
+| Signals runtime | `src/FluentGpu.Engine/Foundation/Signals/{ReactiveCore,Signal,Effect,Memo}.cs` |
+| Hooks | `src/FluentGpu.Engine/Hooks/RenderContext.cs` (impl) + `Component.cs` (surface) |
+| Reconcile / render-effects / For/Show / bindings / context | `src/FluentGpu.Engine/Reconciler/Reconciler.cs` |
+| Element shapes / props / binds | `src/FluentGpu.Engine/Dsl/Element.cs`; `src/FluentGpu.Engine/Hooks/{ControlFlow,Context,ComponentEl}.cs` |
+| DSL helpers / modifiers | `src/FluentGpu.Engine/Dsl/Factories.cs`, `Modifiers.cs` |
 | Controls | `src/FluentGpu.Controls/*.cs` (composition only) — WinUI fidelity rules: `docs/guide/control-fidelity.md` |
 | Control visual state / motion | `StateBrush` ramps + `InteractionAnimator` progress; `BoxEl.{Hover,Pressed}{Fill,BorderColor,Opacity}` + `{Hover,Press}Scale` + `{Hover,Press}DurationMs/Easing`. Declare targets/specs, NOT a state matrix or per-control runtime |
 | Explicit control timelines | `AnimEngine` keyframes/channels (`Opacity`, transform, stroke trim, FLIP/reveal); use for draw-on paths and authored timelines, not hover/press visual states |
-| Rounded-rect / border rendering | `SceneRecorder.cs` + `Rhi.D3D12/{RoundRect,Gradient}Pipeline.cs` — hollow SDF ring (no donut), `InsetCorners`, VS quad inflation for stroke band + AA |
-| Frame loop / scheduling | `src/FluentGpu.Hosting/AppHost.cs` (`RunFrame`/`Paint`; flush = phase 3) |
-| Layout / scoped relayout | `src/FluentGpu.Layout/FlexLayout.cs`, `LayoutInvalidator.cs` |
-| Retained scene (SoA, dirty flags) | `src/FluentGpu.Scene/{SceneStore,Columns}.cs` |
-| Record → DrawList | `src/FluentGpu.Render/SceneRecorder.cs` |
-| Theming tokens | `src/FluentGpu.Dsl/Tokens.cs` (`Tok`), `Theme.cs` |
+| Rounded-rect / border rendering | `src/FluentGpu.Engine/Render/SceneRecorder.cs` + `src/FluentGpu.Windows/D3D12/{RoundRect,Gradient}Pipeline.cs` — hollow SDF ring (no donut), `InsetCorners`, VS quad inflation for stroke band + AA |
+| Frame loop / scheduling | `src/FluentGpu.Engine/Hosting/AppHost.cs` (`RunFrame`/`Paint`; flush = phase 3) |
+| Layout / scoped relayout | `src/FluentGpu.Engine/Layout/FlexLayout.cs`, `LayoutInvalidator.cs` |
+| Retained scene (SoA, dirty flags) | `src/FluentGpu.Engine/Scene/{SceneStore,Columns}.cs` |
+| Record → DrawList | `src/FluentGpu.Engine/Render/SceneRecorder.cs` |
+| Theming tokens | `src/FluentGpu.Engine/Dsl/Tokens.cs` (`Tok`), `Theme.cs` |
 | Tests | `src/FluentGpu.VerticalSlice/Program.cs` |
 
 ## WinUI controls, animations, and states

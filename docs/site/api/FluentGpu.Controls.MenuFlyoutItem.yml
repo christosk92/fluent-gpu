@@ -1,0 +1,1314 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.MenuFlyoutItem
+  commentId: T:FluentGpu.Controls.MenuFlyoutItem
+  id: MenuFlyoutItem
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.MenuFlyoutItem.#ctor(System.String,System.String,System.Boolean,System.Action)
+  - FluentGpu.Controls.MenuFlyoutItem.AcceleratorText
+  - FluentGpu.Controls.MenuFlyoutItem.Enabled
+  - FluentGpu.Controls.MenuFlyoutItem.Glyph
+  - FluentGpu.Controls.MenuFlyoutItem.Invoke
+  - FluentGpu.Controls.MenuFlyoutItem.IsChecked
+  - FluentGpu.Controls.MenuFlyoutItem.IsSeparator
+  - FluentGpu.Controls.MenuFlyoutItem.Kind
+  - FluentGpu.Controls.MenuFlyoutItem.Label
+  - FluentGpu.Controls.MenuFlyoutItem.RadioItem(System.String,System.Boolean,System.Action,System.String,System.Boolean)
+  - FluentGpu.Controls.MenuFlyoutItem.Separator
+  - FluentGpu.Controls.MenuFlyoutItem.SubItems
+  - FluentGpu.Controls.MenuFlyoutItem.SubMenu(System.String,System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem},System.String,System.Boolean)
+  - FluentGpu.Controls.MenuFlyoutItem.Toggle(System.String,System.Boolean,System.Action,System.String,System.Boolean)
+  langs:
+  - csharp
+  - vb
+  name: MenuFlyoutItem
+  nameWithType: MenuFlyoutItem
+  fullName: FluentGpu.Controls.MenuFlyoutItem
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MenuFlyoutItem
+    path: ../../src/FluentGpu.Controls/MenuFlyout.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A single row in a <xref href="FluentGpu.Controls.MenuFlyout" data-throw-if-not-resolved="false"></xref>: a label, an optional leading glyph (icon column), an enabled
+        flag, the action to run when chosen, and an optional trailing keyboard-accelerator hint (e.g. "Ctrl+S"). Use
+        <xref href="FluentGpu.Controls.MenuFlyoutItem.Separator" data-throw-if-not-resolved="false"></xref> for a divider, <xref href="FluentGpu.Controls.MenuFlyoutItem.Toggle(System.String%2cSystem.Boolean%2cSystem.Action%2cSystem.String%2cSystem.Boolean)" data-throw-if-not-resolved="false"></xref> for a checkable item (E73E check column),
+        <xref href="FluentGpu.Controls.MenuFlyoutItem.RadioItem(System.String%2cSystem.Boolean%2cSystem.Action%2cSystem.String%2cSystem.Boolean)" data-throw-if-not-resolved="false"></xref> for a mutually-exclusive choice (E915 bullet), or <xref href="FluentGpu.Controls.MenuFlyoutItem.SubMenu(System.String%2cSystem.Collections.Generic.IReadOnlyList%7bFluentGpu.Controls.MenuFlyoutItem%7d%2cSystem.String%2cSystem.Boolean)" data-throw-if-not-resolved="false"></xref> for a cascading
+        sub-menu (E974 chevron column, hover/Right-arrow opens the nested popup). All non-Command extras are optional so
+        the primary <code>(Label, Glyph, Enabled, Invoke)</code> constructor call-sites are unchanged.
+  example: []
+  syntax:
+    content: 'public readonly record struct MenuFlyoutItem : IEquatable<MenuFlyoutItem>'
+    content.vb: Public Structure MenuFlyoutItem Implements IEquatable(Of MenuFlyoutItem)
+  implements:
+  - System.IEquatable{FluentGpu.Controls.MenuFlyoutItem}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Controls.MenuFlyoutItem.#ctor(System.String,System.String,System.Boolean,System.Action)
+  commentId: M:FluentGpu.Controls.MenuFlyoutItem.#ctor(System.String,System.String,System.Boolean,System.Action)
+  id: '#ctor(System.String,System.String,System.Boolean,System.Action)'
+  parent: FluentGpu.Controls.MenuFlyoutItem
+  langs:
+  - csharp
+  - vb
+  name: MenuFlyoutItem(string, string?, bool, Action?)
+  nameWithType: MenuFlyoutItem.MenuFlyoutItem(string, string?, bool, Action?)
+  fullName: FluentGpu.Controls.MenuFlyoutItem.MenuFlyoutItem(string, string?, bool, System.Action?)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Controls/MenuFlyout.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A single row in a <xref href="FluentGpu.Controls.MenuFlyout" data-throw-if-not-resolved="false"></xref>: a label, an optional leading glyph (icon column), an enabled
+        flag, the action to run when chosen, and an optional trailing keyboard-accelerator hint (e.g. "Ctrl+S"). Use
+        <xref href="FluentGpu.Controls.MenuFlyoutItem.Separator" data-throw-if-not-resolved="false"></xref> for a divider, <xref href="FluentGpu.Controls.MenuFlyoutItem.Toggle(System.String%2cSystem.Boolean%2cSystem.Action%2cSystem.String%2cSystem.Boolean)" data-throw-if-not-resolved="false"></xref> for a checkable item (E73E check column),
+        <xref href="FluentGpu.Controls.MenuFlyoutItem.RadioItem(System.String%2cSystem.Boolean%2cSystem.Action%2cSystem.String%2cSystem.Boolean)" data-throw-if-not-resolved="false"></xref> for a mutually-exclusive choice (E915 bullet), or <xref href="FluentGpu.Controls.MenuFlyoutItem.SubMenu(System.String%2cSystem.Collections.Generic.IReadOnlyList%7bFluentGpu.Controls.MenuFlyoutItem%7d%2cSystem.String%2cSystem.Boolean)" data-throw-if-not-resolved="false"></xref> for a cascading
+        sub-menu (E974 chevron column, hover/Right-arrow opens the nested popup). All non-Command extras are optional so
+        the primary <code>(Label, Glyph, Enabled, Invoke)</code> constructor call-sites are unchanged.
+  example: []
+  syntax:
+    content: public MenuFlyoutItem(string Label, string? Glyph = null, bool Enabled = true, Action? Invoke = null)
+    parameters:
+    - id: Label
+      type: System.String
+    - id: Glyph
+      type: System.String
+    - id: Enabled
+      type: System.Boolean
+    - id: Invoke
+      type: System.Action
+    content.vb: Public Sub New(Label As String, Glyph As String = Nothing, Enabled As Boolean = True, Invoke As Action = Nothing)
+  overload: FluentGpu.Controls.MenuFlyoutItem.#ctor*
+  nameWithType.vb: MenuFlyoutItem.New(String, String, Boolean, Action)
+  fullName.vb: FluentGpu.Controls.MenuFlyoutItem.New(String, String, Boolean, System.Action)
+  name.vb: New(String, String, Boolean, Action)
+- uid: FluentGpu.Controls.MenuFlyoutItem.Label
+  commentId: P:FluentGpu.Controls.MenuFlyoutItem.Label
+  id: Label
+  parent: FluentGpu.Controls.MenuFlyoutItem
+  langs:
+  - csharp
+  - vb
+  name: Label
+  nameWithType: MenuFlyoutItem.Label
+  fullName: FluentGpu.Controls.MenuFlyoutItem.Label
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Label
+    path: ../../src/FluentGpu.Controls/MenuFlyout.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string Label { get; init; }
+    parameters: []
+    return:
+      type: System.String
+    content.vb: Public Property Label As String
+  overload: FluentGpu.Controls.MenuFlyoutItem.Label*
+- uid: FluentGpu.Controls.MenuFlyoutItem.Glyph
+  commentId: P:FluentGpu.Controls.MenuFlyoutItem.Glyph
+  id: Glyph
+  parent: FluentGpu.Controls.MenuFlyoutItem
+  langs:
+  - csharp
+  - vb
+  name: Glyph
+  nameWithType: MenuFlyoutItem.Glyph
+  fullName: FluentGpu.Controls.MenuFlyoutItem.Glyph
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Glyph
+    path: ../../src/FluentGpu.Controls/MenuFlyout.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string? Glyph { get; init; }
+    parameters: []
+    return:
+      type: System.String
+    content.vb: Public Property Glyph As String
+  overload: FluentGpu.Controls.MenuFlyoutItem.Glyph*
+- uid: FluentGpu.Controls.MenuFlyoutItem.Enabled
+  commentId: P:FluentGpu.Controls.MenuFlyoutItem.Enabled
+  id: Enabled
+  parent: FluentGpu.Controls.MenuFlyoutItem
+  langs:
+  - csharp
+  - vb
+  name: Enabled
+  nameWithType: MenuFlyoutItem.Enabled
+  fullName: FluentGpu.Controls.MenuFlyoutItem.Enabled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Enabled
+    path: ../../src/FluentGpu.Controls/MenuFlyout.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool Enabled { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property Enabled As Boolean
+  overload: FluentGpu.Controls.MenuFlyoutItem.Enabled*
+- uid: FluentGpu.Controls.MenuFlyoutItem.Invoke
+  commentId: P:FluentGpu.Controls.MenuFlyoutItem.Invoke
+  id: Invoke
+  parent: FluentGpu.Controls.MenuFlyoutItem
+  langs:
+  - csharp
+  - vb
+  name: Invoke
+  nameWithType: MenuFlyoutItem.Invoke
+  fullName: FluentGpu.Controls.MenuFlyoutItem.Invoke
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Invoke
+    path: ../../src/FluentGpu.Controls/MenuFlyout.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Action? Invoke { get; init; }
+    parameters: []
+    return:
+      type: System.Action
+    content.vb: Public Property Invoke As Action
+  overload: FluentGpu.Controls.MenuFlyoutItem.Invoke*
+- uid: FluentGpu.Controls.MenuFlyoutItem.Kind
+  commentId: P:FluentGpu.Controls.MenuFlyoutItem.Kind
+  id: Kind
+  parent: FluentGpu.Controls.MenuFlyoutItem
+  langs:
+  - csharp
+  - vb
+  name: Kind
+  nameWithType: MenuFlyoutItem.Kind
+  fullName: FluentGpu.Controls.MenuFlyoutItem.Kind
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Kind
+    path: ../../src/FluentGpu.Controls/MenuFlyout.cs
+    startLine: 24
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public MenuItemKind Kind { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.MenuItemKind
+    content.vb: Public Property Kind As MenuItemKind
+  overload: FluentGpu.Controls.MenuFlyoutItem.Kind*
+- uid: FluentGpu.Controls.MenuFlyoutItem.IsChecked
+  commentId: P:FluentGpu.Controls.MenuFlyoutItem.IsChecked
+  id: IsChecked
+  parent: FluentGpu.Controls.MenuFlyoutItem
+  langs:
+  - csharp
+  - vb
+  name: IsChecked
+  nameWithType: MenuFlyoutItem.IsChecked
+  fullName: FluentGpu.Controls.MenuFlyoutItem.IsChecked
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsChecked
+    path: ../../src/FluentGpu.Controls/MenuFlyout.cs
+    startLine: 25
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool IsChecked { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property IsChecked As Boolean
+  overload: FluentGpu.Controls.MenuFlyoutItem.IsChecked*
+- uid: FluentGpu.Controls.MenuFlyoutItem.AcceleratorText
+  commentId: P:FluentGpu.Controls.MenuFlyoutItem.AcceleratorText
+  id: AcceleratorText
+  parent: FluentGpu.Controls.MenuFlyoutItem
+  langs:
+  - csharp
+  - vb
+  name: AcceleratorText
+  nameWithType: MenuFlyoutItem.AcceleratorText
+  fullName: FluentGpu.Controls.MenuFlyoutItem.AcceleratorText
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AcceleratorText
+    path: ../../src/FluentGpu.Controls/MenuFlyout.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Trailing right-aligned keyboard-accelerator text (WinUI KeyboardAcceleratorTextOverride), e.g. "Ctrl+S".
+  example: []
+  syntax:
+    content: public string? AcceleratorText { get; init; }
+    parameters: []
+    return:
+      type: System.String
+    content.vb: Public Property AcceleratorText As String
+  overload: FluentGpu.Controls.MenuFlyoutItem.AcceleratorText*
+- uid: FluentGpu.Controls.MenuFlyoutItem.SubItems
+  commentId: P:FluentGpu.Controls.MenuFlyoutItem.SubItems
+  id: SubItems
+  parent: FluentGpu.Controls.MenuFlyoutItem
+  langs:
+  - csharp
+  - vb
+  name: SubItems
+  nameWithType: MenuFlyoutItem.SubItems
+  fullName: FluentGpu.Controls.MenuFlyoutItem.SubItems
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SubItems
+    path: ../../src/FluentGpu.Controls/MenuFlyout.cs
+    startLine: 29
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Nested items (Kind == <xref href="FluentGpu.Controls.MenuItemKind.SubMenu" data-throw-if-not-resolved="false"></xref> only) — the cascading sub-menu's rows.
+  example: []
+  syntax:
+    content: public IReadOnlyList<MenuFlyoutItem>? SubItems { get; init; }
+    parameters: []
+    return:
+      type: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem}
+    content.vb: Public Property SubItems As IReadOnlyList(Of MenuFlyoutItem)
+  overload: FluentGpu.Controls.MenuFlyoutItem.SubItems*
+- uid: FluentGpu.Controls.MenuFlyoutItem.IsSeparator
+  commentId: P:FluentGpu.Controls.MenuFlyoutItem.IsSeparator
+  id: IsSeparator
+  parent: FluentGpu.Controls.MenuFlyoutItem
+  langs:
+  - csharp
+  - vb
+  name: IsSeparator
+  nameWithType: MenuFlyoutItem.IsSeparator
+  fullName: FluentGpu.Controls.MenuFlyoutItem.IsSeparator
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsSeparator
+    path: ../../src/FluentGpu.Controls/MenuFlyout.cs
+    startLine: 31
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool IsSeparator { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property IsSeparator As Boolean
+  overload: FluentGpu.Controls.MenuFlyoutItem.IsSeparator*
+- uid: FluentGpu.Controls.MenuFlyoutItem.Separator
+  commentId: P:FluentGpu.Controls.MenuFlyoutItem.Separator
+  id: Separator
+  parent: FluentGpu.Controls.MenuFlyoutItem
+  langs:
+  - csharp
+  - vb
+  name: Separator
+  nameWithType: MenuFlyoutItem.Separator
+  fullName: FluentGpu.Controls.MenuFlyoutItem.Separator
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Separator
+    path: ../../src/FluentGpu.Controls/MenuFlyout.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static MenuFlyoutItem Separator { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.MenuFlyoutItem
+    content.vb: Public Shared ReadOnly Property Separator As MenuFlyoutItem
+  overload: FluentGpu.Controls.MenuFlyoutItem.Separator*
+- uid: FluentGpu.Controls.MenuFlyoutItem.Toggle(System.String,System.Boolean,System.Action,System.String,System.Boolean)
+  commentId: M:FluentGpu.Controls.MenuFlyoutItem.Toggle(System.String,System.Boolean,System.Action,System.String,System.Boolean)
+  id: Toggle(System.String,System.Boolean,System.Action,System.String,System.Boolean)
+  parent: FluentGpu.Controls.MenuFlyoutItem
+  langs:
+  - csharp
+  - vb
+  name: Toggle(string, bool, Action?, string?, bool)
+  nameWithType: MenuFlyoutItem.Toggle(string, bool, Action?, string?, bool)
+  fullName: FluentGpu.Controls.MenuFlyoutItem.Toggle(string, bool, System.Action?, string?, bool)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Toggle
+    path: ../../src/FluentGpu.Controls/MenuFlyout.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'A checkable command (WinUI ToggleMenuFlyoutItem): an E73E check column whose glyph paints only when on.'
+  example: []
+  syntax:
+    content: public static MenuFlyoutItem Toggle(string label, bool isChecked, Action? invoke = null, string? glyph = null, bool enabled = true)
+    parameters:
+    - id: label
+      type: System.String
+    - id: isChecked
+      type: System.Boolean
+    - id: invoke
+      type: System.Action
+    - id: glyph
+      type: System.String
+    - id: enabled
+      type: System.Boolean
+    return:
+      type: FluentGpu.Controls.MenuFlyoutItem
+    content.vb: Public Shared Function Toggle(label As String, isChecked As Boolean, invoke As Action = Nothing, glyph As String = Nothing, enabled As Boolean = True) As MenuFlyoutItem
+  overload: FluentGpu.Controls.MenuFlyoutItem.Toggle*
+  nameWithType.vb: MenuFlyoutItem.Toggle(String, Boolean, Action, String, Boolean)
+  fullName.vb: FluentGpu.Controls.MenuFlyoutItem.Toggle(String, Boolean, System.Action, String, Boolean)
+  name.vb: Toggle(String, Boolean, Action, String, Boolean)
+- uid: FluentGpu.Controls.MenuFlyoutItem.RadioItem(System.String,System.Boolean,System.Action,System.String,System.Boolean)
+  commentId: M:FluentGpu.Controls.MenuFlyoutItem.RadioItem(System.String,System.Boolean,System.Action,System.String,System.Boolean)
+  id: RadioItem(System.String,System.Boolean,System.Action,System.String,System.Boolean)
+  parent: FluentGpu.Controls.MenuFlyoutItem
+  langs:
+  - csharp
+  - vb
+  name: RadioItem(string, bool, Action?, string?, bool)
+  nameWithType: MenuFlyoutItem.RadioItem(string, bool, Action?, string?, bool)
+  fullName: FluentGpu.Controls.MenuFlyoutItem.RadioItem(string, bool, System.Action?, string?, bool)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RadioItem
+    path: ../../src/FluentGpu.Controls/MenuFlyout.cs
+    startLine: 39
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'A mutually-exclusive command (WinUI RadioMenuFlyoutItem): an E915 bullet column whose glyph paints when selected.'
+  example: []
+  syntax:
+    content: public static MenuFlyoutItem RadioItem(string label, bool isChecked, Action? invoke = null, string? glyph = null, bool enabled = true)
+    parameters:
+    - id: label
+      type: System.String
+    - id: isChecked
+      type: System.Boolean
+    - id: invoke
+      type: System.Action
+    - id: glyph
+      type: System.String
+    - id: enabled
+      type: System.Boolean
+    return:
+      type: FluentGpu.Controls.MenuFlyoutItem
+    content.vb: Public Shared Function RadioItem(label As String, isChecked As Boolean, invoke As Action = Nothing, glyph As String = Nothing, enabled As Boolean = True) As MenuFlyoutItem
+  overload: FluentGpu.Controls.MenuFlyoutItem.RadioItem*
+  nameWithType.vb: MenuFlyoutItem.RadioItem(String, Boolean, Action, String, Boolean)
+  fullName.vb: FluentGpu.Controls.MenuFlyoutItem.RadioItem(String, Boolean, System.Action, String, Boolean)
+  name.vb: RadioItem(String, Boolean, Action, String, Boolean)
+- uid: FluentGpu.Controls.MenuFlyoutItem.SubMenu(System.String,System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem},System.String,System.Boolean)
+  commentId: M:FluentGpu.Controls.MenuFlyoutItem.SubMenu(System.String,System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem},System.String,System.Boolean)
+  id: SubMenu(System.String,System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem},System.String,System.Boolean)
+  parent: FluentGpu.Controls.MenuFlyoutItem
+  langs:
+  - csharp
+  - vb
+  name: SubMenu(string, IReadOnlyList<MenuFlyoutItem>, string?, bool)
+  nameWithType: MenuFlyoutItem.SubMenu(string, IReadOnlyList<MenuFlyoutItem>, string?, bool)
+  fullName: FluentGpu.Controls.MenuFlyoutItem.SubMenu(string, System.Collections.Generic.IReadOnlyList<FluentGpu.Controls.MenuFlyoutItem>, string?, bool)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SubMenu
+    path: ../../src/FluentGpu.Controls/MenuFlyout.cs
+    startLine: 45
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A cascading sub-menu (WinUI MenuFlyoutSubItem): an E974 chevron in the trailing column
+        (MenuFlyout_themeresources.xaml:720 SubItemChevron); hovering the row for MenuShowDelay (400ms default,
+        MenuFlyout_Partial.h:13), clicking it, or Right-arrow opens the nested menu to the right.
+  example: []
+  syntax:
+    content: public static MenuFlyoutItem SubMenu(string label, IReadOnlyList<MenuFlyoutItem> items, string? glyph = null, bool enabled = true)
+    parameters:
+    - id: label
+      type: System.String
+    - id: items
+      type: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem}
+    - id: glyph
+      type: System.String
+    - id: enabled
+      type: System.Boolean
+    return:
+      type: FluentGpu.Controls.MenuFlyoutItem
+    content.vb: Public Shared Function SubMenu(label As String, items As IReadOnlyList(Of MenuFlyoutItem), glyph As String = Nothing, enabled As Boolean = True) As MenuFlyoutItem
+  overload: FluentGpu.Controls.MenuFlyoutItem.SubMenu*
+  nameWithType.vb: MenuFlyoutItem.SubMenu(String, IReadOnlyList(Of MenuFlyoutItem), String, Boolean)
+  fullName.vb: FluentGpu.Controls.MenuFlyoutItem.SubMenu(String, System.Collections.Generic.IReadOnlyList(Of FluentGpu.Controls.MenuFlyoutItem), String, Boolean)
+  name.vb: SubMenu(String, IReadOnlyList(Of MenuFlyoutItem), String, Boolean)
+references:
+- uid: FluentGpu.Controls.MenuFlyout
+  commentId: T:FluentGpu.Controls.MenuFlyout
+  href: FluentGpu.Controls.MenuFlyout.html
+  name: MenuFlyout
+  nameWithType: MenuFlyout
+  fullName: FluentGpu.Controls.MenuFlyout
+- uid: FluentGpu.Controls.MenuFlyoutItem.Separator
+  commentId: P:FluentGpu.Controls.MenuFlyoutItem.Separator
+  href: FluentGpu.Controls.MenuFlyoutItem.html#FluentGpu_Controls_MenuFlyoutItem_Separator
+  name: Separator
+  nameWithType: MenuFlyoutItem.Separator
+  fullName: FluentGpu.Controls.MenuFlyoutItem.Separator
+- uid: FluentGpu.Controls.MenuFlyoutItem.Toggle(System.String,System.Boolean,System.Action,System.String,System.Boolean)
+  commentId: M:FluentGpu.Controls.MenuFlyoutItem.Toggle(System.String,System.Boolean,System.Action,System.String,System.Boolean)
+  isExternal: true
+  href: FluentGpu.Controls.MenuFlyoutItem.html#FluentGpu_Controls_MenuFlyoutItem_Toggle_System_String_System_Boolean_System_Action_System_String_System_Boolean_
+  name: Toggle(string, bool, Action, string, bool)
+  nameWithType: MenuFlyoutItem.Toggle(string, bool, Action, string, bool)
+  fullName: FluentGpu.Controls.MenuFlyoutItem.Toggle(string, bool, System.Action, string, bool)
+  nameWithType.vb: MenuFlyoutItem.Toggle(String, Boolean, Action, String, Boolean)
+  fullName.vb: FluentGpu.Controls.MenuFlyoutItem.Toggle(String, Boolean, System.Action, String, Boolean)
+  name.vb: Toggle(String, Boolean, Action, String, Boolean)
+  spec.csharp:
+  - uid: FluentGpu.Controls.MenuFlyoutItem.Toggle(System.String,System.Boolean,System.Action,System.String,System.Boolean)
+    name: Toggle
+    href: FluentGpu.Controls.MenuFlyoutItem.html#FluentGpu_Controls_MenuFlyoutItem_Toggle_System_String_System_Boolean_System_Action_System_String_System_Boolean_
+  - name: (
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Action
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.MenuFlyoutItem.Toggle(System.String,System.Boolean,System.Action,System.String,System.Boolean)
+    name: Toggle
+    href: FluentGpu.Controls.MenuFlyoutItem.html#FluentGpu_Controls_MenuFlyoutItem_Toggle_System_String_System_Boolean_System_Action_System_String_System_Boolean_
+  - name: (
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Action
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+- uid: FluentGpu.Controls.MenuFlyoutItem.RadioItem(System.String,System.Boolean,System.Action,System.String,System.Boolean)
+  commentId: M:FluentGpu.Controls.MenuFlyoutItem.RadioItem(System.String,System.Boolean,System.Action,System.String,System.Boolean)
+  isExternal: true
+  href: FluentGpu.Controls.MenuFlyoutItem.html#FluentGpu_Controls_MenuFlyoutItem_RadioItem_System_String_System_Boolean_System_Action_System_String_System_Boolean_
+  name: RadioItem(string, bool, Action, string, bool)
+  nameWithType: MenuFlyoutItem.RadioItem(string, bool, Action, string, bool)
+  fullName: FluentGpu.Controls.MenuFlyoutItem.RadioItem(string, bool, System.Action, string, bool)
+  nameWithType.vb: MenuFlyoutItem.RadioItem(String, Boolean, Action, String, Boolean)
+  fullName.vb: FluentGpu.Controls.MenuFlyoutItem.RadioItem(String, Boolean, System.Action, String, Boolean)
+  name.vb: RadioItem(String, Boolean, Action, String, Boolean)
+  spec.csharp:
+  - uid: FluentGpu.Controls.MenuFlyoutItem.RadioItem(System.String,System.Boolean,System.Action,System.String,System.Boolean)
+    name: RadioItem
+    href: FluentGpu.Controls.MenuFlyoutItem.html#FluentGpu_Controls_MenuFlyoutItem_RadioItem_System_String_System_Boolean_System_Action_System_String_System_Boolean_
+  - name: (
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Action
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.MenuFlyoutItem.RadioItem(System.String,System.Boolean,System.Action,System.String,System.Boolean)
+    name: RadioItem
+    href: FluentGpu.Controls.MenuFlyoutItem.html#FluentGpu_Controls_MenuFlyoutItem_RadioItem_System_String_System_Boolean_System_Action_System_String_System_Boolean_
+  - name: (
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Action
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+- uid: FluentGpu.Controls.MenuFlyoutItem.SubMenu(System.String,System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem},System.String,System.Boolean)
+  commentId: M:FluentGpu.Controls.MenuFlyoutItem.SubMenu(System.String,System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem},System.String,System.Boolean)
+  isExternal: true
+  href: FluentGpu.Controls.MenuFlyoutItem.html#FluentGpu_Controls_MenuFlyoutItem_SubMenu_System_String_System_Collections_Generic_IReadOnlyList_FluentGpu_Controls_MenuFlyoutItem__System_String_System_Boolean_
+  name: SubMenu(string, IReadOnlyList<MenuFlyoutItem>, string, bool)
+  nameWithType: MenuFlyoutItem.SubMenu(string, IReadOnlyList<MenuFlyoutItem>, string, bool)
+  fullName: FluentGpu.Controls.MenuFlyoutItem.SubMenu(string, System.Collections.Generic.IReadOnlyList<FluentGpu.Controls.MenuFlyoutItem>, string, bool)
+  nameWithType.vb: MenuFlyoutItem.SubMenu(String, IReadOnlyList(Of MenuFlyoutItem), String, Boolean)
+  fullName.vb: FluentGpu.Controls.MenuFlyoutItem.SubMenu(String, System.Collections.Generic.IReadOnlyList(Of FluentGpu.Controls.MenuFlyoutItem), String, Boolean)
+  name.vb: SubMenu(String, IReadOnlyList(Of MenuFlyoutItem), String, Boolean)
+  spec.csharp:
+  - uid: FluentGpu.Controls.MenuFlyoutItem.SubMenu(System.String,System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem},System.String,System.Boolean)
+    name: SubMenu
+    href: FluentGpu.Controls.MenuFlyoutItem.html#FluentGpu_Controls_MenuFlyoutItem_SubMenu_System_String_System_Collections_Generic_IReadOnlyList_FluentGpu_Controls_MenuFlyoutItem__System_String_System_Boolean_
+  - name: (
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: ','
+  - name: " "
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - uid: FluentGpu.Controls.MenuFlyoutItem
+    name: MenuFlyoutItem
+    href: FluentGpu.Controls.MenuFlyoutItem.html
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.MenuFlyoutItem.SubMenu(System.String,System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem},System.String,System.Boolean)
+    name: SubMenu
+    href: FluentGpu.Controls.MenuFlyoutItem.html#FluentGpu_Controls_MenuFlyoutItem_SubMenu_System_String_System_Collections_Generic_IReadOnlyList_FluentGpu_Controls_MenuFlyoutItem__System_String_System_Boolean_
+  - name: (
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: ','
+  - name: " "
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.MenuFlyoutItem
+    name: MenuFlyoutItem
+    href: FluentGpu.Controls.MenuFlyoutItem.html
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.IEquatable{FluentGpu.Controls.MenuFlyoutItem}
+  commentId: T:System.IEquatable{FluentGpu.Controls.MenuFlyoutItem}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<MenuFlyoutItem>
+  nameWithType: IEquatable<MenuFlyoutItem>
+  fullName: System.IEquatable<FluentGpu.Controls.MenuFlyoutItem>
+  nameWithType.vb: IEquatable(Of MenuFlyoutItem)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.MenuFlyoutItem)
+  name.vb: IEquatable(Of MenuFlyoutItem)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.MenuFlyoutItem
+    name: MenuFlyoutItem
+    href: FluentGpu.Controls.MenuFlyoutItem.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.MenuFlyoutItem
+    name: MenuFlyoutItem
+    href: FluentGpu.Controls.MenuFlyoutItem.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Controls.MenuFlyoutItem.#ctor*
+  commentId: Overload:FluentGpu.Controls.MenuFlyoutItem.#ctor
+  href: FluentGpu.Controls.MenuFlyoutItem.html#FluentGpu_Controls_MenuFlyoutItem__ctor_System_String_System_String_System_Boolean_System_Action_
+  name: MenuFlyoutItem
+  nameWithType: MenuFlyoutItem.MenuFlyoutItem
+  fullName: FluentGpu.Controls.MenuFlyoutItem.MenuFlyoutItem
+  nameWithType.vb: MenuFlyoutItem.New
+  fullName.vb: FluentGpu.Controls.MenuFlyoutItem.New
+  name.vb: New
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: System.Action
+  commentId: T:System.Action
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action
+  name: Action
+  nameWithType: Action
+  fullName: System.Action
+- uid: FluentGpu.Controls.MenuFlyoutItem.Label*
+  commentId: Overload:FluentGpu.Controls.MenuFlyoutItem.Label
+  href: FluentGpu.Controls.MenuFlyoutItem.html#FluentGpu_Controls_MenuFlyoutItem_Label
+  name: Label
+  nameWithType: MenuFlyoutItem.Label
+  fullName: FluentGpu.Controls.MenuFlyoutItem.Label
+- uid: FluentGpu.Controls.MenuFlyoutItem.Glyph*
+  commentId: Overload:FluentGpu.Controls.MenuFlyoutItem.Glyph
+  href: FluentGpu.Controls.MenuFlyoutItem.html#FluentGpu_Controls_MenuFlyoutItem_Glyph
+  name: Glyph
+  nameWithType: MenuFlyoutItem.Glyph
+  fullName: FluentGpu.Controls.MenuFlyoutItem.Glyph
+- uid: FluentGpu.Controls.MenuFlyoutItem.Enabled*
+  commentId: Overload:FluentGpu.Controls.MenuFlyoutItem.Enabled
+  href: FluentGpu.Controls.MenuFlyoutItem.html#FluentGpu_Controls_MenuFlyoutItem_Enabled
+  name: Enabled
+  nameWithType: MenuFlyoutItem.Enabled
+  fullName: FluentGpu.Controls.MenuFlyoutItem.Enabled
+- uid: FluentGpu.Controls.MenuFlyoutItem.Invoke*
+  commentId: Overload:FluentGpu.Controls.MenuFlyoutItem.Invoke
+  href: FluentGpu.Controls.MenuFlyoutItem.html#FluentGpu_Controls_MenuFlyoutItem_Invoke
+  name: Invoke
+  nameWithType: MenuFlyoutItem.Invoke
+  fullName: FluentGpu.Controls.MenuFlyoutItem.Invoke
+- uid: FluentGpu.Controls.MenuFlyoutItem.Kind*
+  commentId: Overload:FluentGpu.Controls.MenuFlyoutItem.Kind
+  href: FluentGpu.Controls.MenuFlyoutItem.html#FluentGpu_Controls_MenuFlyoutItem_Kind
+  name: Kind
+  nameWithType: MenuFlyoutItem.Kind
+  fullName: FluentGpu.Controls.MenuFlyoutItem.Kind
+- uid: FluentGpu.Controls.MenuItemKind
+  commentId: T:FluentGpu.Controls.MenuItemKind
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.MenuItemKind.html
+  name: MenuItemKind
+  nameWithType: MenuItemKind
+  fullName: FluentGpu.Controls.MenuItemKind
+- uid: FluentGpu.Controls.MenuFlyoutItem.IsChecked*
+  commentId: Overload:FluentGpu.Controls.MenuFlyoutItem.IsChecked
+  href: FluentGpu.Controls.MenuFlyoutItem.html#FluentGpu_Controls_MenuFlyoutItem_IsChecked
+  name: IsChecked
+  nameWithType: MenuFlyoutItem.IsChecked
+  fullName: FluentGpu.Controls.MenuFlyoutItem.IsChecked
+- uid: FluentGpu.Controls.MenuFlyoutItem.AcceleratorText*
+  commentId: Overload:FluentGpu.Controls.MenuFlyoutItem.AcceleratorText
+  href: FluentGpu.Controls.MenuFlyoutItem.html#FluentGpu_Controls_MenuFlyoutItem_AcceleratorText
+  name: AcceleratorText
+  nameWithType: MenuFlyoutItem.AcceleratorText
+  fullName: FluentGpu.Controls.MenuFlyoutItem.AcceleratorText
+- uid: FluentGpu.Controls.MenuItemKind.SubMenu
+  commentId: F:FluentGpu.Controls.MenuItemKind.SubMenu
+  href: FluentGpu.Controls.MenuItemKind.html#FluentGpu_Controls_MenuItemKind_SubMenu
+  name: SubMenu
+  nameWithType: MenuItemKind.SubMenu
+  fullName: FluentGpu.Controls.MenuItemKind.SubMenu
+- uid: FluentGpu.Controls.MenuFlyoutItem.SubItems*
+  commentId: Overload:FluentGpu.Controls.MenuFlyoutItem.SubItems
+  href: FluentGpu.Controls.MenuFlyoutItem.html#FluentGpu_Controls_MenuFlyoutItem_SubItems
+  name: SubItems
+  nameWithType: MenuFlyoutItem.SubItems
+  fullName: FluentGpu.Controls.MenuFlyoutItem.SubItems
+- uid: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem}
+  commentId: T:System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem}
+  parent: System.Collections.Generic
+  definition: System.Collections.Generic.IReadOnlyList`1
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<MenuFlyoutItem>
+  nameWithType: IReadOnlyList<MenuFlyoutItem>
+  fullName: System.Collections.Generic.IReadOnlyList<FluentGpu.Controls.MenuFlyoutItem>
+  nameWithType.vb: IReadOnlyList(Of MenuFlyoutItem)
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of FluentGpu.Controls.MenuFlyoutItem)
+  name.vb: IReadOnlyList(Of MenuFlyoutItem)
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - uid: FluentGpu.Controls.MenuFlyoutItem
+    name: MenuFlyoutItem
+    href: FluentGpu.Controls.MenuFlyoutItem.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.MenuFlyoutItem
+    name: MenuFlyoutItem
+    href: FluentGpu.Controls.MenuFlyoutItem.html
+  - name: )
+- uid: System.Collections.Generic.IReadOnlyList`1
+  commentId: T:System.Collections.Generic.IReadOnlyList`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<T>
+  nameWithType: IReadOnlyList<T>
+  fullName: System.Collections.Generic.IReadOnlyList<T>
+  nameWithType.vb: IReadOnlyList(Of T)
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of T)
+  name.vb: IReadOnlyList(Of T)
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Collections.Generic
+  commentId: N:System.Collections.Generic
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System.Collections.Generic
+  nameWithType: System.Collections.Generic
+  fullName: System.Collections.Generic
+  spec.csharp:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+  spec.vb:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+- uid: FluentGpu.Controls.MenuFlyoutItem.IsSeparator*
+  commentId: Overload:FluentGpu.Controls.MenuFlyoutItem.IsSeparator
+  href: FluentGpu.Controls.MenuFlyoutItem.html#FluentGpu_Controls_MenuFlyoutItem_IsSeparator
+  name: IsSeparator
+  nameWithType: MenuFlyoutItem.IsSeparator
+  fullName: FluentGpu.Controls.MenuFlyoutItem.IsSeparator
+- uid: FluentGpu.Controls.MenuFlyoutItem.Separator*
+  commentId: Overload:FluentGpu.Controls.MenuFlyoutItem.Separator
+  href: FluentGpu.Controls.MenuFlyoutItem.html#FluentGpu_Controls_MenuFlyoutItem_Separator
+  name: Separator
+  nameWithType: MenuFlyoutItem.Separator
+  fullName: FluentGpu.Controls.MenuFlyoutItem.Separator
+- uid: FluentGpu.Controls.MenuFlyoutItem
+  commentId: T:FluentGpu.Controls.MenuFlyoutItem
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.MenuFlyoutItem.html
+  name: MenuFlyoutItem
+  nameWithType: MenuFlyoutItem
+  fullName: FluentGpu.Controls.MenuFlyoutItem
+- uid: FluentGpu.Controls.MenuFlyoutItem.Toggle*
+  commentId: Overload:FluentGpu.Controls.MenuFlyoutItem.Toggle
+  href: FluentGpu.Controls.MenuFlyoutItem.html#FluentGpu_Controls_MenuFlyoutItem_Toggle_System_String_System_Boolean_System_Action_System_String_System_Boolean_
+  name: Toggle
+  nameWithType: MenuFlyoutItem.Toggle
+  fullName: FluentGpu.Controls.MenuFlyoutItem.Toggle
+- uid: FluentGpu.Controls.MenuFlyoutItem.RadioItem*
+  commentId: Overload:FluentGpu.Controls.MenuFlyoutItem.RadioItem
+  href: FluentGpu.Controls.MenuFlyoutItem.html#FluentGpu_Controls_MenuFlyoutItem_RadioItem_System_String_System_Boolean_System_Action_System_String_System_Boolean_
+  name: RadioItem
+  nameWithType: MenuFlyoutItem.RadioItem
+  fullName: FluentGpu.Controls.MenuFlyoutItem.RadioItem
+- uid: FluentGpu.Controls.MenuFlyoutItem.SubMenu*
+  commentId: Overload:FluentGpu.Controls.MenuFlyoutItem.SubMenu
+  href: FluentGpu.Controls.MenuFlyoutItem.html#FluentGpu_Controls_MenuFlyoutItem_SubMenu_System_String_System_Collections_Generic_IReadOnlyList_FluentGpu_Controls_MenuFlyoutItem__System_String_System_Boolean_
+  name: SubMenu
+  nameWithType: MenuFlyoutItem.SubMenu
+  fullName: FluentGpu.Controls.MenuFlyoutItem.SubMenu

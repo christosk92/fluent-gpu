@@ -1,0 +1,141 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode
+  commentId: T:FluentGpu.Controls.NumberBoxSpinButtonPlacementMode
+  id: NumberBoxSpinButtonPlacementMode
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.Compact
+  - FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.Hidden
+  - FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.Inline
+  langs:
+  - csharp
+  - vb
+  name: NumberBoxSpinButtonPlacementMode
+  nameWithType: NumberBoxSpinButtonPlacementMode
+  fullName: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NumberBoxSpinButtonPlacementMode
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 10
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'WinUI <code>NumberBoxSpinButtonPlacementMode</code>: where (if anywhere) the up/down spin buttons appear.'
+  example: []
+  syntax:
+    content: 'public enum NumberBoxSpinButtonPlacementMode : byte'
+    content.vb: Public Enum NumberBoxSpinButtonPlacementMode As Byte
+- uid: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.Hidden
+  commentId: F:FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.Hidden
+  id: Hidden
+  parent: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode
+  langs:
+  - csharp
+  - vb
+  name: Hidden
+  nameWithType: NumberBoxSpinButtonPlacementMode.Hidden
+  fullName: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.Hidden
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Hidden
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 12
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Hidden = 0
+    return:
+      type: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode
+- uid: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.Compact
+  commentId: F:FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.Compact
+  id: Compact
+  parent: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode
+  langs:
+  - csharp
+  - vb
+  name: Compact
+  nameWithType: NumberBoxSpinButtonPlacementMode.Compact
+  fullName: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.Compact
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Compact
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Compact = 1
+    return:
+      type: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode
+- uid: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.Inline
+  commentId: F:FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.Inline
+  id: Inline
+  parent: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode
+  langs:
+  - csharp
+  - vb
+  name: Inline
+  nameWithType: NumberBoxSpinButtonPlacementMode.Inline
+  fullName: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.Inline
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Inline
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Inline = 2
+    return:
+      type: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode
+  commentId: T:FluentGpu.Controls.NumberBoxSpinButtonPlacementMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.html
+  name: NumberBoxSpinButtonPlacementMode
+  nameWithType: NumberBoxSpinButtonPlacementMode
+  fullName: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode

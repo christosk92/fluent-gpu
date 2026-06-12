@@ -1,0 +1,1229 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Class ComboBox | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Class ComboBox | FluentGpu Developer Docs ">
+      
+      <meta name="description" content="A WinUI ComboBox: a closed field showing the selected item + a chevron that opens a dropdown list (an anchored, light-dismiss overlay whose width matches the field). In  mode ONE chrome-owning box (the template&#39;s single Background border spanning BOTH grid columns, ComboBox_themeresources.xaml:571 Grid.ColumnSpan=&amp;quot;2&amp;quot;) hosts a chromeless  spanning the full width (:580 ColumnSpan=&amp;quot;2&amp;quot;, BorderBrush=&amp;quot;Transparent&amp;quot;, padding ComboBoxEditableTextPadding 11,5,38,6 :342) with the 30-wide DropDownOverlay button (:581) and the 12&#215;12 chevron glyph (:582–587) overlaid at the right — never a second bordered box. Selection is a caller  so a page can read it.  1:1 with ComboBox_themeresources(_perf2026).xaml + ComboBoxHelper.cpp. Exact tokens/sizes: field MinHeight=32 (ComboBoxMinHeight), padding 12,5,0,7 (ComboBoxPadding), CornerRadius=4 (ControlCornerRadius), BorderThickness=1, MinWidth=64 (ComboBoxThemeMinWidth); the border is the ControlElevationBorder gradient (ComboBoxBorderBrush), pressed flattens to a flat stroke (ComboBoxBorderBrushPressed=ControlStrokeColorDefault). Field fills rest/hover/pressed/disabled = ControlFillColor Default/Secondary/Tertiary/Disabled; foreground ramps Primary→(pressed)Secondary→(disabled)Disabled; placeholder Secondary→(pressed)Tertiary. Chevron column width 38, glyph  12px, foreground TextFillColorSecondary, right-inset 14 (Margin 0,0,14,0).   Items (ComboBoxItem): padding 11,5,11,7 (ComboBoxItemThemePadding), margin 5,2,5,2, CornerRadius=3 (ComboBoxItemCornerRadius); the 3&#215;16 left accent pill (ComboBoxItemPill, corner 1.5, fill AccentFillColorDefault, flush left — no margin in the ITEM template) shows only on the selected row. Item state matrix mirrors the XAML: rest=SubtleTransparent, PointerOver=SubtleSecondary, Pressed=SubtleTertiary; Selected=SubtleSecondary, SelectedPointerOver=SubtleTertiary, SelectedPressed=SubtleSecondary; foreground Primary, pressed→Secondary. Popup: AcrylicInApp background + SurfaceStrokeColorFlyout 1px + OverlayCornerRadius(8) + presenter margin 0,4 (ComboBoxDropdownContentMargin) + MaxDropDownHeight=504 with internal scroll — all supplied by the overlay host&#39;s FlyoutSurface; here we return only the rows.   Open/close = the overlay host&#39;s WinUI MenuPopupThemeTransition (250ms cubic-bezier(0,0,0,1) clip-reveal + opacity; 83ms close fade) — identical to OverlayOpeningAnimation/OverlayClosingAnimation (ControlNormal/Fast AnimationDuration). Focus is captured on open and restored on close by the host; the popup is opened with PopupOptions(FocusTrap:true) so Tab/arrow roving stays inside the list. Keyboard: when CLOSED, Up/Down/Home/End step the selection in place and Space/Enter/F4/Alt+Down open; when OPEN, Up/Down/Home/End move a highlighted row, Enter/Space commits it, Escape closes (restoring selection). Type-ahead jumps to the next item whose label starts with the typed prefix (WinUI ComboBox text-search), CLOSED or OPEN.  Corner-join (ComboBoxHelper.UpdateCornerRadius): while open-DOWN the field squares its BOTTOM corners so the dropdown reads as one piece with the field (the popup squares the abutting TOP corners host-side via the placement result&#39;s ). The non-editable field overlaps the popup by design, so the join is applied while open.">
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/new/feat/prop-unification/apiSpec/new?filename=FluentGpu_Controls_ComboBox.md&amp;value=---%0Auid%3A%20FluentGpu.Controls.ComboBox%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="ManagedReference">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="FluentGpu.Controls.ComboBox">
+
+
+
+  <h1 id="FluentGpu_Controls_ComboBox" data-uid="FluentGpu.Controls.ComboBox" class="text-break">
+Class ComboBox  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L51"><i class="bi bi-code-slash"></i></a>
+  </h1>
+
+  <div class="facts text-secondary">
+    <dl><dt>Namespace</dt><dd><a class="xref" href="FluentGpu.html">FluentGpu</a>.<a class="xref" href="FluentGpu.Controls.html">Controls</a></dd></dl>
+  <dl><dt>Assembly</dt><dd>FluentGpu.Controls.dll</dd></dl>
+  </div>
+
+  <div class="markdown summary"><p>A WinUI ComboBox: a closed field showing the selected item + a chevron that opens a dropdown list (an anchored,
+light-dismiss overlay whose width matches the field). In <a class="xref" href="FluentGpu.Controls.ComboBox.html#FluentGpu_Controls_ComboBox_Editable">Editable</a> mode ONE chrome-owning box (the
+template's single Background border spanning BOTH grid columns, ComboBox_themeresources.xaml:571
+<code>Grid.ColumnSpan=&quot;2&quot;</code>) hosts a chromeless <a class="xref" href="FluentGpu.Controls.EditableText.html">EditableText</a> spanning the full width (:580
+<code>ColumnSpan=&quot;2&quot;</code>, <code>BorderBrush=&quot;Transparent&quot;</code>, padding ComboBoxEditableTextPadding 11,5,38,6 :342) with
+the 30-wide DropDownOverlay button (:581) and the 12×12 chevron glyph (:582–587) overlaid at the right — never a
+second bordered box. Selection is a caller <a class="xref" href="FluentGpu.Signals.Signal-1.html">Signal&lt;T&gt;</a> so a page can read it.</p>
+<p>
+1:1 with <code>ComboBox_themeresources(_perf2026).xaml</code> + <code>ComboBoxHelper.cpp</code>. Exact tokens/sizes:
+field MinHeight=32 (<code>ComboBoxMinHeight</code>), padding 12,5,0,7 (<code>ComboBoxPadding</code>), CornerRadius=4
+(<code>ControlCornerRadius</code>), BorderThickness=1, MinWidth=64 (<code>ComboBoxThemeMinWidth</code>); the border is the
+<b>ControlElevationBorder</b> gradient (<code>ComboBoxBorderBrush</code>), pressed flattens to a flat stroke
+(<code>ComboBoxBorderBrushPressed=ControlStrokeColorDefault</code>). Field fills rest/hover/pressed/disabled =
+ControlFillColor Default/Secondary/Tertiary/Disabled; foreground ramps Primary→(pressed)Secondary→(disabled)Disabled;
+placeholder Secondary→(pressed)Tertiary. Chevron column width 38, glyph <code></code> 12px, foreground
+<code>TextFillColorSecondary</code>, right-inset 14 (<code>Margin 0,0,14,0</code>).
+</p>
+<p>
+Items (<code>ComboBoxItem</code>): padding 11,5,11,7 (<code>ComboBoxItemThemePadding</code>), margin 5,2,5,2, CornerRadius=3
+(<code>ComboBoxItemCornerRadius</code>); the 3×16 left accent pill (<code>ComboBoxItemPill</code>, corner 1.5, fill
+<code>AccentFillColorDefault</code>, flush left — no margin in the ITEM template) shows only on the selected row. Item
+state matrix mirrors the XAML:
+rest=SubtleTransparent, PointerOver=SubtleSecondary, Pressed=SubtleTertiary; Selected=SubtleSecondary,
+SelectedPointerOver=SubtleTertiary, SelectedPressed=SubtleSecondary; foreground Primary, pressed→Secondary.
+Popup: AcrylicInApp background + <code>SurfaceStrokeColorFlyout</code> 1px + <code>OverlayCornerRadius</code>(8) +
+presenter margin 0,4 (<code>ComboBoxDropdownContentMargin</code>) + <code>MaxDropDownHeight</code>=504 with internal scroll —
+all supplied by the overlay host's <code>FlyoutSurface</code>; here we return only the rows.
+</p>
+<p>
+Open/close = the overlay host's WinUI MenuPopupThemeTransition (250ms cubic-bezier(0,0,0,1) clip-reveal + opacity;
+83ms close fade) — identical to <code>OverlayOpeningAnimation</code>/<code>OverlayClosingAnimation</code> (ControlNormal/Fast
+AnimationDuration). Focus is captured on open and restored on close by the host; the popup is opened with
+<code>PopupOptions(FocusTrap:true)</code> so Tab/arrow roving stays inside the list. Keyboard: when CLOSED, Up/Down/Home/End
+step the selection in place and Space/Enter/F4/Alt+Down open; when OPEN, Up/Down/Home/End move a highlighted row,
+Enter/Space commits it, Escape closes (restoring selection). Type-ahead jumps to the next item whose label starts with
+the typed prefix (WinUI ComboBox text-search), CLOSED or OPEN.
+</p>
+<p>Corner-join (<code>ComboBoxHelper.UpdateCornerRadius</code>): while open-DOWN the field squares its BOTTOM corners so
+the dropdown reads as one piece with the field (the popup squares the abutting TOP corners host-side via the placement
+result's <a class="xref" href="FluentGpu.Controls.CornerJoin.html">CornerJoin</a>). The non-editable field overlaps the popup by design, so the join is applied while open.</p>
+</div>
+  <div class="markdown conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public sealed class ComboBox : Component</code></pre>
+  </div>
+
+
+
+
+  <dl class="typelist inheritance">
+    <dt>Inheritance</dt>
+    <dd>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></div>
+      <div><a class="xref" href="FluentGpu.Hooks.Component.html">Component</a></div>
+      <div><span class="xref">ComboBox</span></div>
+    </dd>
+  </dl>
+
+
+
+  <dl class="typelist inheritedMembers">
+    <dt>Inherited Members</dt>
+    <dd>
+    <div>
+      <a class="xref" href="FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Context">Component.Context</a>
+    </div>
+    <div>
+      <a class="xref" href="FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RunsOnce">Component.RunsOnce</a>
+    </div>
+    <div>
+      <a class="xref" href="FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks">Component.RenderWithHooks()</a>
+    </div>
+    <div>
+      <a class="xref" href="FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount">Component.Unmount()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)">object.Equals(object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)">object.Equals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gethashcode">object.GetHashCode()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gettype">object.GetType()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.referenceequals">object.ReferenceEquals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.tostring">object.ToString()</a>
+    </div>
+  </dd></dl>
+
+  <dl class="typelist extensionMethods">
+    <dt>Extension Methods</dt>
+    <dd>
+  <div>
+      <a class="xref" href="FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_">MotionHooks.UseEntrance(Component, float, object?)</a>
+  </div>
+  <div>
+      <a class="xref" href="FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_">MotionHooks.UseHoverScale(Component, bool, float)</a>
+  </div>
+  </dd></dl>
+
+
+
+
+
+  <h2 class="section" id="fields">Fields
+</h2>
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_ChevronColumn" data-uid="FluentGpu.Controls.ComboBox.ChevronColumn">
+  ChevronColumn
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L74"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float ChevronColumn = 38</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_ChevronGlyphSize" data-uid="FluentGpu.Controls.ComboBox.ChevronGlyphSize">
+  ChevronGlyphSize
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L75"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float ChevronGlyphSize = 12</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_ChevronRightInset" data-uid="FluentGpu.Controls.ComboBox.ChevronRightInset">
+  ChevronRightInset
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L76"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float ChevronRightInset = 14</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_Description" data-uid="FluentGpu.Controls.ComboBox.Description">
+  Description
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L103"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>WinUI <code>Description</code> (DescriptionPresenter, generic.xaml:9233-9239): helper text below the field
+in SystemControlDescriptionTextForegroundBrush.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public string Description</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_Editable" data-uid="FluentGpu.Controls.ComboBox.Editable">
+  Editable
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L92"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool Editable</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_ErrorText" data-uid="FluentGpu.Controls.ComboBox.ErrorText">
+  ErrorText
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L107"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Input-validation error message (WinUI InputValidation InlineErrors state, generic.xaml:9118-9127):
+non-empty → the field border swaps to SystemControlErrorTextForegroundBrush and the message renders below the
+field (replacing the Description row, per the InlineErrors setters).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public string ErrorText</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_Header" data-uid="FluentGpu.Controls.ComboBox.Header">
+  Header
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L100"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>WinUI <code>Header</code> (HeaderContentPresenter, generic.xaml:9155-9166): a label row above the field,
+FontWeight Normal (ComboBoxHeaderThemeFontWeight), margin 0,0,0,4 (ComboBoxTopHeaderMargin, generic.xaml:5911).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public string Header</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_IsEnabled" data-uid="FluentGpu.Controls.ComboBox.IsEnabled">
+  IsEnabled
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L96"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool IsEnabled</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_ItemPillScaleMin" data-uid="FluentGpu.Controls.ComboBox.ItemPillScaleMin">
+  ItemPillScaleMin
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L79"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float ItemPillScaleMin = 0.625</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_Items" data-uid="FluentGpu.Controls.ComboBox.Items">
+  Items
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L90"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public IReadOnlyList&lt;string&gt; Items</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1">IReadOnlyList</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_MaxDropDownHeight" data-uid="FluentGpu.Controls.ComboBox.MaxDropDownHeight">
+  MaxDropDownHeight
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L81"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float MaxDropDownHeight = 504</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_MinHeight" data-uid="FluentGpu.Controls.ComboBox.MinHeight">
+  MinHeight
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L72"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float MinHeight = 32</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_OnSelectionChanged" data-uid="FluentGpu.Controls.ComboBox.OnSelectionChanged">
+  OnSelectionChanged
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L111"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Action&lt;int&gt;? OnSelectionChanged</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action-1">Action</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_OnTextSubmitted" data-uid="FluentGpu.Controls.ComboBox.OnTextSubmitted">
+  OnTextSubmitted
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L117"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>WinUI <code>TextSubmitted</code> with the Handled contract (ComboBoxTextSubmittedEventArgs): raised on commit
+(Enter / Tab / focus loss) when the typed text matched NO item during search (ComboBox_Partial.cpp:2487–2513).
+Return true = handled (the app accepted the custom value; the default matching is skipped); false/null → the
+default: exact-match the items case-insensitively and select on a hit (cpp:2516–2543), else the text stays as a
+custom value with <a class="xref" href="FluentGpu.Controls.ComboBox.html#FluentGpu_Controls_ComboBox_SelectedIndex">SelectedIndex</a> = −1.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Func&lt;string, bool&gt;? OnTextSubmitted</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_OpenOnMount" data-uid="FluentGpu.Controls.ComboBox.OpenOnMount">
+  OpenOnMount
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L97"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool OpenOnMount</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_OverlayButtonInset" data-uid="FluentGpu.Controls.ComboBox.OverlayButtonInset">
+  OverlayButtonInset
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L78"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float OverlayButtonInset = 4</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_OverlayButtonWidth" data-uid="FluentGpu.Controls.ComboBox.OverlayButtonWidth">
+  OverlayButtonWidth
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L77"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float OverlayButtonWidth = 30</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_PartChevron" data-uid="FluentGpu.Controls.ComboBox.PartChevron">
+  PartChevron
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L63"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The 12×12 DropDownGlyph cell (both modes). Owned: HitTestVisible (the glyph is decoration — the
+field / DropDownOverlay button owns the click).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartChevron = &quot;Chevron&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_PartField" data-uid="FluentGpu.Controls.ComboBox.PartField">
+  PartField
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L60"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The field root — the template's Background border (editable: the single ColumnSpan=2 chrome box;
+non-editable: the closed field row). State fills/borders (rest/hover/pressed/focused/error ramps) are computed
+per render BEFORE the modifier — override at will. Owned: OnRealized (anchor capture, chained), OnClick
+(toggle, non-editable), OnKeyDown/OnCharInput/OnFocusChanged, Focusable, Role, Children (value label / TextBox
+part + overlay + glyph).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartField = &quot;Field&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_PartItemPill" data-uid="FluentGpu.Controls.ComboBox.PartItemPill">
+  PartItemPill
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L69"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The 3×16 accent pill (ComboBoxItemPill), mounted only on the selected row. Owned: none.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartItemPill = &quot;ItemPill&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_PartItemRow" data-uid="FluentGpu.Controls.ComboBox.PartItemRow">
+  PartItemRow
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L67"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>One dropdown row (the ComboBoxItem LayoutRoot) — popup-built each open, NOT recycled, so per-row
+modifiers are safe. State fills (selected/cursor rest + hover/press ramp) are computed per render BEFORE the
+modifier. Owned: OnClick (commit), Role, Children (pill + content).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartItemRow = &quot;ItemRow&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_Parts" data-uid="FluentGpu.Controls.ComboBox.Parts">
+  Parts
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L120"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Lightweight per-part styling (CSS ::part): modifiers keyed by the <code>PartXxx</code> consts; see
+<a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a> for the contract.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public TemplateParts? Parts</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_PillScaleMs" data-uid="FluentGpu.Controls.ComboBox.PillScaleMs">
+  PillScaleMs
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L80"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float PillScaleMs = 167</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_Placeholder" data-uid="FluentGpu.Controls.ComboBox.Placeholder">
+  Placeholder
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L94"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public string Placeholder</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_SelectedIndex" data-uid="FluentGpu.Controls.ComboBox.SelectedIndex">
+  SelectedIndex
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L91"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Signal&lt;int&gt; SelectedIndex</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Signals.Signal-1.html">Signal</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_Text" data-uid="FluentGpu.Controls.ComboBox.Text">
+  Text
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L93"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Signal&lt;string&gt;? Text</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Signals.Signal-1.html">Signal</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_ThemeMinWidth" data-uid="FluentGpu.Controls.ComboBox.ThemeMinWidth">
+  ThemeMinWidth
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L73"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float ThemeMinWidth = 64</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_TouchInputMode" data-uid="FluentGpu.Controls.ComboBox.TouchInputMode">
+  TouchInputMode
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L110"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>WinUI TouchInputMode/GameControllerInputMode: items take ComboBoxItemThemeTouchPadding 11,11,11,13
+(generic.xaml:131) instead of the pointer padding 11,5,11,7.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool TouchInputMode</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ComboBox_Width" data-uid="FluentGpu.Controls.ComboBox.Width">
+  Width
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L95"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float Width</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+  <h2 class="section" id="methods">Methods
+</h2>
+
+
+  <a id="FluentGpu_Controls_ComboBox_Create_" data-uid="FluentGpu.Controls.ComboBox.Create*"></a>
+
+  <h3 id="FluentGpu_Controls_ComboBox_Create_System_Collections_Generic_IReadOnlyList_System_String__FluentGpu_Signals_Signal_System_Int32__System_Boolean_FluentGpu_Signals_Signal_System_String__System_Single_System_String_System_Boolean_System_Action_System_Int32__System_Func_System_String_System_Boolean__System_String_System_String_System_String_System_Boolean_" data-uid="FluentGpu.Controls.ComboBox.Create(System.Collections.Generic.IReadOnlyList{System.String},FluentGpu.Signals.Signal{System.Int32},System.Boolean,FluentGpu.Signals.Signal{System.String},System.Single,System.String,System.Boolean,System.Action{System.Int32},System.Func{System.String,System.Boolean},System.String,System.String,System.String,System.Boolean)">
+  Create(IReadOnlyList&lt;string&gt;, Signal&lt;int&gt;, bool, Signal&lt;string&gt;?, float, string, bool, Action&lt;int&gt;?, Func&lt;string, bool&gt;?, string, string, string, bool)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L122"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static Element Create(IReadOnlyList&lt;string&gt; items, Signal&lt;int&gt; selectedIndex, bool editable = false, Signal&lt;string&gt;? text = null, float width = 220, string placeholder = &quot;&quot;, bool isEnabled = true, Action&lt;int&gt;? onSelectionChanged = null, Func&lt;string, bool&gt;? onTextSubmitted = null, string header = &quot;&quot;, string description = &quot;&quot;, string errorText = &quot;&quot;, bool touchInputMode = false)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>items</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1">IReadOnlyList</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>selectedIndex</code> <a class="xref" href="FluentGpu.Signals.Signal-1.html">Signal</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>editable</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+    <dt><code>text</code> <a class="xref" href="FluentGpu.Signals.Signal-1.html">Signal</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>width</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>placeholder</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>isEnabled</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+    <dt><code>onSelectionChanged</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action-1">Action</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>onTextSubmitted</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>header</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>description</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>errorText</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>touchInputMode</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.Element.html">Element</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_ComboBox_Render_" data-uid="FluentGpu.Controls.ComboBox.Render*"></a>
+
+  <h3 id="FluentGpu_Controls_ComboBox_Render" data-uid="FluentGpu.Controls.ComboBox.Render">
+  Render()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ComboBox.cs/#L138"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public override Element Render()</code></pre>
+  </div>
+
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.Element.html">Element</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+</article>
+
+
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

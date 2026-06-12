@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Virtualized lists and ItemsView | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Virtualized lists and ItemsView | FluentGpu Developer Docs ">
+      
+      
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="../toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/docs/site/app-authors/virtualized-lists-and-itemsview.md/#L1">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+
+      <div class="content">
+        <div class="actionbar">
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="">
+<h1 id="virtualized-lists-and-itemsview">Virtualized lists and ItemsView</h1>
+
+<p>You have a playlist with 100,000 tracks. WinUI's answer is <code>ListView</code> over an <code>ItemsRepeater</code> and a virtualizing
+panel; FluentGpu's answer is the same idea, decomposed into pieces you pick from cheapest-first:
+<code>Virtual.List</code> / <code>Virtual.ListBound</code> for the bare windowed viewport, <code>Repeater.ItemsRepeater</code> for a pluggable layout,
+and <code>ItemsView</code> for the whole collection control (selection + keyboard + reorder). All four sit over <strong>one</strong> retained
+viewport node that realizes only the visible window and recycles row nodes through the slab free-list.</p>
+<p>This page is a cookbook. For <em>why</em> virtualization is one retained node plus a hook trio (and the recycle-correctness
+invariants, the decode→measure loop break, the honest alloc claim), read the subsystem design:
+<a href="../../../design/subsystems/virtualization.md">../../../design/subsystems/virtualization.md</a>. For the elements and
+the signals mental model the row templates are built from, read
+<a href="../../guide/components-elements-layout.md">../../guide/components-elements-layout.md</a> and
+<a href="../../guide/reactivity.md">../../guide/reactivity.md</a>.</p>
+<blockquote>
+<p>The mental model in one line: a virtualized list is <strong>not a control and not a new frame phase</strong>. It is a single
+node that, on the frames where the visible range changes, calls your <code>renderItem(i)</code> for <code>[first, last) + overscan</code>
+only, mints stable-keyed <code>Element</code>s, and feeds them to the keyed reconciler you already have. In-window scroll is a
+transform-only frame — no realize, no relayout.</p>
+</blockquote>
+<hr>
+<h2 id="when-to-virtualize-10k-rows-bounded-live-nodes">When to virtualize (10k+ rows, bounded live nodes)</h2>
+<p>Virtualize when the list is large enough that realizing every row would blow the node budget or the frame time. The
+threshold is not a hard number — it is &quot;would a screen's worth plus a few rows of overscan be far fewer live nodes
+than the whole collection?&quot; A 50-row settings list does not need it; a 5,000-row track list does.</p>
+<p>The non-virtual escape hatches exist for the small case and are <em>deliberately</em> non-virtual:</p>
+<ul>
+<li><code>Repeater.ItemsRepeater(..., RepeatLayout.Wrap(gap))</code> / <code>RepeatLayout.Inline(...)</code> build the <strong>whole</strong> child list.
+Use them for a toolbar, a tag cloud, a nav pane — collections small enough that windowing would cost more than it
+saves.</li>
+<li>A plain <code>ScrollView(VStack(0f, rows))</code> over a pre-built <code>Element[]</code> (the <code>ScrollPage</code> gallery shape) is fine for a
+few dozen rows. Scrolling is still layout-free (the viewport clips and offsets by a transform), but every row is a
+live node.</li>
+</ul>
+<p>Everything else on this page realizes only the window. Two rules make that windowing correct:</p>
+<ol>
+<li><strong>Provide a stable <code>keyOf</code>.</strong> A row's identity (a track id, a playlist guid) — <em>not</em> its index — is what lets the
+keyed reconciler recognize a row that survived a scroll boundary and keep its node + component state across
+recycling. Without it the diff falls back to positional keys and row state can smear across recycled slots.</li>
+<li><strong>Keep the list component from re-rendering every frame.</strong> In-window scroll touches no managed state; it is a
+phase-7 transform write. If you find the whole list re-rendering as you scroll, the cause is almost always state
+that lives on the list component and changes each frame — move it down or bind it
+(see <a href="../../guide/pitfalls.md">../../guide/pitfalls.md</a>).</li>
+</ol>
+<blockquote>
+<p><strong>Album art in rows.</strong> Row <code>Fill</code> / <code>Foreground</code> must be static theme tokens (<code>Tok.TextPrimary</code>, <code>Tok.FillCardDefault</code>),
+never a per-track derived brush — that would thrash the brush cache at scroll velocity. A row thumbnail is an
+<code>ImageEl</code> (a <code>DrawImageCmd</code> + residency handle), which is Media's story, not Theme's. This is a hard invariant; see
+<a href="../../../design/subsystems/virtualization.md">../../../design/subsystems/virtualization.md</a> §5.3.</p>
+</blockquote>
+<hr>
+<h2 id="virtuallist--the-index-rebuild-path-a-spotify-style-track-list"><code>Virtual.List</code> — the index-rebuild path (a Spotify-style track list)</h2>
+<p><code>Virtual.List</code> is the uniform 1-D viewport: a fixed row extent, your <code>renderItem(i)</code> returning a fresh <code>Element</code>
+per visible index, and a <code>keyOf</code>. This is the WaveeMusic &quot;Liked Songs&quot; shape.</p>
+<pre><code class="lang-csharp">public static VirtualListEl List(int itemCount, float itemExtent, Func&lt;int, Element&gt; renderItem,
+                                 Func&lt;int, string&gt;? keyOf = null, int overscan = 4)
+</code></pre>
+<p>The full demo (<code>src/FluentGpu.WindowsApp/ScrollDemo.cs</code>) is 5,000 rows at 56px, mouse-wheel scrolled, flat in memory
+at any list size:</p>
+<pre><code class="lang-csharp">sealed class TrackListDemo : Component
+{
+    const int N = 5_000;
+
+    public override Element Render() =&gt; new BoxEl
+    {
+        Direction = 1,
+        Children =
+        [
+            // a normal header band above the scroller
+            new BoxEl
+            {
+                Height = 64, Padding = new Edges4(24, 16, 24, 16), AlignItems = FlexAlign.Center,
+                Fill = ColorF.FromRgba(0x18, 0x18, 0x18),
+                Children = [Heading(&quot;Liked Songs&quot;), Text($&quot;   {N:N0} songs&quot;).Foreground(Grey)],
+            },
+            // the virtualized list fills the rest of the window and scrolls
+            Virtual.List(N, 56f, Row, keyOf: i =&gt; &quot;t&quot; + i) with { Grow = 1f },
+        ],
+    };
+
+    static Element Row(int i)
+    {
+        string title = Titles[i % Titles.Length];
+        string artist = Artists[i % Artists.Length];
+        return new BoxEl
+        {
+            Direction = 0, Height = 56, Gap = 14, Padding = new Edges4(24, 8, 24, 8),
+            AlignItems = FlexAlign.Center,
+            Fill = (i &amp; 1) == 0 ? ColorF.FromRgba(0x1B, 0x1B, 0x1B) : ColorF.FromRgba(0x15, 0x15, 0x15),
+            HoverFill = ColorF.FromRgba(0x2C, 0x2C, 0x2C),
+            OnClick = () =&gt; { },   // hoverable + clickable rows
+            Children =
+            [
+                new BoxEl { Width = 28, Children = [Text($&quot;{i + 1}&quot;).Foreground(Grey)] },
+                new BoxEl { Width = 40, Height = 40, Corners = CornerRadius4.All(4), Fill = AlbumTint(i) },
+                new BoxEl
+                {
+                    Direction = 1, Grow = 1, Gap = 2,
+                    Children = [Text(title), Text(artist).Foreground(Grey).FontSize(12f)],
+                },
+                Text($&quot;{mins}:{secs:00}&quot;).Foreground(Grey),
+            ],
+        };
+    }
+}
+</code></pre>
+<p>Two things to copy from this:</p>
+<ul>
+<li><code>Virtual.List(...) with { Grow = 1f }</code> makes the viewport <strong>fill</strong> the remaining space. A <code>Grow</code> viewport is a
+<em>hard viewport</em>: it never measures its content extent, so 5,000 (or 5,000,000) rows stay windowed. Without <code>Grow</code>
+it would natural-size to <code>itemCount × itemExtent</code>.</li>
+<li><code>renderItem</code> rebuilds the row <code>Element</code> each time an index enters the window. That is fine here: only the ~window+overscan
+rows are ever built, and survivors across a scroll boundary keep their node (the keyed diff updates in place). When
+<em>every</em> visible cell would otherwise rebuild on a thumb-drag storm — 100k rows flying past — reach for the bound
+path below instead.</li>
+</ul>
+<p><code>Virtual.VariableList</code>, <code>Virtual.Grid</code>, <code>Virtual.Custom</code>, and the measured/grouped/lined-flow/spanning factories all
+return the same <code>VirtualListEl</code> record and take the same <code>keyOf</code> / <code>overscan</code> arguments. They differ only in the
+<code>IVirtualLayout</code> they carry — see <a href="#a-quick-tour-of-the-built-in-layouts">the layout catalog</a> below.</p>
+<hr>
+<h2 id="virtuallistbound--the-recycler-fast-path-100k-rows-bound-row-template-with-an-index-signal"><code>Virtual.ListBound</code> — the recycler fast path (100k rows, bound row template with an index signal)</h2>
+<p><code>Virtual.ListBound</code> is the <strong>signals-first</strong> recycler. Instead of a <code>Func&lt;int, Element&gt;</code> that rebuilds the row per
+index, you pass a <code>Func&lt;IReadSignal&lt;int&gt;, Element&gt;</code> that builds the row template <strong>once per visible slot</strong> with an
+<em>index signal</em>. Scrolling rebinds a slot by writing its signal — so only the bound thunks inside the row re-run. No
+element rebuild, no reconcile, no node churn, no keys.</p>
+<pre><code class="lang-csharp">public static VirtualListEl ListBound(int itemCount, float itemExtent, Func&lt;IReadSignal&lt;int&gt;, Element&gt; row,
+                                       int overscan = 4)
+</code></pre>
+<p>The rule that makes this work: <strong>everything in the row that varies by index must be a reactive bind that reads
+<code>idx.Value</code></strong> — a <code>Text</code>/<code>Fill</code>/<code>Source</code>/<code>Placeholder</code> set to a <code>Prop.Of(() =&gt; …)</code> thunk — never a value captured at
+build time. <code>Prop.Of(() =&gt; expr)</code> wraps an inline lambda as a <code>Prop&lt;T&gt;</code>; reading <code>idx.Value</code> inside it subscribes
+that one property to the slot's index signal, so a rebind re-runs <em>only</em> that thunk and updates <em>only</em> that node
+property (compositor-only for transforms/fills).</p>
+<p>The 100k-row demo (<code>src/FluentGpu.WindowsApp/GalleryPages.cs</code>, <code>VirtualizationPage</code>):</p>
+<pre><code class="lang-csharp">// BOUND row template (Virtual.ListBound): built ONCE per visible slot with an index SIGNAL — scrolling rebinds the
+// slot by writing the signal, so only these bound Text/Fill/Source thunks re-run.
+static Element Row(IReadSignal&lt;int&gt; idx)
+{
+    return new BoxEl
+    {
+        Direction = 0, Height = 48f, Gap = 12f, AlignItems = FlexAlign.Center,
+        Padding = new Edges4(16, 0, 16, 0),
+        Fill = Prop.Of(() =&gt; (idx.Value % 2 == 0) ? RowEven : RowOdd),
+        HoverFill = RowHover,
+        Children =
+        [
+            new BoxEl
+            {
+                Width = 64f,
+                Children = [new TextEl(&quot;&quot;) { Size = 13f, Color = IndexGrey, Text = Prop.Of(() =&gt; $&quot;{idx.Value + 1}&quot;) }],
+            },
+            // real thumbnail; tint shows until it decodes, then cross-fades in
+            new ImageEl
+            {
+                Width = 32f, Height = 32f, Corners = CornerRadius4.All(8f),
+                Source = Prop.Of(() =&gt; Cover(idx.Value)), Placeholder = Prop.Of(() =&gt; TileTint(idx.Value)),
+            },
+            new BoxEl
+            {
+                Direction = 1, Gap = 2f, Grow = 1f, Justify = FlexJustify.Center,
+                Children =
+                [
+                    new TextEl(&quot;&quot;) { Size = 14f, Color = Theme.WindowText, Text = Prop.Of(() =&gt; $&quot;Item {idx.Value}&quot;) },
+                    new TextEl(&quot;subtitle&quot;) { Size = 12f, Color = SubGrey },
+                ],
+            },
+        ],
+    };
+}
+
+public override Element Render() =&gt; new BoxEl
+{
+    Direction = 1, Grow = 1f, Gap = 16f, Padding = Edges4.All(24f),
+    Children =
+    [
+        Heading(&quot;List virtualization&quot;),
+        Text(&quot;100,000 rows with real CDN thumbnails — visible slots are built once and REBOUND via index signals &quot;
+           + &quot;as you scroll (no element rebuild); images decode off-thread, pack into the atlas, and evict &quot;
+           + &quot;off-screen, so memory stays flat.&quot;) with { Wrap = TextWrap.Wrap },
+        Virtual.ListBound(100000, 48f, Row) with { Grow = 1f },
+    ],
+};
+</code></pre>
+<p>Notice there is <strong>no <code>keyOf</code></strong> — bound slots recycle positionally, so a key would move no node. Notice the static
+subtitle (<code>&quot;subtitle&quot;</code>) is a plain value, not a thunk: it does not vary by index, so it costs nothing to leave
+constant. The thumbnail <code>Source</code>/<code>Placeholder</code> are bound, so the same <code>ImageEl</code> slot re-requests a new picture as you
+fling, and off-screen decodes evict — memory stays flat across the whole 100k range.</p>
+<p>When to choose which:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th><code>Virtual.List</code></th>
+<th><code>Virtual.ListBound</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Row callback</td>
+<td><code>Func&lt;int, Element&gt;</code> rebuilt per index</td>
+<td><code>Func&lt;IReadSignal&lt;int&gt;, Element&gt;</code> built once per slot</td>
+</tr>
+<tr>
+<td>Scroll-into-window cost</td>
+<td>re-render the entered rows (bounded Gen0)</td>
+<td>rebind signals (thunks re-run; no rebuild)</td>
+</tr>
+<tr>
+<td>Keys</td>
+<td>provide a stable <code>keyOf</code></td>
+<td>none (positional recycle)</td>
+</tr>
+<tr>
+<td>Per-row component state / hooks</td>
+<td>yes (survives recycle via the key)</td>
+<td>no — the slot is one stable template</td>
+</tr>
+<tr>
+<td>Best for</td>
+<td>normal lists, rows with their own state</td>
+<td>huge uniform lists, thumb-drag storms</td>
+</tr>
+</tbody>
+</table>
+<p><code>Virtual.GridBound</code> is the same recycler over a card grid.</p>
+<hr>
+<h2 id="virtualgrid-and-adaptive-column-counts-viewportsize"><code>Virtual.Grid</code> and adaptive column counts (<code>Viewport.Size</code>)</h2>
+<p><code>Virtual.Grid</code> virtualizes a uniform card grid <strong>by row</strong> — it realizes visible-rows × columns and recycles
+identically:</p>
+<pre><code class="lang-csharp">public static VirtualListEl Grid(int itemCount, int columns, float itemHeight, float gap,
+                                 Func&lt;int, Element&gt; renderItem, Func&lt;int, string&gt;? keyOf = null, int overscan = 2)
+</code></pre>
+<p>To make the column count responsive, read the client size from the <code>Viewport.Size</code> context (a <code>Size2</code> in DIP) and
+derive <code>columns</code> in <code>Render()</code>. The Iconography page (<code>src/FluentGpu.WindowsApp/IconsPage.cs</code>) does exactly this over
+the 1,500-glyph Segoe Fluent Icons catalog:</p>
+<pre><code class="lang-csharp">public override Element Render()
+{
+    var (query, setQuery) = UseState(&quot;&quot;);
+    var (selectedCode, setSelected) = UseState(&quot;E700&quot;);
+    var viewport = UseContext(Viewport.Size);
+
+    var filtered = Filter(query);
+
+    // Adapt the column count to the window (nav pane ≈ 320 + detail pane 320 + paddings).
+    int columns = Math.Clamp((int)((viewport.Width - 720f) / 104f), 4, 12);
+
+    var grid = Virtual.Grid(filtered.Length, columns, 92f, 8f,
+        i =&gt; Tile(filtered[i], filtered[i].Code == selectedCode, setSelected),
+        keyOf: i =&gt; filtered[i].Code);
+
+    return new BoxEl
+    {
+        Direction = 1, Gap = 12f, Padding = Edges4.All(28), Grow = 1f,
+        Children =
+        [
+            /* header + search box … */
+            new BoxEl
+            {
+                Direction = 0, Gap = 16f, Grow = 1f, AlignItems = FlexAlign.Stretch,
+                Children =
+                [
+                    new BoxEl { Grow = 1f, ClipToBounds = true, Children = [grid] },
+                    DetailPane(selected),
+                ],
+            },
+        ],
+    };
+}
+</code></pre>
+<p>The key moves: <code>columns</code> is recomputed each render from <code>viewport.Width</code>, the grid is given a stable <code>keyOf</code> (the icon
+codepoint), and the grid is wrapped in a <code>ClipToBounds</code> <code>Grow</code> box so it fills the space left of the detail pane. When
+the user resizes the window, the <code>Viewport.Size</code> context change re-renders this component, <code>columns</code> updates, and the
+grid relays out — but it is still only realizing the visible rows.</p>
+<p>For a <em>fully</em> automatic responsive grid that picks its own column count from a minimum column width, there is also
+<code>AutoGrid(minColWidth, gap, rowHeight, …)</code> — but that is the non-virtual CSS-grid helper, for small responsive
+galleries, not 100k cards.</p>
+<hr>
+<h2 id="virtualvariablelist--measured-heights--anchoring"><code>Virtual.VariableList</code> — measured heights + anchoring</h2>
+<p>When rows are not a uniform height — a feed where each card is as tall as its content, group headers that measure
+taller than items — use <code>Virtual.VariableList</code>. You give an <em>estimate</em> extent; each row realizes at the estimate,
+gets corrected to its measured height on arrange, and the engine re-pins the scroll anchor so a correction <em>above</em> the
+viewport never jumps the visible top.</p>
+<pre><code class="lang-csharp">public static VirtualListEl VariableList(int itemCount, float estimatedExtent, Func&lt;int, Element&gt; renderItem,
+                                         Func&lt;int, string&gt;? keyOf = null, int overscan = 4)
+</code></pre>
+<pre><code class="lang-csharp">Virtual.VariableList(feed.Count, estimatedExtent: 120f,
+    renderItem: i =&gt; FeedCard(feed[i]),     // each card measures to its own content height
+    keyOf: i =&gt; feed[i].Id) with { Grow = 1f }
+</code></pre>
+<p>Behind it is a Fenwick (binary-indexed) extent table that gives O(log n) offset↔index, estimated-then-corrected. The
+same machinery is reachable through the <em>seam</em> form <code>Virtual.Measured(itemCount, IMeasuredVirtualLayout, …)</code> with a
+<code>MeasuredStackVirtualLayout</code> — and through <code>Virtual.GroupedList(...)</code>, where group headers occupy flat indices of their
+own and <code>StickyHeaderIndexAt</code> tells a presenter which header to pin. These stateful layouts own a measured-extent
+table, so if the owning component re-renders you must <strong>hoist the layout instance</strong> (<code>UseMemo</code>) rather than construct
+it inline each render. The factory remarks on each call out which ones are stateful.</p>
+<blockquote>
+<p>One hazard to avoid: <strong>never bind a virtualized row's height to a late-arriving image <code>NaturalSize</code>.</strong> That creates
+a decode → measure → relayout → re-realize → decode loop. Size the image slot to a fixed bucket and let the picture
+fill it (object-fit cover). The full reasoning is in
+<a href="../../../design/subsystems/virtualization.md">../../../design/subsystems/virtualization.md</a> §6.3.</p>
+</blockquote>
+<hr>
+<h2 id="repeateritemsrepeater-with-repeatlayout-wrap--grid--custom"><code>Repeater.ItemsRepeater</code> with <code>RepeatLayout</code> (Wrap / Grid / Custom)</h2>
+<p><code>Repeater.ItemsRepeater</code> is the data-driven items panel (WinUI's <code>ItemsRepeater</code>): a <code>count</code>, a <code>template</code>, and a
+pluggable <code>RepeatLayout</code>. It is one control where you swap the layout to get a stack, a card grid, a non-virtual wrap,
+or your own geometry. The virtualizing layouts (Stack / Grid / Custom / Measured / LinedFlow / SpanGrid) realize only
+the window; Wrap / Inline build the whole child list.</p>
+<pre><code class="lang-csharp">public static Element ItemsRepeater(int count, Func&lt;int, Element&gt; template, in RepeatLayout layout,
+                                    Func&lt;int, string&gt;? keyOf = null, int overscan = 4, /* lifecycle hooks … */)
+</code></pre>
+<p><code>RepeatLayout</code> is a readonly struct (no per-call allocation) with one factory per shape:</p>
+<pre><code class="lang-csharp">RepeatLayout.Stack(itemExtent, horizontal: false)   // virtualized uniform 1-D
+RepeatLayout.Grid(columns, itemHeight, gap)          // virtualized uniform card grid (by row)
+RepeatLayout.Custom(IVirtualLayout)                  // virtualized with ANY layout you implement
+RepeatLayout.Measured(IMeasuredVirtualLayout)        // variable-extent estimate-then-correct + anchoring
+RepeatLayout.LinedFlow(lineHeight, aspectRatio, …)   // the ItemsView photo-wall
+RepeatLayout.SpanGrid(columns, rowHeight, gap, spanOf)  // uniform-row grid with item spanning (hero rows)
+RepeatLayout.HorizontalGrid(rows, itemWidth, gap)    // horizontally-scrolling shelf
+RepeatLayout.Wrap(gap)                               // NON-virtual flex-wrap (small collections)
+RepeatLayout.Inline(horizontal, gap)                 // NON-virtual stack (nav panes, toolbars)
+</code></pre>
+<p>The repeater gallery (<code>src/FluentGpu.WindowsApp/RepeaterPage.cs</code>) shows three at once — note that the virtualizing ones
+are wrapped in a fixed-height <code>BoxEl</code> so they get a concrete viewport to window against, and the non-virtual Wrap is
+not:</p>
+<pre><code class="lang-csharp">public override Element Render() =&gt; ScrollView(new BoxEl
+{
+    Direction = 1, Gap = 18, Padding = Edges4.All(24),
+    Children =
+    [
+        Heading(&quot;ItemsRepeater &amp; custom layouts&quot;),
+
+        Label(&quot;RepeatLayout.Wrap — non-virtual chips&quot;),
+        Repeater.ItemsRepeater(14, Chip, RepeatLayout.Wrap(8f)),
+
+        Label(&quot;RepeatLayout.Grid — virtualized 4-column card grid (1,000 items)&quot;),
+        new BoxEl { Height = 260, Children =
+            [Repeater.ItemsRepeater(1000, Card, RepeatLayout.Grid(4, 110f, 12f), keyOf: i =&gt; &quot;c&quot; + i)] },
+
+        Label(&quot;RepeatLayout.Custom(StaggerLayout) — your own geometry (5,000 items)&quot;),
+        new BoxEl { Height = 260, Children =
+            [Repeater.ItemsRepeater(5000, Row, RepeatLayout.Custom(new StaggerLayout(44f, 16f)), keyOf: i =&gt; &quot;s&quot; + i)] },
+    ],
+});
+</code></pre>
+<p>There is also a typed overload, <code>ItemsRepeater&lt;T&gt;(IReadOnlyList&lt;T&gt; items, Func&lt;int, T, Element&gt; template, …)</code> — the
+WinUI <code>ItemsSource</code> + <code>ItemTemplate</code> pair — so the template receives <code>(index, item)</code> with no cast and no per-item
+boxing.</p>
+<blockquote>
+<p><strong>Don't reach for per-item <code>TemplateParts</code> here.</strong> Repeater's per-item customization goes through the item-template
+itself (and, on <code>ItemsView</code>, the <code>PartDelta</code> value seam below). A per-item <code>TemplateParts</code> modifier in a recycled
+scroll path is an allocation/recycling hazard — see <a href="../../guide/control-fidelity.md">../../guide/control-fidelity.md</a>
+§6.</p>
+</blockquote>
+<h3 id="lifecycle-and-reorder-hooks">Lifecycle and reorder hooks</h3>
+<p><code>ItemsRepeater</code> exposes WinUI's lifecycle events as optional callbacks fired with item indices at realize time:
+<code>elementPrepared</code>, <code>elementClearing</code>, <code>elementIndexChanged</code>, and <code>visibleRange(first, last)</code> (the prefetch hook). The
+<code>transition: ItemCollectionTransition.Default</code> argument stamps an enter-fade / exit-fade / move-FLIP onto each item
+root (167ms decelerate) — adds fade in, removes fade out, and a reorder slides the survivors. (Documented caveat: an
+enter transition also plays when an item scrolls into the realized window as a fresh mount — WinUI's LinedFlow behaves
+the same way.)</p>
+<hr>
+<h2 id="implementing-a-custom-ivirtuallayout-allocation-free-geometry">Implementing a custom <code>IVirtualLayout</code> (allocation-free geometry)</h2>
+<p>Any deterministic, allocation-free geometry plugs into the virtualizer with <strong>no engine changes</strong>. Implement
+<code>IVirtualLayout</code> (<code>src/FluentGpu.Scene/VirtualLayout.cs</code>) — three pure methods that the engine calls <em>only</em> on
+realize/arrange frames (a steady in-window scroll never touches them), returning structs / via out-params so a custom
+layout costs zero per-frame managed allocation:</p>
+<pre><code class="lang-csharp">public interface IVirtualLayout
+{
+    // Total scroll-axis extent (the published ContentSize) for itemCount items.
+    float ContentExtent(int itemCount, float crossSize);
+
+    // The [first,last) item range to realize for scrollOffset (incl. overscan).
+    void Window(int itemCount, float crossSize, float viewportExtent, float scrollOffset, int overscan,
+                out int first, out int last);
+
+    // Content-space rect of item `index` (LOCAL to the scroll content origin).
+    RectF ItemRect(int index, float crossSize);
+}
+</code></pre>
+<p>The gallery's <code>StaggerLayout</code> (<code>src/FluentGpu.WindowsApp/RepeaterPage.cs</code>) is the complete proof — a single column
+where each row is indented by a repeating step:</p>
+<pre><code class="lang-csharp">sealed class StaggerLayout : IVirtualLayout
+{
+    readonly float _extent, _step;
+    public StaggerLayout(float extent, float step) { _extent = extent; _step = step; }
+
+    public float ContentExtent(int n, float cross) =&gt; n * _extent;
+
+    public void Window(int n, float cross, float vp, float off, int over, out int first, out int last)
+    {
+        first = Math.Max(0, (int)MathF.Floor(off / _extent) - over);
+        last = Math.Min(n, (int)MathF.Ceiling((off + vp) / _extent) + over);
+        if (last &lt; first) last = first;
+    }
+
+    public RectF ItemRect(int i, float cross)
+    {
+        float indent = (i % 6) * _step;
+        return new RectF(indent, i * _extent, MathF.Max(40f, cross - indent - 16f), _extent - 6f);
+    }
+}
+</code></pre>
+<p>Hand it to <code>Virtual.Custom(count, new StaggerLayout(44f, 16f), renderItem, keyOf: …)</code> or
+<code>RepeatLayout.Custom(new StaggerLayout(44f, 16f))</code>. Rules for a correct layout:</p>
+<ul>
+<li><strong>Stay allocation-free in all three methods.</strong> They are on the realize/arrange path; no <code>new</code>, no LINQ, no boxing.
+Built-ins that need a precomputed table (LinedFlow, SpanGrid) build it lazily and only when <code>(itemCount, crossSize)</code>
+change — but <code>StackVirtualLayout</code>/<code>GridVirtualLayout</code> are pure O(1) arithmetic with no table at all.</li>
+<li><strong>Keep <code>Window</code> cheap.</strong> For a uniform layout it is <code>floor</code>/<code>ceil</code> arithmetic; for a non-uniform one, binary-search a
+monotonic column (see <code>SpanningGridVirtualLayout.LowerBoundRow</code>).</li>
+<li><strong>If your layout owns mutable state</strong> (a built table), it is <strong>stateful</strong> — hoist the instance in a <code>UseMemo</code> so it
+survives re-renders instead of being reconstructed.</li>
+<li>For variable extents that must measure rows, implement <code>IMeasuredVirtualLayout</code> (the widened seam:
+<code>SetMeasured</code> / <code>OffsetOf</code> / <code>IndexAt</code>) instead and pair it with <code>Virtual.Measured</code> / <code>RepeatLayout.Measured</code>.</li>
+</ul>
+<p>The built-ins (<code>StackVirtualLayout</code>, <code>GridVirtualLayout</code>, <code>HorizontalGridVirtualLayout</code>, <code>LinedFlowLayout</code>,
+<code>SpanningGridVirtualLayout</code>, <code>MeasuredStackVirtualLayout</code>, <code>GroupedListVirtualLayout</code>) all live in that one file and
+are worth reading as worked examples.</p>
+<hr>
+<h2 id="itemsview-and-its-presets-list--grid--create-selectorvisual-chrome-selectionmodel"><code>ItemsView</code> and its presets (List / Grid / Create; SelectorVisual chrome; SelectionModel)</h2>
+<p><code>ItemsView</code> is the premiere collection control — a deliberate <strong>superset</strong> of WinUI's <code>ItemsView</code> that folds the old
+<code>ListView</code> / <code>GridView</code> onto one substrate. Three pluggable axes, each available with every other (no WinUI-style
+capability cliffs):</p>
+<ul>
+<li><strong>Layout</strong> — any <code>RepeatLayout</code> (Stack, Grid, HorizontalStrip, LinedFlow, Measured, SpanGrid, or a custom seam
+layout), over one virtualized viewport.</li>
+<li><strong>Selection</strong> — <code>ItemsSelectionMode.None / Single / Multiple / Extended</code>, backed by a range-based <code>SelectionModel</code>
+that is decoupled from realization (select-all over 50k stores one range and realizes nothing).</li>
+<li><strong>Selector visual</strong> — <code>SelectorVisual.AccentPill</code> (the ListView accent bar), <code>Check</code> (the GridView corner check),
+<code>FullRow</code>, <code>Border</code> (the default <code>ItemContainer</code> ring), <code>None</code> (app-drawn), or a custom <code>ContainerFactory</code>.</li>
+</ul>
+<p>Plus keyboard navigation (arrows / Home / End / PageUp-Down / Space / Enter / Ctrl+A / typeahead), focus rings,
+<code>StartBringItemIntoView</code>, and built-in drag-reorder.</p>
+<h3 id="the-simple-presets">The simple presets</h3>
+<p>The folded <code>ListView</code> / <code>GridView</code> surfaces are static presets (the control types no longer exist):</p>
+<pre><code class="lang-csharp">// Vertical single-selectable list, AccentPill selector, controlled single-selection signal.
+ItemsView.List(items, selectedIndex)
+
+// Grid of labeled tiles, Check selector.
+ItemsView.Grid(items, columns: 4, tileSize: 96f)
+</code></pre>
+<p><code>ItemsView.List(items, selectedIndex)</code> takes a <code>Signal&lt;int&gt;</code> it keeps two-way-synced with the selection — write the
+signal and the row re-skins; click a row and the signal updates. The full preset overloads
+(<code>ItemsView.List(count, itemTemplate, selectionMode: …, canReorderItems: …, onReorder: …, …)</code> and the Grid equivalent)
+add templated rows, the selection mode, and built-in reorder.</p>
+<h3 id="the-full-surface--itemsviewcreate">The full surface — <code>ItemsView.Create</code></h3>
+<pre><code class="lang-csharp">ItemsView.Create(
+    itemCount, itemTemplate, layout,
+    selectionMode: ItemsSelectionMode.Single,
+    selection: model,                                  // SelectionModel, or null to let it own one
+    selector: SelectorVisual.AccentPill,               // AccentPill | Check | FullRow | Border | None
+    isItemInvokedEnabled: true,
+    itemInvoked: i =&gt; Open(i),
+    keyOf: i =&gt; items[i].Id,
+    partDelta: (i, state) =&gt; /* per-item variation, see below */,
+    overscan: 4)
+</code></pre>
+<p>Drive selection through the shared <code>SelectionModel</code> (<code>src/FluentGpu.Controls/SelectionModel.cs</code>): it is signals-first,
+so any control reading <code>model.Version.Value</code> re-renders (and re-skins only its realized window) when selection
+changes. Its programmatic API is <code>Select</code> / <code>Deselect</code> / <code>Toggle</code> / <code>SelectRange</code> / <code>SelectAll</code> / <code>DeselectAll</code> /
+<code>InvertSelection</code>, all range-based and allocation-free. Hand the <em>same</em> model to two <code>ItemsView</code>s and they share a
+selection.</p>
+<p><code>isItemInvokedEnabled</code> + <code>itemInvoked</code> follow WinUI's invoke matrix: with a selection mode active, Tap and Space
+<em>select</em> without invoking, while Enter and DoubleTap <em>invoke</em>; with <code>SelectionMode.None</code>, DoubleTap never invokes.</p>
+<p>For the imperative methods (<code>CurrentItemIndex</code>, <code>StartBringItemIntoView</code>, programmatic selection), pass an
+<code>ItemsViewController</code> and the component wires it at mount:</p>
+<pre><code class="lang-csharp">var controller = new ItemsViewController();
+// … ItemsView.Create(..., controller: controller) …
+controller.StartBringItemIntoView(index, alignmentRatio: float.NaN);   // minimal scroll; 0 = align start, 1 = align end
+controller.Selection?.Select(index);
+</code></pre>
+<h3 id="reorder">Reorder</h3>
+<p>Reorder rides a displacement channel (<code>ItemDisplacement</code> / <code>DisplacementVersion</code>): displaced siblings glide aside via
+an animated translate FLIP (the WinUI &quot;part to make room&quot;) — a capability WinUI's own ItemsView lacks. The simplest way
+to get it is the preset overloads with <code>canReorderItems: true</code> + <code>onReorder: (from, to) =&gt; Move(list, from, to)</code>; the
+List preset wires the 200ms reorder dwell and the Grid preset the 300ms 2-D dwell for you.</p>
+<hr>
+<h2 id="per-item-variation-with-partdelta-zero-alloc-shape-stable--and-the-banned-per-item-templateparts-hazard">Per-item variation with <code>PartDelta</code> (zero-alloc, shape-stable) — and the banned per-item <code>TemplateParts</code> hazard</h2>
+<p>You often want rows that look <em>slightly</em> different — a highlighted &quot;now playing&quot; row, a dimmed unavailable track, a
+tinted tag. The legal seam for that is <code>PartDelta</code>, <strong>not</strong> a per-item <code>TemplateParts</code> modifier.</p>
+<p><code>PartDelta</code> (<code>src/FluentGpu.Controls/SelectorVisuals.cs</code>) is a readonly record struct of nullable overrides applied as
+a plain <code>with</code>-swap into the chrome's already-allocated <code>BoxEl</code>/<code>TextEl</code> during construction:</p>
+<pre><code class="lang-csharp">public readonly record struct PartDelta(
+    ColorF? Fill = null,
+    ColorF? Foreground = null,
+    float? Opacity = null,
+    CornerRadius4? Corners = null,
+    Edges4? Padding = null,
+    ColorF? Border = null,
+    string? Glyph = null)
+{
+    public static readonly PartDelta None = default;
+}
+</code></pre>
+<p>You supply it as <code>partDelta: (i, state) =&gt; …</code> on <code>ItemsView.Create</code>. Every field is a nullable override — <code>null</code> keeps
+the preset default exactly (so a <code>null</code> delta is byte-for-byte the prior chrome). It is resolved <strong>once per realized
+item</strong> and passed by value into the selector builder:</p>
+<pre><code class="lang-csharp">ItemsView.Create(tracks.Count, RowContent, RepeatLayout.Stack(56f),
+    selector: SelectorVisual.AccentPill,
+    keyOf: i =&gt; tracks[i].Id,
+    partDelta: (i, state) =&gt; tracks[i].IsNowPlaying
+        ? new PartDelta(Foreground: Tok.AccentDefault)
+        : tracks[i].IsUnavailable
+            ? new PartDelta(Opacity: 0.4f)
+            : PartDelta.None);
+</code></pre>
+<p>Two constraints, both CI-enforced:</p>
+<ul>
+<li>The producing <code>Func</code> must be <strong>pure-value</strong> — no <code>new</code>/box/LINQ/<code>Animate</code> per call. It runs on the realize edge
+and feeds the shape-stable chrome; allocating per item would defeat the recycle guarantee.</li>
+<li>It carries <strong>values only</strong> (fill / foreground / opacity / corner / padding / border / glyph). It cannot restructure
+the chrome — that is what <code>ContainerFactory</code> / <code>SelectorVisual</code> are for.</li>
+</ul>
+<p><strong>Why not per-item <code>TemplateParts</code>?</strong> <code>TemplateParts</code> is the door for styling a <em>control's</em> internals
+(<a href="../../guide/components-elements-layout.md">../../guide/components-elements-layout.md</a> → &quot;Template parts&quot;). But a
+per-item <code>TemplateParts</code> modifier <em>in a recycled scroll path</em> allocates and reshapes per realized item, which breaks
+recyclability and the steady-scroll zero-alloc contract. That is the banned hazard. <code>PartDelta</code> is the sanctioned
+replacement: same expressive reach for per-item <em>appearance</em>, zero extra allocation, provably shape-stable. See
+<a href="../../guide/control-fidelity.md">../../guide/control-fidelity.md</a> §6.</p>
+<hr>
+<h2 id="stable-keyof-and-why-in-window-scroll-is-transform-only">Stable <code>keyOf</code> and why in-window scroll is transform-only</h2>
+<p>Two threads run through this whole page; here they are stated plainly.</p>
+<p><strong>Stable <code>keyOf</code> is what makes recycling correct.</strong> A row's key is its <em>identity</em> — a track id, a playlist guid, the
+icon codepoint — not its position. When you scroll one row's worth, 39 of 40 rows survive; the keyed reconciler
+recognizes them by key as a contiguous run and emits a 1-enter / 1-exit diff with zero moves, so the survivors keep
+their nodes (and any per-row component state). Get the key wrong — return the index, or a value that isn't unique — and
+the diff can't tell a recycled slot from a new row, so state smears across slots and you pay full rebuilds. The one
+path that <em>doesn't</em> take a key is <code>Virtual.ListBound</code>: its slots recycle positionally and rebind by signal, so a key
+would move no node.</p>
+<p><strong>In-window scroll is transform-only — by design.</strong> When the viewport scrolls but no row crosses an item boundary,
+nothing realizes and nothing relays out. The engine writes a single <code>-ScrollOffset</code> transform on the viewport's content
+node in phase 7 (<code>TransformDirty</code> / <code>PaintDirty</code> only, never <code>LayoutDirty</code>); the recorder re-applies that transform to
+the cached row quads and records nothing new. Your <code>IVirtualLayout</code> methods are not even called. Only when the offset
+<em>crosses</em> an item edge does the window dirty, the entered rows realize (bounded Gen0 — <code>Element</code> records for the rows
+that entered, plus a pooled <code>Element[]</code> window chunk), and the keyed diff runs. The honest claim, stated in the
+subsystem doc: paint machinery (phases 6–13) is zero managed allocation; the realize delta at a boundary cross is
+bounded Gen0. It is <em>near</em>-zero-allocation, not zero — and it is CI-gated.</p>
+<p>If you ever see a scroll re-realizing or relaying out every frame, the list isn't the problem — something is
+re-rendering the list <em>component</em> each frame. Move that state down or bind it. The full mechanism and the recycle
+invariants are in <a href="../../../design/subsystems/virtualization.md">../../../design/subsystems/virtualization.md</a>; the
+quick-fix table is in <a href="../../guide/pitfalls.md">../../guide/pitfalls.md</a>.</p>
+<hr>
+<h2 id="a-quick-tour-of-the-built-in-layouts">A quick tour of the built-in layouts</h2>
+<p>Every factory below returns the same <code>VirtualListEl</code> and takes <code>keyOf</code> / <code>overscan</code>. They differ only in geometry; the
+stateful ones (noted) must be hoisted in a <code>UseMemo</code> when the owner re-renders.</p>
+<table>
+<thead>
+<tr>
+<th>Factory</th>
+<th>Shape</th>
+<th>Stateful?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Virtual.List(n, itemExtent, …)</code></td>
+<td>uniform vertical stack</td>
+<td>no</td>
+</tr>
+<tr>
+<td><code>Virtual.ListBound(n, itemExtent, row)</code></td>
+<td>uniform stack, signal-bound recycler</td>
+<td>no</td>
+</tr>
+<tr>
+<td><code>Virtual.Grid(n, columns, itemHeight, gap, …)</code></td>
+<td>uniform card grid, by row</td>
+<td>no</td>
+</tr>
+<tr>
+<td><code>Virtual.GridBound(n, columns, itemHeight, gap, row)</code></td>
+<td>card grid, signal-bound recycler</td>
+<td>no</td>
+</tr>
+<tr>
+<td><code>Virtual.HorizontalGrid(n, rows, itemWidth, gap, …)</code></td>
+<td>horizontally-scrolling shelf</td>
+<td>no</td>
+</tr>
+<tr>
+<td><code>Virtual.VariableList(n, estimatedExtent, …)</code></td>
+<td>measured heights + anchoring</td>
+<td>(built-in path)</td>
+</tr>
+<tr>
+<td><code>Virtual.Measured(n, IMeasuredVirtualLayout, …)</code></td>
+<td>variable-extent over the seam</td>
+<td>yes (hoist the layout)</td>
+</tr>
+<tr>
+<td><code>Virtual.GroupedList(n, headerIndices, …, out layout)</code></td>
+<td>grouped flat list + sticky-header hook</td>
+<td>yes (hoist the layout)</td>
+</tr>
+<tr>
+<td><code>Virtual.LinedFlow(n, lineHeight, aspectRatio, …)</code></td>
+<td>the photo-wall (aspect-ratio widths)</td>
+<td>yes (hoist the layout)</td>
+</tr>
+<tr>
+<td><code>Virtual.SpanGrid(n, columns, rowHeight, gap, spanOf, …)</code></td>
+<td>uniform-row grid with item spanning (hero rows)</td>
+<td>yes (hoist the layout)</td>
+</tr>
+<tr>
+<td><code>Virtual.Custom(n, IVirtualLayout, …)</code></td>
+<td>your own geometry</td>
+<td>depends on your layout</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="see-also">See also</h2>
+<ul>
+<li><a href="../../guide/components-elements-layout.md">../../guide/components-elements-layout.md</a> — the element zoo, layout
+props, controls, and the <code>Virtualization</code> + <code>ItemsView</code> quick reference.</li>
+<li><a href="../../guide/reactivity.md">../../guide/reactivity.md</a> — signals, <code>Prop.Of</code>, and the three update mechanisms the
+bound row path rides.</li>
+<li><a href="../../guide/pitfalls.md">../../guide/pitfalls.md</a> — the &quot;list is slow / leaks nodes&quot; and &quot;scroll re-realizes every
+frame&quot; fixes.</li>
+<li><a href="../../guide/control-fidelity.md">../../guide/control-fidelity.md</a> §6 — the <code>PartDelta</code> value seam vs the banned
+per-item <code>TemplateParts</code> modifier.</li>
+<li><a href="../../../design/subsystems/virtualization.md">../../../design/subsystems/virtualization.md</a> — the authoritative
+subsystem design: the node model, the hook trio, recycle-correctness invariants, anchoring, grouping, incremental
+load, and the honest alloc story.</li>
+</ul>
+
+</article>
+
+
+        <div class="next-article d-print-none border-top" id="nextArticle"></div>
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

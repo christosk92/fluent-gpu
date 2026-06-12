@@ -1,0 +1,170 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.DropEffect
+  commentId: T:FluentGpu.Foundation.DropEffect
+  id: DropEffect
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.DropEffect.Copy
+  - FluentGpu.Foundation.DropEffect.Link
+  - FluentGpu.Foundation.DropEffect.Move
+  - FluentGpu.Foundation.DropEffect.None
+  langs:
+  - csharp
+  - vb
+  name: DropEffect
+  nameWithType: DropEffect
+  fullName: FluentGpu.Foundation.DropEffect
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DropEffect
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 141
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    The semantic outcome of an IN-APP drop (E5-L2 — the Flutter/SwiftUI model, never OLE): advisory — the
+        engine sets Move while over an accepting target, None otherwise; targets may refine it in OnEnter/OnOver.
+  example: []
+  syntax:
+    content: 'public enum DropEffect : byte'
+    content.vb: Public Enum DropEffect As Byte
+- uid: FluentGpu.Foundation.DropEffect.None
+  commentId: F:FluentGpu.Foundation.DropEffect.None
+  id: None
+  parent: FluentGpu.Foundation.DropEffect
+  langs:
+  - csharp
+  - vb
+  name: None
+  nameWithType: DropEffect.None
+  fullName: FluentGpu.Foundation.DropEffect.None
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: None
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 141
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: None = 0
+    return:
+      type: FluentGpu.Foundation.DropEffect
+- uid: FluentGpu.Foundation.DropEffect.Move
+  commentId: F:FluentGpu.Foundation.DropEffect.Move
+  id: Move
+  parent: FluentGpu.Foundation.DropEffect
+  langs:
+  - csharp
+  - vb
+  name: Move
+  nameWithType: DropEffect.Move
+  fullName: FluentGpu.Foundation.DropEffect.Move
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Move
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 141
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Move = 1
+    return:
+      type: FluentGpu.Foundation.DropEffect
+- uid: FluentGpu.Foundation.DropEffect.Copy
+  commentId: F:FluentGpu.Foundation.DropEffect.Copy
+  id: Copy
+  parent: FluentGpu.Foundation.DropEffect
+  langs:
+  - csharp
+  - vb
+  name: Copy
+  nameWithType: DropEffect.Copy
+  fullName: FluentGpu.Foundation.DropEffect.Copy
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Copy
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 141
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Copy = 2
+    return:
+      type: FluentGpu.Foundation.DropEffect
+- uid: FluentGpu.Foundation.DropEffect.Link
+  commentId: F:FluentGpu.Foundation.DropEffect.Link
+  id: Link
+  parent: FluentGpu.Foundation.DropEffect
+  langs:
+  - csharp
+  - vb
+  name: Link
+  nameWithType: DropEffect.Link
+  fullName: FluentGpu.Foundation.DropEffect.Link
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Link
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 141
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Link = 3
+    return:
+      type: FluentGpu.Foundation.DropEffect
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Foundation.DropEffect
+  commentId: T:FluentGpu.Foundation.DropEffect
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.DropEffect.html
+  name: DropEffect
+  nameWithType: DropEffect
+  fullName: FluentGpu.Foundation.DropEffect

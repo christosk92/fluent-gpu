@@ -1,0 +1,3355 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.ItemsView
+  commentId: T:FluentGpu.Controls.ItemsView
+  id: ItemsView
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.ItemsView.Columns
+  - FluentGpu.Controls.ItemsView.ContainerFactory
+  - FluentGpu.Controls.ItemsView.Controller
+  - FluentGpu.Controls.ItemsView.Create(System.Collections.Generic.IReadOnlyList{System.String},System.Int32)
+  - FluentGpu.Controls.ItemsView.Create(System.Int32,System.Func{System.Int32,FluentGpu.Dsl.Element},FluentGpu.Controls.RepeatLayout,FluentGpu.Controls.ItemsSelectionMode,FluentGpu.Controls.SelectionModel,System.Boolean,System.Action{System.Int32},System.Action,System.Func{System.Int32,System.String},System.Func{System.Int32,System.Boolean},FluentGpu.Controls.ItemsViewController,System.Int32,FluentGpu.Controls.ItemContainerFactory,System.Func{System.Int32,System.String},System.Single,System.Nullable{FluentGpu.Controls.ItemCollectionTransition},FluentGpu.Controls.SelectorVisual,System.Func{System.Int32,System.ValueTuple{System.Single,System.Single}},FluentGpu.Signals.IReadSignal{System.Int32},FluentGpu.Signals.IReadSignal{System.Int32},System.Func{System.Int32,FluentGpu.Controls.ItemChromeState,FluentGpu.Controls.PartDelta})
+  - FluentGpu.Controls.ItemsView.DisplacementVersion
+  - FluentGpu.Controls.ItemsView.DraggedSlot
+  - FluentGpu.Controls.ItemsView.Grid(System.Collections.Generic.IReadOnlyList{System.String},System.Int32,System.Single)
+  - FluentGpu.Controls.ItemsView.Grid(System.Int32,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Int32,System.Single,FluentGpu.Controls.ItemsSelectionMode,FluentGpu.Controls.SelectionModel,System.Action{System.Int32},System.Action{System.Int32},System.Action,System.Boolean,System.Action{System.Int32,System.Int32},System.Func{System.Int32,System.String},System.Func{System.Int32,System.Boolean},FluentGpu.Controls.ItemsViewController,System.Func{System.Int32,System.String},System.Single,System.Single,System.Single)
+  - FluentGpu.Controls.ItemsView.Grow
+  - FluentGpu.Controls.ItemsView.HasExplicitLayout
+  - FluentGpu.Controls.ItemsView.IsItemEnabled
+  - FluentGpu.Controls.ItemsView.IsItemInvokedEnabled
+  - FluentGpu.Controls.ItemsView.ItemCount
+  - FluentGpu.Controls.ItemsView.ItemDisplacement
+  - FluentGpu.Controls.ItemsView.ItemInvoked
+  - FluentGpu.Controls.ItemsView.ItemTemplate
+  - FluentGpu.Controls.ItemsView.ItemText
+  - FluentGpu.Controls.ItemsView.Items
+  - FluentGpu.Controls.ItemsView.KeyOf
+  - FluentGpu.Controls.ItemsView.Layout
+  - FluentGpu.Controls.ItemsView.List(System.Collections.Generic.IReadOnlyList{System.String},FluentGpu.Signals.Signal{System.Int32},System.Action{System.Int32})
+  - FluentGpu.Controls.ItemsView.List(System.Int32,System.Func{System.Int32,FluentGpu.Dsl.Element},FluentGpu.Controls.ItemsSelectionMode,FluentGpu.Controls.SelectionModel,System.Action{System.Int32},System.Action{System.Int32},System.Action{System.Int32},System.Boolean,System.Action{System.Int32,System.Int32},System.Func{System.Int32,System.String},System.Func{System.Int32,System.Boolean},FluentGpu.Controls.ItemsViewController,System.Func{System.Int32,System.String},System.Single,System.Single,System.Single,System.Single)
+  - FluentGpu.Controls.ItemsView.ListItemExtent
+  - FluentGpu.Controls.ItemsView.OverscanItems
+  - FluentGpu.Controls.ItemsView.PartDelta
+  - FluentGpu.Controls.ItemsView.Render
+  - FluentGpu.Controls.ItemsView.Selection
+  - FluentGpu.Controls.ItemsView.SelectionChanged
+  - FluentGpu.Controls.ItemsView.SelectionMode
+  - FluentGpu.Controls.ItemsView.Selector
+  - FluentGpu.Controls.ItemsView.Transition
+  langs:
+  - csharp
+  - vb
+  name: ItemsView
+  nameWithType: ItemsView
+  fullName: FluentGpu.Controls.ItemsView
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ItemsView
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 96
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    THE premiere collection control (a deliberate, documented SUPERSET of WinUI <code>ItemsView</code>,
+
+    controls\dev\ItemsView) — E11-L3: the L2 repeater substrate + <xref href="FluentGpu.Controls.SelectionModel" data-throw-if-not-resolved="false"></xref> + the
+
+    <xref href="FluentGpu.Controls.SelectorVisual" data-throw-if-not-resolved="false"></xref> chrome presets + keyboard navigation/typeahead + StartBringItemIntoView + BUILT-IN
+
+    drag-reorder, composed. <xref href="FluentGpu.Controls.ItemsView.List(System.Collections.Generic.IReadOnlyList%7bSystem.String%7d%2cFluentGpu.Signals.Signal%7bSystem.Int32%7d%2cSystem.Action%7bSystem.Int32%7d)" data-throw-if-not-resolved="false"></xref>
+
+    and <xref href="FluentGpu.Controls.ItemsView.Grid(System.Collections.Generic.IReadOnlyList%7bSystem.String%7d%2cSystem.Int32%2cSystem.Single)" data-throw-if-not-resolved="false"></xref> are the built-in presets (the
+
+    former ListView/GridView controls, folded onto ItemsView); the goal is no WinUI-style capability cliffs — every
+
+    layout × every selection mode × every selector × reorder works in any combination.
+
+
+    Three pluggable axes, each available with every other (the superset over WinUI's fixed ListView/GridView pairings):
+
+    • LAYOUT preset — any <xref href="FluentGpu.Controls.RepeatLayout" data-throw-if-not-resolved="false"></xref>: Stack, Grid, HorizontalStrip, LinedFlow (the WinUI photo-wall),
+      Measured, SpanGrid or a custom seam layout, over ONE virtualized viewport (<xref href="FluentGpu.Reconciler.VirtualListEl" data-throw-if-not-resolved="false"></xref>).
+    • SELECTION mode — None/Single/Multiple/Extended (<xref href="FluentGpu.Controls.SelectionModel" data-throw-if-not-resolved="false"></xref>, range-based: decoupled from realization).
+
+    • SELECTOR VISUAL — <xref href="FluentGpu.Controls.ItemsView.Selector" data-throw-if-not-resolved="false"></xref>: AccentPill (the WinUI ListView accent bar), Check (GridView corner check),
+      FullRow, Border (the default <xref href="FluentGpu.Controls.ItemContainer" data-throw-if-not-resolved="false"></xref>), None, or a custom <xref href="FluentGpu.Controls.ItemsView.ContainerFactory" data-throw-if-not-resolved="false"></xref> hook.
+    Every item template is wrapped in the chosen selector chrome (selection visuals, pointer states, multi-select
+
+    checkbox). Reorder (the WinUI live "siblings part to make room") rides the ONE substrate via
+
+    <xref href="FluentGpu.Controls.ItemsView.ItemDisplacement" data-throw-if-not-resolved="false"></xref> + <xref href="FluentGpu.Controls.ItemsView.DisplacementVersion" data-throw-if-not-resolved="false"></xref> — a capability WinUI's own ItemsView lacks.
+
+
+    Behavior contract (verified against the WinUI sources):
+
+    • SelectionMode None/Single/Multiple/Extended (ItemsView.idl:6-12; default Single, ItemsView.h s_defaultSelectionMode)
+      with the selector semantics in SelectionModel.OnInteractedAction/OnFocusedAction (Single/Multiple/ExtendedSelector.cpp).
+    • ItemInvoked gating (ItemsView.cpp:404-432 CanRaiseItemInvoked): requires IsItemInvokedEnabled; with
+      SelectionMode None, DoubleTap never invokes; with a selection mode active, Tap and Space select WITHOUT invoking
+      (Enter and DoubleTap invoke).
+    • Ctrl+A selects all in Multiple/Extended only (ItemsViewInteractions.cpp:35-50).
+
+    • Arrows move the current item per the layout's index orientation (ItemsViewInteractions.cpp:923-1102): a vertical
+      stack maps Up/Down to ±1 (Left/Right no-op), a grid maps Left/Right ±1 and Up/Down ±columns, custom layouts get
+      geometric nearest-in-direction. Every walk skips disabled items (the SharedHelpers::IsFocusableElement gate,
+      cpp:203/:321). Home/End bring item 0 / count−1 into view edge-aligned, then focus the first/last FOCUSABLE
+      element (cpp:990-1044); PageUp/Down run the railed three-phase page navigation (cpp:1103-1242). Keyboard moves
+      run the selector's OnFocusedAction and focus the realized container (engine focus ring).
+    • TabNavigation="Once" (ItemsView.xaml:7): ONE roving tab stop — the keyboard-current container; tab-in with no
+      current lands on the selected item (Single mode) else the first focusable item (the GettingFocus redirect,
+      ItemsViewInteractions.cpp:645-721).
+    • Typeahead: printable chars accumulate (1s reset) and jump to the next prefix-matching item from current+1,
+      wrapping (the ListView typeahead shape; the plan's L3 requirement).
+    • Selection is DECOUPLED from realization: SelectAll over 50k items stores one range; only the realized window
+      re-skins (this component subscribes to <code>SelectionModel.Version</code>).
+  example: []
+  syntax:
+    content: 'public sealed class ItemsView : Component'
+    content.vb: Public NotInheritable Class ItemsView Inherits Component
+  inheritance:
+  - System.Object
+  - FluentGpu.Hooks.Component
+  inheritedMembers:
+  - FluentGpu.Hooks.Component.Context
+  - FluentGpu.Hooks.Component.RunsOnce
+  - FluentGpu.Hooks.Component.RenderWithHooks
+  - FluentGpu.Hooks.Component.Unmount
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+  extensionMethods:
+  - FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseEntrance(System.Single,System.Object)
+  - FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseHoverScale(System.Boolean,System.Single)
+- uid: FluentGpu.Controls.ItemsView.ListItemExtent
+  commentId: F:FluentGpu.Controls.ItemsView.ListItemExtent
+  id: ListItemExtent
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: ListItemExtent
+  nameWithType: ItemsView.ListItemExtent
+  fullName: FluentGpu.Controls.ItemsView.ListItemExtent
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ListItemExtent
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 109
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Default list slot stride: ListViewItemMinHeight 40 + the 2+2 backplate margins {4,2,4,2}; cp1.a pins 8×44.
+        (The default main-axis extent for <xref href="FluentGpu.Controls.ItemsView.List(System.Int32%2cSystem.Func%7bSystem.Int32%2cFluentGpu.Dsl.Element%7d%2cFluentGpu.Controls.ItemsSelectionMode%2cFluentGpu.Controls.SelectionModel%2cSystem.Action%7bSystem.Int32%7d%2cSystem.Action%7bSystem.Int32%7d%2cSystem.Action%7bSystem.Int32%7d%2cSystem.Boolean%2cSystem.Action%7bSystem.Int32%2cSystem.Int32%7d%2cSystem.Func%7bSystem.Int32%2cSystem.String%7d%2cSystem.Func%7bSystem.Int32%2cSystem.Boolean%7d%2cFluentGpu.Controls.ItemsViewController%2cSystem.Func%7bSystem.Int32%2cSystem.String%7d%2cSystem.Single%2cSystem.Single%2cSystem.Single%2cSystem.Single)" data-throw-if-not-resolved="false"></xref>;
+        the uniform virtualization stride for the List preset.)
+  example: []
+  syntax:
+    content: public const float ListItemExtent = 44
+    return:
+      type: System.Single
+    content.vb: Public Const ListItemExtent As Single = 44
+- uid: FluentGpu.Controls.ItemsView.Items
+  commentId: F:FluentGpu.Controls.ItemsView.Items
+  id: Items
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: Items
+  nameWithType: ItemsView.Items
+  fullName: FluentGpu.Controls.ItemsView.Items
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Items
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 112
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public IReadOnlyList<string> Items
+    return:
+      type: System.Collections.Generic.IReadOnlyList{System.String}
+    content.vb: Public Items As IReadOnlyList(Of String)
+- uid: FluentGpu.Controls.ItemsView.Columns
+  commentId: F:FluentGpu.Controls.ItemsView.Columns
+  id: Columns
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: Columns
+  nameWithType: ItemsView.Columns
+  fullName: FluentGpu.Controls.ItemsView.Columns
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Columns
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 113
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public int Columns
+    return:
+      type: System.Int32
+    content.vb: Public Columns As Integer
+- uid: FluentGpu.Controls.ItemsView.ItemCount
+  commentId: F:FluentGpu.Controls.ItemsView.ItemCount
+  id: ItemCount
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: ItemCount
+  nameWithType: ItemsView.ItemCount
+  fullName: FluentGpu.Controls.ItemsView.ItemCount
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ItemCount
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 117
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Item count when an <xref href="FluentGpu.Controls.ItemsView.ItemTemplate" data-throw-if-not-resolved="false"></xref> drives content (−1 ⇒ <xref href="FluentGpu.Controls.ItemsView.Items" data-throw-if-not-resolved="false"></xref>.Count).
+  example: []
+  syntax:
+    content: public int ItemCount
+    return:
+      type: System.Int32
+    content.vb: Public ItemCount As Integer
+- uid: FluentGpu.Controls.ItemsView.ItemTemplate
+  commentId: F:FluentGpu.Controls.ItemsView.ItemTemplate
+  id: ItemTemplate
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: ItemTemplate
+  nameWithType: ItemsView.ItemTemplate
+  fullName: FluentGpu.Controls.ItemsView.ItemTemplate
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ItemTemplate
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 119
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: The item CONTENT template (wrapped in an <xref href="FluentGpu.Controls.ItemContainer" data-throw-if-not-resolved="false"></xref> per item).
+  example: []
+  syntax:
+    content: public Func<int, Element>? ItemTemplate
+    return:
+      type: System.Func{System.Int32,FluentGpu.Dsl.Element}
+    content.vb: Public ItemTemplate As Func(Of Integer, Element)
+- uid: FluentGpu.Controls.ItemsView.ItemText
+  commentId: F:FluentGpu.Controls.ItemsView.ItemText
+  id: ItemText
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: ItemText
+  nameWithType: ItemsView.ItemText
+  fullName: FluentGpu.Controls.ItemsView.ItemText
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ItemText
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 121
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Typeahead text per item (defaults to <xref href="FluentGpu.Controls.ItemsView.Items" data-throw-if-not-resolved="false"></xref> when it backs the view).
+  example: []
+  syntax:
+    content: public Func<int, string>? ItemText
+    return:
+      type: System.Func{System.Int32,System.String}
+    content.vb: Public ItemText As Func(Of Integer, String)
+- uid: FluentGpu.Controls.ItemsView.IsItemEnabled
+  commentId: F:FluentGpu.Controls.ItemsView.IsItemEnabled
+  id: IsItemEnabled
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: IsItemEnabled
+  nameWithType: ItemsView.IsItemEnabled
+  fullName: FluentGpu.Controls.ItemsView.IsItemEnabled
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsItemEnabled
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 123
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Per-item enabled gate (disabled items dim to 0.3 and don't interact).
+  example: []
+  syntax:
+    content: public Func<int, bool>? IsItemEnabled
+    return:
+      type: System.Func{System.Int32,System.Boolean}
+    content.vb: Public IsItemEnabled As Func(Of Integer, Boolean)
+- uid: FluentGpu.Controls.ItemsView.ContainerFactory
+  commentId: F:FluentGpu.Controls.ItemsView.ContainerFactory
+  id: ContainerFactory
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: ContainerFactory
+  nameWithType: ItemsView.ContainerFactory
+  fullName: FluentGpu.Controls.ItemsView.ContainerFactory
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ContainerFactory
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 128
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'L4 skin seam: replaces the default <xref href="FluentGpu.Controls.ItemContainer" data-throw-if-not-resolved="false"></xref> chrome (the List/Grid presets + TreeView).'
+  example: []
+  syntax:
+    content: public ItemContainerFactory? ContainerFactory
+    return:
+      type: FluentGpu.Controls.ItemContainerFactory
+    content.vb: Public ContainerFactory As ItemContainerFactory
+- uid: FluentGpu.Controls.ItemsView.PartDelta
+  commentId: F:FluentGpu.Controls.ItemsView.PartDelta
+  id: PartDelta
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: PartDelta
+  nameWithType: ItemsView.PartDelta
+  fullName: FluentGpu.Controls.ItemsView.PartDelta
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartDelta
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 133
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Per-item VARIATION (fill/foreground/opacity/corner/padding/glyph as VALUES) baked into the chrome
+        during construction — the legal per-item-customization seam (supersedes per-item TemplateParts in recycled
+        scroll paths). Resolved ONCE per realized item and passed by value into every selector builder / ItemContainer.
+        Must be a pure-value Func (no new/box/LINQ per call) — CI-enforced (control-fidelity §6).
+  example: []
+  syntax:
+    content: public Func<int, ItemChromeState, PartDelta>? PartDelta
+    return:
+      type: System.Func{System.Int32,FluentGpu.Controls.ItemChromeState,FluentGpu.Controls.PartDelta}
+    content.vb: Public PartDelta As Func(Of Integer, ItemChromeState, PartDelta)
+- uid: FluentGpu.Controls.ItemsView.Selector
+  commentId: F:FluentGpu.Controls.ItemsView.Selector
+  id: Selector
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: Selector
+  nameWithType: ItemsView.Selector
+  fullName: FluentGpu.Controls.ItemsView.Selector
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Selector
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 139
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The built-in selector-VISUAL preset (the user-pickable item chrome). Default <xref href="FluentGpu.Controls.SelectorVisual.Border" data-throw-if-not-resolved="false"></xref>
+        = the existing <xref href="FluentGpu.Controls.ItemContainer" data-throw-if-not-resolved="false"></xref> chrome (current behavior). When <xref href="FluentGpu.Controls.ItemsView.ContainerFactory" data-throw-if-not-resolved="false"></xref> is set it
+        wins (a custom skin overrides the preset); otherwise this picks one of the <xref href="FluentGpu.Controls.SelectorVisuals" data-throw-if-not-resolved="false"></xref> builders —
+        AccentPill (ListView accent bar), Check (GridView corner check), FullRow, None — so any selector works with any
+        layout × any selection mode (no WinUI capability cliffs). The List preset uses AccentPill, the Grid preset uses Check.
+  example: []
+  syntax:
+    content: public SelectorVisual Selector
+    return:
+      type: FluentGpu.Controls.SelectorVisual
+    content.vb: Public Selector As SelectorVisual
+- uid: FluentGpu.Controls.ItemsView.KeyOf
+  commentId: F:FluentGpu.Controls.ItemsView.KeyOf
+  id: KeyOf
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: KeyOf
+  nameWithType: ItemsView.KeyOf
+  fullName: FluentGpu.Controls.ItemsView.KeyOf
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: KeyOf
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 141
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Stable per-item keys for the keyed diff (reorder projections need item-identity keys).
+  example: []
+  syntax:
+    content: public Func<int, string>? KeyOf
+    return:
+      type: System.Func{System.Int32,System.String}
+    content.vb: Public KeyOf As Func(Of Integer, String)
+- uid: FluentGpu.Controls.ItemsView.Layout
+  commentId: F:FluentGpu.Controls.ItemsView.Layout
+  id: Layout
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: Layout
+  nameWithType: ItemsView.Layout
+  fullName: FluentGpu.Controls.ItemsView.Layout
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Layout
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 142
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public RepeatLayout Layout
+    return:
+      type: FluentGpu.Controls.RepeatLayout
+    content.vb: Public Layout As RepeatLayout
+- uid: FluentGpu.Controls.ItemsView.HasExplicitLayout
+  commentId: F:FluentGpu.Controls.ItemsView.HasExplicitLayout
+  id: HasExplicitLayout
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: HasExplicitLayout
+  nameWithType: ItemsView.HasExplicitLayout
+  fullName: FluentGpu.Controls.ItemsView.HasExplicitLayout
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HasExplicitLayout
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 143
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool HasExplicitLayout
+    return:
+      type: System.Boolean
+    content.vb: Public HasExplicitLayout As Boolean
+- uid: FluentGpu.Controls.ItemsView.SelectionMode
+  commentId: F:FluentGpu.Controls.ItemsView.SelectionMode
+  id: SelectionMode
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: SelectionMode
+  nameWithType: ItemsView.SelectionMode
+  fullName: FluentGpu.Controls.ItemsView.SelectionMode
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SelectionMode
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 144
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ItemsSelectionMode SelectionMode
+    return:
+      type: FluentGpu.Controls.ItemsSelectionMode
+    content.vb: Public SelectionMode As ItemsSelectionMode
+- uid: FluentGpu.Controls.ItemsView.Selection
+  commentId: F:FluentGpu.Controls.ItemsView.Selection
+  id: Selection
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: Selection
+  nameWithType: ItemsView.Selection
+  fullName: FluentGpu.Controls.ItemsView.Selection
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Selection
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 146
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: External selection model (shared/multi-view); null ⇒ the component owns one.
+  example: []
+  syntax:
+    content: public SelectionModel? Selection
+    return:
+      type: FluentGpu.Controls.SelectionModel
+    content.vb: Public Selection As SelectionModel
+- uid: FluentGpu.Controls.ItemsView.IsItemInvokedEnabled
+  commentId: F:FluentGpu.Controls.ItemsView.IsItemInvokedEnabled
+  id: IsItemInvokedEnabled
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: IsItemInvokedEnabled
+  nameWithType: ItemsView.IsItemInvokedEnabled
+  fullName: FluentGpu.Controls.ItemsView.IsItemInvokedEnabled
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsItemInvokedEnabled
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 147
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool IsItemInvokedEnabled
+    return:
+      type: System.Boolean
+    content.vb: Public IsItemInvokedEnabled As Boolean
+- uid: FluentGpu.Controls.ItemsView.ItemInvoked
+  commentId: F:FluentGpu.Controls.ItemsView.ItemInvoked
+  id: ItemInvoked
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: ItemInvoked
+  nameWithType: ItemsView.ItemInvoked
+  fullName: FluentGpu.Controls.ItemsView.ItemInvoked
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ItemInvoked
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 148
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Action<int>? ItemInvoked
+    return:
+      type: System.Action{System.Int32}
+    content.vb: Public ItemInvoked As Action(Of Integer)
+- uid: FluentGpu.Controls.ItemsView.SelectionChanged
+  commentId: F:FluentGpu.Controls.ItemsView.SelectionChanged
+  id: SelectionChanged
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: SelectionChanged
+  nameWithType: ItemsView.SelectionChanged
+  fullName: FluentGpu.Controls.ItemsView.SelectionChanged
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SelectionChanged
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 149
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Action? SelectionChanged
+    return:
+      type: System.Action
+    content.vb: Public SelectionChanged As Action
+- uid: FluentGpu.Controls.ItemsView.Controller
+  commentId: F:FluentGpu.Controls.ItemsView.Controller
+  id: Controller
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: Controller
+  nameWithType: ItemsView.Controller
+  fullName: FluentGpu.Controls.ItemsView.Controller
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Controller
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 150
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ItemsViewController? Controller
+    return:
+      type: FluentGpu.Controls.ItemsViewController
+    content.vb: Public Controller As ItemsViewController
+- uid: FluentGpu.Controls.ItemsView.Transition
+  commentId: F:FluentGpu.Controls.ItemsView.Transition
+  id: Transition
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: Transition
+  nameWithType: ItemsView.Transition
+  fullName: FluentGpu.Controls.ItemsView.Transition
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Transition
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 154
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>ItemTransitionProvider</code> (ItemsView.idl:45, template-bound onto the inner repeater,
+        ItemsView.xaml:30): the collection transition stamped onto each realized container root — Adds/Removes
+        fade, Moves FLIP, 167ms decelerate (<xref href="FluentGpu.Controls.ItemCollectionTransition" data-throw-if-not-resolved="false"></xref>).
+  example: []
+  syntax:
+    content: public ItemCollectionTransition? Transition
+    return:
+      type: System.Nullable{FluentGpu.Controls.ItemCollectionTransition}
+    content.vb: Public Transition As ItemCollectionTransition?
+- uid: FluentGpu.Controls.ItemsView.ItemDisplacement
+  commentId: F:FluentGpu.Controls.ItemsView.ItemDisplacement
+  id: ItemDisplacement
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: ItemDisplacement
+  nameWithType: ItemsView.ItemDisplacement
+  fullName: FluentGpu.Controls.ItemsView.ItemDisplacement
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ItemDisplacement
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 162
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Resting-index → target displacement in DIP at the current dwell-committed reorder target. The owning
+        reorder substrate (the ListView/GridView/TreeView preset, via ReorderList.OffsetFor / OffsetFor2D over RESTING
+        indices) supplies it; returns (0,0) for the dragged item and every non-displaced item. ItemsView seeds each
+        realized row's AnimEngine TranslateX/Y track from this so displaced siblings glide aside (WinUI
+        MoveItemsForLiveReorder), and the motion survives recycling because it is re-seeded each realize.
+  example: []
+  syntax:
+    content: public Func<int, (float dx, float dy)>? ItemDisplacement
+    return:
+      type: System.Func{System.Int32,System.ValueTuple{System.Single,System.Single}}
+    content.vb: Public ItemDisplacement As Func(Of Integer, (dx As Single, dy As Single))
+- uid: FluentGpu.Controls.ItemsView.DisplacementVersion
+  commentId: F:FluentGpu.Controls.ItemsView.DisplacementVersion
+  id: DisplacementVersion
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: DisplacementVersion
+  nameWithType: ItemsView.DisplacementVersion
+  fullName: FluentGpu.Controls.ItemsView.DisplacementVersion
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DisplacementVersion
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 167
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Bumped by the owner on every drag-delta / dwell-commit; ItemsView subscribes (its <code>.Value</code>) so the
+        frozen-ComponentEl boundary (Reconciler.cs:220-221 — a parent bump alone never re-renders this autonomous
+        component) is crossed and the displacement edge-trigger re-seeds. This is the WinUI on-timer reorder cadence, NOT
+        per frame.
+  example: []
+  syntax:
+    content: public IReadSignal<int>? DisplacementVersion
+    return:
+      type: FluentGpu.Signals.IReadSignal{System.Int32}
+    content.vb: Public DisplacementVersion As IReadSignal(Of Integer)
+- uid: FluentGpu.Controls.ItemsView.DraggedSlot
+  commentId: F:FluentGpu.Controls.ItemsView.DraggedSlot
+  id: DraggedSlot
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: DraggedSlot
+  nameWithType: ItemsView.DraggedSlot
+  fullName: FluentGpu.Controls.ItemsView.DraggedSlot
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DraggedSlot
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 174
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    OPTIONAL redundant hint: the resting index currently pointer-dragged. The displacement seed already
+        skips the dragged node UNCONDITIONALLY via its <xref href="FluentGpu.Foundation.NodeFlags.DragGhost" data-throw-if-not-resolved="false"></xref> scene flag (its translate is
+        owned by the DragController and must never be animated), so this is needed only by callers whose drag does not
+        flow through that flag. NOTE: returning (0,0) from <xref href="FluentGpu.Controls.ItemsView.ItemDisplacement" data-throw-if-not-resolved="false"></xref> for the dragged item does NOT
+        by itself make the seed a no-op — the seed animates the row's LIVE translate back to that 0, which is exactly
+        the ownership conflict the DragGhost-flag skip prevents.
+  example: []
+  syntax:
+    content: public IReadSignal<int>? DraggedSlot
+    return:
+      type: FluentGpu.Signals.IReadSignal{System.Int32}
+    content.vb: Public DraggedSlot As IReadSignal(Of Integer)
+- uid: FluentGpu.Controls.ItemsView.OverscanItems
+  commentId: F:FluentGpu.Controls.ItemsView.OverscanItems
+  id: OverscanItems
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: OverscanItems
+  nameWithType: ItemsView.OverscanItems
+  fullName: FluentGpu.Controls.ItemsView.OverscanItems
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OverscanItems
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 176
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public int OverscanItems
+    return:
+      type: System.Int32
+    content.vb: Public OverscanItems As Integer
+- uid: FluentGpu.Controls.ItemsView.Grow
+  commentId: F:FluentGpu.Controls.ItemsView.Grow
+  id: Grow
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: Grow
+  nameWithType: ItemsView.Grow
+  fullName: FluentGpu.Controls.ItemsView.Grow
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Grow
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 181
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Flex participation of the view (host box + viewport). 1 (default) = FILL the parent-given size — the
+        hard-viewport path every big list wants (a Grow viewport never measures its content extent, so 10k rows stay
+        windowed). 0 = NATURAL size: an unconstrained ItemsView measures to its layout's ContentExtent — WinUI's
+        unconstrained ScrollView-over-ItemsRepeater shape (ItemsView.xaml template) — the gallery card shape.
+  example: []
+  syntax:
+    content: public float Grow
+    return:
+      type: System.Single
+    content.vb: Public Grow As Single
+- uid: FluentGpu.Controls.ItemsView.Create(System.Collections.Generic.IReadOnlyList{System.String},System.Int32)
+  commentId: M:FluentGpu.Controls.ItemsView.Create(System.Collections.Generic.IReadOnlyList{System.String},System.Int32)
+  id: Create(System.Collections.Generic.IReadOnlyList{System.String},System.Int32)
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: Create(IReadOnlyList<string>, int)
+  nameWithType: ItemsView.Create(IReadOnlyList<string>, int)
+  fullName: FluentGpu.Controls.ItemsView.Create(System.Collections.Generic.IReadOnlyList<string>, int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 186
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Legacy demo factory (compat): a single-selectable grid of labeled tiles, now riding the full
+        L0–L3 substrate (virtualized grid + ItemContainer chrome + keyboard nav). Natural-sized (Grow 0): the demo
+        grid sits in an auto-height gallery card, so the view measures to its grid's ContentExtent.
+  example: []
+  syntax:
+    content: public static Element Create(IReadOnlyList<string> items, int columns = 4)
+    parameters:
+    - id: items
+      type: System.Collections.Generic.IReadOnlyList{System.String}
+    - id: columns
+      type: System.Int32
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Create(items As IReadOnlyList(Of String), columns As Integer = 4) As Element
+  overload: FluentGpu.Controls.ItemsView.Create*
+  nameWithType.vb: ItemsView.Create(IReadOnlyList(Of String), Integer)
+  fullName.vb: FluentGpu.Controls.ItemsView.Create(System.Collections.Generic.IReadOnlyList(Of String), Integer)
+  name.vb: Create(IReadOnlyList(Of String), Integer)
+- uid: FluentGpu.Controls.ItemsView.Create(System.Int32,System.Func{System.Int32,FluentGpu.Dsl.Element},FluentGpu.Controls.RepeatLayout,FluentGpu.Controls.ItemsSelectionMode,FluentGpu.Controls.SelectionModel,System.Boolean,System.Action{System.Int32},System.Action,System.Func{System.Int32,System.String},System.Func{System.Int32,System.Boolean},FluentGpu.Controls.ItemsViewController,System.Int32,FluentGpu.Controls.ItemContainerFactory,System.Func{System.Int32,System.String},System.Single,System.Nullable{FluentGpu.Controls.ItemCollectionTransition},FluentGpu.Controls.SelectorVisual,System.Func{System.Int32,System.ValueTuple{System.Single,System.Single}},FluentGpu.Signals.IReadSignal{System.Int32},FluentGpu.Signals.IReadSignal{System.Int32},System.Func{System.Int32,FluentGpu.Controls.ItemChromeState,FluentGpu.Controls.PartDelta})
+  commentId: M:FluentGpu.Controls.ItemsView.Create(System.Int32,System.Func{System.Int32,FluentGpu.Dsl.Element},FluentGpu.Controls.RepeatLayout,FluentGpu.Controls.ItemsSelectionMode,FluentGpu.Controls.SelectionModel,System.Boolean,System.Action{System.Int32},System.Action,System.Func{System.Int32,System.String},System.Func{System.Int32,System.Boolean},FluentGpu.Controls.ItemsViewController,System.Int32,FluentGpu.Controls.ItemContainerFactory,System.Func{System.Int32,System.String},System.Single,System.Nullable{FluentGpu.Controls.ItemCollectionTransition},FluentGpu.Controls.SelectorVisual,System.Func{System.Int32,System.ValueTuple{System.Single,System.Single}},FluentGpu.Signals.IReadSignal{System.Int32},FluentGpu.Signals.IReadSignal{System.Int32},System.Func{System.Int32,FluentGpu.Controls.ItemChromeState,FluentGpu.Controls.PartDelta})
+  id: Create(System.Int32,System.Func{System.Int32,FluentGpu.Dsl.Element},FluentGpu.Controls.RepeatLayout,FluentGpu.Controls.ItemsSelectionMode,FluentGpu.Controls.SelectionModel,System.Boolean,System.Action{System.Int32},System.Action,System.Func{System.Int32,System.String},System.Func{System.Int32,System.Boolean},FluentGpu.Controls.ItemsViewController,System.Int32,FluentGpu.Controls.ItemContainerFactory,System.Func{System.Int32,System.String},System.Single,System.Nullable{FluentGpu.Controls.ItemCollectionTransition},FluentGpu.Controls.SelectorVisual,System.Func{System.Int32,System.ValueTuple{System.Single,System.Single}},FluentGpu.Signals.IReadSignal{System.Int32},FluentGpu.Signals.IReadSignal{System.Int32},System.Func{System.Int32,FluentGpu.Controls.ItemChromeState,FluentGpu.Controls.PartDelta})
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: Create(int, Func<int, Element>, RepeatLayout, ItemsSelectionMode, SelectionModel?, bool, Action<int>?, Action?, Func<int, string>?, Func<int, bool>?, ItemsViewController?, int, ItemContainerFactory?, Func<int, string>?, float, ItemCollectionTransition?, SelectorVisual, Func<int, (float, float)>?, IReadSignal<int>?, IReadSignal<int>?, Func<int, ItemChromeState, PartDelta>?)
+  nameWithType: ItemsView.Create(int, Func<int, Element>, RepeatLayout, ItemsSelectionMode, SelectionModel?, bool, Action<int>?, Action?, Func<int, string>?, Func<int, bool>?, ItemsViewController?, int, ItemContainerFactory?, Func<int, string>?, float, ItemCollectionTransition?, SelectorVisual, Func<int, (float, float)>?, IReadSignal<int>?, IReadSignal<int>?, Func<int, ItemChromeState, PartDelta>?)
+  fullName: FluentGpu.Controls.ItemsView.Create(int, System.Func<int, FluentGpu.Dsl.Element>, FluentGpu.Controls.RepeatLayout, FluentGpu.Controls.ItemsSelectionMode, FluentGpu.Controls.SelectionModel?, bool, System.Action<int>?, System.Action?, System.Func<int, string>?, System.Func<int, bool>?, FluentGpu.Controls.ItemsViewController?, int, FluentGpu.Controls.ItemContainerFactory?, System.Func<int, string>?, float, FluentGpu.Controls.ItemCollectionTransition?, FluentGpu.Controls.SelectorVisual, System.Func<int, (float, float)>?, FluentGpu.Signals.IReadSignal<int>?, FluentGpu.Signals.IReadSignal<int>?, System.Func<int, FluentGpu.Controls.ItemChromeState, FluentGpu.Controls.PartDelta>?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 190
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'The full WinUI-shaped factory: templated items over any <xref href="FluentGpu.Controls.RepeatLayout" data-throw-if-not-resolved="false"></xref>.'
+  example: []
+  syntax:
+    content: public static Element Create(int itemCount, Func<int, Element> itemTemplate, RepeatLayout layout, ItemsSelectionMode selectionMode = ItemsSelectionMode.Single, SelectionModel? selection = null, bool isItemInvokedEnabled = false, Action<int>? itemInvoked = null, Action? selectionChanged = null, Func<int, string>? itemText = null, Func<int, bool>? isItemEnabled = null, ItemsViewController? controller = null, int overscan = 4, ItemContainerFactory? containerFactory = null, Func<int, string>? keyOf = null, float grow = 1, ItemCollectionTransition? transition = null, SelectorVisual selector = SelectorVisual.Border, Func<int, (float, float)>? itemDisplacement = null, IReadSignal<int>? displacementVersion = null, IReadSignal<int>? draggedSlot = null, Func<int, ItemChromeState, PartDelta>? partDelta = null)
+    parameters:
+    - id: itemCount
+      type: System.Int32
+    - id: itemTemplate
+      type: System.Func{System.Int32,FluentGpu.Dsl.Element}
+    - id: layout
+      type: FluentGpu.Controls.RepeatLayout
+    - id: selectionMode
+      type: FluentGpu.Controls.ItemsSelectionMode
+    - id: selection
+      type: FluentGpu.Controls.SelectionModel
+    - id: isItemInvokedEnabled
+      type: System.Boolean
+    - id: itemInvoked
+      type: System.Action{System.Int32}
+    - id: selectionChanged
+      type: System.Action
+    - id: itemText
+      type: System.Func{System.Int32,System.String}
+    - id: isItemEnabled
+      type: System.Func{System.Int32,System.Boolean}
+    - id: controller
+      type: FluentGpu.Controls.ItemsViewController
+    - id: overscan
+      type: System.Int32
+    - id: containerFactory
+      type: FluentGpu.Controls.ItemContainerFactory
+    - id: keyOf
+      type: System.Func{System.Int32,System.String}
+    - id: grow
+      type: System.Single
+    - id: transition
+      type: System.Nullable{FluentGpu.Controls.ItemCollectionTransition}
+    - id: selector
+      type: FluentGpu.Controls.SelectorVisual
+    - id: itemDisplacement
+      type: System.Func{System.Int32,System.ValueTuple{System.Single,System.Single}}
+    - id: displacementVersion
+      type: FluentGpu.Signals.IReadSignal{System.Int32}
+    - id: draggedSlot
+      type: FluentGpu.Signals.IReadSignal{System.Int32}
+    - id: partDelta
+      type: System.Func{System.Int32,FluentGpu.Controls.ItemChromeState,FluentGpu.Controls.PartDelta}
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Create(itemCount As Integer, itemTemplate As Func(Of Integer, Element), layout As RepeatLayout, selectionMode As ItemsSelectionMode = ItemsSelectionMode.Single, selection As SelectionModel = Nothing, isItemInvokedEnabled As Boolean = False, itemInvoked As Action(Of Integer) = Nothing, selectionChanged As Action = Nothing, itemText As Func(Of Integer, String) = Nothing, isItemEnabled As Func(Of Integer, Boolean) = Nothing, controller As ItemsViewController = Nothing, overscan As Integer = 4, containerFactory As ItemContainerFactory = Nothing, keyOf As Func(Of Integer, String) = Nothing, grow As Single = 1, transition As ItemCollectionTransition? = Nothing, selector As SelectorVisual = SelectorVisual.Border, itemDisplacement As Func(Of Integer, (Single, Single)) = Nothing, displacementVersion As IReadSignal(Of Integer) = Nothing, draggedSlot As IReadSignal(Of Integer) = Nothing, partDelta As Func(Of Integer, ItemChromeState, PartDelta) = Nothing) As Element
+  overload: FluentGpu.Controls.ItemsView.Create*
+  nameWithType.vb: ItemsView.Create(Integer, Func(Of Integer, Element), RepeatLayout, ItemsSelectionMode, SelectionModel, Boolean, Action(Of Integer), Action, Func(Of Integer, String), Func(Of Integer, Boolean), ItemsViewController, Integer, ItemContainerFactory, Func(Of Integer, String), Single, ItemCollectionTransition?, SelectorVisual, Func(Of Integer, (Single, Single)), IReadSignal(Of Integer), IReadSignal(Of Integer), Func(Of Integer, ItemChromeState, PartDelta))
+  fullName.vb: FluentGpu.Controls.ItemsView.Create(Integer, System.Func(Of Integer, FluentGpu.Dsl.Element), FluentGpu.Controls.RepeatLayout, FluentGpu.Controls.ItemsSelectionMode, FluentGpu.Controls.SelectionModel, Boolean, System.Action(Of Integer), System.Action, System.Func(Of Integer, String), System.Func(Of Integer, Boolean), FluentGpu.Controls.ItemsViewController, Integer, FluentGpu.Controls.ItemContainerFactory, System.Func(Of Integer, String), Single, FluentGpu.Controls.ItemCollectionTransition?, FluentGpu.Controls.SelectorVisual, System.Func(Of Integer, (Single, Single)), FluentGpu.Signals.IReadSignal(Of Integer), FluentGpu.Signals.IReadSignal(Of Integer), System.Func(Of Integer, FluentGpu.Controls.ItemChromeState, FluentGpu.Controls.PartDelta))
+  name.vb: Create(Integer, Func(Of Integer, Element), RepeatLayout, ItemsSelectionMode, SelectionModel, Boolean, Action(Of Integer), Action, Func(Of Integer, String), Func(Of Integer, Boolean), ItemsViewController, Integer, ItemContainerFactory, Func(Of Integer, String), Single, ItemCollectionTransition?, SelectorVisual, Func(Of Integer, (Single, Single)), IReadSignal(Of Integer), IReadSignal(Of Integer), Func(Of Integer, ItemChromeState, PartDelta))
+- uid: FluentGpu.Controls.ItemsView.List(System.Collections.Generic.IReadOnlyList{System.String},FluentGpu.Signals.Signal{System.Int32},System.Action{System.Int32})
+  commentId: M:FluentGpu.Controls.ItemsView.List(System.Collections.Generic.IReadOnlyList{System.String},FluentGpu.Signals.Signal{System.Int32},System.Action{System.Int32})
+  id: List(System.Collections.Generic.IReadOnlyList{System.String},FluentGpu.Signals.Signal{System.Int32},System.Action{System.Int32})
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: List(IReadOnlyList<string>, Signal<int>?, Action<int>?)
+  nameWithType: ItemsView.List(IReadOnlyList<string>, Signal<int>?, Action<int>?)
+  fullName: FluentGpu.Controls.ItemsView.List(System.Collections.Generic.IReadOnlyList<string>, FluentGpu.Signals.Signal<int>?, System.Action<int>?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: List
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 243
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The WinUI ListView simple surface: a vertical, single-selectable list over the labeled items, with the
+        accent-bar selector. <code class="paramref">selectedIndex</code> is the controlled single-selection signal.
+  example: []
+  syntax:
+    content: public static Element List(IReadOnlyList<string> items, Signal<int>? selectedIndex = null, Action<int>? onSelectionChanged = null)
+    parameters:
+    - id: items
+      type: System.Collections.Generic.IReadOnlyList{System.String}
+    - id: selectedIndex
+      type: FluentGpu.Signals.Signal{System.Int32}
+    - id: onSelectionChanged
+      type: System.Action{System.Int32}
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function List(items As IReadOnlyList(Of String), selectedIndex As Signal(Of Integer) = Nothing, onSelectionChanged As Action(Of Integer) = Nothing) As Element
+  overload: FluentGpu.Controls.ItemsView.List*
+  nameWithType.vb: ItemsView.List(IReadOnlyList(Of String), Signal(Of Integer), Action(Of Integer))
+  fullName.vb: FluentGpu.Controls.ItemsView.List(System.Collections.Generic.IReadOnlyList(Of String), FluentGpu.Signals.Signal(Of Integer), System.Action(Of Integer))
+  name.vb: List(IReadOnlyList(Of String), Signal(Of Integer), Action(Of Integer))
+- uid: FluentGpu.Controls.ItemsView.List(System.Int32,System.Func{System.Int32,FluentGpu.Dsl.Element},FluentGpu.Controls.ItemsSelectionMode,FluentGpu.Controls.SelectionModel,System.Action{System.Int32},System.Action{System.Int32},System.Action{System.Int32},System.Boolean,System.Action{System.Int32,System.Int32},System.Func{System.Int32,System.String},System.Func{System.Int32,System.Boolean},FluentGpu.Controls.ItemsViewController,System.Func{System.Int32,System.String},System.Single,System.Single,System.Single,System.Single)
+  commentId: M:FluentGpu.Controls.ItemsView.List(System.Int32,System.Func{System.Int32,FluentGpu.Dsl.Element},FluentGpu.Controls.ItemsSelectionMode,FluentGpu.Controls.SelectionModel,System.Action{System.Int32},System.Action{System.Int32},System.Action{System.Int32},System.Boolean,System.Action{System.Int32,System.Int32},System.Func{System.Int32,System.String},System.Func{System.Int32,System.Boolean},FluentGpu.Controls.ItemsViewController,System.Func{System.Int32,System.String},System.Single,System.Single,System.Single,System.Single)
+  id: List(System.Int32,System.Func{System.Int32,FluentGpu.Dsl.Element},FluentGpu.Controls.ItemsSelectionMode,FluentGpu.Controls.SelectionModel,System.Action{System.Int32},System.Action{System.Int32},System.Action{System.Int32},System.Boolean,System.Action{System.Int32,System.Int32},System.Func{System.Int32,System.String},System.Func{System.Int32,System.Boolean},FluentGpu.Controls.ItemsViewController,System.Func{System.Int32,System.String},System.Single,System.Single,System.Single,System.Single)
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: List(int, Func<int, Element>, ItemsSelectionMode, SelectionModel?, Action<int>?, Action<int>?, Action<int>?, bool, Action<int, int>?, Func<int, string>?, Func<int, bool>?, ItemsViewController?, Func<int, string>?, float, float, float, float)
+  nameWithType: ItemsView.List(int, Func<int, Element>, ItemsSelectionMode, SelectionModel?, Action<int>?, Action<int>?, Action<int>?, bool, Action<int, int>?, Func<int, string>?, Func<int, bool>?, ItemsViewController?, Func<int, string>?, float, float, float, float)
+  fullName: FluentGpu.Controls.ItemsView.List(int, System.Func<int, FluentGpu.Dsl.Element>, FluentGpu.Controls.ItemsSelectionMode, FluentGpu.Controls.SelectionModel?, System.Action<int>?, System.Action<int>?, System.Action<int>?, bool, System.Action<int, int>?, System.Func<int, string>?, System.Func<int, bool>?, FluentGpu.Controls.ItemsViewController?, System.Func<int, string>?, float, float, float, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: List
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 250
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The full WinUI ListView-shaped preset: templated rows over the virtualized stack (the former
+        <code>ListView.Create</code>).
+  example: []
+  syntax:
+    content: public static Element List(int itemCount, Func<int, Element> itemTemplate, ItemsSelectionMode selectionMode = ItemsSelectionMode.Single, SelectionModel? selection = null, Action<int>? onItemClick = null, Action<int>? onItemInvoked = null, Action<int>? onSelectionIndexChanged = null, bool canReorderItems = false, Action<int, int>? onReorder = null, Func<int, string>? itemText = null, Func<int, bool>? isItemEnabled = null, ItemsViewController? controller = null, Func<int, string>? keyOf = null, float itemExtent = 44, float width = NaN, float height = NaN, float grow = 0)
+    parameters:
+    - id: itemCount
+      type: System.Int32
+    - id: itemTemplate
+      type: System.Func{System.Int32,FluentGpu.Dsl.Element}
+    - id: selectionMode
+      type: FluentGpu.Controls.ItemsSelectionMode
+    - id: selection
+      type: FluentGpu.Controls.SelectionModel
+    - id: onItemClick
+      type: System.Action{System.Int32}
+    - id: onItemInvoked
+      type: System.Action{System.Int32}
+    - id: onSelectionIndexChanged
+      type: System.Action{System.Int32}
+    - id: canReorderItems
+      type: System.Boolean
+    - id: onReorder
+      type: System.Action{System.Int32,System.Int32}
+    - id: itemText
+      type: System.Func{System.Int32,System.String}
+    - id: isItemEnabled
+      type: System.Func{System.Int32,System.Boolean}
+    - id: controller
+      type: FluentGpu.Controls.ItemsViewController
+    - id: keyOf
+      type: System.Func{System.Int32,System.String}
+    - id: itemExtent
+      type: System.Single
+    - id: width
+      type: System.Single
+    - id: height
+      type: System.Single
+    - id: grow
+      type: System.Single
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function List(itemCount As Integer, itemTemplate As Func(Of Integer, Element), selectionMode As ItemsSelectionMode = ItemsSelectionMode.Single, selection As SelectionModel = Nothing, onItemClick As Action(Of Integer) = Nothing, onItemInvoked As Action(Of Integer) = Nothing, onSelectionIndexChanged As Action(Of Integer) = Nothing, canReorderItems As Boolean = False, onReorder As Action(Of Integer, Integer) = Nothing, itemText As Func(Of Integer, String) = Nothing, isItemEnabled As Func(Of Integer, Boolean) = Nothing, controller As ItemsViewController = Nothing, keyOf As Func(Of Integer, String) = Nothing, itemExtent As Single = 44, width As Single = NaN, height As Single = NaN, grow As Single = 0) As Element
+  overload: FluentGpu.Controls.ItemsView.List*
+  nameWithType.vb: ItemsView.List(Integer, Func(Of Integer, Element), ItemsSelectionMode, SelectionModel, Action(Of Integer), Action(Of Integer), Action(Of Integer), Boolean, Action(Of Integer, Integer), Func(Of Integer, String), Func(Of Integer, Boolean), ItemsViewController, Func(Of Integer, String), Single, Single, Single, Single)
+  fullName.vb: FluentGpu.Controls.ItemsView.List(Integer, System.Func(Of Integer, FluentGpu.Dsl.Element), FluentGpu.Controls.ItemsSelectionMode, FluentGpu.Controls.SelectionModel, System.Action(Of Integer), System.Action(Of Integer), System.Action(Of Integer), Boolean, System.Action(Of Integer, Integer), System.Func(Of Integer, String), System.Func(Of Integer, Boolean), FluentGpu.Controls.ItemsViewController, System.Func(Of Integer, String), Single, Single, Single, Single)
+  name.vb: List(Integer, Func(Of Integer, Element), ItemsSelectionMode, SelectionModel, Action(Of Integer), Action(Of Integer), Action(Of Integer), Boolean, Action(Of Integer, Integer), Func(Of Integer, String), Func(Of Integer, Boolean), ItemsViewController, Func(Of Integer, String), Single, Single, Single, Single)
+- uid: FluentGpu.Controls.ItemsView.Grid(System.Collections.Generic.IReadOnlyList{System.String},System.Int32,System.Single)
+  commentId: M:FluentGpu.Controls.ItemsView.Grid(System.Collections.Generic.IReadOnlyList{System.String},System.Int32,System.Single)
+  id: Grid(System.Collections.Generic.IReadOnlyList{System.String},System.Int32,System.Single)
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: Grid(IReadOnlyList<string>, int, float)
+  nameWithType: ItemsView.Grid(IReadOnlyList<string>, int, float)
+  fullName: FluentGpu.Controls.ItemsView.Grid(System.Collections.Generic.IReadOnlyList<string>, int, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Grid
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 268
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The WinUI GridView simple surface: a grid of labeled tiles with the corner-check selector (the former
+        <code>GridView.Create</code>).
+  example: []
+  syntax:
+    content: public static Element Grid(IReadOnlyList<string> items, int columns = 4, float tileSize = 96)
+    parameters:
+    - id: items
+      type: System.Collections.Generic.IReadOnlyList{System.String}
+    - id: columns
+      type: System.Int32
+    - id: tileSize
+      type: System.Single
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Grid(items As IReadOnlyList(Of String), columns As Integer = 4, tileSize As Single = 96) As Element
+  overload: FluentGpu.Controls.ItemsView.Grid*
+  nameWithType.vb: ItemsView.Grid(IReadOnlyList(Of String), Integer, Single)
+  fullName.vb: FluentGpu.Controls.ItemsView.Grid(System.Collections.Generic.IReadOnlyList(Of String), Integer, Single)
+  name.vb: Grid(IReadOnlyList(Of String), Integer, Single)
+- uid: FluentGpu.Controls.ItemsView.Grid(System.Int32,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Int32,System.Single,FluentGpu.Controls.ItemsSelectionMode,FluentGpu.Controls.SelectionModel,System.Action{System.Int32},System.Action{System.Int32},System.Action,System.Boolean,System.Action{System.Int32,System.Int32},System.Func{System.Int32,System.String},System.Func{System.Int32,System.Boolean},FluentGpu.Controls.ItemsViewController,System.Func{System.Int32,System.String},System.Single,System.Single,System.Single)
+  commentId: M:FluentGpu.Controls.ItemsView.Grid(System.Int32,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Int32,System.Single,FluentGpu.Controls.ItemsSelectionMode,FluentGpu.Controls.SelectionModel,System.Action{System.Int32},System.Action{System.Int32},System.Action,System.Boolean,System.Action{System.Int32,System.Int32},System.Func{System.Int32,System.String},System.Func{System.Int32,System.Boolean},FluentGpu.Controls.ItemsViewController,System.Func{System.Int32,System.String},System.Single,System.Single,System.Single)
+  id: Grid(System.Int32,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Int32,System.Single,FluentGpu.Controls.ItemsSelectionMode,FluentGpu.Controls.SelectionModel,System.Action{System.Int32},System.Action{System.Int32},System.Action,System.Boolean,System.Action{System.Int32,System.Int32},System.Func{System.Int32,System.String},System.Func{System.Int32,System.Boolean},FluentGpu.Controls.ItemsViewController,System.Func{System.Int32,System.String},System.Single,System.Single,System.Single)
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: Grid(int, Func<int, Element>, int, float, ItemsSelectionMode, SelectionModel?, Action<int>?, Action<int>?, Action?, bool, Action<int, int>?, Func<int, string>?, Func<int, bool>?, ItemsViewController?, Func<int, string>?, float, float, float)
+  nameWithType: ItemsView.Grid(int, Func<int, Element>, int, float, ItemsSelectionMode, SelectionModel?, Action<int>?, Action<int>?, Action?, bool, Action<int, int>?, Func<int, string>?, Func<int, bool>?, ItemsViewController?, Func<int, string>?, float, float, float)
+  fullName: FluentGpu.Controls.ItemsView.Grid(int, System.Func<int, FluentGpu.Dsl.Element>, int, float, FluentGpu.Controls.ItemsSelectionMode, FluentGpu.Controls.SelectionModel?, System.Action<int>?, System.Action<int>?, System.Action?, bool, System.Action<int, int>?, System.Func<int, string>?, System.Func<int, bool>?, FluentGpu.Controls.ItemsViewController?, System.Func<int, string>?, float, float, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Grid
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 273
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The full WinUI GridView-shaped preset: templated tiles over the virtualized grid (the former
+        <code>GridView.Create</code>).
+  example: []
+  syntax:
+    content: public static Element Grid(int itemCount, Func<int, Element> itemTemplate, int columns, float tileHeight, ItemsSelectionMode selectionMode = ItemsSelectionMode.Single, SelectionModel? selection = null, Action<int>? onItemClick = null, Action<int>? onItemInvoked = null, Action? onSelectionChanged = null, bool canReorderItems = false, Action<int, int>? onReorder = null, Func<int, string>? itemText = null, Func<int, bool>? isItemEnabled = null, ItemsViewController? controller = null, Func<int, string>? keyOf = null, float width = NaN, float height = NaN, float grow = 0)
+    parameters:
+    - id: itemCount
+      type: System.Int32
+    - id: itemTemplate
+      type: System.Func{System.Int32,FluentGpu.Dsl.Element}
+    - id: columns
+      type: System.Int32
+    - id: tileHeight
+      type: System.Single
+    - id: selectionMode
+      type: FluentGpu.Controls.ItemsSelectionMode
+    - id: selection
+      type: FluentGpu.Controls.SelectionModel
+    - id: onItemClick
+      type: System.Action{System.Int32}
+    - id: onItemInvoked
+      type: System.Action{System.Int32}
+    - id: onSelectionChanged
+      type: System.Action
+    - id: canReorderItems
+      type: System.Boolean
+    - id: onReorder
+      type: System.Action{System.Int32,System.Int32}
+    - id: itemText
+      type: System.Func{System.Int32,System.String}
+    - id: isItemEnabled
+      type: System.Func{System.Int32,System.Boolean}
+    - id: controller
+      type: FluentGpu.Controls.ItemsViewController
+    - id: keyOf
+      type: System.Func{System.Int32,System.String}
+    - id: width
+      type: System.Single
+    - id: height
+      type: System.Single
+    - id: grow
+      type: System.Single
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Grid(itemCount As Integer, itemTemplate As Func(Of Integer, Element), columns As Integer, tileHeight As Single, selectionMode As ItemsSelectionMode = ItemsSelectionMode.Single, selection As SelectionModel = Nothing, onItemClick As Action(Of Integer) = Nothing, onItemInvoked As Action(Of Integer) = Nothing, onSelectionChanged As Action = Nothing, canReorderItems As Boolean = False, onReorder As Action(Of Integer, Integer) = Nothing, itemText As Func(Of Integer, String) = Nothing, isItemEnabled As Func(Of Integer, Boolean) = Nothing, controller As ItemsViewController = Nothing, keyOf As Func(Of Integer, String) = Nothing, width As Single = NaN, height As Single = NaN, grow As Single = 0) As Element
+  overload: FluentGpu.Controls.ItemsView.Grid*
+  nameWithType.vb: ItemsView.Grid(Integer, Func(Of Integer, Element), Integer, Single, ItemsSelectionMode, SelectionModel, Action(Of Integer), Action(Of Integer), Action, Boolean, Action(Of Integer, Integer), Func(Of Integer, String), Func(Of Integer, Boolean), ItemsViewController, Func(Of Integer, String), Single, Single, Single)
+  fullName.vb: FluentGpu.Controls.ItemsView.Grid(Integer, System.Func(Of Integer, FluentGpu.Dsl.Element), Integer, Single, FluentGpu.Controls.ItemsSelectionMode, FluentGpu.Controls.SelectionModel, System.Action(Of Integer), System.Action(Of Integer), System.Action, Boolean, System.Action(Of Integer, Integer), System.Func(Of Integer, String), System.Func(Of Integer, Boolean), FluentGpu.Controls.ItemsViewController, System.Func(Of Integer, String), Single, Single, Single)
+  name.vb: Grid(Integer, Func(Of Integer, Element), Integer, Single, ItemsSelectionMode, SelectionModel, Action(Of Integer), Action(Of Integer), Action, Boolean, Action(Of Integer, Integer), Func(Of Integer, String), Func(Of Integer, Boolean), ItemsViewController, Func(Of Integer, String), Single, Single, Single)
+- uid: FluentGpu.Controls.ItemsView.Render
+  commentId: M:FluentGpu.Controls.ItemsView.Render
+  id: Render
+  parent: FluentGpu.Controls.ItemsView
+  langs:
+  - csharp
+  - vb
+  name: Render()
+  nameWithType: ItemsView.Render()
+  fullName: FluentGpu.Controls.ItemsView.Render()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Render
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 288
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  example: []
+  syntax:
+    content: public override Element Render()
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Overrides Function Render() As Element
+  overridden: FluentGpu.Hooks.Component.Render
+  overload: FluentGpu.Controls.ItemsView.Render*
+references:
+- uid: FluentGpu.Controls.SelectionModel
+  commentId: T:FluentGpu.Controls.SelectionModel
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.SelectionModel.html
+  name: SelectionModel
+  nameWithType: SelectionModel
+  fullName: FluentGpu.Controls.SelectionModel
+- uid: FluentGpu.Controls.SelectorVisual
+  commentId: T:FluentGpu.Controls.SelectorVisual
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.SelectorVisual.html
+  name: SelectorVisual
+  nameWithType: SelectorVisual
+  fullName: FluentGpu.Controls.SelectorVisual
+- uid: FluentGpu.Controls.ItemsView.List(System.Collections.Generic.IReadOnlyList{System.String},FluentGpu.Signals.Signal{System.Int32},System.Action{System.Int32})
+  commentId: M:FluentGpu.Controls.ItemsView.List(System.Collections.Generic.IReadOnlyList{System.String},FluentGpu.Signals.Signal{System.Int32},System.Action{System.Int32})
+  isExternal: true
+  href: FluentGpu.Controls.ItemsView.html#FluentGpu_Controls_ItemsView_List_System_Collections_Generic_IReadOnlyList_System_String__FluentGpu_Signals_Signal_System_Int32__System_Action_System_Int32__
+  name: List(IReadOnlyList<string>, Signal<int>, Action<int>)
+  nameWithType: ItemsView.List(IReadOnlyList<string>, Signal<int>, Action<int>)
+  fullName: FluentGpu.Controls.ItemsView.List(System.Collections.Generic.IReadOnlyList<string>, FluentGpu.Signals.Signal<int>, System.Action<int>)
+  nameWithType.vb: ItemsView.List(IReadOnlyList(Of String), Signal(Of Integer), Action(Of Integer))
+  fullName.vb: FluentGpu.Controls.ItemsView.List(System.Collections.Generic.IReadOnlyList(Of String), FluentGpu.Signals.Signal(Of Integer), System.Action(Of Integer))
+  name.vb: List(IReadOnlyList(Of String), Signal(Of Integer), Action(Of Integer))
+  spec.csharp:
+  - uid: FluentGpu.Controls.ItemsView.List(System.Collections.Generic.IReadOnlyList{System.String},FluentGpu.Signals.Signal{System.Int32},System.Action{System.Int32})
+    name: List
+    href: FluentGpu.Controls.ItemsView.html#FluentGpu_Controls_ItemsView_List_System_Collections_Generic_IReadOnlyList_System_String__FluentGpu_Signals_Signal_System_Int32__System_Action_System_Int32__
+  - name: (
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.ItemsView.List(System.Collections.Generic.IReadOnlyList{System.String},FluentGpu.Signals.Signal{System.Int32},System.Action{System.Int32})
+    name: List
+    href: FluentGpu.Controls.ItemsView.html#FluentGpu_Controls_ItemsView_List_System_Collections_Generic_IReadOnlyList_System_String__FluentGpu_Signals_Signal_System_Int32__System_Action_System_Int32__
+  - name: (
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  - name: )
+- uid: FluentGpu.Controls.ItemsView.Grid(System.Collections.Generic.IReadOnlyList{System.String},System.Int32,System.Single)
+  commentId: M:FluentGpu.Controls.ItemsView.Grid(System.Collections.Generic.IReadOnlyList{System.String},System.Int32,System.Single)
+  isExternal: true
+  href: FluentGpu.Controls.ItemsView.html#FluentGpu_Controls_ItemsView_Grid_System_Collections_Generic_IReadOnlyList_System_String__System_Int32_System_Single_
+  name: Grid(IReadOnlyList<string>, int, float)
+  nameWithType: ItemsView.Grid(IReadOnlyList<string>, int, float)
+  fullName: FluentGpu.Controls.ItemsView.Grid(System.Collections.Generic.IReadOnlyList<string>, int, float)
+  nameWithType.vb: ItemsView.Grid(IReadOnlyList(Of String), Integer, Single)
+  fullName.vb: FluentGpu.Controls.ItemsView.Grid(System.Collections.Generic.IReadOnlyList(Of String), Integer, Single)
+  name.vb: Grid(IReadOnlyList(Of String), Integer, Single)
+  spec.csharp:
+  - uid: FluentGpu.Controls.ItemsView.Grid(System.Collections.Generic.IReadOnlyList{System.String},System.Int32,System.Single)
+    name: Grid
+    href: FluentGpu.Controls.ItemsView.html#FluentGpu_Controls_ItemsView_Grid_System_Collections_Generic_IReadOnlyList_System_String__System_Int32_System_Single_
+  - name: (
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.ItemsView.Grid(System.Collections.Generic.IReadOnlyList{System.String},System.Int32,System.Single)
+    name: Grid
+    href: FluentGpu.Controls.ItemsView.html#FluentGpu_Controls_ItemsView_Grid_System_Collections_Generic_IReadOnlyList_System_String__System_Int32_System_Single_
+  - name: (
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: FluentGpu.Controls.RepeatLayout
+  commentId: T:FluentGpu.Controls.RepeatLayout
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.RepeatLayout.html
+  name: RepeatLayout
+  nameWithType: RepeatLayout
+  fullName: FluentGpu.Controls.RepeatLayout
+- uid: FluentGpu.Reconciler.VirtualListEl
+  commentId: T:FluentGpu.Reconciler.VirtualListEl
+  parent: FluentGpu.Reconciler
+  href: FluentGpu.Reconciler.VirtualListEl.html
+  name: VirtualListEl
+  nameWithType: VirtualListEl
+  fullName: FluentGpu.Reconciler.VirtualListEl
+- uid: FluentGpu.Controls.ItemsView.Selector
+  commentId: F:FluentGpu.Controls.ItemsView.Selector
+  href: FluentGpu.Controls.ItemsView.html#FluentGpu_Controls_ItemsView_Selector
+  name: Selector
+  nameWithType: ItemsView.Selector
+  fullName: FluentGpu.Controls.ItemsView.Selector
+- uid: FluentGpu.Controls.ItemContainer
+  commentId: T:FluentGpu.Controls.ItemContainer
+  href: FluentGpu.Controls.ItemContainer.html
+  name: ItemContainer
+  nameWithType: ItemContainer
+  fullName: FluentGpu.Controls.ItemContainer
+- uid: FluentGpu.Controls.ItemsView.ContainerFactory
+  commentId: F:FluentGpu.Controls.ItemsView.ContainerFactory
+  href: FluentGpu.Controls.ItemsView.html#FluentGpu_Controls_ItemsView_ContainerFactory
+  name: ContainerFactory
+  nameWithType: ItemsView.ContainerFactory
+  fullName: FluentGpu.Controls.ItemsView.ContainerFactory
+- uid: FluentGpu.Controls.ItemsView.ItemDisplacement
+  commentId: F:FluentGpu.Controls.ItemsView.ItemDisplacement
+  href: FluentGpu.Controls.ItemsView.html#FluentGpu_Controls_ItemsView_ItemDisplacement
+  name: ItemDisplacement
+  nameWithType: ItemsView.ItemDisplacement
+  fullName: FluentGpu.Controls.ItemsView.ItemDisplacement
+- uid: FluentGpu.Controls.ItemsView.DisplacementVersion
+  commentId: F:FluentGpu.Controls.ItemsView.DisplacementVersion
+  href: FluentGpu.Controls.ItemsView.html#FluentGpu_Controls_ItemsView_DisplacementVersion
+  name: DisplacementVersion
+  nameWithType: ItemsView.DisplacementVersion
+  fullName: FluentGpu.Controls.ItemsView.DisplacementVersion
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Hooks.Component
+  commentId: T:FluentGpu.Hooks.Component
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.Component.html
+  name: Component
+  nameWithType: Component
+  fullName: FluentGpu.Hooks.Component
+- uid: FluentGpu.Hooks.Component.Context
+  commentId: P:FluentGpu.Hooks.Component.Context
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Context
+  name: Context
+  nameWithType: Component.Context
+  fullName: FluentGpu.Hooks.Component.Context
+- uid: FluentGpu.Hooks.Component.RunsOnce
+  commentId: P:FluentGpu.Hooks.Component.RunsOnce
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RunsOnce
+  name: RunsOnce
+  nameWithType: Component.RunsOnce
+  fullName: FluentGpu.Hooks.Component.RunsOnce
+- uid: FluentGpu.Hooks.Component.RenderWithHooks
+  commentId: M:FluentGpu.Hooks.Component.RenderWithHooks
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  name: RenderWithHooks()
+  nameWithType: Component.RenderWithHooks()
+  fullName: FluentGpu.Hooks.Component.RenderWithHooks()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.RenderWithHooks
+    name: RenderWithHooks
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.RenderWithHooks
+    name: RenderWithHooks
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  - name: (
+  - name: )
+- uid: FluentGpu.Hooks.Component.Unmount
+  commentId: M:FluentGpu.Hooks.Component.Unmount
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  name: Unmount()
+  nameWithType: Component.Unmount()
+  fullName: FluentGpu.Hooks.Component.Unmount()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.Unmount
+    name: Unmount
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.Unmount
+    name: Unmount
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseEntrance(System.Single,System.Object)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  parent: FluentGpu.Hooks.MotionHooks
+  definition: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  name: UseEntrance(Component, float, object)
+  nameWithType: MotionHooks.UseEntrance(Component, float, object)
+  fullName: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, float, object)
+  nameWithType.vb: MotionHooks.UseEntrance(Component, Single, Object)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, Single, Object)
+  name.vb: UseEntrance(Component, Single, Object)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseHoverScale(System.Boolean,System.Single)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  parent: FluentGpu.Hooks.MotionHooks
+  definition: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  name: UseHoverScale(Component, bool, float)
+  nameWithType: MotionHooks.UseHoverScale(Component, bool, float)
+  fullName: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, bool, float)
+  nameWithType.vb: MotionHooks.UseHoverScale(Component, Boolean, Single)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, Boolean, Single)
+  name.vb: UseHoverScale(Component, Boolean, Single)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: FluentGpu.Reconciler
+  commentId: N:FluentGpu.Reconciler
+  href: FluentGpu.html
+  name: FluentGpu.Reconciler
+  nameWithType: FluentGpu.Reconciler
+  fullName: FluentGpu.Reconciler
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Reconciler
+    name: Reconciler
+    href: FluentGpu.Reconciler.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Reconciler
+    name: Reconciler
+    href: FluentGpu.Reconciler.html
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Hooks
+  commentId: N:FluentGpu.Hooks
+  href: FluentGpu.html
+  name: FluentGpu.Hooks
+  nameWithType: FluentGpu.Hooks
+  fullName: FluentGpu.Hooks
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+- uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  isExternal: true
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  name: UseEntrance(Component, float, object)
+  nameWithType: MotionHooks.UseEntrance(Component, float, object)
+  fullName: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, float, object)
+  nameWithType.vb: MotionHooks.UseEntrance(Component, Single, Object)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, Single, Object)
+  name.vb: UseEntrance(Component, Single, Object)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Hooks.MotionHooks
+  commentId: T:FluentGpu.Hooks.MotionHooks
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.MotionHooks.html
+  name: MotionHooks
+  nameWithType: MotionHooks
+  fullName: FluentGpu.Hooks.MotionHooks
+- uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  isExternal: true
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  name: UseHoverScale(Component, bool, float)
+  nameWithType: MotionHooks.UseHoverScale(Component, bool, float)
+  fullName: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, bool, float)
+  nameWithType.vb: MotionHooks.UseHoverScale(Component, Boolean, Single)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, Boolean, Single)
+  name.vb: UseHoverScale(Component, Boolean, Single)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: FluentGpu.Controls.ItemsView.List(System.Int32,System.Func{System.Int32,FluentGpu.Dsl.Element},FluentGpu.Controls.ItemsSelectionMode,FluentGpu.Controls.SelectionModel,System.Action{System.Int32},System.Action{System.Int32},System.Action{System.Int32},System.Boolean,System.Action{System.Int32,System.Int32},System.Func{System.Int32,System.String},System.Func{System.Int32,System.Boolean},FluentGpu.Controls.ItemsViewController,System.Func{System.Int32,System.String},System.Single,System.Single,System.Single,System.Single)
+  commentId: M:FluentGpu.Controls.ItemsView.List(System.Int32,System.Func{System.Int32,FluentGpu.Dsl.Element},FluentGpu.Controls.ItemsSelectionMode,FluentGpu.Controls.SelectionModel,System.Action{System.Int32},System.Action{System.Int32},System.Action{System.Int32},System.Boolean,System.Action{System.Int32,System.Int32},System.Func{System.Int32,System.String},System.Func{System.Int32,System.Boolean},FluentGpu.Controls.ItemsViewController,System.Func{System.Int32,System.String},System.Single,System.Single,System.Single,System.Single)
+  isExternal: true
+  href: FluentGpu.Controls.ItemsView.html#FluentGpu_Controls_ItemsView_List_System_Int32_System_Func_System_Int32_FluentGpu_Dsl_Element__FluentGpu_Controls_ItemsSelectionMode_FluentGpu_Controls_SelectionModel_System_Action_System_Int32__System_Action_System_Int32__System_Action_System_Int32__System_Boolean_System_Action_System_Int32_System_Int32__System_Func_System_Int32_System_String__System_Func_System_Int32_System_Boolean__FluentGpu_Controls_ItemsViewController_System_Func_System_Int32_System_String__System_Single_System_Single_System_Single_System_Single_
+  name: List(int, Func<int, Element>, ItemsSelectionMode, SelectionModel, Action<int>, Action<int>, Action<int>, bool, Action<int, int>, Func<int, string>, Func<int, bool>, ItemsViewController, Func<int, string>, float, float, float, float)
+  nameWithType: ItemsView.List(int, Func<int, Element>, ItemsSelectionMode, SelectionModel, Action<int>, Action<int>, Action<int>, bool, Action<int, int>, Func<int, string>, Func<int, bool>, ItemsViewController, Func<int, string>, float, float, float, float)
+  fullName: FluentGpu.Controls.ItemsView.List(int, System.Func<int, FluentGpu.Dsl.Element>, FluentGpu.Controls.ItemsSelectionMode, FluentGpu.Controls.SelectionModel, System.Action<int>, System.Action<int>, System.Action<int>, bool, System.Action<int, int>, System.Func<int, string>, System.Func<int, bool>, FluentGpu.Controls.ItemsViewController, System.Func<int, string>, float, float, float, float)
+  nameWithType.vb: ItemsView.List(Integer, Func(Of Integer, Element), ItemsSelectionMode, SelectionModel, Action(Of Integer), Action(Of Integer), Action(Of Integer), Boolean, Action(Of Integer, Integer), Func(Of Integer, String), Func(Of Integer, Boolean), ItemsViewController, Func(Of Integer, String), Single, Single, Single, Single)
+  fullName.vb: FluentGpu.Controls.ItemsView.List(Integer, System.Func(Of Integer, FluentGpu.Dsl.Element), FluentGpu.Controls.ItemsSelectionMode, FluentGpu.Controls.SelectionModel, System.Action(Of Integer), System.Action(Of Integer), System.Action(Of Integer), Boolean, System.Action(Of Integer, Integer), System.Func(Of Integer, String), System.Func(Of Integer, Boolean), FluentGpu.Controls.ItemsViewController, System.Func(Of Integer, String), Single, Single, Single, Single)
+  name.vb: List(Integer, Func(Of Integer, Element), ItemsSelectionMode, SelectionModel, Action(Of Integer), Action(Of Integer), Action(Of Integer), Boolean, Action(Of Integer, Integer), Func(Of Integer, String), Func(Of Integer, Boolean), ItemsViewController, Func(Of Integer, String), Single, Single, Single, Single)
+  spec.csharp:
+  - uid: FluentGpu.Controls.ItemsView.List(System.Int32,System.Func{System.Int32,FluentGpu.Dsl.Element},FluentGpu.Controls.ItemsSelectionMode,FluentGpu.Controls.SelectionModel,System.Action{System.Int32},System.Action{System.Int32},System.Action{System.Int32},System.Boolean,System.Action{System.Int32,System.Int32},System.Func{System.Int32,System.String},System.Func{System.Int32,System.Boolean},FluentGpu.Controls.ItemsViewController,System.Func{System.Int32,System.String},System.Single,System.Single,System.Single,System.Single)
+    name: List
+    href: FluentGpu.Controls.ItemsView.html#FluentGpu_Controls_ItemsView_List_System_Int32_System_Func_System_Int32_FluentGpu_Dsl_Element__FluentGpu_Controls_ItemsSelectionMode_FluentGpu_Controls_SelectionModel_System_Action_System_Int32__System_Action_System_Int32__System_Action_System_Int32__System_Boolean_System_Action_System_Int32_System_Int32__System_Func_System_Int32_System_String__System_Func_System_Int32_System_Boolean__FluentGpu_Controls_ItemsViewController_System_Func_System_Int32_System_String__System_Single_System_Single_System_Single_System_Single_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Controls.ItemsSelectionMode
+    name: ItemsSelectionMode
+    href: FluentGpu.Controls.ItemsSelectionMode.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Controls.SelectionModel
+    name: SelectionModel
+    href: FluentGpu.Controls.SelectionModel.html
+  - name: ','
+  - name: " "
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Controls.ItemsViewController
+    name: ItemsViewController
+    href: FluentGpu.Controls.ItemsViewController.html
+  - name: ','
+  - name: " "
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.ItemsView.List(System.Int32,System.Func{System.Int32,FluentGpu.Dsl.Element},FluentGpu.Controls.ItemsSelectionMode,FluentGpu.Controls.SelectionModel,System.Action{System.Int32},System.Action{System.Int32},System.Action{System.Int32},System.Boolean,System.Action{System.Int32,System.Int32},System.Func{System.Int32,System.String},System.Func{System.Int32,System.Boolean},FluentGpu.Controls.ItemsViewController,System.Func{System.Int32,System.String},System.Single,System.Single,System.Single,System.Single)
+    name: List
+    href: FluentGpu.Controls.ItemsView.html#FluentGpu_Controls_ItemsView_List_System_Int32_System_Func_System_Int32_FluentGpu_Dsl_Element__FluentGpu_Controls_ItemsSelectionMode_FluentGpu_Controls_SelectionModel_System_Action_System_Int32__System_Action_System_Int32__System_Action_System_Int32__System_Boolean_System_Action_System_Int32_System_Int32__System_Func_System_Int32_System_String__System_Func_System_Int32_System_Boolean__FluentGpu_Controls_ItemsViewController_System_Func_System_Int32_System_String__System_Single_System_Single_System_Single_System_Single_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Controls.ItemsSelectionMode
+    name: ItemsSelectionMode
+    href: FluentGpu.Controls.ItemsSelectionMode.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Controls.SelectionModel
+    name: SelectionModel
+    href: FluentGpu.Controls.SelectionModel.html
+  - name: ','
+  - name: " "
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Controls.ItemsViewController
+    name: ItemsViewController
+    href: FluentGpu.Controls.ItemsViewController.html
+  - name: ','
+  - name: " "
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System.Collections.Generic.IReadOnlyList{System.String}
+  commentId: T:System.Collections.Generic.IReadOnlyList{System.String}
+  parent: System.Collections.Generic
+  definition: System.Collections.Generic.IReadOnlyList`1
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<string>
+  nameWithType: IReadOnlyList<string>
+  fullName: System.Collections.Generic.IReadOnlyList<string>
+  nameWithType.vb: IReadOnlyList(Of String)
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of String)
+  name.vb: IReadOnlyList(Of String)
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+- uid: System.Collections.Generic.IReadOnlyList`1
+  commentId: T:System.Collections.Generic.IReadOnlyList`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<T>
+  nameWithType: IReadOnlyList<T>
+  fullName: System.Collections.Generic.IReadOnlyList<T>
+  nameWithType.vb: IReadOnlyList(Of T)
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of T)
+  name.vb: IReadOnlyList(Of T)
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Collections.Generic
+  commentId: N:System.Collections.Generic
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System.Collections.Generic
+  nameWithType: System.Collections.Generic
+  fullName: System.Collections.Generic
+  spec.csharp:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+  spec.vb:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Controls.ItemsView.ItemTemplate
+  commentId: F:FluentGpu.Controls.ItemsView.ItemTemplate
+  href: FluentGpu.Controls.ItemsView.html#FluentGpu_Controls_ItemsView_ItemTemplate
+  name: ItemTemplate
+  nameWithType: ItemsView.ItemTemplate
+  fullName: FluentGpu.Controls.ItemsView.ItemTemplate
+- uid: FluentGpu.Controls.ItemsView.Items
+  commentId: F:FluentGpu.Controls.ItemsView.Items
+  href: FluentGpu.Controls.ItemsView.html#FluentGpu_Controls_ItemsView_Items
+  name: Items
+  nameWithType: ItemsView.Items
+  fullName: FluentGpu.Controls.ItemsView.Items
+- uid: System.Func{System.Int32,FluentGpu.Dsl.Element}
+  commentId: T:System.Func{System.Int32,FluentGpu.Dsl.Element}
+  parent: System
+  definition: System.Func`2
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<int, Element>
+  nameWithType: Func<int, Element>
+  fullName: System.Func<int, FluentGpu.Dsl.Element>
+  nameWithType.vb: Func(Of Integer, Element)
+  fullName.vb: System.Func(Of Integer, FluentGpu.Dsl.Element)
+  name.vb: Func(Of Integer, Element)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: )
+- uid: System.Func`2
+  commentId: T:System.Func`2
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<T, TResult>
+  nameWithType: Func<T, TResult>
+  fullName: System.Func<T, TResult>
+  nameWithType.vb: Func(Of T, TResult)
+  fullName.vb: System.Func(Of T, TResult)
+  name.vb: Func(Of T, TResult)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - name: T
+  - name: ','
+  - name: " "
+  - name: TResult
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: ','
+  - name: " "
+  - name: TResult
+  - name: )
+- uid: System.Func{System.Int32,System.String}
+  commentId: T:System.Func{System.Int32,System.String}
+  parent: System
+  definition: System.Func`2
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<int, string>
+  nameWithType: Func<int, string>
+  fullName: System.Func<int, string>
+  nameWithType.vb: Func(Of Integer, String)
+  fullName.vb: System.Func(Of Integer, String)
+  name.vb: Func(Of Integer, String)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+- uid: System.Func{System.Int32,System.Boolean}
+  commentId: T:System.Func{System.Int32,System.Boolean}
+  parent: System
+  definition: System.Func`2
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<int, bool>
+  nameWithType: Func<int, bool>
+  fullName: System.Func<int, bool>
+  nameWithType.vb: Func(Of Integer, Boolean)
+  fullName.vb: System.Func(Of Integer, Boolean)
+  name.vb: Func(Of Integer, Boolean)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+- uid: FluentGpu.Controls.ItemContainerFactory
+  commentId: T:FluentGpu.Controls.ItemContainerFactory
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ItemContainerFactory.html
+  name: ItemContainerFactory
+  nameWithType: ItemContainerFactory
+  fullName: FluentGpu.Controls.ItemContainerFactory
+- uid: System.Func{System.Int32,FluentGpu.Controls.ItemChromeState,FluentGpu.Controls.PartDelta}
+  commentId: T:System.Func{System.Int32,FluentGpu.Controls.ItemChromeState,FluentGpu.Controls.PartDelta}
+  parent: System
+  definition: System.Func`3
+  href: https://learn.microsoft.com/dotnet/api/system.func-3
+  name: Func<int, ItemChromeState, PartDelta>
+  nameWithType: Func<int, ItemChromeState, PartDelta>
+  fullName: System.Func<int, FluentGpu.Controls.ItemChromeState, FluentGpu.Controls.PartDelta>
+  nameWithType.vb: Func(Of Integer, ItemChromeState, PartDelta)
+  fullName.vb: System.Func(Of Integer, FluentGpu.Controls.ItemChromeState, FluentGpu.Controls.PartDelta)
+  name.vb: Func(Of Integer, ItemChromeState, PartDelta)
+  spec.csharp:
+  - uid: System.Func`3
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-3
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Controls.ItemChromeState
+    name: ItemChromeState
+    href: FluentGpu.Controls.ItemChromeState.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Controls.PartDelta
+    name: PartDelta
+    href: FluentGpu.Controls.PartDelta.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`3
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-3
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Controls.ItemChromeState
+    name: ItemChromeState
+    href: FluentGpu.Controls.ItemChromeState.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Controls.PartDelta
+    name: PartDelta
+    href: FluentGpu.Controls.PartDelta.html
+  - name: )
+- uid: System.Func`3
+  commentId: T:System.Func`3
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.func-3
+  name: Func<T1, T2, TResult>
+  nameWithType: Func<T1, T2, TResult>
+  fullName: System.Func<T1, T2, TResult>
+  nameWithType.vb: Func(Of T1, T2, TResult)
+  fullName.vb: System.Func(Of T1, T2, TResult)
+  name.vb: Func(Of T1, T2, TResult)
+  spec.csharp:
+  - uid: System.Func`3
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-3
+  - name: <
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: ','
+  - name: " "
+  - name: TResult
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`3
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-3
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: ','
+  - name: " "
+  - name: TResult
+  - name: )
+- uid: FluentGpu.Controls.SelectorVisual.Border
+  commentId: F:FluentGpu.Controls.SelectorVisual.Border
+  href: FluentGpu.Controls.SelectorVisual.html#FluentGpu_Controls_SelectorVisual_Border
+  name: Border
+  nameWithType: SelectorVisual.Border
+  fullName: FluentGpu.Controls.SelectorVisual.Border
+- uid: FluentGpu.Controls.SelectorVisuals
+  commentId: T:FluentGpu.Controls.SelectorVisuals
+  href: FluentGpu.Controls.SelectorVisuals.html
+  name: SelectorVisuals
+  nameWithType: SelectorVisuals
+  fullName: FluentGpu.Controls.SelectorVisuals
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Controls.ItemsSelectionMode
+  commentId: T:FluentGpu.Controls.ItemsSelectionMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ItemsSelectionMode.html
+  name: ItemsSelectionMode
+  nameWithType: ItemsSelectionMode
+  fullName: FluentGpu.Controls.ItemsSelectionMode
+- uid: System.Action{System.Int32}
+  commentId: T:System.Action{System.Int32}
+  parent: System
+  definition: System.Action`1
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<int>
+  nameWithType: Action<int>
+  fullName: System.Action<int>
+  nameWithType.vb: Action(Of Integer)
+  fullName.vb: System.Action(Of Integer)
+  name.vb: Action(Of Integer)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: System.Action`1
+  commentId: T:System.Action`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<T>
+  nameWithType: Action<T>
+  fullName: System.Action<T>
+  nameWithType.vb: Action(Of T)
+  fullName.vb: System.Action(Of T)
+  name.vb: Action(Of T)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Action
+  commentId: T:System.Action
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action
+  name: Action
+  nameWithType: Action
+  fullName: System.Action
+- uid: FluentGpu.Controls.ItemsViewController
+  commentId: T:FluentGpu.Controls.ItemsViewController
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ItemsViewController.html
+  name: ItemsViewController
+  nameWithType: ItemsViewController
+  fullName: FluentGpu.Controls.ItemsViewController
+- uid: FluentGpu.Controls.ItemCollectionTransition
+  commentId: T:FluentGpu.Controls.ItemCollectionTransition
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ItemCollectionTransition.html
+  name: ItemCollectionTransition
+  nameWithType: ItemCollectionTransition
+  fullName: FluentGpu.Controls.ItemCollectionTransition
+- uid: System.Nullable{FluentGpu.Controls.ItemCollectionTransition}
+  commentId: T:System.Nullable{FluentGpu.Controls.ItemCollectionTransition}
+  parent: System
+  definition: System.Nullable`1
+  href: FluentGpu.Controls.ItemCollectionTransition.html
+  name: ItemCollectionTransition?
+  nameWithType: ItemCollectionTransition?
+  fullName: FluentGpu.Controls.ItemCollectionTransition?
+  spec.csharp:
+  - uid: FluentGpu.Controls.ItemCollectionTransition
+    name: ItemCollectionTransition
+    href: FluentGpu.Controls.ItemCollectionTransition.html
+  - name: '?'
+  spec.vb:
+  - uid: FluentGpu.Controls.ItemCollectionTransition
+    name: ItemCollectionTransition
+    href: FluentGpu.Controls.ItemCollectionTransition.html
+  - name: '?'
+- uid: System.Nullable`1
+  commentId: T:System.Nullable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  name: Nullable<T>
+  nameWithType: Nullable<T>
+  fullName: System.Nullable<T>
+  nameWithType.vb: Nullable(Of T)
+  fullName.vb: System.Nullable(Of T)
+  name.vb: Nullable(Of T)
+  spec.csharp:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Func{System.Int32,System.ValueTuple{System.Single,System.Single}}
+  commentId: T:System.Func{System.Int32,System.ValueTuple{System.Single,System.Single}}
+  parent: System
+  definition: System.Func`2
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<int, (float dx, float dy)>
+  nameWithType: Func<int, (float dx, float dy)>
+  fullName: System.Func<int, (float dx, float dy)>
+  nameWithType.vb: Func(Of Integer, (dx As Single, dy As Single))
+  fullName.vb: System.Func(Of Integer, (dx As Single, dy As Single))
+  name.vb: Func(Of Integer, (dx As Single, dy As Single))
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - name: (
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: " "
+  - uid: System.ValueTuple{System.Single,System.Single}.dx
+    name: dx
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple-system.single,system.single-.dx
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: " "
+  - uid: System.ValueTuple{System.Single,System.Single}.dy
+    name: dy
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple-system.single,system.single-.dy
+  - name: )
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - name: (
+  - uid: System.ValueTuple{System.Single,System.Single}.dx
+    name: dx
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple-system.single,system.single-.dx
+  - name: " "
+  - name: As
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.ValueTuple{System.Single,System.Single}.dy
+    name: dy
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple-system.single,system.single-.dy
+  - name: " "
+  - name: As
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  - name: )
+- uid: FluentGpu.Signals.IReadSignal{System.Int32}
+  commentId: T:FluentGpu.Signals.IReadSignal{System.Int32}
+  parent: FluentGpu.Signals
+  definition: FluentGpu.Signals.IReadSignal`1
+  href: FluentGpu.Signals.IReadSignal-1.html
+  name: IReadSignal<int>
+  nameWithType: IReadSignal<int>
+  fullName: FluentGpu.Signals.IReadSignal<int>
+  nameWithType.vb: IReadSignal(Of Integer)
+  fullName.vb: FluentGpu.Signals.IReadSignal(Of Integer)
+  name.vb: IReadSignal(Of Integer)
+  spec.csharp:
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: FluentGpu.Signals.IReadSignal`1
+  commentId: T:FluentGpu.Signals.IReadSignal`1
+  href: FluentGpu.Signals.IReadSignal-1.html
+  name: IReadSignal<T>
+  nameWithType: IReadSignal<T>
+  fullName: FluentGpu.Signals.IReadSignal<T>
+  nameWithType.vb: IReadSignal(Of T)
+  fullName.vb: FluentGpu.Signals.IReadSignal(Of T)
+  name.vb: IReadSignal(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Signals
+  commentId: N:FluentGpu.Signals
+  href: FluentGpu.html
+  name: FluentGpu.Signals
+  nameWithType: FluentGpu.Signals
+  fullName: FluentGpu.Signals
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+- uid: FluentGpu.Foundation.NodeFlags.DragGhost
+  commentId: F:FluentGpu.Foundation.NodeFlags.DragGhost
+  href: FluentGpu.Foundation.NodeFlags.html#FluentGpu_Foundation_NodeFlags_DragGhost
+  name: DragGhost
+  nameWithType: NodeFlags.DragGhost
+  fullName: FluentGpu.Foundation.NodeFlags.DragGhost
+- uid: FluentGpu.Controls.ItemsView.Create*
+  commentId: Overload:FluentGpu.Controls.ItemsView.Create
+  href: FluentGpu.Controls.ItemsView.html#FluentGpu_Controls_ItemsView_Create_System_Collections_Generic_IReadOnlyList_System_String__System_Int32_
+  name: Create
+  nameWithType: ItemsView.Create
+  fullName: FluentGpu.Controls.ItemsView.Create
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: FluentGpu.Controls.ItemsView.List*
+  commentId: Overload:FluentGpu.Controls.ItemsView.List
+  href: FluentGpu.Controls.ItemsView.html#FluentGpu_Controls_ItemsView_List_System_Collections_Generic_IReadOnlyList_System_String__FluentGpu_Signals_Signal_System_Int32__System_Action_System_Int32__
+  name: List
+  nameWithType: ItemsView.List
+  fullName: FluentGpu.Controls.ItemsView.List
+- uid: FluentGpu.Signals.Signal{System.Int32}
+  commentId: T:FluentGpu.Signals.Signal{System.Int32}
+  parent: FluentGpu.Signals
+  definition: FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<int>
+  nameWithType: Signal<int>
+  fullName: FluentGpu.Signals.Signal<int>
+  nameWithType.vb: Signal(Of Integer)
+  fullName.vb: FluentGpu.Signals.Signal(Of Integer)
+  name.vb: Signal(Of Integer)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: FluentGpu.Signals.Signal`1
+  commentId: T:FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<T>
+  nameWithType: Signal<T>
+  fullName: FluentGpu.Signals.Signal<T>
+  nameWithType.vb: Signal(Of T)
+  fullName.vb: FluentGpu.Signals.Signal(Of T)
+  name.vb: Signal(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Action{System.Int32,System.Int32}
+  commentId: T:System.Action{System.Int32,System.Int32}
+  parent: System
+  definition: System.Action`2
+  href: https://learn.microsoft.com/dotnet/api/system.action-2
+  name: Action<int, int>
+  nameWithType: Action<int, int>
+  fullName: System.Action<int, int>
+  nameWithType.vb: Action(Of Integer, Integer)
+  fullName.vb: System.Action(Of Integer, Integer)
+  name.vb: Action(Of Integer, Integer)
+  spec.csharp:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: System.Action`2
+  commentId: T:System.Action`2
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-2
+  name: Action<T1, T2>
+  nameWithType: Action<T1, T2>
+  fullName: System.Action<T1, T2>
+  nameWithType.vb: Action(Of T1, T2)
+  fullName.vb: System.Action(Of T1, T2)
+  name.vb: Action(Of T1, T2)
+  spec.csharp:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: <
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: )
+- uid: FluentGpu.Controls.ItemsView.Grid*
+  commentId: Overload:FluentGpu.Controls.ItemsView.Grid
+  href: FluentGpu.Controls.ItemsView.html#FluentGpu_Controls_ItemsView_Grid_System_Collections_Generic_IReadOnlyList_System_String__System_Int32_System_Single_
+  name: Grid
+  nameWithType: ItemsView.Grid
+  fullName: FluentGpu.Controls.ItemsView.Grid
+- uid: FluentGpu.Hooks.Component.Render
+  commentId: M:FluentGpu.Hooks.Component.Render
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  name: Render()
+  nameWithType: Component.Render()
+  fullName: FluentGpu.Hooks.Component.Render()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.Render
+    name: Render
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.Render
+    name: Render
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  - name: (
+  - name: )
+- uid: FluentGpu.Controls.ItemsView.Render*
+  commentId: Overload:FluentGpu.Controls.ItemsView.Render
+  href: FluentGpu.Controls.ItemsView.html#FluentGpu_Controls_ItemsView_Render
+  name: Render
+  nameWithType: ItemsView.Render
+  fullName: FluentGpu.Controls.ItemsView.Render

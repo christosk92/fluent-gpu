@@ -1,0 +1,118 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.TextLineBounds
+  commentId: T:FluentGpu.Foundation.TextLineBounds
+  id: TextLineBounds
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.TextLineBounds.Full
+  - FluentGpu.Foundation.TextLineBounds.Tight
+  langs:
+  - csharp
+  - vb
+  name: TextLineBounds
+  nameWithType: TextLineBounds
+  fullName: FluentGpu.Foundation.TextLineBounds
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/TextLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextLineBounds
+    path: ../../src/FluentGpu.Foundation/TextLayout.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    Which vertical band a text line reports as its box (mirrors WinUI TextLineBounds, minimum set —
+        TrimToCapHeight/TrimToBaseline individually are not modeled). Full — the WinUI BaseTextBlockStyle default
+        (TextBlock_themeresources.xaml:17) — is the font-natural ascent..descent box; Tight trims the box to
+        cap-height..baseline so vertical centering is optical (e.g. PersonPicture initials, PersonPicture.xaml:66).
+  example: []
+  syntax:
+    content: 'public enum TextLineBounds : byte'
+    content.vb: Public Enum TextLineBounds As Byte
+- uid: FluentGpu.Foundation.TextLineBounds.Full
+  commentId: F:FluentGpu.Foundation.TextLineBounds.Full
+  id: Full
+  parent: FluentGpu.Foundation.TextLineBounds
+  langs:
+  - csharp
+  - vb
+  name: Full
+  nameWithType: TextLineBounds.Full
+  fullName: FluentGpu.Foundation.TextLineBounds.Full
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/TextLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Full
+    path: ../../src/FluentGpu.Foundation/TextLayout.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Full = 0
+    return:
+      type: FluentGpu.Foundation.TextLineBounds
+- uid: FluentGpu.Foundation.TextLineBounds.Tight
+  commentId: F:FluentGpu.Foundation.TextLineBounds.Tight
+  id: Tight
+  parent: FluentGpu.Foundation.TextLineBounds
+  langs:
+  - csharp
+  - vb
+  name: Tight
+  nameWithType: TextLineBounds.Tight
+  fullName: FluentGpu.Foundation.TextLineBounds.Tight
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/TextLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Tight
+    path: ../../src/FluentGpu.Foundation/TextLayout.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Tight = 1
+    return:
+      type: FluentGpu.Foundation.TextLineBounds
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Foundation.TextLineBounds
+  commentId: T:FluentGpu.Foundation.TextLineBounds
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.TextLineBounds.html
+  name: TextLineBounds
+  nameWithType: TextLineBounds
+  fullName: FluentGpu.Foundation.TextLineBounds

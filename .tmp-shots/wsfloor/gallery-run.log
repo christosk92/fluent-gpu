@@ -1,0 +1,33 @@
+[memcensus]
+  gc      heap=5.3MB committed=5.4MB gen0=1 gen1=1 gen2=1 alloc=3.1KB/s
+  proc    workingSet=146.2MB
+  scene   live=392 cap=512 orphans=0 sticky=0 scroll=2 brush=0
+  strings map=95 pendReclaim=0 idHighWater=96
+  images  count=0 ready=0 pending=0 used=0.0MB
+  decode  inflight=0 canceledPending=0
+  recon   components=22 nodeBindings=2 virtuals=0 providers=3
+  anim    tracks=0 loops=0 transitions=65 interact=0 scroll=0
+  host    popupWindows=0
+  gpu     bytes=27.2MB count=26 | glyphs=174 runs=78 atlasGen=0 quadPool=0 | tex: atlas=0 pooledFree=0 retired=0
+[memcensus]
+  gc      heap=5.3MB committed=5.4MB gen0=1 gen1=1 gen2=1 alloc=7.4KB/s
+  proc    workingSet=146.6MB
+  scene   live=392 cap=512 orphans=0 sticky=0 scroll=2 brush=0
+  strings map=95 pendReclaim=0 idHighWater=96
+  images  count=0 ready=0 pending=0 used=0.0MB
+  decode  inflight=0 canceledPending=0
+  recon   components=22 nodeBindings=2 virtuals=0 providers=3
+  anim    tracks=0 loops=0 transitions=65 interact=0 scroll=0
+  host    popupWindows=0
+  gpu     bytes=27.2MB count=26 | glyphs=174 runs=78 atlasGen=0 quadPool=0 | tex: atlas=0 pooledFree=0 retired=0
+[memcensus]
+  gc      heap=5.1MB committed=7.6MB gen0=3 gen1=3 gen2=2 alloc=0.6KB/s
+  proc    workingSet=140.7MB
+  scene   live=392 cap=512 orphans=0 sticky=0 scroll=2 brush=0
+  strings map=95 pendReclaim=0 idHighWater=96
+  images  count=0 ready=0 pending=0 used=0.0MB
+  decode  inflight=0 canceledPending=0
+  recon   components=22 nodeBindings=2 virtuals=0 providers=3
+  anim    tracks=0 loops=0 transitions=65 interact=0 scroll=0
+  host    popupWindows=0
+  gpu     bytes=27.2MB count=26 | glyphs=174 runs=78 atlasGen=0 quadPool=0 | tex: atlas=0 pooledFree=0 retired=0

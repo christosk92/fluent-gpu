@@ -1,0 +1,840 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Pal.InputEvent
+  commentId: T:FluentGpu.Pal.InputEvent
+  id: InputEvent
+  parent: FluentGpu.Pal
+  children:
+  - FluentGpu.Pal.InputEvent.#ctor(FluentGpu.Pal.InputKind,FluentGpu.Foundation.Point2,System.Int32,System.Int32,System.Single,FluentGpu.Foundation.KeyModifiers,FluentGpu.Foundation.PointerKind,System.Boolean,System.UInt32)
+  - FluentGpu.Pal.InputEvent.Button
+  - FluentGpu.Pal.InputEvent.IsRepeat
+  - FluentGpu.Pal.InputEvent.KeyCode
+  - FluentGpu.Pal.InputEvent.Kind
+  - FluentGpu.Pal.InputEvent.Mods
+  - FluentGpu.Pal.InputEvent.Pointer
+  - FluentGpu.Pal.InputEvent.PositionPx
+  - FluentGpu.Pal.InputEvent.ScrollDelta
+  - FluentGpu.Pal.InputEvent.TimestampMs
+  langs:
+  - csharp
+  - vb
+  name: InputEvent
+  nameWithType: InputEvent
+  fullName: FluentGpu.Pal.InputEvent
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InputEvent
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 52
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: >-
+    POD input event drained from the host-owned ring once per frame (no C# events across the seam).
+
+    <code class="paramref">ScrollDelta</code> (Wheel only) is in DIP, oriented so positive = scroll toward the content end
+
+    (offset increases). The platform pump converts WM_MOUSEWHEEL notches → DIP and flips the sign there.
+
+    <code class="paramref">Button</code>: 0 = left, 1 = right, 2 = middle. <code class="paramref">Mods</code> is the modifier chord at the
+
+    time of the event (pump-captured); <code class="paramref">IsRepeat</code> = keyboard auto-repeat (lParam bit 30);
+
+    <code class="paramref">TimestampMs</code> = the platform message time (drives double/triple-click detection in the dispatcher).
+  example: []
+  syntax:
+    content: 'public readonly record struct InputEvent : IEquatable<InputEvent>'
+    content.vb: Public Structure InputEvent Implements IEquatable(Of InputEvent)
+  implements:
+  - System.IEquatable{FluentGpu.Pal.InputEvent}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Pal.InputEvent.#ctor(FluentGpu.Pal.InputKind,FluentGpu.Foundation.Point2,System.Int32,System.Int32,System.Single,FluentGpu.Foundation.KeyModifiers,FluentGpu.Foundation.PointerKind,System.Boolean,System.UInt32)
+  commentId: M:FluentGpu.Pal.InputEvent.#ctor(FluentGpu.Pal.InputKind,FluentGpu.Foundation.Point2,System.Int32,System.Int32,System.Single,FluentGpu.Foundation.KeyModifiers,FluentGpu.Foundation.PointerKind,System.Boolean,System.UInt32)
+  id: '#ctor(FluentGpu.Pal.InputKind,FluentGpu.Foundation.Point2,System.Int32,System.Int32,System.Single,FluentGpu.Foundation.KeyModifiers,FluentGpu.Foundation.PointerKind,System.Boolean,System.UInt32)'
+  parent: FluentGpu.Pal.InputEvent
+  langs:
+  - csharp
+  - vb
+  name: InputEvent(InputKind, Point2, int, int, float, KeyModifiers, PointerKind, bool, uint)
+  nameWithType: InputEvent.InputEvent(InputKind, Point2, int, int, float, KeyModifiers, PointerKind, bool, uint)
+  fullName: FluentGpu.Pal.InputEvent.InputEvent(FluentGpu.Pal.InputKind, FluentGpu.Foundation.Point2, int, int, float, FluentGpu.Foundation.KeyModifiers, FluentGpu.Foundation.PointerKind, bool, uint)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 52
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: >-
+    POD input event drained from the host-owned ring once per frame (no C# events across the seam).
+
+    <code class="paramref">ScrollDelta</code> (Wheel only) is in DIP, oriented so positive = scroll toward the content end
+
+    (offset increases). The platform pump converts WM_MOUSEWHEEL notches → DIP and flips the sign there.
+
+    <code class="paramref">Button</code>: 0 = left, 1 = right, 2 = middle. <code class="paramref">Mods</code> is the modifier chord at the
+
+    time of the event (pump-captured); <code class="paramref">IsRepeat</code> = keyboard auto-repeat (lParam bit 30);
+
+    <code class="paramref">TimestampMs</code> = the platform message time (drives double/triple-click detection in the dispatcher).
+  example: []
+  syntax:
+    content: public InputEvent(InputKind Kind, Point2 PositionPx, int Button, int KeyCode, float ScrollDelta = 0, KeyModifiers Mods = KeyModifiers.None, PointerKind Pointer = PointerKind.Mouse, bool IsRepeat = false, uint TimestampMs = 0)
+    parameters:
+    - id: Kind
+      type: FluentGpu.Pal.InputKind
+    - id: PositionPx
+      type: FluentGpu.Foundation.Point2
+    - id: Button
+      type: System.Int32
+    - id: KeyCode
+      type: System.Int32
+    - id: ScrollDelta
+      type: System.Single
+    - id: Mods
+      type: FluentGpu.Foundation.KeyModifiers
+    - id: Pointer
+      type: FluentGpu.Foundation.PointerKind
+    - id: IsRepeat
+      type: System.Boolean
+    - id: TimestampMs
+      type: System.UInt32
+    content.vb: Public Sub New(Kind As InputKind, PositionPx As Point2, Button As Integer, KeyCode As Integer, ScrollDelta As Single = 0, Mods As KeyModifiers = KeyModifiers.None, Pointer As PointerKind = PointerKind.Mouse, IsRepeat As Boolean = False, TimestampMs As UInteger = 0)
+  overload: FluentGpu.Pal.InputEvent.#ctor*
+  nameWithType.vb: InputEvent.New(InputKind, Point2, Integer, Integer, Single, KeyModifiers, PointerKind, Boolean, UInteger)
+  fullName.vb: FluentGpu.Pal.InputEvent.New(FluentGpu.Pal.InputKind, FluentGpu.Foundation.Point2, Integer, Integer, Single, FluentGpu.Foundation.KeyModifiers, FluentGpu.Foundation.PointerKind, Boolean, UInteger)
+  name.vb: New(InputKind, Point2, Integer, Integer, Single, KeyModifiers, PointerKind, Boolean, UInteger)
+- uid: FluentGpu.Pal.InputEvent.Kind
+  commentId: P:FluentGpu.Pal.InputEvent.Kind
+  id: Kind
+  parent: FluentGpu.Pal.InputEvent
+  langs:
+  - csharp
+  - vb
+  name: Kind
+  nameWithType: InputEvent.Kind
+  fullName: FluentGpu.Pal.InputEvent.Kind
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Kind
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: public InputKind Kind { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Pal.InputKind
+    content.vb: Public Property Kind As InputKind
+  overload: FluentGpu.Pal.InputEvent.Kind*
+- uid: FluentGpu.Pal.InputEvent.PositionPx
+  commentId: P:FluentGpu.Pal.InputEvent.PositionPx
+  id: PositionPx
+  parent: FluentGpu.Pal.InputEvent
+  langs:
+  - csharp
+  - vb
+  name: PositionPx
+  nameWithType: InputEvent.PositionPx
+  fullName: FluentGpu.Pal.InputEvent.PositionPx
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PositionPx
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: public Point2 PositionPx { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Point2
+    content.vb: Public Property PositionPx As Point2
+  overload: FluentGpu.Pal.InputEvent.PositionPx*
+- uid: FluentGpu.Pal.InputEvent.Button
+  commentId: P:FluentGpu.Pal.InputEvent.Button
+  id: Button
+  parent: FluentGpu.Pal.InputEvent
+  langs:
+  - csharp
+  - vb
+  name: Button
+  nameWithType: InputEvent.Button
+  fullName: FluentGpu.Pal.InputEvent.Button
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Button
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: public int Button { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property Button As Integer
+  overload: FluentGpu.Pal.InputEvent.Button*
+- uid: FluentGpu.Pal.InputEvent.KeyCode
+  commentId: P:FluentGpu.Pal.InputEvent.KeyCode
+  id: KeyCode
+  parent: FluentGpu.Pal.InputEvent
+  langs:
+  - csharp
+  - vb
+  name: KeyCode
+  nameWithType: InputEvent.KeyCode
+  fullName: FluentGpu.Pal.InputEvent.KeyCode
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: KeyCode
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: public int KeyCode { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property KeyCode As Integer
+  overload: FluentGpu.Pal.InputEvent.KeyCode*
+- uid: FluentGpu.Pal.InputEvent.ScrollDelta
+  commentId: P:FluentGpu.Pal.InputEvent.ScrollDelta
+  id: ScrollDelta
+  parent: FluentGpu.Pal.InputEvent
+  langs:
+  - csharp
+  - vb
+  name: ScrollDelta
+  nameWithType: InputEvent.ScrollDelta
+  fullName: FluentGpu.Pal.InputEvent.ScrollDelta
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ScrollDelta
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: public float ScrollDelta { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property ScrollDelta As Single
+  overload: FluentGpu.Pal.InputEvent.ScrollDelta*
+- uid: FluentGpu.Pal.InputEvent.Mods
+  commentId: P:FluentGpu.Pal.InputEvent.Mods
+  id: Mods
+  parent: FluentGpu.Pal.InputEvent
+  langs:
+  - csharp
+  - vb
+  name: Mods
+  nameWithType: InputEvent.Mods
+  fullName: FluentGpu.Pal.InputEvent.Mods
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Mods
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: public KeyModifiers Mods { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.KeyModifiers
+    content.vb: Public Property Mods As KeyModifiers
+  overload: FluentGpu.Pal.InputEvent.Mods*
+- uid: FluentGpu.Pal.InputEvent.Pointer
+  commentId: P:FluentGpu.Pal.InputEvent.Pointer
+  id: Pointer
+  parent: FluentGpu.Pal.InputEvent
+  langs:
+  - csharp
+  - vb
+  name: Pointer
+  nameWithType: InputEvent.Pointer
+  fullName: FluentGpu.Pal.InputEvent.Pointer
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Pointer
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: public PointerKind Pointer { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.PointerKind
+    content.vb: Public Property Pointer As PointerKind
+  overload: FluentGpu.Pal.InputEvent.Pointer*
+- uid: FluentGpu.Pal.InputEvent.IsRepeat
+  commentId: P:FluentGpu.Pal.InputEvent.IsRepeat
+  id: IsRepeat
+  parent: FluentGpu.Pal.InputEvent
+  langs:
+  - csharp
+  - vb
+  name: IsRepeat
+  nameWithType: InputEvent.IsRepeat
+  fullName: FluentGpu.Pal.InputEvent.IsRepeat
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsRepeat
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 55
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: public bool IsRepeat { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property IsRepeat As Boolean
+  overload: FluentGpu.Pal.InputEvent.IsRepeat*
+- uid: FluentGpu.Pal.InputEvent.TimestampMs
+  commentId: P:FluentGpu.Pal.InputEvent.TimestampMs
+  id: TimestampMs
+  parent: FluentGpu.Pal.InputEvent
+  langs:
+  - csharp
+  - vb
+  name: TimestampMs
+  nameWithType: InputEvent.TimestampMs
+  fullName: FluentGpu.Pal.InputEvent.TimestampMs
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TimestampMs
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 55
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: public uint TimestampMs { get; init; }
+    parameters: []
+    return:
+      type: System.UInt32
+    content.vb: Public Property TimestampMs As UInteger
+  overload: FluentGpu.Pal.InputEvent.TimestampMs*
+references:
+- uid: FluentGpu.Pal
+  commentId: N:FluentGpu.Pal
+  href: FluentGpu.html
+  name: FluentGpu.Pal
+  nameWithType: FluentGpu.Pal
+  fullName: FluentGpu.Pal
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+- uid: System.IEquatable{FluentGpu.Pal.InputEvent}
+  commentId: T:System.IEquatable{FluentGpu.Pal.InputEvent}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<InputEvent>
+  nameWithType: IEquatable<InputEvent>
+  fullName: System.IEquatable<FluentGpu.Pal.InputEvent>
+  nameWithType.vb: IEquatable(Of InputEvent)
+  fullName.vb: System.IEquatable(Of FluentGpu.Pal.InputEvent)
+  name.vb: IEquatable(Of InputEvent)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Pal.InputEvent
+    name: InputEvent
+    href: FluentGpu.Pal.InputEvent.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Pal.InputEvent
+    name: InputEvent
+    href: FluentGpu.Pal.InputEvent.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Pal.InputEvent.#ctor*
+  commentId: Overload:FluentGpu.Pal.InputEvent.#ctor
+  href: FluentGpu.Pal.InputEvent.html#FluentGpu_Pal_InputEvent__ctor_FluentGpu_Pal_InputKind_FluentGpu_Foundation_Point2_System_Int32_System_Int32_System_Single_FluentGpu_Foundation_KeyModifiers_FluentGpu_Foundation_PointerKind_System_Boolean_System_UInt32_
+  name: InputEvent
+  nameWithType: InputEvent.InputEvent
+  fullName: FluentGpu.Pal.InputEvent.InputEvent
+  nameWithType.vb: InputEvent.New
+  fullName.vb: FluentGpu.Pal.InputEvent.New
+  name.vb: New
+- uid: FluentGpu.Pal.InputKind
+  commentId: T:FluentGpu.Pal.InputKind
+  parent: FluentGpu.Pal
+  href: FluentGpu.Pal.InputKind.html
+  name: InputKind
+  nameWithType: InputKind
+  fullName: FluentGpu.Pal.InputKind
+- uid: FluentGpu.Foundation.Point2
+  commentId: T:FluentGpu.Foundation.Point2
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Point2.html
+  name: Point2
+  nameWithType: Point2
+  fullName: FluentGpu.Foundation.Point2
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.KeyModifiers
+  commentId: T:FluentGpu.Foundation.KeyModifiers
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.KeyModifiers.html
+  name: KeyModifiers
+  nameWithType: KeyModifiers
+  fullName: FluentGpu.Foundation.KeyModifiers
+- uid: FluentGpu.Foundation.PointerKind
+  commentId: T:FluentGpu.Foundation.PointerKind
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.PointerKind.html
+  name: PointerKind
+  nameWithType: PointerKind
+  fullName: FluentGpu.Foundation.PointerKind
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: System.UInt32
+  commentId: T:System.UInt32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.uint32
+  name: uint
+  nameWithType: uint
+  fullName: uint
+  nameWithType.vb: UInteger
+  fullName.vb: UInteger
+  name.vb: UInteger
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Pal.InputEvent.Kind*
+  commentId: Overload:FluentGpu.Pal.InputEvent.Kind
+  href: FluentGpu.Pal.InputEvent.html#FluentGpu_Pal_InputEvent_Kind
+  name: Kind
+  nameWithType: InputEvent.Kind
+  fullName: FluentGpu.Pal.InputEvent.Kind
+- uid: FluentGpu.Pal.InputEvent.PositionPx*
+  commentId: Overload:FluentGpu.Pal.InputEvent.PositionPx
+  href: FluentGpu.Pal.InputEvent.html#FluentGpu_Pal_InputEvent_PositionPx
+  name: PositionPx
+  nameWithType: InputEvent.PositionPx
+  fullName: FluentGpu.Pal.InputEvent.PositionPx
+- uid: FluentGpu.Pal.InputEvent.Button*
+  commentId: Overload:FluentGpu.Pal.InputEvent.Button
+  href: FluentGpu.Pal.InputEvent.html#FluentGpu_Pal_InputEvent_Button
+  name: Button
+  nameWithType: InputEvent.Button
+  fullName: FluentGpu.Pal.InputEvent.Button
+- uid: FluentGpu.Pal.InputEvent.KeyCode*
+  commentId: Overload:FluentGpu.Pal.InputEvent.KeyCode
+  href: FluentGpu.Pal.InputEvent.html#FluentGpu_Pal_InputEvent_KeyCode
+  name: KeyCode
+  nameWithType: InputEvent.KeyCode
+  fullName: FluentGpu.Pal.InputEvent.KeyCode
+- uid: FluentGpu.Pal.InputEvent.ScrollDelta*
+  commentId: Overload:FluentGpu.Pal.InputEvent.ScrollDelta
+  href: FluentGpu.Pal.InputEvent.html#FluentGpu_Pal_InputEvent_ScrollDelta
+  name: ScrollDelta
+  nameWithType: InputEvent.ScrollDelta
+  fullName: FluentGpu.Pal.InputEvent.ScrollDelta
+- uid: FluentGpu.Pal.InputEvent.Mods*
+  commentId: Overload:FluentGpu.Pal.InputEvent.Mods
+  href: FluentGpu.Pal.InputEvent.html#FluentGpu_Pal_InputEvent_Mods
+  name: Mods
+  nameWithType: InputEvent.Mods
+  fullName: FluentGpu.Pal.InputEvent.Mods
+- uid: FluentGpu.Pal.InputEvent.Pointer*
+  commentId: Overload:FluentGpu.Pal.InputEvent.Pointer
+  href: FluentGpu.Pal.InputEvent.html#FluentGpu_Pal_InputEvent_Pointer
+  name: Pointer
+  nameWithType: InputEvent.Pointer
+  fullName: FluentGpu.Pal.InputEvent.Pointer
+- uid: FluentGpu.Pal.InputEvent.IsRepeat*
+  commentId: Overload:FluentGpu.Pal.InputEvent.IsRepeat
+  href: FluentGpu.Pal.InputEvent.html#FluentGpu_Pal_InputEvent_IsRepeat
+  name: IsRepeat
+  nameWithType: InputEvent.IsRepeat
+  fullName: FluentGpu.Pal.InputEvent.IsRepeat
+- uid: FluentGpu.Pal.InputEvent.TimestampMs*
+  commentId: Overload:FluentGpu.Pal.InputEvent.TimestampMs
+  href: FluentGpu.Pal.InputEvent.html#FluentGpu_Pal_InputEvent_TimestampMs
+  name: TimestampMs
+  nameWithType: InputEvent.TimestampMs
+  fullName: FluentGpu.Pal.InputEvent.TimestampMs

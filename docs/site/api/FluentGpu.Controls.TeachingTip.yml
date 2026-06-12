@@ -1,0 +1,2125 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.TeachingTip
+  commentId: T:FluentGpu.Controls.TeachingTip
+  id: TeachingTip
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.TeachingTip.ActionButtonClick
+  - FluentGpu.Controls.TeachingTip.ActionButtonContent
+  - FluentGpu.Controls.TeachingTip.ActionButtonIsAccent
+  - FluentGpu.Controls.TeachingTip.Body
+  - FluentGpu.Controls.TeachingTip.CloseButtonClick
+  - FluentGpu.Controls.TeachingTip.CloseButtonContent
+  - FluentGpu.Controls.TeachingTip.Closed
+  - FluentGpu.Controls.TeachingTip.Closing
+  - FluentGpu.Controls.TeachingTip.Create(System.String,System.String,System.String)
+  - FluentGpu.Controls.TeachingTip.HasTarget
+  - FluentGpu.Controls.TeachingTip.HeroContent
+  - FluentGpu.Controls.TeachingTip.HeroContentPlacement
+  - FluentGpu.Controls.TeachingTip.HeroImage
+  - FluentGpu.Controls.TeachingTip.IconGlyph
+  - FluentGpu.Controls.TeachingTip.IsLightDismissEnabled
+  - FluentGpu.Controls.TeachingTip.IsOpen
+  - FluentGpu.Controls.TeachingTip.OpenOnMount
+  - FluentGpu.Controls.TeachingTip.Opened
+  - FluentGpu.Controls.TeachingTip.PartBubble
+  - FluentGpu.Controls.TeachingTip.PartCloseButton
+  - FluentGpu.Controls.TeachingTip.PartHero
+  - FluentGpu.Controls.TeachingTip.PartTitle
+  - FluentGpu.Controls.TeachingTip.Parts
+  - FluentGpu.Controls.TeachingTip.PlacementMargin
+  - FluentGpu.Controls.TeachingTip.PreferredPlacement
+  - FluentGpu.Controls.TeachingTip.Render
+  - FluentGpu.Controls.TeachingTip.ShouldConstrainToRootBounds
+  - FluentGpu.Controls.TeachingTip.Subtitle
+  - FluentGpu.Controls.TeachingTip.TailVisibility
+  - FluentGpu.Controls.TeachingTip.Target
+  - FluentGpu.Controls.TeachingTip.Title
+  - FluentGpu.Controls.TeachingTip.TriggerLabel
+  langs:
+  - csharp
+  - vb
+  name: TeachingTip
+  nameWithType: TeachingTip
+  fullName: FluentGpu.Controls.TeachingTip
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TeachingTip
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 41
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>TeachingTip</code> (controls/dev/TeachingTip/TeachingTip.xaml + _themeresources + .cpp/.idl): an anchored
+
+    (targeted) or window-relative (untargeted) non-modal callout that teaches/highlights a feature. The body is a SOLID
+
+    surface — <code>SolidBackgroundFillColorTertiary</code> background, <code>SurfaceStrokeColorDefault</code> 1px border,
+
+    <code>OverlayCornerRadius</code> (8), an elevation shadow, and the 1px <code>TeachingTipTopHighlightBrush</code> top highlight
+
+    (#0DFFFFFF dark / #99FFFFFF light, TeachingTip_themeresources.xaml:6/:28) — with (top→bottom) an optional hero
+
+    image, an icon + title + subtitle row, the main content, and a footer button panel (Action + Close). A targeted tip
+
+    grows a 16×8 tail/beak that points at the target; an untargeted tip has no tail. NOT light-dismiss by default
+
+    (<code>IsLightDismissEnabled=false</code>): only the close button, Escape, or a programmatic close dismisses it.
+
+
+    The FULL 13-placement matrix (TeachingTip.xaml PlacementStates :115-264) is honored — Top/Bottom/Left/Right,
+
+    the 8 corner variants, and Center — each mapping to the matching FlyoutPositioner placement with the tail pinned
+
+    to the joined edge per the state's alignment setters (e.g. TopRight → tail at the LEFT of the bottom edge,
+
+    :160-170). <xref href="FluentGpu.Controls.TeachingTip.PlacementMargin" data-throw-if-not-resolved="false"></xref> nudges the tip away from the target (TeachingTip.cpp:480/:588 offset);
+
+    <xref href="FluentGpu.Controls.TeachingTip.ShouldConstrainToRootBounds" data-throw-if-not-resolved="false"></xref> (default true, the WinUI idl default) opts the popup out of the window
+
+    bounds via the E4 windowed-popup seam when false.
+
+
+    1:1 tokens/sizes (TeachingTip_themeresources.xaml, unitless = epx):
+     • MinWidth 320, MaxWidth 336, MinHeight 40, MaxHeight 520 (TeachingTipMin/MaxWidth/Height).
+     • Content margin 12 on all sides (TeachingTipContentMargin); button panel top margin 0,12,0,0
+       (TeachingTipButtonPanelMargin); both-buttons split — Action 0,12,4,0 (Left), Close 4,12,0,0 (Right).
+     • MainContent present-margin 0,12,0,0 (gap below the title block when content exists); icon→title gap 12
+       (TeachingTipIconPresenterMarginWithIcon); title-stack right margin 28 when the header (alternate) close button shows.
+     • Title FontSize 16 SemiBold; Subtitle FontSize 14; body content FontSize 14 (Foreground = TextPrimary).
+     • Alternate (header) close button: 40×40 (TeachingTipAlternateCloseButtonSize), E711 glyph at 16px, SubtleFill
+       ramp, ControlCornerRadius. The footer ActionButton's DEFAULT style is the STANDARD button
+       (TeachingTip.xaml:10 ActionButtonStyle = DefaultButtonStyle) — set <xref href="FluentGpu.Controls.TeachingTip.ActionButtonIsAccent" data-throw-if-not-resolved="false"></xref> for the
+       AccentButtonStyle the gallery samples use.
+
+    Open/close motion (host-driven, PopupChrome.TeachingTip): expand scale → 1 over 300ms cubic-bezier(0.1,0.9,0.2,1);
+
+    contract scale → 20/Width over 200ms cubic-bezier(0.7,0,1,0.5) (TeachingTip.cpp:1660-1712; .h:234-235 +
+
+    :304-307 control points) — both at full opacity (the storyboards carry no opacity keyframes).
+  example: []
+  syntax:
+    content: 'public sealed class TeachingTip : Component'
+    content.vb: Public NotInheritable Class TeachingTip Inherits Component
+  inheritance:
+  - System.Object
+  - FluentGpu.Hooks.Component
+  inheritedMembers:
+  - FluentGpu.Hooks.Component.Context
+  - FluentGpu.Hooks.Component.RunsOnce
+  - FluentGpu.Hooks.Component.RenderWithHooks
+  - FluentGpu.Hooks.Component.Unmount
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+  extensionMethods:
+  - FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseEntrance(System.Single,System.Object)
+  - FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseHoverScale(System.Boolean,System.Single)
+- uid: FluentGpu.Controls.TeachingTip.PartBubble
+  commentId: F:FluentGpu.Controls.TeachingTip.PartBubble
+  id: PartBubble
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: PartBubble
+  nameWithType: TeachingTip.PartBubble
+  fullName: FluentGpu.Controls.TeachingTip.PartBubble
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartBubble
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 64
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The solid callout card (WinUI ContentRootGrid): fill, border, corners, shadow, min/max sizes…
+        The tail/beak and the 1px top highlight are composed AGAINST the card OUTSIDE this part (tail mechanics
+        stay control-owned — restyling the card fill does not recolor the beak). Owned: Children (the
+        hero · content · footer structure).
+  example: []
+  syntax:
+    content: public const string PartBubble = "Bubble"
+    return:
+      type: System.String
+    content.vb: Public Const PartBubble As String = "Bubble"
+- uid: FluentGpu.Controls.TeachingTip.PartTitle
+  commentId: F:FluentGpu.Controls.TeachingTip.PartTitle
+  id: PartTitle
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: PartTitle
+  nameWithType: TeachingTip.PartTitle
+  fullName: FluentGpu.Controls.TeachingTip.PartTitle
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartTitle
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 67
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The title text — a TextEl part: customize via
+        <code>Parts.Set&lt;TextEl&gt;(TeachingTip.PartTitle, t =&gt; t with { … })</code>. Owned: none (pure styling).
+  example: []
+  syntax:
+    content: public const string PartTitle = "Title"
+    return:
+      type: System.String
+    content.vb: Public Const PartTitle As String = "Title"
+- uid: FluentGpu.Controls.TeachingTip.PartCloseButton
+  commentId: F:FluentGpu.Controls.TeachingTip.PartCloseButton
+  id: PartCloseButton
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: PartCloseButton
+  nameWithType: TeachingTip.PartCloseButton
+  fullName: FluentGpu.Controls.TeachingTip.PartCloseButton
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartCloseButton
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 71
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Whichever close button is in use: the 40×40 header (alternate) close button when
+        <xref href="FluentGpu.Controls.TeachingTip.CloseButtonContent" data-throw-if-not-resolved="false"></xref> is empty, else the labelled footer close (WinUI AlternateCloseButton /
+        CloseButton). Owned: OnClick (the Closing→Closed pipeline), Role.
+  example: []
+  syntax:
+    content: public const string PartCloseButton = "CloseButton"
+    return:
+      type: System.String
+    content.vb: Public Const PartCloseButton As String = "CloseButton"
+- uid: FluentGpu.Controls.TeachingTip.PartHero
+  commentId: F:FluentGpu.Controls.TeachingTip.PartHero
+  id: PartHero
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: PartHero
+  nameWithType: TeachingTip.PartHero
+  fullName: FluentGpu.Controls.TeachingTip.PartHero
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartHero
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 74
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The full-bleed hero banner wrapper (WinUI HeroContentPresenter host). Owned: Children (the
+        <xref href="FluentGpu.Controls.TeachingTip.HeroContent" data-throw-if-not-resolved="false"></xref>/<xref href="FluentGpu.Controls.TeachingTip.HeroImage" data-throw-if-not-resolved="false"></xref> slot).
+  example: []
+  syntax:
+    content: public const string PartHero = "Hero"
+    return:
+      type: System.String
+    content.vb: Public Const PartHero As String = "Hero"
+- uid: FluentGpu.Controls.TeachingTip.TriggerLabel
+  commentId: F:FluentGpu.Controls.TeachingTip.TriggerLabel
+  id: TriggerLabel
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: TriggerLabel
+  nameWithType: TeachingTip.TriggerLabel
+  fullName: FluentGpu.Controls.TeachingTip.TriggerLabel
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TriggerLabel
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 80
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Optional convenience trigger button label — WinUI's TeachingTip has NO trigger UI of its own (it is
+        opened via <code>IsOpen</code> only, TeachingTip.idl); empty (the default) renders no trigger. Set it for the
+        gallery-style "button that shows the tip" composition (the wrapper then doubles as the anchor).
+  example: []
+  syntax:
+    content: public string TriggerLabel
+    return:
+      type: System.String
+    content.vb: Public TriggerLabel As String
+- uid: FluentGpu.Controls.TeachingTip.Title
+  commentId: F:FluentGpu.Controls.TeachingTip.Title
+  id: Title
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: Title
+  nameWithType: TeachingTip.Title
+  fullName: FluentGpu.Controls.TeachingTip.Title
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Title
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 81
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string Title
+    return:
+      type: System.String
+    content.vb: Public Title As String
+- uid: FluentGpu.Controls.TeachingTip.Subtitle
+  commentId: F:FluentGpu.Controls.TeachingTip.Subtitle
+  id: Subtitle
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: Subtitle
+  nameWithType: TeachingTip.Subtitle
+  fullName: FluentGpu.Controls.TeachingTip.Subtitle
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Subtitle
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 82
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string Subtitle
+    return:
+      type: System.String
+    content.vb: Public Subtitle As String
+- uid: FluentGpu.Controls.TeachingTip.Body
+  commentId: F:FluentGpu.Controls.TeachingTip.Body
+  id: Body
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: Body
+  nameWithType: TeachingTip.Body
+  fullName: FluentGpu.Controls.TeachingTip.Body
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Body
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 84
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Body content (WinUI <code>Content</code>). When empty, the MainContentPresenter collapses (NoContent VSM).
+  example: []
+  syntax:
+    content: public string Body
+    return:
+      type: System.String
+    content.vb: Public Body As String
+- uid: FluentGpu.Controls.TeachingTip.IconGlyph
+  commentId: F:FluentGpu.Controls.TeachingTip.IconGlyph
+  id: IconGlyph
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: IconGlyph
+  nameWithType: TeachingTip.IconGlyph
+  fullName: FluentGpu.Controls.TeachingTip.IconGlyph
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IconGlyph
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 86
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Glyph icon (Segoe Fluent Icons codepoint) shown left of the title (WinUI <code>IconSource</code>). Empty = none.
+  example: []
+  syntax:
+    content: public string IconGlyph
+    return:
+      type: System.String
+    content.vb: Public IconGlyph As String
+- uid: FluentGpu.Controls.TeachingTip.HeroImage
+  commentId: F:FluentGpu.Controls.TeachingTip.HeroImage
+  id: HeroImage
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: HeroImage
+  nameWithType: TeachingTip.HeroImage
+  fullName: FluentGpu.Controls.TeachingTip.HeroImage
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HeroImage
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 88
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'Hero image source (WinUI <code>HeroContent</code>): a full-bleed banner pinned to the top or bottom edge.'
+  example: []
+  syntax:
+    content: public string HeroImage
+    return:
+      type: System.String
+    content.vb: Public HeroImage As String
+- uid: FluentGpu.Controls.TeachingTip.HeroContent
+  commentId: F:FluentGpu.Controls.TeachingTip.HeroContent
+  id: HeroContent
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: HeroContent
+  nameWithType: TeachingTip.HeroContent
+  fullName: FluentGpu.Controls.TeachingTip.HeroContent
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HeroContent
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 91
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Arbitrary hero content slot (overrides <xref href="FluentGpu.Controls.TeachingTip.HeroImage" data-throw-if-not-resolved="false"></xref> when set) — WinUI HeroContent is a
+        UIElement, not just an image.
+  example: []
+  syntax:
+    content: public Element? HeroContent
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public HeroContent As Element
+- uid: FluentGpu.Controls.TeachingTip.HeroContentPlacement
+  commentId: F:FluentGpu.Controls.TeachingTip.HeroContentPlacement
+  id: HeroContentPlacement
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: HeroContentPlacement
+  nameWithType: TeachingTip.HeroContentPlacement
+  fullName: FluentGpu.Controls.TeachingTip.HeroContentPlacement
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HeroContentPlacement
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 92
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public TeachingTip.HeroPlacement HeroContentPlacement
+    return:
+      type: FluentGpu.Controls.TeachingTip.HeroPlacement
+    content.vb: Public HeroContentPlacement As TeachingTip.HeroPlacement
+- uid: FluentGpu.Controls.TeachingTip.ActionButtonContent
+  commentId: F:FluentGpu.Controls.TeachingTip.ActionButtonContent
+  id: ActionButtonContent
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: ActionButtonContent
+  nameWithType: TeachingTip.ActionButtonContent
+  fullName: FluentGpu.Controls.TeachingTip.ActionButtonContent
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ActionButtonContent
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 96
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI <code>ActionButtonContent</code> — the footer action button. Empty = collapsed.
+  example: []
+  syntax:
+    content: public string ActionButtonContent
+    return:
+      type: System.String
+    content.vb: Public ActionButtonContent As String
+- uid: FluentGpu.Controls.TeachingTip.ActionButtonClick
+  commentId: F:FluentGpu.Controls.TeachingTip.ActionButtonClick
+  id: ActionButtonClick
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: ActionButtonClick
+  nameWithType: TeachingTip.ActionButtonClick
+  fullName: FluentGpu.Controls.TeachingTip.ActionButtonClick
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ActionButtonClick
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 97
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Action? ActionButtonClick
+    return:
+      type: System.Action
+    content.vb: Public ActionButtonClick As Action
+- uid: FluentGpu.Controls.TeachingTip.ActionButtonIsAccent
+  commentId: F:FluentGpu.Controls.TeachingTip.ActionButtonIsAccent
+  id: ActionButtonIsAccent
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: ActionButtonIsAccent
+  nameWithType: TeachingTip.ActionButtonIsAccent
+  fullName: FluentGpu.Controls.TeachingTip.ActionButtonIsAccent
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ActionButtonIsAccent
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 100
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The DEFAULT ActionButtonStyle is the standard button (TeachingTip.xaml:10); true opts into
+        AccentButtonStyle (the common app override).
+  example: []
+  syntax:
+    content: public bool ActionButtonIsAccent
+    return:
+      type: System.Boolean
+    content.vb: Public ActionButtonIsAccent As Boolean
+- uid: FluentGpu.Controls.TeachingTip.CloseButtonContent
+  commentId: F:FluentGpu.Controls.TeachingTip.CloseButtonContent
+  id: CloseButtonContent
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: CloseButtonContent
+  nameWithType: TeachingTip.CloseButtonContent
+  fullName: FluentGpu.Controls.TeachingTip.CloseButtonContent
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CloseButtonContent
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 103
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>CloseButtonContent</code> — the standard footer close button. Empty = the close moves to the 40×40
+        header (alternate) close button (WinUI HeaderCloseButton VSM); set it to show a labelled footer close instead.
+  example: []
+  syntax:
+    content: public string CloseButtonContent
+    return:
+      type: System.String
+    content.vb: Public CloseButtonContent As String
+- uid: FluentGpu.Controls.TeachingTip.CloseButtonClick
+  commentId: F:FluentGpu.Controls.TeachingTip.CloseButtonClick
+  id: CloseButtonClick
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: CloseButtonClick
+  nameWithType: TeachingTip.CloseButtonClick
+  fullName: FluentGpu.Controls.TeachingTip.CloseButtonClick
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CloseButtonClick
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 104
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Action? CloseButtonClick
+    return:
+      type: System.Action
+    content.vb: Public CloseButtonClick As Action
+- uid: FluentGpu.Controls.TeachingTip.IsLightDismissEnabled
+  commentId: F:FluentGpu.Controls.TeachingTip.IsLightDismissEnabled
+  id: IsLightDismissEnabled
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: IsLightDismissEnabled
+  nameWithType: TeachingTip.IsLightDismissEnabled
+  fullName: FluentGpu.Controls.TeachingTip.IsLightDismissEnabled
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsLightDismissEnabled
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 109
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>IsLightDismissEnabled</code> (default false). When true, clicking outside dismisses the tip
+        (and the surface swaps to the transient acrylic background — the LightDismiss VSM, TeachingTip.xaml:19-26).
+  example: []
+  syntax:
+    content: public bool IsLightDismissEnabled
+    return:
+      type: System.Boolean
+    content.vb: Public IsLightDismissEnabled As Boolean
+- uid: FluentGpu.Controls.TeachingTip.OpenOnMount
+  commentId: F:FluentGpu.Controls.TeachingTip.OpenOnMount
+  id: OpenOnMount
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: OpenOnMount
+  nameWithType: TeachingTip.OpenOnMount
+  fullName: FluentGpu.Controls.TeachingTip.OpenOnMount
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OpenOnMount
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 110
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool OpenOnMount
+    return:
+      type: System.Boolean
+    content.vb: Public OpenOnMount As Boolean
+- uid: FluentGpu.Controls.TeachingTip.IsOpen
+  commentId: F:FluentGpu.Controls.TeachingTip.IsOpen
+  id: IsOpen
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: IsOpen
+  nameWithType: TeachingTip.IsOpen
+  fullName: FluentGpu.Controls.TeachingTip.IsOpen
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsOpen
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 116
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>Boolean IsOpen</code> (TeachingTip.idl, MUX_DEFAULT_VALUE false) as a CONTROLLED two-way signal:
+        when set, writes from anywhere open/close the tip with the full expand/contract motion, and EVERY close path
+        (close button, light dismiss, Escape, programmatic) writes false back — WinUI's OnCloseButtonClicked and its
+        light-dismiss handler both end in <code>IsOpen(false)</code> (TeachingTip.cpp:1271-1276, :1382-1388). A cancelled
+        Closing restores true (the WinUI deferral revert). Null = open via the trigger/<xref href="FluentGpu.Controls.TeachingTip.OpenOnMount" data-throw-if-not-resolved="false"></xref> only.
+  example: []
+  syntax:
+    content: public Signal<bool>? IsOpen
+    return:
+      type: FluentGpu.Signals.Signal{System.Boolean}
+    content.vb: Public IsOpen As Signal(Of Boolean)
+- uid: FluentGpu.Controls.TeachingTip.Target
+  commentId: F:FluentGpu.Controls.TeachingTip.Target
+  id: Target
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: Target
+  nameWithType: TeachingTip.Target
+  fullName: FluentGpu.Controls.TeachingTip.Target
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Target
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 121
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>FrameworkElement Target</code> (TeachingTip.idl) as the engine's anchor-thunk seam: the node the
+        targeted tip points at (capture it via <xref href="FluentGpu.Dsl.BoxEl.OnRealized" data-throw-if-not-resolved="false"></xref> on the target element). Null with
+        <xref href="FluentGpu.Controls.TeachingTip.HasTarget" data-throw-if-not-resolved="false"></xref>=true anchors to this component's own wrapper/trigger (the pre-Target compat behavior);
+        <xref href="FluentGpu.Controls.TeachingTip.HasTarget" data-throw-if-not-resolved="false"></xref>=false ignores it (untargeted window-edge placement).
+  example: []
+  syntax:
+    content: public Func<NodeHandle>? Target
+    return:
+      type: System.Func{FluentGpu.Foundation.NodeHandle}
+    content.vb: Public Target As Func(Of NodeHandle)
+- uid: FluentGpu.Controls.TeachingTip.PreferredPlacement
+  commentId: F:FluentGpu.Controls.TeachingTip.PreferredPlacement
+  id: PreferredPlacement
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: PreferredPlacement
+  nameWithType: TeachingTip.PreferredPlacement
+  fullName: FluentGpu.Controls.TeachingTip.PreferredPlacement
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PreferredPlacement
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 123
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI <code>PreferredPlacement</code> (default Auto = Top for a targeted tip).
+  example: []
+  syntax:
+    content: public TeachingTip.PlacementMode PreferredPlacement
+    return:
+      type: FluentGpu.Controls.TeachingTip.PlacementMode
+    content.vb: Public PreferredPlacement As TeachingTip.PlacementMode
+- uid: FluentGpu.Controls.TeachingTip.TailVisibility
+  commentId: F:FluentGpu.Controls.TeachingTip.TailVisibility
+  id: TailVisibility
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: TailVisibility
+  nameWithType: TeachingTip.TailVisibility
+  fullName: FluentGpu.Controls.TeachingTip.TailVisibility
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TailVisibility
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 124
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public TeachingTip.TailVisibilityMode TailVisibility
+    return:
+      type: FluentGpu.Controls.TeachingTip.TailVisibilityMode
+    content.vb: Public TailVisibility As TeachingTip.TailVisibilityMode
+- uid: FluentGpu.Controls.TeachingTip.PlacementMargin
+  commentId: F:FluentGpu.Controls.TeachingTip.PlacementMargin
+  id: PlacementMargin
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: PlacementMargin
+  nameWithType: TeachingTip.PlacementMargin
+  fullName: FluentGpu.Controls.TeachingTip.PlacementMargin
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PlacementMargin
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 127
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>PlacementMargin</code> (idl:119): extra distance between the target and the tip, applied on the
+        placement axis (TeachingTip.cpp:480/:588 read it as the offset).
+  example: []
+  syntax:
+    content: public float PlacementMargin
+    return:
+      type: System.Single
+    content.vb: Public PlacementMargin As Single
+- uid: FluentGpu.Controls.TeachingTip.ShouldConstrainToRootBounds
+  commentId: F:FluentGpu.Controls.TeachingTip.ShouldConstrainToRootBounds
+  id: ShouldConstrainToRootBounds
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: ShouldConstrainToRootBounds
+  nameWithType: TeachingTip.ShouldConstrainToRootBounds
+  fullName: FluentGpu.Controls.TeachingTip.ShouldConstrainToRootBounds
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ShouldConstrainToRootBounds
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 130
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>ShouldConstrainToRootBounds</code> (default TRUE — the tip stays inside the window). False →
+        the popup goes windowed via the E4 seam and may escape the window.
+  example: []
+  syntax:
+    content: public bool ShouldConstrainToRootBounds
+    return:
+      type: System.Boolean
+    content.vb: Public ShouldConstrainToRootBounds As Boolean
+- uid: FluentGpu.Controls.TeachingTip.HasTarget
+  commentId: F:FluentGpu.Controls.TeachingTip.HasTarget
+  id: HasTarget
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: HasTarget
+  nameWithType: TeachingTip.HasTarget
+  fullName: FluentGpu.Controls.TeachingTip.HasTarget
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HasTarget
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 135
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>Target</code> presence. When false the tip is untargeted (no beak unless
+        <xref href="FluentGpu.Controls.TeachingTip.TailVisibility" data-throw-if-not-resolved="false"></xref> forces one) and is placed against the WINDOW edge — WinUI
+        PositionUntargetedPopup: default Bottom of the window, UntargetedEdgeMargin = 24px from the
+        edges, <xref href="FluentGpu.Controls.TeachingTip.PreferredPlacement" data-throw-if-not-resolved="false"></xref> picking the corner/edge (TeachingTip.cpp:571-668, :2074-2090).
+  example: []
+  syntax:
+    content: public bool HasTarget
+    return:
+      type: System.Boolean
+    content.vb: Public HasTarget As Boolean
+- uid: FluentGpu.Controls.TeachingTip.Opened
+  commentId: F:FluentGpu.Controls.TeachingTip.Opened
+  id: Opened
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: Opened
+  nameWithType: TeachingTip.Opened
+  fullName: FluentGpu.Controls.TeachingTip.Opened
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Opened
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 138
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Action? Opened
+    return:
+      type: System.Action
+    content.vb: Public Opened As Action
+- uid: FluentGpu.Controls.TeachingTip.Closing
+  commentId: F:FluentGpu.Controls.TeachingTip.Closing
+  id: Closing
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: Closing
+  nameWithType: TeachingTip.Closing
+  fullName: FluentGpu.Controls.TeachingTip.Closing
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Closing
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 141
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>Closing</code> — fires before close with the reason; setting <xref href="FluentGpu.Controls.TeachingTip.ClosingEventArgs.Cancel" data-throw-if-not-resolved="false"></xref>
+        aborts the close (the synchronous slice of the deferral pipeline).
+  example: []
+  syntax:
+    content: public Action<TeachingTip.ClosingEventArgs>? Closing
+    return:
+      type: System.Action{FluentGpu.Controls.TeachingTip.ClosingEventArgs}
+    content.vb: Public Closing As Action(Of TeachingTip.ClosingEventArgs)
+- uid: FluentGpu.Controls.TeachingTip.Closed
+  commentId: F:FluentGpu.Controls.TeachingTip.Closed
+  id: Closed
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: Closed
+  nameWithType: TeachingTip.Closed
+  fullName: FluentGpu.Controls.TeachingTip.Closed
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Closed
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 142
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Action<TeachingTip.CloseReason>? Closed
+    return:
+      type: System.Action{FluentGpu.Controls.TeachingTip.CloseReason}
+    content.vb: Public Closed As Action(Of TeachingTip.CloseReason)
+- uid: FluentGpu.Controls.TeachingTip.Parts
+  commentId: F:FluentGpu.Controls.TeachingTip.Parts
+  id: Parts
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: Parts
+  nameWithType: TeachingTip.Parts
+  fullName: FluentGpu.Controls.TeachingTip.Parts
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Parts
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 146
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Lightweight per-part styling (CSS ::part): modifiers keyed by the <code>PartXxx</code> consts; see
+        <xref href="FluentGpu.Dsl.TemplateParts" data-throw-if-not-resolved="false"></xref> for the contract.
+  example: []
+  syntax:
+    content: public TemplateParts? Parts
+    return:
+      type: FluentGpu.Dsl.TemplateParts
+    content.vb: Public Parts As TemplateParts
+- uid: FluentGpu.Controls.TeachingTip.Create(System.String,System.String,System.String)
+  commentId: M:FluentGpu.Controls.TeachingTip.Create(System.String,System.String,System.String)
+  id: Create(System.String,System.String,System.String)
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: Create(string, string, string)
+  nameWithType: TeachingTip.Create(string, string, string)
+  fullName: FluentGpu.Controls.TeachingTip.Create(string, string, string)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 181
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Embed a TeachingTip with a trigger label, title, and body (kept call-site-compatible with the prior API).
+  example: []
+  syntax:
+    content: public static Element Create(string triggerLabel, string title, string body)
+    parameters:
+    - id: triggerLabel
+      type: System.String
+    - id: title
+      type: System.String
+    - id: body
+      type: System.String
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Create(triggerLabel As String, title As String, body As String) As Element
+  overload: FluentGpu.Controls.TeachingTip.Create*
+  nameWithType.vb: TeachingTip.Create(String, String, String)
+  fullName.vb: FluentGpu.Controls.TeachingTip.Create(String, String, String)
+  name.vb: Create(String, String, String)
+- uid: FluentGpu.Controls.TeachingTip.Render
+  commentId: M:FluentGpu.Controls.TeachingTip.Render
+  id: Render
+  parent: FluentGpu.Controls.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: Render()
+  nameWithType: TeachingTip.Render()
+  fullName: FluentGpu.Controls.TeachingTip.Render()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Render
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 207
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  example: []
+  syntax:
+    content: public override Element Render()
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Overrides Function Render() As Element
+  overridden: FluentGpu.Hooks.Component.Render
+  overload: FluentGpu.Controls.TeachingTip.Render*
+references:
+- uid: FluentGpu.Controls.TeachingTip.PlacementMargin
+  commentId: F:FluentGpu.Controls.TeachingTip.PlacementMargin
+  href: FluentGpu.Controls.TeachingTip.html#FluentGpu_Controls_TeachingTip_PlacementMargin
+  name: PlacementMargin
+  nameWithType: TeachingTip.PlacementMargin
+  fullName: FluentGpu.Controls.TeachingTip.PlacementMargin
+- uid: FluentGpu.Controls.TeachingTip.ShouldConstrainToRootBounds
+  commentId: F:FluentGpu.Controls.TeachingTip.ShouldConstrainToRootBounds
+  href: FluentGpu.Controls.TeachingTip.html#FluentGpu_Controls_TeachingTip_ShouldConstrainToRootBounds
+  name: ShouldConstrainToRootBounds
+  nameWithType: TeachingTip.ShouldConstrainToRootBounds
+  fullName: FluentGpu.Controls.TeachingTip.ShouldConstrainToRootBounds
+- uid: FluentGpu.Controls.TeachingTip.ActionButtonIsAccent
+  commentId: F:FluentGpu.Controls.TeachingTip.ActionButtonIsAccent
+  href: FluentGpu.Controls.TeachingTip.html#FluentGpu_Controls_TeachingTip_ActionButtonIsAccent
+  name: ActionButtonIsAccent
+  nameWithType: TeachingTip.ActionButtonIsAccent
+  fullName: FluentGpu.Controls.TeachingTip.ActionButtonIsAccent
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Hooks.Component
+  commentId: T:FluentGpu.Hooks.Component
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.Component.html
+  name: Component
+  nameWithType: Component
+  fullName: FluentGpu.Hooks.Component
+- uid: FluentGpu.Hooks.Component.Context
+  commentId: P:FluentGpu.Hooks.Component.Context
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Context
+  name: Context
+  nameWithType: Component.Context
+  fullName: FluentGpu.Hooks.Component.Context
+- uid: FluentGpu.Hooks.Component.RunsOnce
+  commentId: P:FluentGpu.Hooks.Component.RunsOnce
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RunsOnce
+  name: RunsOnce
+  nameWithType: Component.RunsOnce
+  fullName: FluentGpu.Hooks.Component.RunsOnce
+- uid: FluentGpu.Hooks.Component.RenderWithHooks
+  commentId: M:FluentGpu.Hooks.Component.RenderWithHooks
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  name: RenderWithHooks()
+  nameWithType: Component.RenderWithHooks()
+  fullName: FluentGpu.Hooks.Component.RenderWithHooks()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.RenderWithHooks
+    name: RenderWithHooks
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.RenderWithHooks
+    name: RenderWithHooks
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  - name: (
+  - name: )
+- uid: FluentGpu.Hooks.Component.Unmount
+  commentId: M:FluentGpu.Hooks.Component.Unmount
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  name: Unmount()
+  nameWithType: Component.Unmount()
+  fullName: FluentGpu.Hooks.Component.Unmount()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.Unmount
+    name: Unmount
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.Unmount
+    name: Unmount
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseEntrance(System.Single,System.Object)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  parent: FluentGpu.Hooks.MotionHooks
+  definition: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  name: UseEntrance(Component, float, object)
+  nameWithType: MotionHooks.UseEntrance(Component, float, object)
+  fullName: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, float, object)
+  nameWithType.vb: MotionHooks.UseEntrance(Component, Single, Object)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, Single, Object)
+  name.vb: UseEntrance(Component, Single, Object)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseHoverScale(System.Boolean,System.Single)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  parent: FluentGpu.Hooks.MotionHooks
+  definition: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  name: UseHoverScale(Component, bool, float)
+  nameWithType: MotionHooks.UseHoverScale(Component, bool, float)
+  fullName: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, bool, float)
+  nameWithType.vb: MotionHooks.UseHoverScale(Component, Boolean, Single)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, Boolean, Single)
+  name.vb: UseHoverScale(Component, Boolean, Single)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Hooks
+  commentId: N:FluentGpu.Hooks
+  href: FluentGpu.html
+  name: FluentGpu.Hooks
+  nameWithType: FluentGpu.Hooks
+  fullName: FluentGpu.Hooks
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+- uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  isExternal: true
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  name: UseEntrance(Component, float, object)
+  nameWithType: MotionHooks.UseEntrance(Component, float, object)
+  fullName: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, float, object)
+  nameWithType.vb: MotionHooks.UseEntrance(Component, Single, Object)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, Single, Object)
+  name.vb: UseEntrance(Component, Single, Object)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Hooks.MotionHooks
+  commentId: T:FluentGpu.Hooks.MotionHooks
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.MotionHooks.html
+  name: MotionHooks
+  nameWithType: MotionHooks
+  fullName: FluentGpu.Hooks.MotionHooks
+- uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  isExternal: true
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  name: UseHoverScale(Component, bool, float)
+  nameWithType: MotionHooks.UseHoverScale(Component, bool, float)
+  fullName: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, bool, float)
+  nameWithType.vb: MotionHooks.UseHoverScale(Component, Boolean, Single)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, Boolean, Single)
+  name.vb: UseHoverScale(Component, Boolean, Single)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Controls.TeachingTip.CloseButtonContent
+  commentId: F:FluentGpu.Controls.TeachingTip.CloseButtonContent
+  href: FluentGpu.Controls.TeachingTip.html#FluentGpu_Controls_TeachingTip_CloseButtonContent
+  name: CloseButtonContent
+  nameWithType: TeachingTip.CloseButtonContent
+  fullName: FluentGpu.Controls.TeachingTip.CloseButtonContent
+- uid: FluentGpu.Controls.TeachingTip.HeroContent
+  commentId: F:FluentGpu.Controls.TeachingTip.HeroContent
+  href: FluentGpu.Controls.TeachingTip.html#FluentGpu_Controls_TeachingTip_HeroContent
+  name: HeroContent
+  nameWithType: TeachingTip.HeroContent
+  fullName: FluentGpu.Controls.TeachingTip.HeroContent
+- uid: FluentGpu.Controls.TeachingTip.HeroImage
+  commentId: F:FluentGpu.Controls.TeachingTip.HeroImage
+  href: FluentGpu.Controls.TeachingTip.html#FluentGpu_Controls_TeachingTip_HeroImage
+  name: HeroImage
+  nameWithType: TeachingTip.HeroImage
+  fullName: FluentGpu.Controls.TeachingTip.HeroImage
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: FluentGpu.Controls.TeachingTip.HeroPlacement
+  commentId: T:FluentGpu.Controls.TeachingTip.HeroPlacement
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.TeachingTip.html
+  name: TeachingTip.HeroPlacement
+  nameWithType: TeachingTip.HeroPlacement
+  fullName: FluentGpu.Controls.TeachingTip.HeroPlacement
+  spec.csharp:
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.HeroPlacement
+    name: HeroPlacement
+    href: FluentGpu.Controls.TeachingTip.HeroPlacement.html
+  spec.vb:
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.HeroPlacement
+    name: HeroPlacement
+    href: FluentGpu.Controls.TeachingTip.HeroPlacement.html
+- uid: System.Action
+  commentId: T:System.Action
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action
+  name: Action
+  nameWithType: Action
+  fullName: System.Action
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Controls.TeachingTip.OpenOnMount
+  commentId: F:FluentGpu.Controls.TeachingTip.OpenOnMount
+  href: FluentGpu.Controls.TeachingTip.html#FluentGpu_Controls_TeachingTip_OpenOnMount
+  name: OpenOnMount
+  nameWithType: TeachingTip.OpenOnMount
+  fullName: FluentGpu.Controls.TeachingTip.OpenOnMount
+- uid: FluentGpu.Signals.Signal{System.Boolean}
+  commentId: T:FluentGpu.Signals.Signal{System.Boolean}
+  parent: FluentGpu.Signals
+  definition: FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<bool>
+  nameWithType: Signal<bool>
+  fullName: FluentGpu.Signals.Signal<bool>
+  nameWithType.vb: Signal(Of Boolean)
+  fullName.vb: FluentGpu.Signals.Signal(Of Boolean)
+  name.vb: Signal(Of Boolean)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+- uid: FluentGpu.Signals.Signal`1
+  commentId: T:FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<T>
+  nameWithType: Signal<T>
+  fullName: FluentGpu.Signals.Signal<T>
+  nameWithType.vb: Signal(Of T)
+  fullName.vb: FluentGpu.Signals.Signal(Of T)
+  name.vb: Signal(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Signals
+  commentId: N:FluentGpu.Signals
+  href: FluentGpu.html
+  name: FluentGpu.Signals
+  nameWithType: FluentGpu.Signals
+  fullName: FluentGpu.Signals
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+- uid: FluentGpu.Dsl.BoxEl.OnRealized
+  commentId: P:FluentGpu.Dsl.BoxEl.OnRealized
+  href: FluentGpu.Dsl.BoxEl.html#FluentGpu_Dsl_BoxEl_OnRealized
+  name: OnRealized
+  nameWithType: BoxEl.OnRealized
+  fullName: FluentGpu.Dsl.BoxEl.OnRealized
+- uid: FluentGpu.Controls.TeachingTip.HasTarget
+  commentId: F:FluentGpu.Controls.TeachingTip.HasTarget
+  href: FluentGpu.Controls.TeachingTip.html#FluentGpu_Controls_TeachingTip_HasTarget
+  name: HasTarget
+  nameWithType: TeachingTip.HasTarget
+  fullName: FluentGpu.Controls.TeachingTip.HasTarget
+- uid: System.Func{FluentGpu.Foundation.NodeHandle}
+  commentId: T:System.Func{FluentGpu.Foundation.NodeHandle}
+  parent: System
+  definition: System.Func`1
+  href: https://learn.microsoft.com/dotnet/api/system.func-1
+  name: Func<NodeHandle>
+  nameWithType: Func<NodeHandle>
+  fullName: System.Func<FluentGpu.Foundation.NodeHandle>
+  nameWithType.vb: Func(Of NodeHandle)
+  fullName.vb: System.Func(Of FluentGpu.Foundation.NodeHandle)
+  name.vb: Func(Of NodeHandle)
+  spec.csharp:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: <
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: )
+- uid: System.Func`1
+  commentId: T:System.Func`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.func-1
+  name: Func<TResult>
+  nameWithType: Func<TResult>
+  fullName: System.Func<TResult>
+  nameWithType.vb: Func(Of TResult)
+  fullName.vb: System.Func(Of TResult)
+  name.vb: Func(Of TResult)
+  spec.csharp:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: <
+  - name: TResult
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: TResult
+  - name: )
+- uid: FluentGpu.Controls.TeachingTip.PlacementMode
+  commentId: T:FluentGpu.Controls.TeachingTip.PlacementMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.TeachingTip.html
+  name: TeachingTip.PlacementMode
+  nameWithType: TeachingTip.PlacementMode
+  fullName: FluentGpu.Controls.TeachingTip.PlacementMode
+  spec.csharp:
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.PlacementMode
+    name: PlacementMode
+    href: FluentGpu.Controls.TeachingTip.PlacementMode.html
+  spec.vb:
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.PlacementMode
+    name: PlacementMode
+    href: FluentGpu.Controls.TeachingTip.PlacementMode.html
+- uid: FluentGpu.Controls.TeachingTip.TailVisibilityMode
+  commentId: T:FluentGpu.Controls.TeachingTip.TailVisibilityMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.TeachingTip.html
+  name: TeachingTip.TailVisibilityMode
+  nameWithType: TeachingTip.TailVisibilityMode
+  fullName: FluentGpu.Controls.TeachingTip.TailVisibilityMode
+  spec.csharp:
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.TailVisibilityMode
+    name: TailVisibilityMode
+    href: FluentGpu.Controls.TeachingTip.TailVisibilityMode.html
+  spec.vb:
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.TailVisibilityMode
+    name: TailVisibilityMode
+    href: FluentGpu.Controls.TeachingTip.TailVisibilityMode.html
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Controls.TeachingTip.TailVisibility
+  commentId: F:FluentGpu.Controls.TeachingTip.TailVisibility
+  href: FluentGpu.Controls.TeachingTip.html#FluentGpu_Controls_TeachingTip_TailVisibility
+  name: TailVisibility
+  nameWithType: TeachingTip.TailVisibility
+  fullName: FluentGpu.Controls.TeachingTip.TailVisibility
+- uid: FluentGpu.Controls.TeachingTip.PreferredPlacement
+  commentId: F:FluentGpu.Controls.TeachingTip.PreferredPlacement
+  href: FluentGpu.Controls.TeachingTip.html#FluentGpu_Controls_TeachingTip_PreferredPlacement
+  name: PreferredPlacement
+  nameWithType: TeachingTip.PreferredPlacement
+  fullName: FluentGpu.Controls.TeachingTip.PreferredPlacement
+- uid: FluentGpu.Controls.TeachingTip.ClosingEventArgs.Cancel
+  commentId: P:FluentGpu.Controls.TeachingTip.ClosingEventArgs.Cancel
+  href: FluentGpu.Controls.TeachingTip.ClosingEventArgs.html#FluentGpu_Controls_TeachingTip_ClosingEventArgs_Cancel
+  name: Cancel
+  nameWithType: TeachingTip.ClosingEventArgs.Cancel
+  fullName: FluentGpu.Controls.TeachingTip.ClosingEventArgs.Cancel
+- uid: System.Action{FluentGpu.Controls.TeachingTip.ClosingEventArgs}
+  commentId: T:System.Action{FluentGpu.Controls.TeachingTip.ClosingEventArgs}
+  parent: System
+  definition: System.Action`1
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<TeachingTip.ClosingEventArgs>
+  nameWithType: Action<TeachingTip.ClosingEventArgs>
+  fullName: System.Action<FluentGpu.Controls.TeachingTip.ClosingEventArgs>
+  nameWithType.vb: Action(Of TeachingTip.ClosingEventArgs)
+  fullName.vb: System.Action(Of FluentGpu.Controls.TeachingTip.ClosingEventArgs)
+  name.vb: Action(Of TeachingTip.ClosingEventArgs)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.ClosingEventArgs
+    name: ClosingEventArgs
+    href: FluentGpu.Controls.TeachingTip.ClosingEventArgs.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.ClosingEventArgs
+    name: ClosingEventArgs
+    href: FluentGpu.Controls.TeachingTip.ClosingEventArgs.html
+  - name: )
+- uid: System.Action`1
+  commentId: T:System.Action`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<T>
+  nameWithType: Action<T>
+  fullName: System.Action<T>
+  nameWithType.vb: Action(Of T)
+  fullName.vb: System.Action(Of T)
+  name.vb: Action(Of T)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Action{FluentGpu.Controls.TeachingTip.CloseReason}
+  commentId: T:System.Action{FluentGpu.Controls.TeachingTip.CloseReason}
+  parent: System
+  definition: System.Action`1
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<TeachingTip.CloseReason>
+  nameWithType: Action<TeachingTip.CloseReason>
+  fullName: System.Action<FluentGpu.Controls.TeachingTip.CloseReason>
+  nameWithType.vb: Action(Of TeachingTip.CloseReason)
+  fullName.vb: System.Action(Of FluentGpu.Controls.TeachingTip.CloseReason)
+  name.vb: Action(Of TeachingTip.CloseReason)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.CloseReason
+    name: CloseReason
+    href: FluentGpu.Controls.TeachingTip.CloseReason.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.CloseReason
+    name: CloseReason
+    href: FluentGpu.Controls.TeachingTip.CloseReason.html
+  - name: )
+- uid: FluentGpu.Dsl.TemplateParts
+  commentId: T:FluentGpu.Dsl.TemplateParts
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.TemplateParts.html
+  name: TemplateParts
+  nameWithType: TemplateParts
+  fullName: FluentGpu.Dsl.TemplateParts
+- uid: FluentGpu.Controls.TeachingTip.Create*
+  commentId: Overload:FluentGpu.Controls.TeachingTip.Create
+  href: FluentGpu.Controls.TeachingTip.html#FluentGpu_Controls_TeachingTip_Create_System_String_System_String_System_String_
+  name: Create
+  nameWithType: TeachingTip.Create
+  fullName: FluentGpu.Controls.TeachingTip.Create
+- uid: FluentGpu.Hooks.Component.Render
+  commentId: M:FluentGpu.Hooks.Component.Render
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  name: Render()
+  nameWithType: Component.Render()
+  fullName: FluentGpu.Hooks.Component.Render()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.Render
+    name: Render
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.Render
+    name: Render
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  - name: (
+  - name: )
+- uid: FluentGpu.Controls.TeachingTip.Render*
+  commentId: Overload:FluentGpu.Controls.TeachingTip.Render
+  href: FluentGpu.Controls.TeachingTip.html#FluentGpu_Controls_TeachingTip_Render
+  name: Render
+  nameWithType: TeachingTip.Render
+  fullName: FluentGpu.Controls.TeachingTip.Render

@@ -1,0 +1,526 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.WrapTile
+  commentId: T:FluentGpu.Controls.WrapTile
+  id: WrapTile
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.WrapTile.#ctor(System.String,System.Int32,System.Int32)
+  - FluentGpu.Controls.WrapTile.ColSpan
+  - FluentGpu.Controls.WrapTile.Label
+  - FluentGpu.Controls.WrapTile.RowSpan
+  langs:
+  - csharp
+  - vb
+  name: WrapTile
+  nameWithType: WrapTile
+  fullName: FluentGpu.Controls.WrapTile
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/VariableSizedWrapGrid.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: WrapTile
+    path: ../../src/FluentGpu.Controls/VariableSizedWrapGrid.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    One tile in a <xref href="FluentGpu.Controls.VariableSizedWrapGrid" data-throw-if-not-resolved="false"></xref>: a label plus how many base cells it spans
+        horizontally (<code class="paramref">ColSpan</code>) and vertically (<code class="paramref">RowSpan</code>).
+  example: []
+  syntax:
+    content: 'public sealed record WrapTile : IEquatable<WrapTile>'
+    content.vb: Public NotInheritable Class WrapTile Implements IEquatable(Of WrapTile)
+  inheritance:
+  - System.Object
+  implements:
+  - System.IEquatable{FluentGpu.Controls.WrapTile}
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.WrapTile.#ctor(System.String,System.Int32,System.Int32)
+  commentId: M:FluentGpu.Controls.WrapTile.#ctor(System.String,System.Int32,System.Int32)
+  id: '#ctor(System.String,System.Int32,System.Int32)'
+  parent: FluentGpu.Controls.WrapTile
+  langs:
+  - csharp
+  - vb
+  name: WrapTile(string, int, int)
+  nameWithType: WrapTile.WrapTile(string, int, int)
+  fullName: FluentGpu.Controls.WrapTile.WrapTile(string, int, int)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Controls/VariableSizedWrapGrid.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Controls/VariableSizedWrapGrid.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    One tile in a <xref href="FluentGpu.Controls.VariableSizedWrapGrid" data-throw-if-not-resolved="false"></xref>: a label plus how many base cells it spans
+        horizontally (<code class="paramref">ColSpan</code>) and vertically (<code class="paramref">RowSpan</code>).
+  example: []
+  syntax:
+    content: public WrapTile(string Label, int ColSpan, int RowSpan)
+    parameters:
+    - id: Label
+      type: System.String
+    - id: ColSpan
+      type: System.Int32
+    - id: RowSpan
+      type: System.Int32
+    content.vb: Public Sub New(Label As String, ColSpan As Integer, RowSpan As Integer)
+  overload: FluentGpu.Controls.WrapTile.#ctor*
+  nameWithType.vb: WrapTile.New(String, Integer, Integer)
+  fullName.vb: FluentGpu.Controls.WrapTile.New(String, Integer, Integer)
+  name.vb: New(String, Integer, Integer)
+- uid: FluentGpu.Controls.WrapTile.Label
+  commentId: P:FluentGpu.Controls.WrapTile.Label
+  id: Label
+  parent: FluentGpu.Controls.WrapTile
+  langs:
+  - csharp
+  - vb
+  name: Label
+  nameWithType: WrapTile.Label
+  fullName: FluentGpu.Controls.WrapTile.Label
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/VariableSizedWrapGrid.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Label
+    path: ../../src/FluentGpu.Controls/VariableSizedWrapGrid.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string Label { get; init; }
+    parameters: []
+    return:
+      type: System.String
+    content.vb: Public Property Label As String
+  overload: FluentGpu.Controls.WrapTile.Label*
+- uid: FluentGpu.Controls.WrapTile.ColSpan
+  commentId: P:FluentGpu.Controls.WrapTile.ColSpan
+  id: ColSpan
+  parent: FluentGpu.Controls.WrapTile
+  langs:
+  - csharp
+  - vb
+  name: ColSpan
+  nameWithType: WrapTile.ColSpan
+  fullName: FluentGpu.Controls.WrapTile.ColSpan
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/VariableSizedWrapGrid.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ColSpan
+    path: ../../src/FluentGpu.Controls/VariableSizedWrapGrid.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public int ColSpan { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property ColSpan As Integer
+  overload: FluentGpu.Controls.WrapTile.ColSpan*
+- uid: FluentGpu.Controls.WrapTile.RowSpan
+  commentId: P:FluentGpu.Controls.WrapTile.RowSpan
+  id: RowSpan
+  parent: FluentGpu.Controls.WrapTile
+  langs:
+  - csharp
+  - vb
+  name: RowSpan
+  nameWithType: WrapTile.RowSpan
+  fullName: FluentGpu.Controls.WrapTile.RowSpan
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/VariableSizedWrapGrid.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RowSpan
+    path: ../../src/FluentGpu.Controls/VariableSizedWrapGrid.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public int RowSpan { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property RowSpan As Integer
+  overload: FluentGpu.Controls.WrapTile.RowSpan*
+references:
+- uid: FluentGpu.Controls.VariableSizedWrapGrid
+  commentId: T:FluentGpu.Controls.VariableSizedWrapGrid
+  href: FluentGpu.Controls.VariableSizedWrapGrid.html
+  name: VariableSizedWrapGrid
+  nameWithType: VariableSizedWrapGrid
+  fullName: FluentGpu.Controls.VariableSizedWrapGrid
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.IEquatable{FluentGpu.Controls.WrapTile}
+  commentId: T:System.IEquatable{FluentGpu.Controls.WrapTile}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<WrapTile>
+  nameWithType: IEquatable<WrapTile>
+  fullName: System.IEquatable<FluentGpu.Controls.WrapTile>
+  nameWithType.vb: IEquatable(Of WrapTile)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.WrapTile)
+  name.vb: IEquatable(Of WrapTile)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.WrapTile
+    name: WrapTile
+    href: FluentGpu.Controls.WrapTile.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.WrapTile
+    name: WrapTile
+    href: FluentGpu.Controls.WrapTile.html
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.WrapTile.#ctor*
+  commentId: Overload:FluentGpu.Controls.WrapTile.#ctor
+  href: FluentGpu.Controls.WrapTile.html#FluentGpu_Controls_WrapTile__ctor_System_String_System_Int32_System_Int32_
+  name: WrapTile
+  nameWithType: WrapTile.WrapTile
+  fullName: FluentGpu.Controls.WrapTile.WrapTile
+  nameWithType.vb: WrapTile.New
+  fullName.vb: FluentGpu.Controls.WrapTile.New
+  name.vb: New
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Controls.WrapTile.Label*
+  commentId: Overload:FluentGpu.Controls.WrapTile.Label
+  href: FluentGpu.Controls.WrapTile.html#FluentGpu_Controls_WrapTile_Label
+  name: Label
+  nameWithType: WrapTile.Label
+  fullName: FluentGpu.Controls.WrapTile.Label
+- uid: FluentGpu.Controls.WrapTile.ColSpan*
+  commentId: Overload:FluentGpu.Controls.WrapTile.ColSpan
+  href: FluentGpu.Controls.WrapTile.html#FluentGpu_Controls_WrapTile_ColSpan
+  name: ColSpan
+  nameWithType: WrapTile.ColSpan
+  fullName: FluentGpu.Controls.WrapTile.ColSpan
+- uid: FluentGpu.Controls.WrapTile.RowSpan*
+  commentId: Overload:FluentGpu.Controls.WrapTile.RowSpan
+  href: FluentGpu.Controls.WrapTile.html#FluentGpu_Controls_WrapTile_RowSpan
+  name: RowSpan
+  nameWithType: WrapTile.RowSpan
+  fullName: FluentGpu.Controls.WrapTile.RowSpan

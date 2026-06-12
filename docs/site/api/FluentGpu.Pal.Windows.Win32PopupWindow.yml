@@ -1,0 +1,822 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Pal.Windows.Win32PopupWindow
+  commentId: T:FluentGpu.Pal.Windows.Win32PopupWindow
+  id: Win32PopupWindow
+  parent: FluentGpu.Pal.Windows
+  children:
+  - FluentGpu.Pal.Windows.Win32PopupWindow.#ctor(FluentGpu.Pal.PopupWindowDesc@)
+  - FluentGpu.Pal.Windows.Win32PopupWindow.BoundsPx
+  - FluentGpu.Pal.Windows.Win32PopupWindow.Dispose
+  - FluentGpu.Pal.Windows.Win32PopupWindow.Handle
+  - FluentGpu.Pal.Windows.Win32PopupWindow.Hide
+  - FluentGpu.Pal.Windows.Win32PopupWindow.IsShown
+  - FluentGpu.Pal.Windows.Win32PopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF@)
+  - FluentGpu.Pal.Windows.Win32PopupWindow.Show
+  langs:
+  - csharp
+  - vb
+  name: Win32PopupWindow
+  nameWithType: Win32PopupWindow
+  fullName: FluentGpu.Pal.Windows.Win32PopupWindow
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Pal.Windows/Win32PopupWindow.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Win32PopupWindow
+    path: ../../src/FluentGpu.Pal.Windows/Win32PopupWindow.cs
+    startLine: 25
+  assemblies:
+  - FluentGpu.Pal.Windows
+  namespace: FluentGpu.Pal.Windows
+  summary: >-
+    A borderless, non-activating, owned top-level popup HWND — the Win32 backing of <xref href="FluentGpu.Pal.IPlatformPopupWindow" data-throw-if-not-resolved="false"></xref>
+
+    and the engine analogue of WinUI's windowed <code>CPopup</code> (microsoft-ui-xaml Popup_Partial.cpp:1019
+
+    <code>SetIsWindowed()</code> creates an HWND via PopupSiteBridge so flyouts/menus can render OUTSIDE the XAML window;
+
+    Popup_Partial.cpp:951-970 <code>IsConstrainedToRootBounds == false</code> for windowed popups).
+
+
+    <ul><li><code>WS_POPUP</code> + owner: borderless, z-ordered above the owner, hidden when the owner minimizes.</li><li><code>WS_EX_NOACTIVATE</code> + <code>MA_NOACTIVATE</code>: the popup NEVER takes activation — keyboard focus stays on the
+      owner window exactly like WinUI's popup site (the dispatcher keeps routing keys to the main window).</li><li><code>WS_EX_TOOLWINDOW</code>: no taskbar button / Alt-Tab entry.</li><li><code>WS_EX_NOREDIRECTIONBITMAP</code>: no GDI redirection surface — the host presents into it with its own
+      composition swapchain (same composited-surface model as the main window).</li><li>Mouse input over the popup is FORWARDED to the owner <xref href="FluentGpu.Pal.Windows.Win32Window" data-throw-if-not-resolved="false"></xref>, translated popup-client →
+      screen → owner-client → owner DIP, so the one InputDispatcher hit-tests the popup subtree at its scene
+      coordinates (the subtree stays in the single SceneStore; out-of-bounds coords hit-test fine).</li></ul>
+  example: []
+  syntax:
+    content: 'public sealed class Win32PopupWindow : IPlatformPopupWindow, IDisposable'
+    content.vb: Public NotInheritable Class Win32PopupWindow Implements IPlatformPopupWindow, IDisposable
+  inheritance:
+  - System.Object
+  implements:
+  - FluentGpu.Pal.IPlatformPopupWindow
+  - System.IDisposable
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Pal.Windows.Win32PopupWindow.#ctor(FluentGpu.Pal.PopupWindowDesc@)
+  commentId: M:FluentGpu.Pal.Windows.Win32PopupWindow.#ctor(FluentGpu.Pal.PopupWindowDesc@)
+  id: '#ctor(FluentGpu.Pal.PopupWindowDesc@)'
+  parent: FluentGpu.Pal.Windows.Win32PopupWindow
+  langs:
+  - csharp
+  - vb
+  name: Win32PopupWindow(in PopupWindowDesc)
+  nameWithType: Win32PopupWindow.Win32PopupWindow(in PopupWindowDesc)
+  fullName: FluentGpu.Pal.Windows.Win32PopupWindow.Win32PopupWindow(in FluentGpu.Pal.PopupWindowDesc)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Pal.Windows/Win32PopupWindow.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Pal.Windows/Win32PopupWindow.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Pal.Windows
+  namespace: FluentGpu.Pal.Windows
+  syntax:
+    content: public Win32PopupWindow(in PopupWindowDesc desc)
+    parameters:
+    - id: desc
+      type: FluentGpu.Pal.PopupWindowDesc
+    content.vb: Public Sub New(desc As PopupWindowDesc)
+  overload: FluentGpu.Pal.Windows.Win32PopupWindow.#ctor*
+  nameWithType.vb: Win32PopupWindow.New(PopupWindowDesc)
+  fullName.vb: FluentGpu.Pal.Windows.Win32PopupWindow.New(FluentGpu.Pal.PopupWindowDesc)
+  name.vb: New(PopupWindowDesc)
+- uid: FluentGpu.Pal.Windows.Win32PopupWindow.Handle
+  commentId: P:FluentGpu.Pal.Windows.Win32PopupWindow.Handle
+  id: Handle
+  parent: FluentGpu.Pal.Windows.Win32PopupWindow
+  langs:
+  - csharp
+  - vb
+  name: Handle
+  nameWithType: Win32PopupWindow.Handle
+  fullName: FluentGpu.Pal.Windows.Win32PopupWindow.Handle
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal.Windows/Win32PopupWindow.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Handle
+    path: ../../src/FluentGpu.Pal.Windows/Win32PopupWindow.cs
+    startLine: 89
+  assemblies:
+  - FluentGpu.Pal.Windows
+  namespace: FluentGpu.Pal.Windows
+  example: []
+  syntax:
+    content: public NativeHandle Handle { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.NativeHandle
+    content.vb: Public ReadOnly Property Handle As NativeHandle
+  overload: FluentGpu.Pal.Windows.Win32PopupWindow.Handle*
+  implements:
+  - FluentGpu.Pal.IPlatformPopupWindow.Handle
+- uid: FluentGpu.Pal.Windows.Win32PopupWindow.BoundsPx
+  commentId: P:FluentGpu.Pal.Windows.Win32PopupWindow.BoundsPx
+  id: BoundsPx
+  parent: FluentGpu.Pal.Windows.Win32PopupWindow
+  langs:
+  - csharp
+  - vb
+  name: BoundsPx
+  nameWithType: Win32PopupWindow.BoundsPx
+  fullName: FluentGpu.Pal.Windows.Win32PopupWindow.BoundsPx
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal.Windows/Win32PopupWindow.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BoundsPx
+    path: ../../src/FluentGpu.Pal.Windows/Win32PopupWindow.cs
+    startLine: 90
+  assemblies:
+  - FluentGpu.Pal.Windows
+  namespace: FluentGpu.Pal.Windows
+  summary: Last bounds set via <xref href="FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF%40)" data-throw-if-not-resolved="false"></xref> (physical virtual-screen px).
+  example: []
+  syntax:
+    content: public RectF BoundsPx { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.RectF
+    content.vb: Public ReadOnly Property BoundsPx As RectF
+  overload: FluentGpu.Pal.Windows.Win32PopupWindow.BoundsPx*
+  implements:
+  - FluentGpu.Pal.IPlatformPopupWindow.BoundsPx
+- uid: FluentGpu.Pal.Windows.Win32PopupWindow.IsShown
+  commentId: P:FluentGpu.Pal.Windows.Win32PopupWindow.IsShown
+  id: IsShown
+  parent: FluentGpu.Pal.Windows.Win32PopupWindow
+  langs:
+  - csharp
+  - vb
+  name: IsShown
+  nameWithType: Win32PopupWindow.IsShown
+  fullName: FluentGpu.Pal.Windows.Win32PopupWindow.IsShown
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal.Windows/Win32PopupWindow.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsShown
+    path: ../../src/FluentGpu.Pal.Windows/Win32PopupWindow.cs
+    startLine: 91
+  assemblies:
+  - FluentGpu.Pal.Windows
+  namespace: FluentGpu.Pal.Windows
+  summary: Visible (a <xref href="FluentGpu.Pal.IPlatformPopupWindow.Show" data-throw-if-not-resolved="false"></xref> not yet followed by <xref href="FluentGpu.Pal.IPlatformPopupWindow.Hide" data-throw-if-not-resolved="false"></xref>/<xref href="System.IDisposable.Dispose" data-throw-if-not-resolved="false"></xref>).
+  example: []
+  syntax:
+    content: public bool IsShown { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property IsShown As Boolean
+  overload: FluentGpu.Pal.Windows.Win32PopupWindow.IsShown*
+  implements:
+  - FluentGpu.Pal.IPlatformPopupWindow.IsShown
+- uid: FluentGpu.Pal.Windows.Win32PopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF@)
+  commentId: M:FluentGpu.Pal.Windows.Win32PopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF@)
+  id: SetBoundsPx(FluentGpu.Foundation.RectF@)
+  parent: FluentGpu.Pal.Windows.Win32PopupWindow
+  langs:
+  - csharp
+  - vb
+  name: SetBoundsPx(in RectF)
+  nameWithType: Win32PopupWindow.SetBoundsPx(in RectF)
+  fullName: FluentGpu.Pal.Windows.Win32PopupWindow.SetBoundsPx(in FluentGpu.Foundation.RectF)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal.Windows/Win32PopupWindow.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SetBoundsPx
+    path: ../../src/FluentGpu.Pal.Windows/Win32PopupWindow.cs
+    startLine: 93
+  assemblies:
+  - FluentGpu.Pal.Windows
+  namespace: FluentGpu.Pal.Windows
+  summary: Move/size the popup (physical virtual-screen px) WITHOUT activating it.
+  example: []
+  syntax:
+    content: public void SetBoundsPx(in RectF px)
+    parameters:
+    - id: px
+      type: FluentGpu.Foundation.RectF
+    content.vb: Public Sub SetBoundsPx(px As RectF)
+  overload: FluentGpu.Pal.Windows.Win32PopupWindow.SetBoundsPx*
+  implements:
+  - FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF@)
+  nameWithType.vb: Win32PopupWindow.SetBoundsPx(RectF)
+  fullName.vb: FluentGpu.Pal.Windows.Win32PopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF)
+  name.vb: SetBoundsPx(RectF)
+- uid: FluentGpu.Pal.Windows.Win32PopupWindow.Show
+  commentId: M:FluentGpu.Pal.Windows.Win32PopupWindow.Show
+  id: Show
+  parent: FluentGpu.Pal.Windows.Win32PopupWindow
+  langs:
+  - csharp
+  - vb
+  name: Show()
+  nameWithType: Win32PopupWindow.Show()
+  fullName: FluentGpu.Pal.Windows.Win32PopupWindow.Show()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal.Windows/Win32PopupWindow.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Show
+    path: ../../src/FluentGpu.Pal.Windows/Win32PopupWindow.cs
+    startLine: 100
+  assemblies:
+  - FluentGpu.Pal.Windows
+  namespace: FluentGpu.Pal.Windows
+  summary: Show without activating (Win32 <code>SW_SHOWNOACTIVATE</code>) — focus stays on the owner window.
+  example: []
+  syntax:
+    content: public void Show()
+    content.vb: Public Sub Show()
+  overload: FluentGpu.Pal.Windows.Win32PopupWindow.Show*
+  implements:
+  - FluentGpu.Pal.IPlatformPopupWindow.Show
+- uid: FluentGpu.Pal.Windows.Win32PopupWindow.Hide
+  commentId: M:FluentGpu.Pal.Windows.Win32PopupWindow.Hide
+  id: Hide
+  parent: FluentGpu.Pal.Windows.Win32PopupWindow
+  langs:
+  - csharp
+  - vb
+  name: Hide()
+  nameWithType: Win32PopupWindow.Hide()
+  fullName: FluentGpu.Pal.Windows.Win32PopupWindow.Hide()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal.Windows/Win32PopupWindow.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Hide
+    path: ../../src/FluentGpu.Pal.Windows/Win32PopupWindow.cs
+    startLine: 106
+  assemblies:
+  - FluentGpu.Pal.Windows
+  namespace: FluentGpu.Pal.Windows
+  example: []
+  syntax:
+    content: public void Hide()
+    content.vb: Public Sub Hide()
+  overload: FluentGpu.Pal.Windows.Win32PopupWindow.Hide*
+  implements:
+  - FluentGpu.Pal.IPlatformPopupWindow.Hide
+- uid: FluentGpu.Pal.Windows.Win32PopupWindow.Dispose
+  commentId: M:FluentGpu.Pal.Windows.Win32PopupWindow.Dispose
+  id: Dispose
+  parent: FluentGpu.Pal.Windows.Win32PopupWindow
+  langs:
+  - csharp
+  - vb
+  name: Dispose()
+  nameWithType: Win32PopupWindow.Dispose()
+  fullName: FluentGpu.Pal.Windows.Win32PopupWindow.Dispose()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal.Windows/Win32PopupWindow.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Dispose
+    path: ../../src/FluentGpu.Pal.Windows/Win32PopupWindow.cs
+    startLine: 112
+  assemblies:
+  - FluentGpu.Pal.Windows
+  namespace: FluentGpu.Pal.Windows
+  summary: Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.
+  example: []
+  syntax:
+    content: public void Dispose()
+    content.vb: Public Sub Dispose()
+  overload: FluentGpu.Pal.Windows.Win32PopupWindow.Dispose*
+  implements:
+  - System.IDisposable.Dispose
+references:
+- uid: FluentGpu.Pal.IPlatformPopupWindow
+  commentId: T:FluentGpu.Pal.IPlatformPopupWindow
+  parent: FluentGpu.Pal
+  href: FluentGpu.Pal.IPlatformPopupWindow.html
+  name: IPlatformPopupWindow
+  nameWithType: IPlatformPopupWindow
+  fullName: FluentGpu.Pal.IPlatformPopupWindow
+- uid: FluentGpu.Pal.Windows.Win32Window
+  commentId: T:FluentGpu.Pal.Windows.Win32Window
+  href: FluentGpu.Pal.Windows.Win32Window.html
+  name: Win32Window
+  nameWithType: Win32Window
+  fullName: FluentGpu.Pal.Windows.Win32Window
+- uid: FluentGpu.Pal.Windows
+  commentId: N:FluentGpu.Pal.Windows
+  href: FluentGpu.html
+  name: FluentGpu.Pal.Windows
+  nameWithType: FluentGpu.Pal.Windows
+  fullName: FluentGpu.Pal.Windows
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+  - name: .
+  - uid: FluentGpu.Pal.Windows
+    name: Windows
+    href: FluentGpu.Pal.Windows.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+  - name: .
+  - uid: FluentGpu.Pal.Windows
+    name: Windows
+    href: FluentGpu.Pal.Windows.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.IDisposable
+  commentId: T:System.IDisposable
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.idisposable
+  name: IDisposable
+  nameWithType: IDisposable
+  fullName: System.IDisposable
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: FluentGpu.Pal
+  commentId: N:FluentGpu.Pal
+  href: FluentGpu.html
+  name: FluentGpu.Pal
+  nameWithType: FluentGpu.Pal
+  fullName: FluentGpu.Pal
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Pal.Windows.Win32PopupWindow.#ctor*
+  commentId: Overload:FluentGpu.Pal.Windows.Win32PopupWindow.#ctor
+  href: FluentGpu.Pal.Windows.Win32PopupWindow.html#FluentGpu_Pal_Windows_Win32PopupWindow__ctor_FluentGpu_Pal_PopupWindowDesc__
+  name: Win32PopupWindow
+  nameWithType: Win32PopupWindow.Win32PopupWindow
+  fullName: FluentGpu.Pal.Windows.Win32PopupWindow.Win32PopupWindow
+  nameWithType.vb: Win32PopupWindow.New
+  fullName.vb: FluentGpu.Pal.Windows.Win32PopupWindow.New
+  name.vb: New
+- uid: FluentGpu.Pal.PopupWindowDesc
+  commentId: T:FluentGpu.Pal.PopupWindowDesc
+  parent: FluentGpu.Pal
+  href: FluentGpu.Pal.PopupWindowDesc.html
+  name: PopupWindowDesc
+  nameWithType: PopupWindowDesc
+  fullName: FluentGpu.Pal.PopupWindowDesc
+- uid: FluentGpu.Pal.Windows.Win32PopupWindow.Handle*
+  commentId: Overload:FluentGpu.Pal.Windows.Win32PopupWindow.Handle
+  href: FluentGpu.Pal.Windows.Win32PopupWindow.html#FluentGpu_Pal_Windows_Win32PopupWindow_Handle
+  name: Handle
+  nameWithType: Win32PopupWindow.Handle
+  fullName: FluentGpu.Pal.Windows.Win32PopupWindow.Handle
+- uid: FluentGpu.Pal.IPlatformPopupWindow.Handle
+  commentId: P:FluentGpu.Pal.IPlatformPopupWindow.Handle
+  parent: FluentGpu.Pal.IPlatformPopupWindow
+  href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_Handle
+  name: Handle
+  nameWithType: IPlatformPopupWindow.Handle
+  fullName: FluentGpu.Pal.IPlatformPopupWindow.Handle
+- uid: FluentGpu.Foundation.NativeHandle
+  commentId: T:FluentGpu.Foundation.NativeHandle
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.NativeHandle.html
+  name: NativeHandle
+  nameWithType: NativeHandle
+  fullName: FluentGpu.Foundation.NativeHandle
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF@)
+  commentId: M:FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF@)
+  parent: FluentGpu.Pal.IPlatformPopupWindow
+  href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_SetBoundsPx_FluentGpu_Foundation_RectF__
+  name: SetBoundsPx(in RectF)
+  nameWithType: IPlatformPopupWindow.SetBoundsPx(in RectF)
+  fullName: FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(in FluentGpu.Foundation.RectF)
+  nameWithType.vb: IPlatformPopupWindow.SetBoundsPx(RectF)
+  fullName.vb: FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF)
+  name.vb: SetBoundsPx(RectF)
+  spec.csharp:
+  - uid: FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF@)
+    name: SetBoundsPx
+    href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_SetBoundsPx_FluentGpu_Foundation_RectF__
+  - name: (
+  - name: in
+  - name: " "
+  - uid: FluentGpu.Foundation.RectF
+    name: RectF
+    href: FluentGpu.Foundation.RectF.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF@)
+    name: SetBoundsPx
+    href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_SetBoundsPx_FluentGpu_Foundation_RectF__
+  - name: (
+  - uid: FluentGpu.Foundation.RectF
+    name: RectF
+    href: FluentGpu.Foundation.RectF.html
+  - name: )
+- uid: FluentGpu.Pal.Windows.Win32PopupWindow.BoundsPx*
+  commentId: Overload:FluentGpu.Pal.Windows.Win32PopupWindow.BoundsPx
+  href: FluentGpu.Pal.Windows.Win32PopupWindow.html#FluentGpu_Pal_Windows_Win32PopupWindow_BoundsPx
+  name: BoundsPx
+  nameWithType: Win32PopupWindow.BoundsPx
+  fullName: FluentGpu.Pal.Windows.Win32PopupWindow.BoundsPx
+- uid: FluentGpu.Pal.IPlatformPopupWindow.BoundsPx
+  commentId: P:FluentGpu.Pal.IPlatformPopupWindow.BoundsPx
+  parent: FluentGpu.Pal.IPlatformPopupWindow
+  href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_BoundsPx
+  name: BoundsPx
+  nameWithType: IPlatformPopupWindow.BoundsPx
+  fullName: FluentGpu.Pal.IPlatformPopupWindow.BoundsPx
+- uid: FluentGpu.Foundation.RectF
+  commentId: T:FluentGpu.Foundation.RectF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.RectF.html
+  name: RectF
+  nameWithType: RectF
+  fullName: FluentGpu.Foundation.RectF
+- uid: FluentGpu.Pal.IPlatformPopupWindow.Show
+  commentId: M:FluentGpu.Pal.IPlatformPopupWindow.Show
+  parent: FluentGpu.Pal.IPlatformPopupWindow
+  href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_Show
+  name: Show()
+  nameWithType: IPlatformPopupWindow.Show()
+  fullName: FluentGpu.Pal.IPlatformPopupWindow.Show()
+  spec.csharp:
+  - uid: FluentGpu.Pal.IPlatformPopupWindow.Show
+    name: Show
+    href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_Show
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Pal.IPlatformPopupWindow.Show
+    name: Show
+    href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_Show
+  - name: (
+  - name: )
+- uid: FluentGpu.Pal.IPlatformPopupWindow.Hide
+  commentId: M:FluentGpu.Pal.IPlatformPopupWindow.Hide
+  parent: FluentGpu.Pal.IPlatformPopupWindow
+  href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_Hide
+  name: Hide()
+  nameWithType: IPlatformPopupWindow.Hide()
+  fullName: FluentGpu.Pal.IPlatformPopupWindow.Hide()
+  spec.csharp:
+  - uid: FluentGpu.Pal.IPlatformPopupWindow.Hide
+    name: Hide
+    href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_Hide
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Pal.IPlatformPopupWindow.Hide
+    name: Hide
+    href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_Hide
+  - name: (
+  - name: )
+- uid: System.IDisposable.Dispose
+  commentId: M:System.IDisposable.Dispose
+  parent: System.IDisposable
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  name: Dispose()
+  nameWithType: IDisposable.Dispose()
+  fullName: System.IDisposable.Dispose()
+  spec.csharp:
+  - uid: System.IDisposable.Dispose
+    name: Dispose
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.IDisposable.Dispose
+    name: Dispose
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  - name: (
+  - name: )
+- uid: FluentGpu.Pal.Windows.Win32PopupWindow.IsShown*
+  commentId: Overload:FluentGpu.Pal.Windows.Win32PopupWindow.IsShown
+  href: FluentGpu.Pal.Windows.Win32PopupWindow.html#FluentGpu_Pal_Windows_Win32PopupWindow_IsShown
+  name: IsShown
+  nameWithType: Win32PopupWindow.IsShown
+  fullName: FluentGpu.Pal.Windows.Win32PopupWindow.IsShown
+- uid: FluentGpu.Pal.IPlatformPopupWindow.IsShown
+  commentId: P:FluentGpu.Pal.IPlatformPopupWindow.IsShown
+  parent: FluentGpu.Pal.IPlatformPopupWindow
+  href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_IsShown
+  name: IsShown
+  nameWithType: IPlatformPopupWindow.IsShown
+  fullName: FluentGpu.Pal.IPlatformPopupWindow.IsShown
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Pal.Windows.Win32PopupWindow.SetBoundsPx*
+  commentId: Overload:FluentGpu.Pal.Windows.Win32PopupWindow.SetBoundsPx
+  href: FluentGpu.Pal.Windows.Win32PopupWindow.html#FluentGpu_Pal_Windows_Win32PopupWindow_SetBoundsPx_FluentGpu_Foundation_RectF__
+  name: SetBoundsPx
+  nameWithType: Win32PopupWindow.SetBoundsPx
+  fullName: FluentGpu.Pal.Windows.Win32PopupWindow.SetBoundsPx
+- uid: FluentGpu.Pal.Windows.Win32PopupWindow.Show*
+  commentId: Overload:FluentGpu.Pal.Windows.Win32PopupWindow.Show
+  href: FluentGpu.Pal.Windows.Win32PopupWindow.html#FluentGpu_Pal_Windows_Win32PopupWindow_Show
+  name: Show
+  nameWithType: Win32PopupWindow.Show
+  fullName: FluentGpu.Pal.Windows.Win32PopupWindow.Show
+- uid: FluentGpu.Pal.Windows.Win32PopupWindow.Hide*
+  commentId: Overload:FluentGpu.Pal.Windows.Win32PopupWindow.Hide
+  href: FluentGpu.Pal.Windows.Win32PopupWindow.html#FluentGpu_Pal_Windows_Win32PopupWindow_Hide
+  name: Hide
+  nameWithType: Win32PopupWindow.Hide
+  fullName: FluentGpu.Pal.Windows.Win32PopupWindow.Hide
+- uid: FluentGpu.Pal.Windows.Win32PopupWindow.Dispose*
+  commentId: Overload:FluentGpu.Pal.Windows.Win32PopupWindow.Dispose
+  href: FluentGpu.Pal.Windows.Win32PopupWindow.html#FluentGpu_Pal_Windows_Win32PopupWindow_Dispose
+  name: Dispose
+  nameWithType: Win32PopupWindow.Dispose
+  fullName: FluentGpu.Pal.Windows.Win32PopupWindow.Dispose

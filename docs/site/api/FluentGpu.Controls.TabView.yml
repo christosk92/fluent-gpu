@@ -1,0 +1,1836 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.TabView
+  commentId: T:FluentGpu.Controls.TabView
+  id: TabView
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.TabView.CanReorderTabs
+  - FluentGpu.Controls.TabView.CloseButtonOverlayMode
+  - FluentGpu.Controls.TabView.Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.TabViewItem},System.Action{System.Int32},System.Func{FluentGpu.Controls.TabViewItem},System.Action{System.Int32},FluentGpu.Controls.TabViewWidthMode)
+  - FluentGpu.Controls.TabView.Create(System.Collections.Generic.IReadOnlyList{System.String},System.Action{System.Int32},System.Func{FluentGpu.Controls.TabViewItem},System.Action{System.Int32})
+  - FluentGpu.Controls.TabView.IsAddTabButtonVisible
+  - FluentGpu.Controls.TabView.Items
+  - FluentGpu.Controls.TabView.OnAddTabButtonClick
+  - FluentGpu.Controls.TabView.OnSelectionChanged
+  - FluentGpu.Controls.TabView.OnTabCloseRequested
+  - FluentGpu.Controls.TabView.OnTabsReordered
+  - FluentGpu.Controls.TabView.PartAddButton
+  - FluentGpu.Controls.TabView.PartContent
+  - FluentGpu.Controls.TabView.PartStrip
+  - FluentGpu.Controls.TabView.PartTabCloseButton
+  - FluentGpu.Controls.TabView.PartTabItem
+  - FluentGpu.Controls.TabView.PartTabLabel
+  - FluentGpu.Controls.TabView.Parts
+  - FluentGpu.Controls.TabView.Render
+  - FluentGpu.Controls.TabView.SelectedIndex
+  - FluentGpu.Controls.TabView.TabWidthMode
+  - FluentGpu.Controls.TabView.Tabs
+  langs:
+  - csharp
+  - vb
+  name: TabView
+  nameWithType: TabView
+  fullName: FluentGpu.Controls.TabView
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TabView
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 44
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A WinUI TabView (controls\dev\TabView): a horizontal strip of tab headers atop the selected tab's content.
+        The control OWNS its live tab collection (the WinUI <code>TabItems</code> vector, TabView.idl:135), seeded once from
+        <xref href="FluentGpu.Controls.TabView.Items" data-throw-if-not-resolved="false"></xref>/<xref href="FluentGpu.Controls.TabView.Tabs" data-throw-if-not-resolved="false"></xref> at mount: the close button / middle-click / Ctrl+F4 remove the tab (after
+        raising <xref href="FluentGpu.Controls.TabView.OnTabCloseRequested" data-throw-if-not-resolved="false"></xref>) with WinUI's reselect-at-the-removed-index rule (TabView.cpp:786-812);
+        the add button appends what <xref href="FluentGpu.Controls.TabView.OnAddTabButtonClick" data-throw-if-not-resolved="false"></xref> returns; pointer drag reorders tabs
+        (<xref href="FluentGpu.Controls.TabView.CanReorderTabs" data-throw-if-not-resolved="false"></xref>, default true). Equal width mode clamps tabs to 100–240px of the measured strip;
+        overflowing tabs scroll behind 32×24 repeat scroll buttons (±50px, disabled at the extremes) and the selected tab
+        is auto-scrolled into view. The selected header uses the SolidBackgroundFillColorTertiary surface and fuses flush
+        with the content area (the strip's 1px CardStroke baseline is per-tab and omitted under the selected header).
+        Per-part restyling goes through <xref href="FluentGpu.Controls.TabView.Parts" data-throw-if-not-resolved="false"></xref> (see <xref href="FluentGpu.Dsl.TemplateParts" data-throw-if-not-resolved="false"></xref> for the contract).
+  example: []
+  syntax:
+    content: 'public sealed class TabView : Component'
+    content.vb: Public NotInheritable Class TabView Inherits Component
+  inheritance:
+  - System.Object
+  - FluentGpu.Hooks.Component
+  inheritedMembers:
+  - FluentGpu.Hooks.Component.Context
+  - FluentGpu.Hooks.Component.RunsOnce
+  - FluentGpu.Hooks.Component.RenderWithHooks
+  - FluentGpu.Hooks.Component.Unmount
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+  extensionMethods:
+  - FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseEntrance(System.Single,System.Object)
+  - FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseHoverScale(System.Boolean,System.Single)
+- uid: FluentGpu.Controls.TabView.PartTabItem
+  commentId: F:FluentGpu.Controls.TabView.PartTabItem
+  id: PartTabItem
+  parent: FluentGpu.Controls.TabView
+  langs:
+  - csharp
+  - vb
+  name: PartTabItem
+  nameWithType: TabView.PartTabItem
+  fullName: FluentGpu.Controls.TabView.PartTabItem
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartTabItem
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 50
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Each tab's clickable header plate (WinUI TabViewItem TabContainer). The SAME modifier runs for every
+        tab — branch on app state for per-tab styling. Owned: OnClick (select), Role, Children.
+  example: []
+  syntax:
+    content: public const string PartTabItem = "TabItem"
+    return:
+      type: System.String
+    content.vb: Public Const PartTabItem As String = "TabItem"
+- uid: FluentGpu.Controls.TabView.PartTabLabel
+  commentId: F:FluentGpu.Controls.TabView.PartTabLabel
+  id: PartTabLabel
+  parent: FluentGpu.Controls.TabView
+  langs:
+  - csharp
+  - vb
+  name: PartTabLabel
+  nameWithType: TabView.PartTabLabel
+  fullName: FluentGpu.Controls.TabView.PartTabLabel
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartTabLabel
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Each tab's header label — a <xref href="FluentGpu.Dsl.TextEl" data-throw-if-not-resolved="false"></xref>, so style it via the generic map:
+        <code>Parts.Set&lt;TextEl&gt;(TabView.PartTabLabel, t =&gt; t with { … })</code>. Owned: nothing (pure styling).
+  example: []
+  syntax:
+    content: public const string PartTabLabel = "TabLabel"
+    return:
+      type: System.String
+    content.vb: Public Const PartTabLabel As String = "TabLabel"
+- uid: FluentGpu.Controls.TabView.PartTabCloseButton
+  commentId: F:FluentGpu.Controls.TabView.PartTabCloseButton
+  id: PartTabCloseButton
+  parent: FluentGpu.Controls.TabView
+  langs:
+  - csharp
+  - vb
+  name: PartTabCloseButton
+  nameWithType: TabView.PartTabCloseButton
+  fullName: FluentGpu.Controls.TabView.PartTabCloseButton
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartTabCloseButton
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 55
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: "Each tab's trailing close button (WinUI TabViewItem CloseButton). Owned: OnClick (close), Role."
+  example: []
+  syntax:
+    content: public const string PartTabCloseButton = "TabCloseButton"
+    return:
+      type: System.String
+    content.vb: Public Const PartTabCloseButton As String = "TabCloseButton"
+- uid: FluentGpu.Controls.TabView.PartAddButton
+  commentId: F:FluentGpu.Controls.TabView.PartAddButton
+  id: PartAddButton
+  parent: FluentGpu.Controls.TabView
+  langs:
+  - csharp
+  - vb
+  name: PartAddButton
+  nameWithType: TabView.PartAddButton
+  fullName: FluentGpu.Controls.TabView.PartAddButton
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartAddButton
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 57
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'The trailing "+" add button (WinUI AddButton). Owned: OnClick, Role, OnRealized (chained).'
+  example: []
+  syntax:
+    content: public const string PartAddButton = "AddButton"
+    return:
+      type: System.String
+    content.vb: Public Const PartAddButton As String = "AddButton"
+- uid: FluentGpu.Controls.TabView.PartStrip
+  commentId: F:FluentGpu.Controls.TabView.PartStrip
+  id: PartStrip
+  parent: FluentGpu.Controls.TabView
+  langs:
+  - csharp
+  - vb
+  name: PartStrip
+  nameWithType: TabView.PartStrip
+  fullName: FluentGpu.Controls.TabView.PartStrip
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartStrip
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 59
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'The header strip row hosting the leading inset + scrolling tabs + add button. Owned: Children.'
+  example: []
+  syntax:
+    content: public const string PartStrip = "Strip"
+    return:
+      type: System.String
+    content.vb: Public Const PartStrip As String = "Strip"
+- uid: FluentGpu.Controls.TabView.PartContent
+  commentId: F:FluentGpu.Controls.TabView.PartContent
+  id: PartContent
+  parent: FluentGpu.Controls.TabView
+  langs:
+  - csharp
+  - vb
+  name: PartContent
+  nameWithType: TabView.PartContent
+  fullName: FluentGpu.Controls.TabView.PartContent
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartContent
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 61
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: "The selected tab's content area. Owned: Children."
+  example: []
+  syntax:
+    content: public const string PartContent = "Content"
+    return:
+      type: System.String
+    content.vb: Public Const PartContent As String = "Content"
+- uid: FluentGpu.Controls.TabView.Tabs
+  commentId: F:FluentGpu.Controls.TabView.Tabs
+  id: Tabs
+  parent: FluentGpu.Controls.TabView
+  langs:
+  - csharp
+  - vb
+  name: Tabs
+  nameWithType: TabView.Tabs
+  fullName: FluentGpu.Controls.TabView.Tabs
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Tabs
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 71
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Simple path: header strings only (each becomes a closable <xref href="FluentGpu.Controls.TabViewItem" data-throw-if-not-resolved="false"></xref>). Mount-only
+        seed of the control-owned collection; ignored when <xref href="FluentGpu.Controls.TabView.Items" data-throw-if-not-resolved="false"></xref> is set.
+  example: []
+  syntax:
+    content: public IReadOnlyList<string> Tabs
+    return:
+      type: System.Collections.Generic.IReadOnlyList{System.String}
+    content.vb: Public Tabs As IReadOnlyList(Of String)
+- uid: FluentGpu.Controls.TabView.Items
+  commentId: F:FluentGpu.Controls.TabView.Items
+  id: Items
+  parent: FluentGpu.Controls.TabView
+  langs:
+  - csharp
+  - vb
+  name: Items
+  nameWithType: TabView.Items
+  fullName: FluentGpu.Controls.TabView.Items
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Items
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 74
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Rich path: full per-tab models (header + icon + closability + content). Mount-only seed of the
+        control-owned collection (the WinUI TabItems vector, TabView.idl:135).
+  example: []
+  syntax:
+    content: public IReadOnlyList<TabViewItem>? Items
+    return:
+      type: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.TabViewItem}
+    content.vb: Public Items As IReadOnlyList(Of TabViewItem)
+- uid: FluentGpu.Controls.TabView.TabWidthMode
+  commentId: F:FluentGpu.Controls.TabView.TabWidthMode
+  id: TabWidthMode
+  parent: FluentGpu.Controls.TabView
+  langs:
+  - csharp
+  - vb
+  name: TabWidthMode
+  nameWithType: TabView.TabWidthMode
+  fullName: FluentGpu.Controls.TabView.TabWidthMode
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TabWidthMode
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 76
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI <code>TabWidthMode</code> (TabView.idl:105-107, default Equal).
+  example: []
+  syntax:
+    content: public TabViewWidthMode TabWidthMode
+    return:
+      type: FluentGpu.Controls.TabViewWidthMode
+    content.vb: Public TabWidthMode As TabViewWidthMode
+- uid: FluentGpu.Controls.TabView.CloseButtonOverlayMode
+  commentId: F:FluentGpu.Controls.TabView.CloseButtonOverlayMode
+  id: CloseButtonOverlayMode
+  parent: FluentGpu.Controls.TabView
+  langs:
+  - csharp
+  - vb
+  name: CloseButtonOverlayMode
+  nameWithType: TabView.CloseButtonOverlayMode
+  fullName: FluentGpu.Controls.TabView.CloseButtonOverlayMode
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CloseButtonOverlayMode
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 78
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI <code>CloseButtonOverlayMode</code> (TabView.idl:109-111, default Auto).
+  example: []
+  syntax:
+    content: public TabViewCloseButtonOverlayMode CloseButtonOverlayMode
+    return:
+      type: FluentGpu.Controls.TabViewCloseButtonOverlayMode
+    content.vb: Public CloseButtonOverlayMode As TabViewCloseButtonOverlayMode
+- uid: FluentGpu.Controls.TabView.IsAddTabButtonVisible
+  commentId: F:FluentGpu.Controls.TabView.IsAddTabButtonVisible
+  id: IsAddTabButtonVisible
+  parent: FluentGpu.Controls.TabView
+  langs:
+  - csharp
+  - vb
+  name: IsAddTabButtonVisible
+  nameWithType: TabView.IsAddTabButtonVisible
+  fullName: FluentGpu.Controls.TabView.IsAddTabButtonVisible
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsAddTabButtonVisible
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 80
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI <code>IsAddTabButtonVisible</code> (TabView.idl:119-120, default true).
+  example: []
+  syntax:
+    content: public bool IsAddTabButtonVisible
+    return:
+      type: System.Boolean
+    content.vb: Public IsAddTabButtonVisible As Boolean
+- uid: FluentGpu.Controls.TabView.CanReorderTabs
+  commentId: F:FluentGpu.Controls.TabView.CanReorderTabs
+  id: CanReorderTabs
+  parent: FluentGpu.Controls.TabView
+  langs:
+  - csharp
+  - vb
+  name: CanReorderTabs
+  nameWithType: TabView.CanReorderTabs
+  fullName: FluentGpu.Controls.TabView.CanReorderTabs
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CanReorderTabs
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 82
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI <code>CanReorderTabs</code> (TabView.idl:142-143, default TRUE) — pointer drag reorders the strip.
+  example: []
+  syntax:
+    content: public bool CanReorderTabs
+    return:
+      type: System.Boolean
+    content.vb: Public CanReorderTabs As Boolean
+- uid: FluentGpu.Controls.TabView.SelectedIndex
+  commentId: F:FluentGpu.Controls.TabView.SelectedIndex
+  id: SelectedIndex
+  parent: FluentGpu.Controls.TabView
+  langs:
+  - csharp
+  - vb
+  name: SelectedIndex
+  nameWithType: TabView.SelectedIndex
+  fullName: FluentGpu.Controls.TabView.SelectedIndex
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SelectedIndex
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 85
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Controlled selection: a two-way signal (the engine's controlled-prop idiom — plain fields are
+        mount-only). Null = the control owns selection (WinUI SelectedIndex DP, TabView.idl:159-161).
+  example: []
+  syntax:
+    content: public Signal<int>? SelectedIndex
+    return:
+      type: FluentGpu.Signals.Signal{System.Int32}
+    content.vb: Public SelectedIndex As Signal(Of Integer)
+- uid: FluentGpu.Controls.TabView.OnSelectionChanged
+  commentId: F:FluentGpu.Controls.TabView.OnSelectionChanged
+  id: OnSelectionChanged
+  parent: FluentGpu.Controls.TabView
+  langs:
+  - csharp
+  - vb
+  name: OnSelectionChanged
+  nameWithType: TabView.OnSelectionChanged
+  fullName: FluentGpu.Controls.TabView.OnSelectionChanged
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnSelectionChanged
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 87
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI <code>SelectionChanged</code> (TabView.idl:169) with the new index.
+  example: []
+  syntax:
+    content: public Action<int>? OnSelectionChanged
+    return:
+      type: System.Action{System.Int32}
+    content.vb: Public OnSelectionChanged As Action(Of Integer)
+- uid: FluentGpu.Controls.TabView.OnTabCloseRequested
+  commentId: F:FluentGpu.Controls.TabView.OnTabCloseRequested
+  id: OnTabCloseRequested
+  parent: FluentGpu.Controls.TabView
+  langs:
+  - csharp
+  - vb
+  name: OnTabCloseRequested
+  nameWithType: TabView.OnTabCloseRequested
+  fullName: FluentGpu.Controls.TabView.OnTabCloseRequested
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnTabCloseRequested
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 91
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>TabCloseRequested</code> (TabView.idl:124), raised with the closing index BEFORE the control
+        commits the removal. WinUI leaves removal to the handler; our collection is control-owned (the TabItems
+        vector), so the control performs the WinUI handler's <code>TabItems.RemoveAt</code> itself after raising.
+  example: []
+  syntax:
+    content: public Action<int>? OnTabCloseRequested
+    return:
+      type: System.Action{System.Int32}
+    content.vb: Public OnTabCloseRequested As Action(Of Integer)
+- uid: FluentGpu.Controls.TabView.OnAddTabButtonClick
+  commentId: F:FluentGpu.Controls.TabView.OnAddTabButtonClick
+  id: OnAddTabButtonClick
+  parent: FluentGpu.Controls.TabView
+  langs:
+  - csharp
+  - vb
+  name: OnAddTabButtonClick
+  nameWithType: TabView.OnAddTabButtonClick
+  fullName: FluentGpu.Controls.TabView.OnAddTabButtonClick
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnAddTabButtonClick
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 95
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>AddTabButtonClick</code> (TabView.idl:128): return the tab to append (the WinUI handler's
+        <code>TabItems.Add</code>) or null for no-op. Null handler = the button clicks to nothing, like an unhandled
+        WinUI event.
+  example: []
+  syntax:
+    content: public Func<TabViewItem?>? OnAddTabButtonClick
+    return:
+      type: System.Func{FluentGpu.Controls.TabViewItem}
+    content.vb: Public OnAddTabButtonClick As Func(Of TabViewItem)
+- uid: FluentGpu.Controls.TabView.OnTabsReordered
+  commentId: F:FluentGpu.Controls.TabView.OnTabsReordered
+  id: OnTabsReordered
+  parent: FluentGpu.Controls.TabView
+  langs:
+  - csharp
+  - vb
+  name: OnTabsReordered
+  nameWithType: TabView.OnTabsReordered
+  fullName: FluentGpu.Controls.TabView.OnTabsReordered
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnTabsReordered
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 98
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Raised after a drag reorder commits (from, to) — the TabItemsChanged move notification
+        (TabView.idl:130) so the app can mirror its model.
+  example: []
+  syntax:
+    content: public Action<int, int>? OnTabsReordered
+    return:
+      type: System.Action{System.Int32,System.Int32}
+    content.vb: Public OnTabsReordered As Action(Of Integer, Integer)
+- uid: FluentGpu.Controls.TabView.Parts
+  commentId: F:FluentGpu.Controls.TabView.Parts
+  id: Parts
+  parent: FluentGpu.Controls.TabView
+  langs:
+  - csharp
+  - vb
+  name: Parts
+  nameWithType: TabView.Parts
+  fullName: FluentGpu.Controls.TabView.Parts
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Parts
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 101
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Lightweight per-part styling (CSS ::part): modifiers keyed by the <code>PartXxx</code> consts; see
+        <xref href="FluentGpu.Dsl.TemplateParts" data-throw-if-not-resolved="false"></xref> for the contract.
+  example: []
+  syntax:
+    content: public TemplateParts? Parts
+    return:
+      type: FluentGpu.Dsl.TemplateParts
+    content.vb: Public Parts As TemplateParts
+- uid: FluentGpu.Controls.TabView.Create(System.Collections.Generic.IReadOnlyList{System.String},System.Action{System.Int32},System.Func{FluentGpu.Controls.TabViewItem},System.Action{System.Int32})
+  commentId: M:FluentGpu.Controls.TabView.Create(System.Collections.Generic.IReadOnlyList{System.String},System.Action{System.Int32},System.Func{FluentGpu.Controls.TabViewItem},System.Action{System.Int32})
+  id: Create(System.Collections.Generic.IReadOnlyList{System.String},System.Action{System.Int32},System.Func{FluentGpu.Controls.TabViewItem},System.Action{System.Int32})
+  parent: FluentGpu.Controls.TabView
+  langs:
+  - csharp
+  - vb
+  name: Create(IReadOnlyList<string>, Action<int>?, Func<TabViewItem?>?, Action<int>?)
+  nameWithType: TabView.Create(IReadOnlyList<string>, Action<int>?, Func<TabViewItem?>?, Action<int>?)
+  fullName: FluentGpu.Controls.TabView.Create(System.Collections.Generic.IReadOnlyList<string>, System.Action<int>?, System.Func<FluentGpu.Controls.TabViewItem?>?, System.Action<int>?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 103
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static Element Create(IReadOnlyList<string> tabs, Action<int>? onTabCloseRequested = null, Func<TabViewItem?>? onAddTabButtonClick = null, Action<int>? onSelectionChanged = null)
+    parameters:
+    - id: tabs
+      type: System.Collections.Generic.IReadOnlyList{System.String}
+    - id: onTabCloseRequested
+      type: System.Action{System.Int32}
+    - id: onAddTabButtonClick
+      type: System.Func{FluentGpu.Controls.TabViewItem}
+    - id: onSelectionChanged
+      type: System.Action{System.Int32}
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Create(tabs As IReadOnlyList(Of String), onTabCloseRequested As Action(Of Integer) = Nothing, onAddTabButtonClick As Func(Of TabViewItem) = Nothing, onSelectionChanged As Action(Of Integer) = Nothing) As Element
+  overload: FluentGpu.Controls.TabView.Create*
+  nameWithType.vb: TabView.Create(IReadOnlyList(Of String), Action(Of Integer), Func(Of TabViewItem), Action(Of Integer))
+  fullName.vb: FluentGpu.Controls.TabView.Create(System.Collections.Generic.IReadOnlyList(Of String), System.Action(Of Integer), System.Func(Of FluentGpu.Controls.TabViewItem), System.Action(Of Integer))
+  name.vb: Create(IReadOnlyList(Of String), Action(Of Integer), Func(Of TabViewItem), Action(Of Integer))
+- uid: FluentGpu.Controls.TabView.Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.TabViewItem},System.Action{System.Int32},System.Func{FluentGpu.Controls.TabViewItem},System.Action{System.Int32},FluentGpu.Controls.TabViewWidthMode)
+  commentId: M:FluentGpu.Controls.TabView.Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.TabViewItem},System.Action{System.Int32},System.Func{FluentGpu.Controls.TabViewItem},System.Action{System.Int32},FluentGpu.Controls.TabViewWidthMode)
+  id: Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.TabViewItem},System.Action{System.Int32},System.Func{FluentGpu.Controls.TabViewItem},System.Action{System.Int32},FluentGpu.Controls.TabViewWidthMode)
+  parent: FluentGpu.Controls.TabView
+  langs:
+  - csharp
+  - vb
+  name: Create(IReadOnlyList<TabViewItem>, Action<int>?, Func<TabViewItem?>?, Action<int>?, TabViewWidthMode)
+  nameWithType: TabView.Create(IReadOnlyList<TabViewItem>, Action<int>?, Func<TabViewItem?>?, Action<int>?, TabViewWidthMode)
+  fullName: FluentGpu.Controls.TabView.Create(System.Collections.Generic.IReadOnlyList<FluentGpu.Controls.TabViewItem>, System.Action<int>?, System.Func<FluentGpu.Controls.TabViewItem?>?, System.Action<int>?, FluentGpu.Controls.TabViewWidthMode)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 115
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static Element Create(IReadOnlyList<TabViewItem> items, Action<int>? onTabCloseRequested = null, Func<TabViewItem?>? onAddTabButtonClick = null, Action<int>? onSelectionChanged = null, TabViewWidthMode widthMode = TabViewWidthMode.Equal)
+    parameters:
+    - id: items
+      type: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.TabViewItem}
+    - id: onTabCloseRequested
+      type: System.Action{System.Int32}
+    - id: onAddTabButtonClick
+      type: System.Func{FluentGpu.Controls.TabViewItem}
+    - id: onSelectionChanged
+      type: System.Action{System.Int32}
+    - id: widthMode
+      type: FluentGpu.Controls.TabViewWidthMode
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Create(items As IReadOnlyList(Of TabViewItem), onTabCloseRequested As Action(Of Integer) = Nothing, onAddTabButtonClick As Func(Of TabViewItem) = Nothing, onSelectionChanged As Action(Of Integer) = Nothing, widthMode As TabViewWidthMode = TabViewWidthMode.Equal) As Element
+  overload: FluentGpu.Controls.TabView.Create*
+  nameWithType.vb: TabView.Create(IReadOnlyList(Of TabViewItem), Action(Of Integer), Func(Of TabViewItem), Action(Of Integer), TabViewWidthMode)
+  fullName.vb: FluentGpu.Controls.TabView.Create(System.Collections.Generic.IReadOnlyList(Of FluentGpu.Controls.TabViewItem), System.Action(Of Integer), System.Func(Of FluentGpu.Controls.TabViewItem), System.Action(Of Integer), FluentGpu.Controls.TabViewWidthMode)
+  name.vb: Create(IReadOnlyList(Of TabViewItem), Action(Of Integer), Func(Of TabViewItem), Action(Of Integer), TabViewWidthMode)
+- uid: FluentGpu.Controls.TabView.Render
+  commentId: M:FluentGpu.Controls.TabView.Render
+  id: Render
+  parent: FluentGpu.Controls.TabView
+  langs:
+  - csharp
+  - vb
+  name: Render()
+  nameWithType: TabView.Render()
+  fullName: FluentGpu.Controls.TabView.Render()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Render
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 139
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  example: []
+  syntax:
+    content: public override Element Render()
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Overrides Function Render() As Element
+  overridden: FluentGpu.Hooks.Component.Render
+  overload: FluentGpu.Controls.TabView.Render*
+references:
+- uid: FluentGpu.Controls.TabView.Items
+  commentId: F:FluentGpu.Controls.TabView.Items
+  href: FluentGpu.Controls.TabView.html#FluentGpu_Controls_TabView_Items
+  name: Items
+  nameWithType: TabView.Items
+  fullName: FluentGpu.Controls.TabView.Items
+- uid: FluentGpu.Controls.TabView.Tabs
+  commentId: F:FluentGpu.Controls.TabView.Tabs
+  href: FluentGpu.Controls.TabView.html#FluentGpu_Controls_TabView_Tabs
+  name: Tabs
+  nameWithType: TabView.Tabs
+  fullName: FluentGpu.Controls.TabView.Tabs
+- uid: FluentGpu.Controls.TabView.OnTabCloseRequested
+  commentId: F:FluentGpu.Controls.TabView.OnTabCloseRequested
+  href: FluentGpu.Controls.TabView.html#FluentGpu_Controls_TabView_OnTabCloseRequested
+  name: OnTabCloseRequested
+  nameWithType: TabView.OnTabCloseRequested
+  fullName: FluentGpu.Controls.TabView.OnTabCloseRequested
+- uid: FluentGpu.Controls.TabView.OnAddTabButtonClick
+  commentId: F:FluentGpu.Controls.TabView.OnAddTabButtonClick
+  href: FluentGpu.Controls.TabView.html#FluentGpu_Controls_TabView_OnAddTabButtonClick
+  name: OnAddTabButtonClick
+  nameWithType: TabView.OnAddTabButtonClick
+  fullName: FluentGpu.Controls.TabView.OnAddTabButtonClick
+- uid: FluentGpu.Controls.TabView.CanReorderTabs
+  commentId: F:FluentGpu.Controls.TabView.CanReorderTabs
+  href: FluentGpu.Controls.TabView.html#FluentGpu_Controls_TabView_CanReorderTabs
+  name: CanReorderTabs
+  nameWithType: TabView.CanReorderTabs
+  fullName: FluentGpu.Controls.TabView.CanReorderTabs
+- uid: FluentGpu.Controls.TabView.Parts
+  commentId: F:FluentGpu.Controls.TabView.Parts
+  href: FluentGpu.Controls.TabView.html#FluentGpu_Controls_TabView_Parts
+  name: Parts
+  nameWithType: TabView.Parts
+  fullName: FluentGpu.Controls.TabView.Parts
+- uid: FluentGpu.Dsl.TemplateParts
+  commentId: T:FluentGpu.Dsl.TemplateParts
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.TemplateParts.html
+  name: TemplateParts
+  nameWithType: TemplateParts
+  fullName: FluentGpu.Dsl.TemplateParts
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Hooks.Component
+  commentId: T:FluentGpu.Hooks.Component
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.Component.html
+  name: Component
+  nameWithType: Component
+  fullName: FluentGpu.Hooks.Component
+- uid: FluentGpu.Hooks.Component.Context
+  commentId: P:FluentGpu.Hooks.Component.Context
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Context
+  name: Context
+  nameWithType: Component.Context
+  fullName: FluentGpu.Hooks.Component.Context
+- uid: FluentGpu.Hooks.Component.RunsOnce
+  commentId: P:FluentGpu.Hooks.Component.RunsOnce
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RunsOnce
+  name: RunsOnce
+  nameWithType: Component.RunsOnce
+  fullName: FluentGpu.Hooks.Component.RunsOnce
+- uid: FluentGpu.Hooks.Component.RenderWithHooks
+  commentId: M:FluentGpu.Hooks.Component.RenderWithHooks
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  name: RenderWithHooks()
+  nameWithType: Component.RenderWithHooks()
+  fullName: FluentGpu.Hooks.Component.RenderWithHooks()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.RenderWithHooks
+    name: RenderWithHooks
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.RenderWithHooks
+    name: RenderWithHooks
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  - name: (
+  - name: )
+- uid: FluentGpu.Hooks.Component.Unmount
+  commentId: M:FluentGpu.Hooks.Component.Unmount
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  name: Unmount()
+  nameWithType: Component.Unmount()
+  fullName: FluentGpu.Hooks.Component.Unmount()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.Unmount
+    name: Unmount
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.Unmount
+    name: Unmount
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseEntrance(System.Single,System.Object)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  parent: FluentGpu.Hooks.MotionHooks
+  definition: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  name: UseEntrance(Component, float, object)
+  nameWithType: MotionHooks.UseEntrance(Component, float, object)
+  fullName: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, float, object)
+  nameWithType.vb: MotionHooks.UseEntrance(Component, Single, Object)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, Single, Object)
+  name.vb: UseEntrance(Component, Single, Object)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseHoverScale(System.Boolean,System.Single)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  parent: FluentGpu.Hooks.MotionHooks
+  definition: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  name: UseHoverScale(Component, bool, float)
+  nameWithType: MotionHooks.UseHoverScale(Component, bool, float)
+  fullName: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, bool, float)
+  nameWithType.vb: MotionHooks.UseHoverScale(Component, Boolean, Single)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, Boolean, Single)
+  name.vb: UseHoverScale(Component, Boolean, Single)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Hooks
+  commentId: N:FluentGpu.Hooks
+  href: FluentGpu.html
+  name: FluentGpu.Hooks
+  nameWithType: FluentGpu.Hooks
+  fullName: FluentGpu.Hooks
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+- uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  isExternal: true
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  name: UseEntrance(Component, float, object)
+  nameWithType: MotionHooks.UseEntrance(Component, float, object)
+  fullName: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, float, object)
+  nameWithType.vb: MotionHooks.UseEntrance(Component, Single, Object)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, Single, Object)
+  name.vb: UseEntrance(Component, Single, Object)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Hooks.MotionHooks
+  commentId: T:FluentGpu.Hooks.MotionHooks
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.MotionHooks.html
+  name: MotionHooks
+  nameWithType: MotionHooks
+  fullName: FluentGpu.Hooks.MotionHooks
+- uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  isExternal: true
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  name: UseHoverScale(Component, bool, float)
+  nameWithType: MotionHooks.UseHoverScale(Component, bool, float)
+  fullName: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, bool, float)
+  nameWithType.vb: MotionHooks.UseHoverScale(Component, Boolean, Single)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, Boolean, Single)
+  name.vb: UseHoverScale(Component, Boolean, Single)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Dsl.TextEl
+  commentId: T:FluentGpu.Dsl.TextEl
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.TextEl.html
+  name: TextEl
+  nameWithType: TextEl
+  fullName: FluentGpu.Dsl.TextEl
+- uid: FluentGpu.Controls.TabViewItem
+  commentId: T:FluentGpu.Controls.TabViewItem
+  href: FluentGpu.Controls.TabViewItem.html
+  name: TabViewItem
+  nameWithType: TabViewItem
+  fullName: FluentGpu.Controls.TabViewItem
+- uid: System.Collections.Generic.IReadOnlyList{System.String}
+  commentId: T:System.Collections.Generic.IReadOnlyList{System.String}
+  parent: System.Collections.Generic
+  definition: System.Collections.Generic.IReadOnlyList`1
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<string>
+  nameWithType: IReadOnlyList<string>
+  fullName: System.Collections.Generic.IReadOnlyList<string>
+  nameWithType.vb: IReadOnlyList(Of String)
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of String)
+  name.vb: IReadOnlyList(Of String)
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+- uid: System.Collections.Generic.IReadOnlyList`1
+  commentId: T:System.Collections.Generic.IReadOnlyList`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<T>
+  nameWithType: IReadOnlyList<T>
+  fullName: System.Collections.Generic.IReadOnlyList<T>
+  nameWithType.vb: IReadOnlyList(Of T)
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of T)
+  name.vb: IReadOnlyList(Of T)
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Collections.Generic
+  commentId: N:System.Collections.Generic
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System.Collections.Generic
+  nameWithType: System.Collections.Generic
+  fullName: System.Collections.Generic
+  spec.csharp:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+  spec.vb:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+- uid: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.TabViewItem}
+  commentId: T:System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.TabViewItem}
+  parent: System.Collections.Generic
+  definition: System.Collections.Generic.IReadOnlyList`1
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<TabViewItem>
+  nameWithType: IReadOnlyList<TabViewItem>
+  fullName: System.Collections.Generic.IReadOnlyList<FluentGpu.Controls.TabViewItem>
+  nameWithType.vb: IReadOnlyList(Of TabViewItem)
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of FluentGpu.Controls.TabViewItem)
+  name.vb: IReadOnlyList(Of TabViewItem)
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - uid: FluentGpu.Controls.TabViewItem
+    name: TabViewItem
+    href: FluentGpu.Controls.TabViewItem.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.TabViewItem
+    name: TabViewItem
+    href: FluentGpu.Controls.TabViewItem.html
+  - name: )
+- uid: FluentGpu.Controls.TabViewWidthMode
+  commentId: T:FluentGpu.Controls.TabViewWidthMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.TabViewWidthMode.html
+  name: TabViewWidthMode
+  nameWithType: TabViewWidthMode
+  fullName: FluentGpu.Controls.TabViewWidthMode
+- uid: FluentGpu.Controls.TabViewCloseButtonOverlayMode
+  commentId: T:FluentGpu.Controls.TabViewCloseButtonOverlayMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.TabViewCloseButtonOverlayMode.html
+  name: TabViewCloseButtonOverlayMode
+  nameWithType: TabViewCloseButtonOverlayMode
+  fullName: FluentGpu.Controls.TabViewCloseButtonOverlayMode
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Signals.Signal{System.Int32}
+  commentId: T:FluentGpu.Signals.Signal{System.Int32}
+  parent: FluentGpu.Signals
+  definition: FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<int>
+  nameWithType: Signal<int>
+  fullName: FluentGpu.Signals.Signal<int>
+  nameWithType.vb: Signal(Of Integer)
+  fullName.vb: FluentGpu.Signals.Signal(Of Integer)
+  name.vb: Signal(Of Integer)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: FluentGpu.Signals.Signal`1
+  commentId: T:FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<T>
+  nameWithType: Signal<T>
+  fullName: FluentGpu.Signals.Signal<T>
+  nameWithType.vb: Signal(Of T)
+  fullName.vb: FluentGpu.Signals.Signal(Of T)
+  name.vb: Signal(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Signals
+  commentId: N:FluentGpu.Signals
+  href: FluentGpu.html
+  name: FluentGpu.Signals
+  nameWithType: FluentGpu.Signals
+  fullName: FluentGpu.Signals
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+- uid: System.Action{System.Int32}
+  commentId: T:System.Action{System.Int32}
+  parent: System
+  definition: System.Action`1
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<int>
+  nameWithType: Action<int>
+  fullName: System.Action<int>
+  nameWithType.vb: Action(Of Integer)
+  fullName.vb: System.Action(Of Integer)
+  name.vb: Action(Of Integer)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: System.Action`1
+  commentId: T:System.Action`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<T>
+  nameWithType: Action<T>
+  fullName: System.Action<T>
+  nameWithType.vb: Action(Of T)
+  fullName.vb: System.Action(Of T)
+  name.vb: Action(Of T)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Func{FluentGpu.Controls.TabViewItem}
+  commentId: T:System.Func{FluentGpu.Controls.TabViewItem}
+  parent: System
+  definition: System.Func`1
+  href: https://learn.microsoft.com/dotnet/api/system.func-1
+  name: Func<TabViewItem>
+  nameWithType: Func<TabViewItem>
+  fullName: System.Func<FluentGpu.Controls.TabViewItem>
+  nameWithType.vb: Func(Of TabViewItem)
+  fullName.vb: System.Func(Of FluentGpu.Controls.TabViewItem)
+  name.vb: Func(Of TabViewItem)
+  spec.csharp:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: <
+  - uid: FluentGpu.Controls.TabViewItem
+    name: TabViewItem
+    href: FluentGpu.Controls.TabViewItem.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.TabViewItem
+    name: TabViewItem
+    href: FluentGpu.Controls.TabViewItem.html
+  - name: )
+- uid: System.Func`1
+  commentId: T:System.Func`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.func-1
+  name: Func<TResult>
+  nameWithType: Func<TResult>
+  fullName: System.Func<TResult>
+  nameWithType.vb: Func(Of TResult)
+  fullName.vb: System.Func(Of TResult)
+  name.vb: Func(Of TResult)
+  spec.csharp:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: <
+  - name: TResult
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: TResult
+  - name: )
+- uid: System.Action{System.Int32,System.Int32}
+  commentId: T:System.Action{System.Int32,System.Int32}
+  parent: System
+  definition: System.Action`2
+  href: https://learn.microsoft.com/dotnet/api/system.action-2
+  name: Action<int, int>
+  nameWithType: Action<int, int>
+  fullName: System.Action<int, int>
+  nameWithType.vb: Action(Of Integer, Integer)
+  fullName.vb: System.Action(Of Integer, Integer)
+  name.vb: Action(Of Integer, Integer)
+  spec.csharp:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: System.Action`2
+  commentId: T:System.Action`2
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-2
+  name: Action<T1, T2>
+  nameWithType: Action<T1, T2>
+  fullName: System.Action<T1, T2>
+  nameWithType.vb: Action(Of T1, T2)
+  fullName.vb: System.Action(Of T1, T2)
+  name.vb: Action(Of T1, T2)
+  spec.csharp:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: <
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: )
+- uid: FluentGpu.Controls.TabView.Create*
+  commentId: Overload:FluentGpu.Controls.TabView.Create
+  href: FluentGpu.Controls.TabView.html#FluentGpu_Controls_TabView_Create_System_Collections_Generic_IReadOnlyList_System_String__System_Action_System_Int32__System_Func_FluentGpu_Controls_TabViewItem__System_Action_System_Int32__
+  name: Create
+  nameWithType: TabView.Create
+  fullName: FluentGpu.Controls.TabView.Create
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: FluentGpu.Hooks.Component.Render
+  commentId: M:FluentGpu.Hooks.Component.Render
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  name: Render()
+  nameWithType: Component.Render()
+  fullName: FluentGpu.Hooks.Component.Render()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.Render
+    name: Render
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.Render
+    name: Render
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  - name: (
+  - name: )
+- uid: FluentGpu.Controls.TabView.Render*
+  commentId: Overload:FluentGpu.Controls.TabView.Render
+  href: FluentGpu.Controls.TabView.html#FluentGpu_Controls_TabView_Render
+  name: Render
+  nameWithType: TabView.Render
+  fullName: FluentGpu.Controls.TabView.Render

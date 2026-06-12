@@ -1,0 +1,20 @@
+# App Authors section — learning order: overview, first app, the reactive model,
+# then the building blocks (controls, layout, theming, media), then scale & performance.
+- name: App Authors
+  href: index.md
+- name: Build Your First App
+  href: build-your-first-app.md
+- name: Signals, Components, and Bindings
+  href: signals-components-and-bindings.md
+- name: Controls Cookbook
+  href: controls-cookbook.md
+- name: Layout and Composition
+  href: layout-and-composition.md
+- name: Theming and Tokens
+  href: theming.md
+- name: Media and Animation
+  href: media-and-animation.md
+- name: Virtualized Lists and ItemsView
+  href: virtualized-lists-and-itemsview.md
+- name: Performance Rules and Zero-Alloc Boundaries
+  href: performance-rules-and-zero-alloc-boundaries.md

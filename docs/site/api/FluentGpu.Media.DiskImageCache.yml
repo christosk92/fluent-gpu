@@ -1,0 +1,713 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Media.DiskImageCache
+  commentId: T:FluentGpu.Media.DiskImageCache
+  id: DiskImageCache
+  parent: FluentGpu.Media
+  children:
+  - FluentGpu.Media.DiskImageCache.#ctor(System.String,System.Int64,System.Int32,System.Nullable{System.TimeSpan})
+  - FluentGpu.Media.DiskImageCache.TryReadAsync(System.String,System.Threading.CancellationToken)
+  - FluentGpu.Media.DiskImageCache.WriteAsync(System.String,System.ReadOnlyMemory{System.Byte},System.Threading.CancellationToken)
+  langs:
+  - csharp
+  - vb
+  name: DiskImageCache
+  nameWithType: DiskImageCache
+  fullName: FluentGpu.Media.DiskImageCache
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Media/DiskImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DiskImageCache
+    path: ../../src/FluentGpu.Media/DiskImageCache.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Media
+  namespace: FluentGpu.Media
+  summary: >-
+    Persistent on-disk cache of ENCODED image bytes (the second tier under the in-memory GPU residency cache) — the
+
+    memory+disk model every mature loader uses (Flutter <code>flutter_cache_manager</code>, Nuke/Kingfisher <code>DataCache</code>,
+
+    SDWebImage). Content-addressed by a hash of the source URL, with an LRU byte budget + max-object count + stale
+
+    period. It makes CDN images instant on the second view, survives app restarts, and serves offline. Stores the
+
+    compressed source (≈tens of KB), NOT the decoded BGRA (which is the memory tier) — so the budget covers thousands
+
+    of covers.
+  example: []
+  syntax:
+    content: public sealed class DiskImageCache
+    content.vb: Public NotInheritable Class DiskImageCache
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Media.DiskImageCache.#ctor(System.String,System.Int64,System.Int32,System.Nullable{System.TimeSpan})
+  commentId: M:FluentGpu.Media.DiskImageCache.#ctor(System.String,System.Int64,System.Int32,System.Nullable{System.TimeSpan})
+  id: '#ctor(System.String,System.Int64,System.Int32,System.Nullable{System.TimeSpan})'
+  parent: FluentGpu.Media.DiskImageCache
+  langs:
+  - csharp
+  - vb
+  name: DiskImageCache(string?, long, int, TimeSpan?)
+  nameWithType: DiskImageCache.DiskImageCache(string?, long, int, TimeSpan?)
+  fullName: FluentGpu.Media.DiskImageCache.DiskImageCache(string?, long, int, System.TimeSpan?)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Media/DiskImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Media/DiskImageCache.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Media
+  namespace: FluentGpu.Media
+  syntax:
+    content: public DiskImageCache(string? directory = null, long budgetBytes = 268435456, int maxObjects = 4096, TimeSpan? maxAge = null)
+    parameters:
+    - id: directory
+      type: System.String
+    - id: budgetBytes
+      type: System.Int64
+    - id: maxObjects
+      type: System.Int32
+    - id: maxAge
+      type: System.Nullable{System.TimeSpan}
+    content.vb: Public Sub New(directory As String = Nothing, budgetBytes As Long = 268435456, maxObjects As Integer = 4096, maxAge As TimeSpan? = Nothing)
+  overload: FluentGpu.Media.DiskImageCache.#ctor*
+  nameWithType.vb: DiskImageCache.New(String, Long, Integer, TimeSpan?)
+  fullName.vb: FluentGpu.Media.DiskImageCache.New(String, Long, Integer, System.TimeSpan?)
+  name.vb: New(String, Long, Integer, TimeSpan?)
+- uid: FluentGpu.Media.DiskImageCache.TryReadAsync(System.String,System.Threading.CancellationToken)
+  commentId: M:FluentGpu.Media.DiskImageCache.TryReadAsync(System.String,System.Threading.CancellationToken)
+  id: TryReadAsync(System.String,System.Threading.CancellationToken)
+  parent: FluentGpu.Media.DiskImageCache
+  langs:
+  - csharp
+  - vb
+  name: TryReadAsync(string, CancellationToken)
+  nameWithType: DiskImageCache.TryReadAsync(string, CancellationToken)
+  fullName: FluentGpu.Media.DiskImageCache.TryReadAsync(string, System.Threading.CancellationToken)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Media/DiskImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TryReadAsync
+    path: ../../src/FluentGpu.Media/DiskImageCache.cs
+    startLine: 50
+  assemblies:
+  - FluentGpu.Media
+  namespace: FluentGpu.Media
+  summary: >-
+    Hit ⇒ a pooled buffer (the scheduler returns it); miss/stale ⇒ <code>FetchResult.Fail(...)</code> with a
+        neutral kind so the caller falls through to the network.
+  example: []
+  syntax:
+    content: public Task<FetchResult> TryReadAsync(string url, CancellationToken ct)
+    parameters:
+    - id: url
+      type: System.String
+    - id: ct
+      type: System.Threading.CancellationToken
+    return:
+      type: System.Threading.Tasks.Task{FluentGpu.Media.FetchResult}
+    content.vb: Public Function TryReadAsync(url As String, ct As CancellationToken) As Task(Of FetchResult)
+  overload: FluentGpu.Media.DiskImageCache.TryReadAsync*
+  nameWithType.vb: DiskImageCache.TryReadAsync(String, CancellationToken)
+  fullName.vb: FluentGpu.Media.DiskImageCache.TryReadAsync(String, System.Threading.CancellationToken)
+  name.vb: TryReadAsync(String, CancellationToken)
+- uid: FluentGpu.Media.DiskImageCache.WriteAsync(System.String,System.ReadOnlyMemory{System.Byte},System.Threading.CancellationToken)
+  commentId: M:FluentGpu.Media.DiskImageCache.WriteAsync(System.String,System.ReadOnlyMemory{System.Byte},System.Threading.CancellationToken)
+  id: WriteAsync(System.String,System.ReadOnlyMemory{System.Byte},System.Threading.CancellationToken)
+  parent: FluentGpu.Media.DiskImageCache
+  langs:
+  - csharp
+  - vb
+  name: WriteAsync(string, ReadOnlyMemory<byte>, CancellationToken)
+  nameWithType: DiskImageCache.WriteAsync(string, ReadOnlyMemory<byte>, CancellationToken)
+  fullName: FluentGpu.Media.DiskImageCache.WriteAsync(string, System.ReadOnlyMemory<byte>, System.Threading.CancellationToken)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Media/DiskImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: WriteAsync
+    path: ../../src/FluentGpu.Media/DiskImageCache.cs
+    startLine: 78
+  assemblies:
+  - FluentGpu.Media
+  namespace: FluentGpu.Media
+  summary: Persist encoded bytes for <code class="paramref">url</code> (temp file + atomic move; opportunistic LRU trim).
+  example: []
+  syntax:
+    content: public Task WriteAsync(string url, ReadOnlyMemory<byte> bytes, CancellationToken ct)
+    parameters:
+    - id: url
+      type: System.String
+    - id: bytes
+      type: System.ReadOnlyMemory{System.Byte}
+    - id: ct
+      type: System.Threading.CancellationToken
+    return:
+      type: System.Threading.Tasks.Task
+    content.vb: Public Function WriteAsync(url As String, bytes As ReadOnlyMemory(Of Byte), ct As CancellationToken) As Task
+  overload: FluentGpu.Media.DiskImageCache.WriteAsync*
+  nameWithType.vb: DiskImageCache.WriteAsync(String, ReadOnlyMemory(Of Byte), CancellationToken)
+  fullName.vb: FluentGpu.Media.DiskImageCache.WriteAsync(String, System.ReadOnlyMemory(Of Byte), System.Threading.CancellationToken)
+  name.vb: WriteAsync(String, ReadOnlyMemory(Of Byte), CancellationToken)
+references:
+- uid: FluentGpu.Media
+  commentId: N:FluentGpu.Media
+  href: FluentGpu.html
+  name: FluentGpu.Media
+  nameWithType: FluentGpu.Media
+  fullName: FluentGpu.Media
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Media
+    name: Media
+    href: FluentGpu.Media.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Media
+    name: Media
+    href: FluentGpu.Media.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Media.DiskImageCache.#ctor*
+  commentId: Overload:FluentGpu.Media.DiskImageCache.#ctor
+  href: FluentGpu.Media.DiskImageCache.html#FluentGpu_Media_DiskImageCache__ctor_System_String_System_Int64_System_Int32_System_Nullable_System_TimeSpan__
+  name: DiskImageCache
+  nameWithType: DiskImageCache.DiskImageCache
+  fullName: FluentGpu.Media.DiskImageCache.DiskImageCache
+  nameWithType.vb: DiskImageCache.New
+  fullName.vb: FluentGpu.Media.DiskImageCache.New
+  name.vb: New
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: System.Int64
+  commentId: T:System.Int64
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int64
+  name: long
+  nameWithType: long
+  fullName: long
+  nameWithType.vb: Long
+  fullName.vb: Long
+  name.vb: Long
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: System.Nullable{System.TimeSpan}
+  commentId: T:System.Nullable{System.TimeSpan}
+  parent: System
+  definition: System.Nullable`1
+  href: https://learn.microsoft.com/dotnet/api/system.timespan
+  name: TimeSpan?
+  nameWithType: TimeSpan?
+  fullName: System.TimeSpan?
+  spec.csharp:
+  - uid: System.TimeSpan
+    name: TimeSpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.timespan
+  - name: '?'
+  spec.vb:
+  - uid: System.TimeSpan
+    name: TimeSpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.timespan
+  - name: '?'
+- uid: System.Nullable`1
+  commentId: T:System.Nullable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  name: Nullable<T>
+  nameWithType: Nullable<T>
+  fullName: System.Nullable<T>
+  nameWithType.vb: Nullable(Of T)
+  fullName.vb: System.Nullable(Of T)
+  name.vb: Nullable(Of T)
+  spec.csharp:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Media.DiskImageCache.TryReadAsync*
+  commentId: Overload:FluentGpu.Media.DiskImageCache.TryReadAsync
+  href: FluentGpu.Media.DiskImageCache.html#FluentGpu_Media_DiskImageCache_TryReadAsync_System_String_System_Threading_CancellationToken_
+  name: TryReadAsync
+  nameWithType: DiskImageCache.TryReadAsync
+  fullName: FluentGpu.Media.DiskImageCache.TryReadAsync
+- uid: System.Threading.CancellationToken
+  commentId: T:System.Threading.CancellationToken
+  parent: System.Threading
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.threading.cancellationtoken
+  name: CancellationToken
+  nameWithType: CancellationToken
+  fullName: System.Threading.CancellationToken
+- uid: System.Threading.Tasks.Task{FluentGpu.Media.FetchResult}
+  commentId: T:System.Threading.Tasks.Task{FluentGpu.Media.FetchResult}
+  parent: System.Threading.Tasks
+  definition: System.Threading.Tasks.Task`1
+  href: https://learn.microsoft.com/dotnet/api/system.threading.tasks.task-1
+  name: Task<FetchResult>
+  nameWithType: Task<FetchResult>
+  fullName: System.Threading.Tasks.Task<FluentGpu.Media.FetchResult>
+  nameWithType.vb: Task(Of FetchResult)
+  fullName.vb: System.Threading.Tasks.Task(Of FluentGpu.Media.FetchResult)
+  name.vb: Task(Of FetchResult)
+  spec.csharp:
+  - uid: System.Threading.Tasks.Task`1
+    name: Task
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.threading.tasks.task-1
+  - name: <
+  - uid: FluentGpu.Media.FetchResult
+    name: FetchResult
+    href: FluentGpu.Media.FetchResult.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Threading.Tasks.Task`1
+    name: Task
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.threading.tasks.task-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Media.FetchResult
+    name: FetchResult
+    href: FluentGpu.Media.FetchResult.html
+  - name: )
+- uid: System.Threading
+  commentId: N:System.Threading
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System.Threading
+  nameWithType: System.Threading
+  fullName: System.Threading
+  spec.csharp:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Threading
+    name: Threading
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.threading
+  spec.vb:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Threading
+    name: Threading
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.threading
+- uid: System.Threading.Tasks.Task`1
+  commentId: T:System.Threading.Tasks.Task`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.threading.tasks.task-1
+  name: Task<TResult>
+  nameWithType: Task<TResult>
+  fullName: System.Threading.Tasks.Task<TResult>
+  nameWithType.vb: Task(Of TResult)
+  fullName.vb: System.Threading.Tasks.Task(Of TResult)
+  name.vb: Task(Of TResult)
+  spec.csharp:
+  - uid: System.Threading.Tasks.Task`1
+    name: Task
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.threading.tasks.task-1
+  - name: <
+  - name: TResult
+  - name: '>'
+  spec.vb:
+  - uid: System.Threading.Tasks.Task`1
+    name: Task
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.threading.tasks.task-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: TResult
+  - name: )
+- uid: System.Threading.Tasks
+  commentId: N:System.Threading.Tasks
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System.Threading.Tasks
+  nameWithType: System.Threading.Tasks
+  fullName: System.Threading.Tasks
+  spec.csharp:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Threading
+    name: Threading
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.threading
+  - name: .
+  - uid: System.Threading.Tasks
+    name: Tasks
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.threading.tasks
+  spec.vb:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Threading
+    name: Threading
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.threading
+  - name: .
+  - uid: System.Threading.Tasks
+    name: Tasks
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.threading.tasks
+- uid: FluentGpu.Media.DiskImageCache.WriteAsync*
+  commentId: Overload:FluentGpu.Media.DiskImageCache.WriteAsync
+  href: FluentGpu.Media.DiskImageCache.html#FluentGpu_Media_DiskImageCache_WriteAsync_System_String_System_ReadOnlyMemory_System_Byte__System_Threading_CancellationToken_
+  name: WriteAsync
+  nameWithType: DiskImageCache.WriteAsync
+  fullName: FluentGpu.Media.DiskImageCache.WriteAsync
+- uid: System.ReadOnlyMemory{System.Byte}
+  commentId: T:System.ReadOnlyMemory{System.Byte}
+  parent: System
+  definition: System.ReadOnlyMemory`1
+  href: https://learn.microsoft.com/dotnet/api/system.readonlymemory-1
+  name: ReadOnlyMemory<byte>
+  nameWithType: ReadOnlyMemory<byte>
+  fullName: System.ReadOnlyMemory<byte>
+  nameWithType.vb: ReadOnlyMemory(Of Byte)
+  fullName.vb: System.ReadOnlyMemory(Of Byte)
+  name.vb: ReadOnlyMemory(Of Byte)
+  spec.csharp:
+  - uid: System.ReadOnlyMemory`1
+    name: ReadOnlyMemory
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlymemory-1
+  - name: <
+  - uid: System.Byte
+    name: byte
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.byte
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlyMemory`1
+    name: ReadOnlyMemory
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlymemory-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Byte
+    name: Byte
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.byte
+  - name: )
+- uid: System.Threading.Tasks.Task
+  commentId: T:System.Threading.Tasks.Task
+  parent: System.Threading.Tasks
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.threading.tasks.task
+  name: Task
+  nameWithType: Task
+  fullName: System.Threading.Tasks.Task
+- uid: System.ReadOnlyMemory`1
+  commentId: T:System.ReadOnlyMemory`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.readonlymemory-1
+  name: ReadOnlyMemory<T>
+  nameWithType: ReadOnlyMemory<T>
+  fullName: System.ReadOnlyMemory<T>
+  nameWithType.vb: ReadOnlyMemory(Of T)
+  fullName.vb: System.ReadOnlyMemory(Of T)
+  name.vb: ReadOnlyMemory(Of T)
+  spec.csharp:
+  - uid: System.ReadOnlyMemory`1
+    name: ReadOnlyMemory
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlymemory-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlyMemory`1
+    name: ReadOnlyMemory
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlymemory-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )

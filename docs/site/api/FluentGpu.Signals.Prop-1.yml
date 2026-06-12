@@ -1,0 +1,963 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Signals.Prop`1
+  commentId: T:FluentGpu.Signals.Prop`1
+  id: Prop`1
+  parent: FluentGpu.Signals
+  children:
+  - FluentGpu.Signals.Prop`1.FromSignal(FluentGpu.Signals.IReadSignal{`0})
+  - FluentGpu.Signals.Prop`1.IsBound
+  - FluentGpu.Signals.Prop`1.Signal
+  - FluentGpu.Signals.Prop`1.Thunk
+  - FluentGpu.Signals.Prop`1.Value
+  - FluentGpu.Signals.Prop`1.ValueOr(`0)
+  - FluentGpu.Signals.Prop`1.op_Implicit(FluentGpu.Signals.Memo{`0})~FluentGpu.Signals.Prop{`0}
+  - FluentGpu.Signals.Prop`1.op_Implicit(FluentGpu.Signals.Signal{`0})~FluentGpu.Signals.Prop{`0}
+  - FluentGpu.Signals.Prop`1.op_Implicit(System.Func{`0})~FluentGpu.Signals.Prop{`0}
+  - FluentGpu.Signals.Prop`1.op_Implicit(`0)~FluentGpu.Signals.Prop{`0}
+  langs:
+  - csharp
+  - vb
+  name: Prop<T>
+  nameWithType: Prop<T>
+  fullName: FluentGpu.Signals.Prop<T>
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Signals/Prop.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Prop
+    path: ../../src/FluentGpu.Foundation/Signals/Prop.cs
+    startLine: 24
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Signals
+  syntax:
+    content: public readonly struct Prop<T>
+    typeParameters:
+    - id: T
+    content.vb: Public Structure Prop(Of T)
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  nameWithType.vb: Prop(Of T)
+  fullName.vb: FluentGpu.Signals.Prop(Of T)
+  name.vb: Prop(Of T)
+- uid: FluentGpu.Signals.Prop`1.IsBound
+  commentId: P:FluentGpu.Signals.Prop`1.IsBound
+  id: IsBound
+  parent: FluentGpu.Signals.Prop`1
+  langs:
+  - csharp
+  - vb
+  name: IsBound
+  nameWithType: Prop<T>.IsBound
+  fullName: FluentGpu.Signals.Prop<T>.IsBound
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Signals/Prop.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsBound
+    path: ../../src/FluentGpu.Foundation/Signals/Prop.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Signals
+  summary: True ⇒ a bind owns this channel; the reconciler's static write must skip it.
+  example: []
+  syntax:
+    content: public bool IsBound { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property IsBound As Boolean
+  overload: FluentGpu.Signals.Prop`1.IsBound*
+  nameWithType.vb: Prop(Of T).IsBound
+  fullName.vb: FluentGpu.Signals.Prop(Of T).IsBound
+- uid: FluentGpu.Signals.Prop`1.Value
+  commentId: P:FluentGpu.Signals.Prop`1.Value
+  id: Value
+  parent: FluentGpu.Signals.Prop`1
+  langs:
+  - csharp
+  - vb
+  name: Value
+  nameWithType: Prop<T>.Value
+  fullName: FluentGpu.Signals.Prop<T>.Value
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Signals/Prop.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Value
+    path: ../../src/FluentGpu.Foundation/Signals/Prop.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Signals
+  summary: >-
+    The static value — meaningful only when <xref href="FluentGpu.Signals.Prop%601.IsBound" data-throw-if-not-resolved="false"></xref> is false (a bound Prop's value is the
+        inert conversion seed).
+  example: []
+  syntax:
+    content: public T Value { get; }
+    parameters: []
+    return:
+      type: '{T}'
+    content.vb: Public ReadOnly Property Value As T
+  overload: FluentGpu.Signals.Prop`1.Value*
+  nameWithType.vb: Prop(Of T).Value
+  fullName.vb: FluentGpu.Signals.Prop(Of T).Value
+- uid: FluentGpu.Signals.Prop`1.ValueOr(`0)
+  commentId: M:FluentGpu.Signals.Prop`1.ValueOr(`0)
+  id: ValueOr(`0)
+  parent: FluentGpu.Signals.Prop`1
+  langs:
+  - csharp
+  - vb
+  name: ValueOr(T)
+  nameWithType: Prop<T>.ValueOr(T)
+  fullName: FluentGpu.Signals.Prop<T>.ValueOr(T)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Signals/Prop.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ValueOr
+    path: ../../src/FluentGpu.Foundation/Signals/Prop.cs
+    startLine: 38
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Signals
+  summary: >-
+    The static value, or <code class="paramref">fallback</code> when bound — for engine edge readers that need a
+        scalar regardless (e.g. exit-animation seeds).
+  example: []
+  syntax:
+    content: public T ValueOr(T fallback)
+    parameters:
+    - id: fallback
+      type: '{T}'
+    return:
+      type: '{T}'
+    content.vb: Public Function ValueOr(fallback As T) As T
+  overload: FluentGpu.Signals.Prop`1.ValueOr*
+  nameWithType.vb: Prop(Of T).ValueOr(T)
+  fullName.vb: FluentGpu.Signals.Prop(Of T).ValueOr(T)
+- uid: FluentGpu.Signals.Prop`1.Thunk
+  commentId: P:FluentGpu.Signals.Prop`1.Thunk
+  id: Thunk
+  parent: FluentGpu.Signals.Prop`1
+  langs:
+  - csharp
+  - vb
+  name: Thunk
+  nameWithType: Prop<T>.Thunk
+  fullName: FluentGpu.Signals.Prop<T>.Thunk
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Signals/Prop.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Thunk
+    path: ../../src/FluentGpu.Foundation/Signals/Prop.cs
+    startLine: 41
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Signals
+  summary: The thunk payload (bind wiring only — one type test per channel per mount).
+  example: []
+  syntax:
+    content: public Func<T>? Thunk { get; }
+    parameters: []
+    return:
+      type: System.Func{{T}}
+    content.vb: Public ReadOnly Property Thunk As Func(Of T)
+  overload: FluentGpu.Signals.Prop`1.Thunk*
+  nameWithType.vb: Prop(Of T).Thunk
+  fullName.vb: FluentGpu.Signals.Prop(Of T).Thunk
+- uid: FluentGpu.Signals.Prop`1.Signal
+  commentId: P:FluentGpu.Signals.Prop`1.Signal
+  id: Signal
+  parent: FluentGpu.Signals.Prop`1
+  langs:
+  - csharp
+  - vb
+  name: Signal
+  nameWithType: Prop<T>.Signal
+  fullName: FluentGpu.Signals.Prop<T>.Signal
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Signals/Prop.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Signal
+    path: ../../src/FluentGpu.Foundation/Signals/Prop.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Signals
+  summary: The signal payload (bind wiring only).
+  example: []
+  syntax:
+    content: public IReadSignal<T>? Signal { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Signals.IReadSignal{{T}}
+    content.vb: Public ReadOnly Property Signal As IReadSignal(Of T)
+  overload: FluentGpu.Signals.Prop`1.Signal*
+  nameWithType.vb: Prop(Of T).Signal
+  fullName.vb: FluentGpu.Signals.Prop(Of T).Signal
+- uid: FluentGpu.Signals.Prop`1.op_Implicit(`0)~FluentGpu.Signals.Prop{`0}
+  commentId: M:FluentGpu.Signals.Prop`1.op_Implicit(`0)~FluentGpu.Signals.Prop{`0}
+  id: op_Implicit(`0)~FluentGpu.Signals.Prop{`0}
+  parent: FluentGpu.Signals.Prop`1
+  langs:
+  - csharp
+  - vb
+  name: implicit operator Prop<T>(T)
+  nameWithType: Prop<T>.implicit operator Prop<T>(T)
+  fullName: FluentGpu.Signals.Prop<T>.implicit operator FluentGpu.Signals.Prop<T>(T)
+  type: Operator
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Signals/Prop.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: op_Implicit
+    path: ../../src/FluentGpu.Foundation/Signals/Prop.cs
+    startLine: 45
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Signals
+  syntax:
+    content: public static implicit operator Prop<T>(T value)
+    parameters:
+    - id: value
+      type: '{T}'
+    return:
+      type: FluentGpu.Signals.Prop`1
+    content.vb: Public Shared Widening Operator CType(value As T) As Prop(Of T)
+  overload: FluentGpu.Signals.Prop`1.op_Implicit*
+  nameWithType.vb: Prop(Of T).CType(T)
+  fullName.vb: FluentGpu.Signals.Prop(Of T).CType(T)
+  name.vb: CType(T)
+- uid: FluentGpu.Signals.Prop`1.op_Implicit(System.Func{`0})~FluentGpu.Signals.Prop{`0}
+  commentId: M:FluentGpu.Signals.Prop`1.op_Implicit(System.Func{`0})~FluentGpu.Signals.Prop{`0}
+  id: op_Implicit(System.Func{`0})~FluentGpu.Signals.Prop{`0}
+  parent: FluentGpu.Signals.Prop`1
+  langs:
+  - csharp
+  - vb
+  name: implicit operator Prop<T>(Func<T>)
+  nameWithType: Prop<T>.implicit operator Prop<T>(Func<T>)
+  fullName: FluentGpu.Signals.Prop<T>.implicit operator FluentGpu.Signals.Prop<T>(System.Func<T>)
+  type: Operator
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Signals/Prop.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: op_Implicit
+    path: ../../src/FluentGpu.Foundation/Signals/Prop.cs
+    startLine: 46
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Signals
+  syntax:
+    content: public static implicit operator Prop<T>(Func<T> thunk)
+    parameters:
+    - id: thunk
+      type: System.Func{{T}}
+    return:
+      type: FluentGpu.Signals.Prop`1
+    content.vb: Public Shared Widening Operator CType(thunk As Func(Of T)) As Prop(Of T)
+  overload: FluentGpu.Signals.Prop`1.op_Implicit*
+  nameWithType.vb: Prop(Of T).CType(Func(Of T))
+  fullName.vb: FluentGpu.Signals.Prop(Of T).CType(System.Func(Of T))
+  name.vb: CType(Func(Of T))
+- uid: FluentGpu.Signals.Prop`1.op_Implicit(FluentGpu.Signals.Signal{`0})~FluentGpu.Signals.Prop{`0}
+  commentId: M:FluentGpu.Signals.Prop`1.op_Implicit(FluentGpu.Signals.Signal{`0})~FluentGpu.Signals.Prop{`0}
+  id: op_Implicit(FluentGpu.Signals.Signal{`0})~FluentGpu.Signals.Prop{`0}
+  parent: FluentGpu.Signals.Prop`1
+  langs:
+  - csharp
+  - vb
+  name: implicit operator Prop<T>(Signal<T>)
+  nameWithType: Prop<T>.implicit operator Prop<T>(Signal<T>)
+  fullName: FluentGpu.Signals.Prop<T>.implicit operator FluentGpu.Signals.Prop<T>(FluentGpu.Signals.Signal<T>)
+  type: Operator
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Signals/Prop.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: op_Implicit
+    path: ../../src/FluentGpu.Foundation/Signals/Prop.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Signals
+  syntax:
+    content: public static implicit operator Prop<T>(Signal<T> signal)
+    parameters:
+    - id: signal
+      type: FluentGpu.Signals.Signal{{T}}
+    return:
+      type: FluentGpu.Signals.Prop`1
+    content.vb: Public Shared Widening Operator CType(signal As Signal(Of T)) As Prop(Of T)
+  overload: FluentGpu.Signals.Prop`1.op_Implicit*
+  nameWithType.vb: Prop(Of T).CType(Signal(Of T))
+  fullName.vb: FluentGpu.Signals.Prop(Of T).CType(FluentGpu.Signals.Signal(Of T))
+  name.vb: CType(Signal(Of T))
+- uid: FluentGpu.Signals.Prop`1.op_Implicit(FluentGpu.Signals.Memo{`0})~FluentGpu.Signals.Prop{`0}
+  commentId: M:FluentGpu.Signals.Prop`1.op_Implicit(FluentGpu.Signals.Memo{`0})~FluentGpu.Signals.Prop{`0}
+  id: op_Implicit(FluentGpu.Signals.Memo{`0})~FluentGpu.Signals.Prop{`0}
+  parent: FluentGpu.Signals.Prop`1
+  langs:
+  - csharp
+  - vb
+  name: implicit operator Prop<T>(Memo<T>)
+  nameWithType: Prop<T>.implicit operator Prop<T>(Memo<T>)
+  fullName: FluentGpu.Signals.Prop<T>.implicit operator FluentGpu.Signals.Prop<T>(FluentGpu.Signals.Memo<T>)
+  type: Operator
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Signals/Prop.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: op_Implicit
+    path: ../../src/FluentGpu.Foundation/Signals/Prop.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Signals
+  syntax:
+    content: public static implicit operator Prop<T>(Memo<T> memo)
+    parameters:
+    - id: memo
+      type: FluentGpu.Signals.Memo{{T}}
+    return:
+      type: FluentGpu.Signals.Prop`1
+    content.vb: Public Shared Widening Operator CType(memo As Memo(Of T)) As Prop(Of T)
+  overload: FluentGpu.Signals.Prop`1.op_Implicit*
+  nameWithType.vb: Prop(Of T).CType(Memo(Of T))
+  fullName.vb: FluentGpu.Signals.Prop(Of T).CType(FluentGpu.Signals.Memo(Of T))
+  name.vb: CType(Memo(Of T))
+- uid: FluentGpu.Signals.Prop`1.FromSignal(FluentGpu.Signals.IReadSignal{`0})
+  commentId: M:FluentGpu.Signals.Prop`1.FromSignal(FluentGpu.Signals.IReadSignal{`0})
+  id: FromSignal(FluentGpu.Signals.IReadSignal{`0})
+  parent: FluentGpu.Signals.Prop`1
+  langs:
+  - csharp
+  - vb
+  name: FromSignal(IReadSignal<T>)
+  nameWithType: Prop<T>.FromSignal(IReadSignal<T>)
+  fullName: FluentGpu.Signals.Prop<T>.FromSignal(FluentGpu.Signals.IReadSignal<T>)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Signals/Prop.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FromSignal
+    path: ../../src/FluentGpu.Foundation/Signals/Prop.cs
+    startLine: 52
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Signals
+  summary: >-
+    Bind from any concrete <xref href="FluentGpu.Signals.IReadSignal%601" data-throw-if-not-resolved="false"></xref> implementation (used by sibling-declared
+        operators like <code>FloatSignal → Prop&lt;float&gt;</code>, and by callers holding the interface).
+  example: []
+  syntax:
+    content: public static Prop<T> FromSignal(IReadSignal<T> signal)
+    parameters:
+    - id: signal
+      type: FluentGpu.Signals.IReadSignal{{T}}
+    return:
+      type: FluentGpu.Signals.Prop`1
+    content.vb: Public Shared Function FromSignal(signal As IReadSignal(Of T)) As Prop(Of T)
+  overload: FluentGpu.Signals.Prop`1.FromSignal*
+  nameWithType.vb: Prop(Of T).FromSignal(IReadSignal(Of T))
+  fullName.vb: FluentGpu.Signals.Prop(Of T).FromSignal(FluentGpu.Signals.IReadSignal(Of T))
+  name.vb: FromSignal(IReadSignal(Of T))
+references:
+- uid: FluentGpu.Signals
+  commentId: N:FluentGpu.Signals
+  href: FluentGpu.html
+  name: FluentGpu.Signals
+  nameWithType: FluentGpu.Signals
+  fullName: FluentGpu.Signals
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Signals.Prop`1.IsBound*
+  commentId: Overload:FluentGpu.Signals.Prop`1.IsBound
+  href: FluentGpu.Signals.Prop-1.html#FluentGpu_Signals_Prop_1_IsBound
+  name: IsBound
+  nameWithType: Prop<T>.IsBound
+  fullName: FluentGpu.Signals.Prop<T>.IsBound
+  nameWithType.vb: Prop(Of T).IsBound
+  fullName.vb: FluentGpu.Signals.Prop(Of T).IsBound
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Signals.Prop`1.IsBound
+  commentId: P:FluentGpu.Signals.Prop`1.IsBound
+  href: FluentGpu.Signals.Prop-1.html#FluentGpu_Signals_Prop_1_IsBound
+  name: IsBound
+  nameWithType: Prop<T>.IsBound
+  fullName: FluentGpu.Signals.Prop<T>.IsBound
+  nameWithType.vb: Prop(Of T).IsBound
+  fullName.vb: FluentGpu.Signals.Prop(Of T).IsBound
+- uid: FluentGpu.Signals.Prop`1.Value*
+  commentId: Overload:FluentGpu.Signals.Prop`1.Value
+  href: FluentGpu.Signals.Prop-1.html#FluentGpu_Signals_Prop_1_Value
+  name: Value
+  nameWithType: Prop<T>.Value
+  fullName: FluentGpu.Signals.Prop<T>.Value
+  nameWithType.vb: Prop(Of T).Value
+  fullName.vb: FluentGpu.Signals.Prop(Of T).Value
+- uid: '{T}'
+  commentId: '!:T'
+  definition: T
+  name: T
+  nameWithType: T
+  fullName: T
+- uid: T
+  name: T
+  nameWithType: T
+  fullName: T
+- uid: FluentGpu.Signals.Prop`1.ValueOr*
+  commentId: Overload:FluentGpu.Signals.Prop`1.ValueOr
+  href: FluentGpu.Signals.Prop-1.html#FluentGpu_Signals_Prop_1_ValueOr__0_
+  name: ValueOr
+  nameWithType: Prop<T>.ValueOr
+  fullName: FluentGpu.Signals.Prop<T>.ValueOr
+  nameWithType.vb: Prop(Of T).ValueOr
+  fullName.vb: FluentGpu.Signals.Prop(Of T).ValueOr
+- uid: FluentGpu.Signals.Prop`1.Thunk*
+  commentId: Overload:FluentGpu.Signals.Prop`1.Thunk
+  href: FluentGpu.Signals.Prop-1.html#FluentGpu_Signals_Prop_1_Thunk
+  name: Thunk
+  nameWithType: Prop<T>.Thunk
+  fullName: FluentGpu.Signals.Prop<T>.Thunk
+  nameWithType.vb: Prop(Of T).Thunk
+  fullName.vb: FluentGpu.Signals.Prop(Of T).Thunk
+- uid: System.Func{{T}}
+  commentId: T:System.Func{`0}
+  parent: System
+  definition: System.Func`1
+  href: https://learn.microsoft.com/dotnet/api/system.func-1
+  name: Func<T>
+  nameWithType: Func<T>
+  fullName: System.Func<T>
+  nameWithType.vb: Func(Of T)
+  fullName.vb: System.Func(Of T)
+  name.vb: Func(Of T)
+  spec.csharp:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Func`1
+  commentId: T:System.Func`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.func-1
+  name: Func<TResult>
+  nameWithType: Func<TResult>
+  fullName: System.Func<TResult>
+  nameWithType.vb: Func(Of TResult)
+  fullName.vb: System.Func(Of TResult)
+  name.vb: Func(Of TResult)
+  spec.csharp:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: <
+  - name: TResult
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: TResult
+  - name: )
+- uid: FluentGpu.Signals.Prop`1.Signal*
+  commentId: Overload:FluentGpu.Signals.Prop`1.Signal
+  href: FluentGpu.Signals.Prop-1.html#FluentGpu_Signals_Prop_1_Signal
+  name: Signal
+  nameWithType: Prop<T>.Signal
+  fullName: FluentGpu.Signals.Prop<T>.Signal
+  nameWithType.vb: Prop(Of T).Signal
+  fullName.vb: FluentGpu.Signals.Prop(Of T).Signal
+- uid: FluentGpu.Signals.IReadSignal{{T}}
+  commentId: T:FluentGpu.Signals.IReadSignal{`0}
+  parent: FluentGpu.Signals
+  definition: FluentGpu.Signals.IReadSignal`1
+  href: FluentGpu.Signals.IReadSignal-1.html
+  name: IReadSignal<T>
+  nameWithType: IReadSignal<T>
+  fullName: FluentGpu.Signals.IReadSignal<T>
+  nameWithType.vb: IReadSignal(Of T)
+  fullName.vb: FluentGpu.Signals.IReadSignal(Of T)
+  name.vb: IReadSignal(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Signals.IReadSignal`1
+  commentId: T:FluentGpu.Signals.IReadSignal`1
+  href: FluentGpu.Signals.IReadSignal-1.html
+  name: IReadSignal<T>
+  nameWithType: IReadSignal<T>
+  fullName: FluentGpu.Signals.IReadSignal<T>
+  nameWithType.vb: IReadSignal(Of T)
+  fullName.vb: FluentGpu.Signals.IReadSignal(Of T)
+  name.vb: IReadSignal(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Signals.Prop`1.op_Implicit*
+  commentId: Overload:FluentGpu.Signals.Prop`1.op_Implicit
+  name: implicit operator
+  nameWithType: Prop<T>.implicit operator
+  fullName: FluentGpu.Signals.Prop<T>.implicit operator
+  nameWithType.vb: Prop(Of T).CType
+  fullName.vb: FluentGpu.Signals.Prop(Of T).CType
+  name.vb: CType
+  spec.csharp:
+  - name: implicit
+  - name: " "
+  - name: operator
+- uid: FluentGpu.Signals.Prop`1
+  commentId: T:FluentGpu.Signals.Prop`1
+  parent: FluentGpu.Signals
+  href: FluentGpu.Signals.Prop-1.html
+  name: Prop<T>
+  nameWithType: Prop<T>
+  fullName: FluentGpu.Signals.Prop<T>
+  nameWithType.vb: Prop(Of T)
+  fullName.vb: FluentGpu.Signals.Prop(Of T)
+  name.vb: Prop(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Prop`1
+    name: Prop
+    href: FluentGpu.Signals.Prop-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Prop`1
+    name: Prop
+    href: FluentGpu.Signals.Prop-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Signals.Signal{{T}}
+  commentId: T:FluentGpu.Signals.Signal{`0}
+  parent: FluentGpu.Signals
+  definition: FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<T>
+  nameWithType: Signal<T>
+  fullName: FluentGpu.Signals.Signal<T>
+  nameWithType.vb: Signal(Of T)
+  fullName.vb: FluentGpu.Signals.Signal(Of T)
+  name.vb: Signal(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Signals.Signal`1
+  commentId: T:FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<T>
+  nameWithType: Signal<T>
+  fullName: FluentGpu.Signals.Signal<T>
+  nameWithType.vb: Signal(Of T)
+  fullName.vb: FluentGpu.Signals.Signal(Of T)
+  name.vb: Signal(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Signals.Memo{{T}}
+  commentId: T:FluentGpu.Signals.Memo{`0}
+  parent: FluentGpu.Signals
+  definition: FluentGpu.Signals.Memo`1
+  href: FluentGpu.Signals.Memo-1.html
+  name: Memo<T>
+  nameWithType: Memo<T>
+  fullName: FluentGpu.Signals.Memo<T>
+  nameWithType.vb: Memo(Of T)
+  fullName.vb: FluentGpu.Signals.Memo(Of T)
+  name.vb: Memo(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Memo`1
+    name: Memo
+    href: FluentGpu.Signals.Memo-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Memo`1
+    name: Memo
+    href: FluentGpu.Signals.Memo-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Signals.Memo`1
+  commentId: T:FluentGpu.Signals.Memo`1
+  href: FluentGpu.Signals.Memo-1.html
+  name: Memo<T>
+  nameWithType: Memo<T>
+  fullName: FluentGpu.Signals.Memo<T>
+  nameWithType.vb: Memo(Of T)
+  fullName.vb: FluentGpu.Signals.Memo(Of T)
+  name.vb: Memo(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Memo`1
+    name: Memo
+    href: FluentGpu.Signals.Memo-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Memo`1
+    name: Memo
+    href: FluentGpu.Signals.Memo-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Signals.Prop`1.FromSignal*
+  commentId: Overload:FluentGpu.Signals.Prop`1.FromSignal
+  href: FluentGpu.Signals.Prop-1.html#FluentGpu_Signals_Prop_1_FromSignal_FluentGpu_Signals_IReadSignal__0__
+  name: FromSignal
+  nameWithType: Prop<T>.FromSignal
+  fullName: FluentGpu.Signals.Prop<T>.FromSignal
+  nameWithType.vb: Prop(Of T).FromSignal
+  fullName.vb: FluentGpu.Signals.Prop(Of T).FromSignal

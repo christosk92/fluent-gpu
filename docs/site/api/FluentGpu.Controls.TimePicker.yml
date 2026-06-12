@@ -1,0 +1,1212 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.TimePicker
+  commentId: T:FluentGpu.Controls.TimePicker
+  id: TimePicker
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.TimePicker.ClockIdentifier
+  - FluentGpu.Controls.TimePicker.Create
+  - FluentGpu.Controls.TimePicker.Create(FluentGpu.Signals.Signal{System.Nullable{System.TimeOnly}},System.String,System.Int32,System.Action{System.Nullable{System.TimeOnly}},System.String,System.Boolean)
+  - FluentGpu.Controls.TimePicker.Header
+  - FluentGpu.Controls.TimePicker.IsEnabled
+  - FluentGpu.Controls.TimePicker.MinuteIncrement
+  - FluentGpu.Controls.TimePicker.OnTimeChanged
+  - FluentGpu.Controls.TimePicker.Render
+  - FluentGpu.Controls.TimePicker.SelectedTime
+  - FluentGpu.Controls.TimePicker.TwelveHourClock
+  - FluentGpu.Controls.TimePicker.TwentyFourHourClock
+  langs:
+  - csharp
+  - vb
+  name: TimePicker
+  nameWithType: TimePicker
+  fullName: FluentGpu.Controls.TimePicker
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TimePicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TimePicker
+    path: ../../src/FluentGpu.Controls/TimePicker.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A WinUI TimePicker: a single Button FACE split into Hour | Minute | AM/PM text columns (equal star widths,
+
+    TimePicker_themeresources.xaml:234-239) separated by 1px vertical spacers, and on tap opens ONE
+
+    <code>TimePickerFlyout</code> presenter via the <xref href="FluentGpu.Controls.Overlay" data-throw-if-not-resolved="false"></xref> service (the whole face is a single FlyoutButton,
+
+    TimePicker_themeresources.xaml:232). The popup is placed so the centered 40px accent highlight band overlays the
+
+    face (DateTimePickerFlyoutHelper.cpp:39-71) and is width-matched to the face's realized width
+
+    (TimePickerFlyout_Partial.cpp:196-200). It hosts side-by-side LOOPING selector columns (item height 40) — the
+
+    shared <xref href="FluentGpu.Controls.DateTimeLoopColumn" data-throw-if-not-resolved="false"></xref> — under the highlight band, with a 41px Accept(E8FB) / Dismiss(E711) bar.
+
+    <xref href="FluentGpu.Controls.TimePicker.SelectedTime" data-throw-if-not-resolved="false"></xref> is nullable (null shows the hour/minute/AM placeholders, the WinUI HasNoTime state);
+
+    <xref href="FluentGpu.Controls.TimePicker.ClockIdentifier" data-throw-if-not-resolved="false"></xref> selects the 12/24-hour clock and <xref href="FluentGpu.Controls.TimePicker.MinuteIncrement" data-throw-if-not-resolved="false"></xref> coarsens the minute
+
+    column.
+  example: []
+  syntax:
+    content: 'public sealed class TimePicker : Component'
+    content.vb: Public NotInheritable Class TimePicker Inherits Component
+  inheritance:
+  - System.Object
+  - FluentGpu.Hooks.Component
+  inheritedMembers:
+  - FluentGpu.Hooks.Component.Context
+  - FluentGpu.Hooks.Component.RunsOnce
+  - FluentGpu.Hooks.Component.RenderWithHooks
+  - FluentGpu.Hooks.Component.Unmount
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+  extensionMethods:
+  - FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseEntrance(System.Single,System.Object)
+  - FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseHoverScale(System.Boolean,System.Single)
+- uid: FluentGpu.Controls.TimePicker.TwelveHourClock
+  commentId: F:FluentGpu.Controls.TimePicker.TwelveHourClock
+  id: TwelveHourClock
+  parent: FluentGpu.Controls.TimePicker
+  langs:
+  - csharp
+  - vb
+  name: TwelveHourClock
+  nameWithType: TimePicker.TwelveHourClock
+  fullName: FluentGpu.Controls.TimePicker.TwelveHourClock
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TimePicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TwelveHourClock
+    path: ../../src/FluentGpu.Controls/TimePicker.cs
+    startLine: 34
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI <code>ClockIdentifier</code> values (TimePicker_Partial.cpp:45 <code>s_strTwelveHourClock</code>).
+  example: []
+  syntax:
+    content: public const string TwelveHourClock = "12HourClock"
+    return:
+      type: System.String
+    content.vb: Public Const TwelveHourClock As String = "12HourClock"
+- uid: FluentGpu.Controls.TimePicker.TwentyFourHourClock
+  commentId: F:FluentGpu.Controls.TimePicker.TwentyFourHourClock
+  id: TwentyFourHourClock
+  parent: FluentGpu.Controls.TimePicker
+  langs:
+  - csharp
+  - vb
+  name: TwentyFourHourClock
+  nameWithType: TimePicker.TwentyFourHourClock
+  fullName: FluentGpu.Controls.TimePicker.TwentyFourHourClock
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TimePicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TwentyFourHourClock
+    path: ../../src/FluentGpu.Controls/TimePicker.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string TwentyFourHourClock = "24HourClock"
+    return:
+      type: System.String
+    content.vb: Public Const TwentyFourHourClock As String = "24HourClock"
+- uid: FluentGpu.Controls.TimePicker.SelectedTime
+  commentId: F:FluentGpu.Controls.TimePicker.SelectedTime
+  id: SelectedTime
+  parent: FluentGpu.Controls.TimePicker
+  langs:
+  - csharp
+  - vb
+  name: SelectedTime
+  nameWithType: TimePicker.SelectedTime
+  fullName: FluentGpu.Controls.TimePicker.SelectedTime
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TimePicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SelectedTime
+    path: ../../src/FluentGpu.Controls/TimePicker.cs
+    startLine: 41
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Caller-owned selected time; null shows the placeholders (HasNoTime, TimePicker_themeresources.xaml:220-225).
+        A fallback signal is used when null.
+  example: []
+  syntax:
+    content: public Signal<TimeOnly?>? SelectedTime
+    return:
+      type: FluentGpu.Signals.Signal{System.Nullable{System.TimeOnly}}
+    content.vb: Public SelectedTime As Signal(Of TimeOnly?)
+- uid: FluentGpu.Controls.TimePicker.ClockIdentifier
+  commentId: F:FluentGpu.Controls.TimePicker.ClockIdentifier
+  id: ClockIdentifier
+  parent: FluentGpu.Controls.TimePicker
+  langs:
+  - csharp
+  - vb
+  name: ClockIdentifier
+  nameWithType: TimePicker.ClockIdentifier
+  fullName: FluentGpu.Controls.TimePicker.ClockIdentifier
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TimePicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ClockIdentifier
+    path: ../../src/FluentGpu.Controls/TimePicker.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: "\"12HourClock\" (default, TimePicker IDL) or \"24HourClock\" — the 24h clock drops the AM/PM column."
+  example: []
+  syntax:
+    content: public string ClockIdentifier
+    return:
+      type: System.String
+    content.vb: Public ClockIdentifier As String
+- uid: FluentGpu.Controls.TimePicker.MinuteIncrement
+  commentId: F:FluentGpu.Controls.TimePicker.MinuteIncrement
+  id: MinuteIncrement
+  parent: FluentGpu.Controls.TimePicker
+  langs:
+  - csharp
+  - vb
+  name: MinuteIncrement
+  nameWithType: TimePicker.MinuteIncrement
+  fullName: FluentGpu.Controls.TimePicker.MinuteIncrement
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TimePicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MinuteIncrement
+    path: ../../src/FluentGpu.Controls/TimePicker.cs
+    startLine: 45
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'WinUI <code>MinuteIncrement</code> (0-59; 0 behaves as 1): the minute column lists 0, inc, 2·inc, …'
+  example: []
+  syntax:
+    content: public int MinuteIncrement
+    return:
+      type: System.Int32
+    content.vb: Public MinuteIncrement As Integer
+- uid: FluentGpu.Controls.TimePicker.Header
+  commentId: F:FluentGpu.Controls.TimePicker.Header
+  id: Header
+  parent: FluentGpu.Controls.TimePicker
+  langs:
+  - csharp
+  - vb
+  name: Header
+  nameWithType: TimePicker.Header
+  fullName: FluentGpu.Controls.TimePicker.Header
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TimePicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Header
+    path: ../../src/FluentGpu.Controls/TimePicker.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI <code>Header</code> — shown above the face (HeaderContentPresenter, TimePicker_themeresources.xaml:231).
+  example: []
+  syntax:
+    content: public string? Header
+    return:
+      type: System.String
+    content.vb: Public Header As String
+- uid: FluentGpu.Controls.TimePicker.IsEnabled
+  commentId: F:FluentGpu.Controls.TimePicker.IsEnabled
+  id: IsEnabled
+  parent: FluentGpu.Controls.TimePicker
+  langs:
+  - csharp
+  - vb
+  name: IsEnabled
+  nameWithType: TimePicker.IsEnabled
+  fullName: FluentGpu.Controls.TimePicker.IsEnabled
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TimePicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsEnabled
+    path: ../../src/FluentGpu.Controls/TimePicker.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool IsEnabled
+    return:
+      type: System.Boolean
+    content.vb: Public IsEnabled As Boolean
+- uid: FluentGpu.Controls.TimePicker.OnTimeChanged
+  commentId: F:FluentGpu.Controls.TimePicker.OnTimeChanged
+  id: OnTimeChanged
+  parent: FluentGpu.Controls.TimePicker
+  langs:
+  - csharp
+  - vb
+  name: OnTimeChanged
+  nameWithType: TimePicker.OnTimeChanged
+  fullName: FluentGpu.Controls.TimePicker.OnTimeChanged
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TimePicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnTimeChanged
+    path: ../../src/FluentGpu.Controls/TimePicker.cs
+    startLine: 49
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Action<TimeOnly?>? OnTimeChanged
+    return:
+      type: System.Action{System.Nullable{System.TimeOnly}}
+    content.vb: Public OnTimeChanged As Action(Of TimeOnly?)
+- uid: FluentGpu.Controls.TimePicker.Create
+  commentId: M:FluentGpu.Controls.TimePicker.Create
+  id: Create
+  parent: FluentGpu.Controls.TimePicker
+  langs:
+  - csharp
+  - vb
+  name: Create()
+  nameWithType: TimePicker.Create()
+  fullName: FluentGpu.Controls.TimePicker.Create()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TimePicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/TimePicker.cs
+    startLine: 52
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Zero-arg factory — keeps the existing demo call site (DateTimePages.cs) compiling unchanged.
+  example: []
+  syntax:
+    content: public static Element Create()
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Create() As Element
+  overload: FluentGpu.Controls.TimePicker.Create*
+- uid: FluentGpu.Controls.TimePicker.Create(FluentGpu.Signals.Signal{System.Nullable{System.TimeOnly}},System.String,System.Int32,System.Action{System.Nullable{System.TimeOnly}},System.String,System.Boolean)
+  commentId: M:FluentGpu.Controls.TimePicker.Create(FluentGpu.Signals.Signal{System.Nullable{System.TimeOnly}},System.String,System.Int32,System.Action{System.Nullable{System.TimeOnly}},System.String,System.Boolean)
+  id: Create(FluentGpu.Signals.Signal{System.Nullable{System.TimeOnly}},System.String,System.Int32,System.Action{System.Nullable{System.TimeOnly}},System.String,System.Boolean)
+  parent: FluentGpu.Controls.TimePicker
+  langs:
+  - csharp
+  - vb
+  name: Create(Signal<TimeOnly?>, string, int, Action<TimeOnly?>?, string?, bool)
+  nameWithType: TimePicker.Create(Signal<TimeOnly?>, string, int, Action<TimeOnly?>?, string?, bool)
+  fullName: FluentGpu.Controls.TimePicker.Create(FluentGpu.Signals.Signal<System.TimeOnly?>, string, int, System.Action<System.TimeOnly?>?, string?, bool)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TimePicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/TimePicker.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static Element Create(Signal<TimeOnly?> selectedTime, string clockIdentifier = "12HourClock", int minuteIncrement = 1, Action<TimeOnly?>? onTimeChanged = null, string? header = null, bool isEnabled = true)
+    parameters:
+    - id: selectedTime
+      type: FluentGpu.Signals.Signal{System.Nullable{System.TimeOnly}}
+    - id: clockIdentifier
+      type: System.String
+    - id: minuteIncrement
+      type: System.Int32
+    - id: onTimeChanged
+      type: System.Action{System.Nullable{System.TimeOnly}}
+    - id: header
+      type: System.String
+    - id: isEnabled
+      type: System.Boolean
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Create(selectedTime As Signal(Of TimeOnly?), clockIdentifier As String = "12HourClock", minuteIncrement As Integer = 1, onTimeChanged As Action(Of TimeOnly?) = Nothing, header As String = Nothing, isEnabled As Boolean = True) As Element
+  overload: FluentGpu.Controls.TimePicker.Create*
+  nameWithType.vb: TimePicker.Create(Signal(Of TimeOnly?), String, Integer, Action(Of TimeOnly?), String, Boolean)
+  fullName.vb: FluentGpu.Controls.TimePicker.Create(FluentGpu.Signals.Signal(Of System.TimeOnly?), String, Integer, System.Action(Of System.TimeOnly?), String, Boolean)
+  name.vb: Create(Signal(Of TimeOnly?), String, Integer, Action(Of TimeOnly?), String, Boolean)
+- uid: FluentGpu.Controls.TimePicker.Render
+  commentId: M:FluentGpu.Controls.TimePicker.Render
+  id: Render
+  parent: FluentGpu.Controls.TimePicker
+  langs:
+  - csharp
+  - vb
+  name: Render()
+  nameWithType: TimePicker.Render()
+  fullName: FluentGpu.Controls.TimePicker.Render()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TimePicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Render
+    path: ../../src/FluentGpu.Controls/TimePicker.cs
+    startLine: 66
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  example: []
+  syntax:
+    content: public override Element Render()
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Overrides Function Render() As Element
+  overridden: FluentGpu.Hooks.Component.Render
+  overload: FluentGpu.Controls.TimePicker.Render*
+references:
+- uid: FluentGpu.Controls.Overlay
+  commentId: T:FluentGpu.Controls.Overlay
+  href: FluentGpu.Controls.Overlay.html
+  name: Overlay
+  nameWithType: Overlay
+  fullName: FluentGpu.Controls.Overlay
+- uid: FluentGpu.Controls.DateTimeLoopColumn
+  commentId: T:FluentGpu.Controls.DateTimeLoopColumn
+  name: DateTimeLoopColumn
+  nameWithType: DateTimeLoopColumn
+  fullName: FluentGpu.Controls.DateTimeLoopColumn
+- uid: FluentGpu.Controls.TimePicker.SelectedTime
+  commentId: F:FluentGpu.Controls.TimePicker.SelectedTime
+  href: FluentGpu.Controls.TimePicker.html#FluentGpu_Controls_TimePicker_SelectedTime
+  name: SelectedTime
+  nameWithType: TimePicker.SelectedTime
+  fullName: FluentGpu.Controls.TimePicker.SelectedTime
+- uid: FluentGpu.Controls.TimePicker.ClockIdentifier
+  commentId: F:FluentGpu.Controls.TimePicker.ClockIdentifier
+  href: FluentGpu.Controls.TimePicker.html#FluentGpu_Controls_TimePicker_ClockIdentifier
+  name: ClockIdentifier
+  nameWithType: TimePicker.ClockIdentifier
+  fullName: FluentGpu.Controls.TimePicker.ClockIdentifier
+- uid: FluentGpu.Controls.TimePicker.MinuteIncrement
+  commentId: F:FluentGpu.Controls.TimePicker.MinuteIncrement
+  href: FluentGpu.Controls.TimePicker.html#FluentGpu_Controls_TimePicker_MinuteIncrement
+  name: MinuteIncrement
+  nameWithType: TimePicker.MinuteIncrement
+  fullName: FluentGpu.Controls.TimePicker.MinuteIncrement
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Hooks.Component
+  commentId: T:FluentGpu.Hooks.Component
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.Component.html
+  name: Component
+  nameWithType: Component
+  fullName: FluentGpu.Hooks.Component
+- uid: FluentGpu.Hooks.Component.Context
+  commentId: P:FluentGpu.Hooks.Component.Context
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Context
+  name: Context
+  nameWithType: Component.Context
+  fullName: FluentGpu.Hooks.Component.Context
+- uid: FluentGpu.Hooks.Component.RunsOnce
+  commentId: P:FluentGpu.Hooks.Component.RunsOnce
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RunsOnce
+  name: RunsOnce
+  nameWithType: Component.RunsOnce
+  fullName: FluentGpu.Hooks.Component.RunsOnce
+- uid: FluentGpu.Hooks.Component.RenderWithHooks
+  commentId: M:FluentGpu.Hooks.Component.RenderWithHooks
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  name: RenderWithHooks()
+  nameWithType: Component.RenderWithHooks()
+  fullName: FluentGpu.Hooks.Component.RenderWithHooks()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.RenderWithHooks
+    name: RenderWithHooks
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.RenderWithHooks
+    name: RenderWithHooks
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  - name: (
+  - name: )
+- uid: FluentGpu.Hooks.Component.Unmount
+  commentId: M:FluentGpu.Hooks.Component.Unmount
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  name: Unmount()
+  nameWithType: Component.Unmount()
+  fullName: FluentGpu.Hooks.Component.Unmount()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.Unmount
+    name: Unmount
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.Unmount
+    name: Unmount
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseEntrance(System.Single,System.Object)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  parent: FluentGpu.Hooks.MotionHooks
+  definition: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  name: UseEntrance(Component, float, object)
+  nameWithType: MotionHooks.UseEntrance(Component, float, object)
+  fullName: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, float, object)
+  nameWithType.vb: MotionHooks.UseEntrance(Component, Single, Object)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, Single, Object)
+  name.vb: UseEntrance(Component, Single, Object)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseHoverScale(System.Boolean,System.Single)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  parent: FluentGpu.Hooks.MotionHooks
+  definition: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  name: UseHoverScale(Component, bool, float)
+  nameWithType: MotionHooks.UseHoverScale(Component, bool, float)
+  fullName: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, bool, float)
+  nameWithType.vb: MotionHooks.UseHoverScale(Component, Boolean, Single)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, Boolean, Single)
+  name.vb: UseHoverScale(Component, Boolean, Single)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Hooks
+  commentId: N:FluentGpu.Hooks
+  href: FluentGpu.html
+  name: FluentGpu.Hooks
+  nameWithType: FluentGpu.Hooks
+  fullName: FluentGpu.Hooks
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+- uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  isExternal: true
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  name: UseEntrance(Component, float, object)
+  nameWithType: MotionHooks.UseEntrance(Component, float, object)
+  fullName: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, float, object)
+  nameWithType.vb: MotionHooks.UseEntrance(Component, Single, Object)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, Single, Object)
+  name.vb: UseEntrance(Component, Single, Object)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Hooks.MotionHooks
+  commentId: T:FluentGpu.Hooks.MotionHooks
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.MotionHooks.html
+  name: MotionHooks
+  nameWithType: MotionHooks
+  fullName: FluentGpu.Hooks.MotionHooks
+- uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  isExternal: true
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  name: UseHoverScale(Component, bool, float)
+  nameWithType: MotionHooks.UseHoverScale(Component, bool, float)
+  fullName: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, bool, float)
+  nameWithType.vb: MotionHooks.UseHoverScale(Component, Boolean, Single)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, Boolean, Single)
+  name.vb: UseHoverScale(Component, Boolean, Single)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Signals.Signal{System.Nullable{System.TimeOnly}}
+  commentId: T:FluentGpu.Signals.Signal{System.Nullable{System.TimeOnly}}
+  parent: FluentGpu.Signals
+  definition: FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<TimeOnly?>
+  nameWithType: Signal<TimeOnly?>
+  fullName: FluentGpu.Signals.Signal<System.TimeOnly?>
+  nameWithType.vb: Signal(Of TimeOnly?)
+  fullName.vb: FluentGpu.Signals.Signal(Of System.TimeOnly?)
+  name.vb: Signal(Of TimeOnly?)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - uid: System.TimeOnly
+    name: TimeOnly
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.timeonly
+  - name: '?'
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.TimeOnly
+    name: TimeOnly
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.timeonly
+  - name: '?'
+  - name: )
+- uid: FluentGpu.Signals.Signal`1
+  commentId: T:FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<T>
+  nameWithType: Signal<T>
+  fullName: FluentGpu.Signals.Signal<T>
+  nameWithType.vb: Signal(Of T)
+  fullName.vb: FluentGpu.Signals.Signal(Of T)
+  name.vb: Signal(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Signals
+  commentId: N:FluentGpu.Signals
+  href: FluentGpu.html
+  name: FluentGpu.Signals
+  nameWithType: FluentGpu.Signals
+  fullName: FluentGpu.Signals
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: System.Action{System.Nullable{System.TimeOnly}}
+  commentId: T:System.Action{System.Nullable{System.TimeOnly}}
+  parent: System
+  definition: System.Action`1
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<TimeOnly?>
+  nameWithType: Action<TimeOnly?>
+  fullName: System.Action<System.TimeOnly?>
+  nameWithType.vb: Action(Of TimeOnly?)
+  fullName.vb: System.Action(Of System.TimeOnly?)
+  name.vb: Action(Of TimeOnly?)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: System.TimeOnly
+    name: TimeOnly
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.timeonly
+  - name: '?'
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.TimeOnly
+    name: TimeOnly
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.timeonly
+  - name: '?'
+  - name: )
+- uid: System.Action`1
+  commentId: T:System.Action`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<T>
+  nameWithType: Action<T>
+  fullName: System.Action<T>
+  nameWithType.vb: Action(Of T)
+  fullName.vb: System.Action(Of T)
+  name.vb: Action(Of T)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.TimePicker.Create*
+  commentId: Overload:FluentGpu.Controls.TimePicker.Create
+  href: FluentGpu.Controls.TimePicker.html#FluentGpu_Controls_TimePicker_Create
+  name: Create
+  nameWithType: TimePicker.Create
+  fullName: FluentGpu.Controls.TimePicker.Create
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: FluentGpu.Hooks.Component.Render
+  commentId: M:FluentGpu.Hooks.Component.Render
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  name: Render()
+  nameWithType: Component.Render()
+  fullName: FluentGpu.Hooks.Component.Render()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.Render
+    name: Render
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.Render
+    name: Render
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  - name: (
+  - name: )
+- uid: FluentGpu.Controls.TimePicker.Render*
+  commentId: Overload:FluentGpu.Controls.TimePicker.Render
+  href: FluentGpu.Controls.TimePicker.html#FluentGpu_Controls_TimePicker_Render
+  name: Render
+  nameWithType: TimePicker.Render
+  fullName: FluentGpu.Controls.TimePicker.Render

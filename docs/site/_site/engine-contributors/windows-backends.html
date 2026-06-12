@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Windows backends: D3D12, DirectWrite, Win32 | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Windows backends: D3D12, DirectWrite, Win32 | FluentGpu Developer Docs ">
+      
+      
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="../toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/docs/site/engine-contributors/windows-backends.md/#L1">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+
+      <div class="content">
+        <div class="actionbar">
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="">
+<h1 id="windows-backends-d3d12-directwrite-win32">Windows backends: D3D12, DirectWrite, Win32</h1>
+
+<p>This page is for engine contributors working <strong>below the seams</strong> — the three Windows leaf assemblies that turn the
+portable PAL/RHI/Text contracts into real pixels: <code>FluentGpu.Rhi.D3D12</code> (Direct3D 12 + DXGI + DirectComposition),
+<code>FluentGpu.Text.DirectWrite</code> (the DirectWrite layout/shaping backend), and <code>FluentGpu.Pal.Windows</code> (the Win32 window,
+message pump, DPI, theme, and Mica). It also covers the real image pipeline (<code>FluentGpu.Media</code> + the WIC codec) and the
+screenshot-capture path the fidelity loop uses.</p>
+<p>If you are changing the engine <em>above</em> the seams (the reconciler, layout, the recorder, signals), you want
+<a href="seams-rhi-pal-text.html">The RHI, PAL, and Text seams</a> and the <a href="contributor-map.html">Contributor Map</a> instead — this
+page is specifically the <em>Windows implementation</em> of those seams.</p>
+<blockquote>
+<p><strong>Design authority vs as-built.</strong> The architecture of these leaves is owned by the design corpus —
+<a href="../../../design/subsystems/pal-rhi.md"><code>pal-rhi.md</code></a> (the PAL/RHI/present plumbing),
+<a href="../../../design/subsystems/window-backdrop-mica.md"><code>window-backdrop-mica.md</code></a> (the host backdrop),
+<a href="../../../design/subsystems/com-interop.md"><code>com-interop.md</code></a> (the COM policy), and
+<a href="../../../design/dotnet10-csharp14-zero-alloc.md"><code>dotnet10-csharp14-zero-alloc.md</code></a> (the AOT/trim baseline). This page
+does <strong>not</strong> restate those contracts; it links to them and documents <strong>what the source does today</strong>, flagging where
+the as-built leaf is a step behind the design target. When a doc and the source disagree, the source wins and the doc
+is the bug.</p>
+</blockquote>
+<h2 id="the-windows-bootstrap-one-method-wires-the-whole-stack">The Windows bootstrap (one method wires the whole stack)</h2>
+<p>Everything starts in <code>FluentApp.Run</code> (<code>src/FluentGpu.WindowsApp/FluentApp.cs</code>) — the batteries-included entry point that
+constructs every Windows leaf and hands them to the portable <a href="../../../src/FluentGpu.Hosting/AppHost.cs"><code>AppHost</code></a>. It
+is the most useful single read for understanding how the leaves fit together, because it is the one place the concrete
+types meet:</p>
+<pre><code class="lang-csharp">var strings = new StringTable();
+using var app = new Win32App();
+var window = (Win32Window)app.CreateWindow(new WindowDesc(title, new Size2(width, height), 1f, mica, CustomFrame: customFrame));
+
+if (Win32Theme.AccentLight2() is { } a) Theme.Accent = ColorF.FromRgba(a.R, a.G, a.B);
+else if (Win32Theme.Accent() is { } b) Theme.Accent = ColorF.FromRgba(b.R, b.G, b.B);
+Win32Theme.ApplyWindowMaterial(window.Handle.Value, Theme.Dark, mica, customFrame);
+if (mica) Theme.WindowBackground = ColorF.Transparent;
+
+var fonts = new DirectWriteFontSystem(strings);
+IGpuDevice device = new D3D12Device(strings, composited: mica);
+
+using var imageFetcher = new DefaultImageFetcher(diskCache: new DiskImageCache());
+using var imageDecoder = new DecodeScheduler(new WicImageCodec(), imageFetcher);
+var images = new ImageCache(imageDecoder);
+
+using var host = new AppHost(app, window, device, fonts, strings, root(), images);
+host.SmoothScroll = true;
+window.Show();
+</code></pre>
+<p>The ordering is load-bearing and worth internalizing:</p>
+<ol>
+<li><strong><code>Win32App</code> + <code>Win32Window</code></strong> — the window, class registration, DPI awareness, and message pump
+(<code>FluentGpu.Pal.Windows</code>). The <code>mica</code> flag becomes <code>WindowDesc.Composited</code>, which makes the window
+<code>WS_EX_NOREDIRECTIONBITMAP</code> so a DirectComposition swapchain can show the DWM backdrop through transparent pixels.</li>
+<li><strong>System accent pickup</strong> — <code>Win32Theme.AccentLight2()</code> reads the OS <code>AccentPalette</code> (the dark-theme Light2 shade WinUI
+uses); it falls back to <code>Win32Theme.Accent()</code> (the registry <code>AccentColorMenu</code>, then the DWM colorization color). The
+result is written into the engine's <code>Theme.Accent</code>.</li>
+<li><strong><code>Win32Theme.ApplyWindowMaterial</code></strong> — sets the dark caption + the DWM system-backdrop type, and (for the right frame
+mode) extends the frame so Mica fills the client area. When <code>mica</code> is on, the engine's <code>Theme.WindowBackground</code> is
+forced to <code>ColorF.Transparent</code> so the root clears transparent and the backdrop shows through.</li>
+<li><strong><code>DirectWriteFontSystem</code></strong> — the text backend, constructed before the device because layout (phase 6, UI thread)
+needs it and the recorder's glyph path reads the <em>same</em> design advances it measured with.</li>
+<li><strong><code>D3D12Device(strings, composited: mica)</code></strong> — the RHI leaf. <code>composited</code> selects the
+<code>CreateSwapChainForComposition</code> + DComp path over the plain HWND path.</li>
+<li><strong>The real image pipeline</strong> — a disk-cached HTTP/2 <code>DefaultImageFetcher</code>, a worker-pool <code>DecodeScheduler</code> over the
+<code>WicImageCodec</code>, behind an <code>ImageCache</code>. (<code>FakeImageDecoder</code> is the headless stand-in; this is the live one.)</li>
+</ol>
+<p>The frame loop is the tail of <code>Run</code>: <code>host.RunFrame()</code> until <code>window.IsClosed</code>, pacing with <code>window.WaitForWork(...)</code> —
+<code>0</code> while there is active work (<code>host.HasActiveWork</code>), <code>-1</code> (block) when idle, and a fixed <code>8</code> ms in screenshot mode so
+time-driven animations advance deterministically.</p>
+<h2 id="the-d3d12-rhi-leaf">The D3D12 RHI leaf</h2>
+<p><code>D3D12Device</code> (<code>src/FluentGpu.Rhi.D3D12/D3D12Device.cs</code>) is the reference Windows RHI backend — it implements
+<code>IGpuDevice</code>/<code>ISwapchain</code> (the seam owned by <a href="../../../design/subsystems/pal-rhi.md"><code>pal-rhi.md</code></a> §2) over a real
+hardware device. The COM is hand-vtable through <strong>TerraFX.Interop.Windows</strong> (<code>ID3D12Device*</code>, <code>IDXGISwapChain3*</code>,
+<code>IDCompositionDevice*</code>, …), which is the as-built realization of the &quot;no <code>ComWrappers</code> on the hot path&quot; ruling (see
+<a href="#the-tiered-com-policy">the COM policy</a> below).</p>
+<p><strong>Where to change what</strong> in this leaf:</p>
+<table>
+<thead>
+<tr>
+<th>If you're changing…</th>
+<th>Edit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Device/queue/fence/heaps bring-up, swapchain creation, the per-frame submit/present, capture, resize</td>
+<td><code>src/FluentGpu.Rhi.D3D12/D3D12Device.cs</code></td>
+</tr>
+<tr>
+<td>The SDF rounded-rect / stroke / tab-shape pipeline</td>
+<td><code>src/FluentGpu.Rhi.D3D12/RoundRectPipeline.cs</code></td>
+</tr>
+<tr>
+<td>Drop shadows, arcs, polyline strokes, gradients</td>
+<td><code>…/ShadowPipeline.cs</code>, <code>ArcPipeline.cs</code>, <code>PolylineStrokePipeline.cs</code>, <code>GradientPipeline.cs</code></td>
+</tr>
+<tr>
+<td>The DirectWrite glyph atlas + run cache (the GPU text path)</td>
+<td><code>…/GlyphRenderer.cs</code></td>
+</tr>
+<tr>
+<td>Image textures (atlas + per-bucket pool, staging) and the image draw pipeline</td>
+<td><code>…/ImageTextureStore.cs</code>, <code>ImagePipeline.cs</code></td>
+</tr>
+<tr>
+<td>In-app acrylic / opacity-group layers</td>
+<td><code>…/AcrylicCompositor.cs</code>, <code>OpacityLayerCompositor.cs</code></td>
+</tr>
+<tr>
+<td>Live D3D12 resource accounting (the MemCensus feed)</td>
+<td><code>…/D3D12MemoryDiagnostics.cs</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="device--queue--fences--heaps">Device + queue + fences + heaps</h3>
+<p><code>InitDevice()</code> creates the device via the flat <code>[LibraryImport]</code> export <code>D3D12CreateDevice</code> (feature level 11_0). The
+as-built adapter pick is the <strong>default adapter with a WARP fallback</strong> — on a VM / RDP / GPU-less box,
+<code>_factory-&gt;EnumWarpAdapter</code> provides the software device and <code>BackendName</code> becomes <code>D3D12 (WARP)</code>. (The
+<code>IDXGIFactory6</code> high-performance enumeration that <a href="../../../design/subsystems/pal-rhi.md"><code>pal-rhi.md</code></a> §3 describes is
+the design target; the current leaf does not yet pick by power preference.)</p>
+<p>It then builds the rest of the steady-state machinery, all keyed off a single <code>const uint FRAME_COUNT = 2</code> (the
+<code>FLIP_DISCARD</code> canon from <a href="../../../design/budgets.md"><code>budgets.md</code></a>, configurable 2–3 by one constant): one DIRECT
+<code>ID3D12CommandQueue</code>, per-frame <code>ID3D12CommandAllocator</code>s, one <code>ID3D12GraphicsCommandList</code> (created closed, <code>Reset</code> each
+frame), an <code>ID3D12Fence</code> + event for CPU/GPU sync, and an RTV descriptor heap sized to <code>FRAME_COUNT</code>. The debug layer is
+opt-in behind <code>FG_D3D12_DEBUG</code> in <code>DEBUG</code> builds.</p>
+<h3 id="the-dxgi-flip-model-swapchain--dcomp-present">The DXGI flip-model swapchain + DComp present</h3>
+<p><code>InitSwapChain()</code> is the <a href="../../../design/subsystems/pal-rhi.md"><code>pal-rhi.md</code></a> §5.1 base path made concrete. The color
+contract is exactly the one pinned in <a href="../../../design/SPEC-INDEX.md"><code>SPEC-INDEX.md</code></a>: the swapchain buffer is
+<code>DXGI_FORMAT_B8G8R8A8_UNORM</code>, <code>BufferCount = 2</code>, <code>SwapEffect = FLIP_DISCARD</code>, created
+<code>FRAME_LATENCY_WAITABLE_OBJECT</code> (and <code>ALLOW_TEARING</code> on the non-composited, tearing-capable path). The composited path
+takes <code>DXGI_ALPHA_MODE_PREMULTIPLIED</code> (mandatory for DWM show-through); the opaque path takes <code>ALPHA_MODE_IGNORE</code>.</p>
+<p>Two creation paths, selected by the <code>composited</code> ctor flag:</p>
+<ul>
+<li><strong>Composited (Mica) path</strong> — <code>CreateSwapChainForComposition(queue, …)</code>, then the DirectComposition tree:
+<code>DCompositionCreateDevice</code> → <code>CreateTargetForHwnd</code> → <code>CreateVisual</code> → <code>visual.SetContent(swapchain)</code> →
+<code>target.SetRoot(visual)</code> → <code>Commit()</code>. The swapchain composes onto the HWND so the DWM backdrop shows through wherever
+the engine presents transparent pixels.</li>
+<li><strong>Opaque path</strong> — <code>CreateSwapChainForHwnd(queue, hwnd, …)</code>, no DComp tree.</li>
+</ul>
+<p>After creation it QIs <code>IDXGISwapChain3</code>, calls <code>SetMaximumFrameLatency(FRAME_COUNT - 1)</code>, and grabs the
+<code>GetFrameLatencyWaitableObject()</code> — the handle <code>WaitForLatency()</code> blocks on at the top of each frame to bound queued-frame
+latency.</p>
+<blockquote>
+<p><strong>Single-visual today.</strong> The leaf composes exactly <strong>one</strong> swapchain visual. The multi-visual present-tree (a video
+child visual z-below the UI swapchain, with the transparent premultiplied-0 hole-punch for <code>DrawVideoCmd.Dst</code>) in
+<a href="../../../design/subsystems/pal-rhi.md"><code>pal-rhi.md</code></a> §5.2 is the design target for video and is not yet wired.</p>
+</blockquote>
+<h3 id="the-per-frame-submit-path">The per-frame submit path</h3>
+<p><code>SubmitDrawList(ReadOnlySpan&lt;byte&gt; drawList, ReadOnlySpan&lt;ulong&gt; sortKeys, in FrameInfo ctx)</code> is the hot path
+(phase 10–11, <a href="../../../design/subsystems/pal-rhi.md"><code>pal-rhi.md</code></a> §3.1). Each frame it:</p>
+<ol>
+<li><code>WaitForLatency()</code> (bound queued frames), pick the back-buffer index, <code>WaitForFrame(idx)</code> on that buffer's last fence,
+<code>Reset</code> the allocator + command list, and flush any pending image uploads (<code>_imageTextures.FlushUploads</code>).</li>
+<li>Barrier the back buffer <code>PRESENT → RENDER_TARGET</code>. DPI is handled by rendering at <strong>physical</strong> resolution while
+mapping coordinates through a <strong>logical</strong> viewport (<code>physical / scale</code>), so glyphs rasterize crisp at native px while
+layout stays in DIPs.</li>
+<li>Walk the POD opcode stream. The flat (no-layer) path clears the RTV and calls <code>SubmitStreaming</code>, which decodes opcodes
+(<code>MemoryMarshal.Read&lt;TCmd&gt;</code>) into per-pipeline instance lists, batching consecutive same-kind ops into one draw in
+<strong>stream (painter) order</strong> so a shadow correctly sits over the background drawn before it; glyphs always render last.
+<code>PushClip</code>/<code>PopClip</code> flush the current segment and set the scissor. The layered path (<code>SubmitWithLayers</code>, when the
+stream contains a <code>PushLayer</code>) renders into an engine canvas and runs acrylic/opacity passes before blitting back.</li>
+<li>Barrier <code>RENDER_TARGET → PRESENT</code>, <code>Close</code>, <code>ExecuteCommandLists</code>, <code>SignalFrame</code> (bump the fence, record the per-frame
+value). The <code>Diag.Set(&quot;d3d12&quot;, …)</code> counters here (<code>rects</code>, <code>glyphInstances</code>, <code>images</code>, <code>imagesSkipped</code>,
+<code>cachedRuns</code>/<code>runsShaped</code>, …) are your instrument panel for the GPU path.</li>
+</ol>
+<p><code>Present()</code> issues <code>swapChain-&gt;Present(syncInterval, flags)</code> — interval 1 when vsync'd, interval 0 +
+<code>DXGI_PRESENT_ALLOW_TEARING</code> when unsynced on a tearing-capable swapchain.</p>
+<blockquote>
+<p><strong>Note on the clip opcode.</strong> <code>DrawOp.PushClip</code> is consumed by the decoder but the GPU scissor wiring is a
+needs-pixels follow-up (<code>TODO(step-27)</code> in <code>DecodeOne</code>): the headless path is the verified source of truth for clip
+<em>semantics</em>; the D3D12 leaf keeps the stream well-formed and relies on layout bounding scroll content. The
+<code>SubmitStreaming</code>/<code>PushScissor</code> path does apply <code>RSSetScissorRects</code> between clip-broken segments — read both to see the
+current state.</p>
+</blockquote>
+<h3 id="device-lost-resize-capture">Device-lost, resize, capture</h3>
+<ul>
+<li><strong>Resize</strong> (<code>Resize(w, h)</code>) — <code>WaitForGpu</code>, release the old back buffers, <code>IDXGISwapChain3.ResizeBuffers</code> (preserving
+<code>_swapChainFlags</code>), re-create RTVs. (The design target in
+<a href="../../../design/subsystems/pal-rhi.md"><code>pal-rhi.md</code></a> §5.4 narrows this to waiting only the in-flight fences that
+referenced <em>this</em> swapchain; the current leaf uses the simpler full-<code>WaitForGpu</code>.)</li>
+<li><strong>Device-lost</strong> — the render-thread synchronous-HRESULT detection + Volatile-word marshal + rebuild-from-CPU-state
+recovery is the design contract in <a href="../../../design/subsystems/pal-rhi.md"><code>pal-rhi.md</code></a> §6 and
+<a href="../../../design/subsystems/com-interop.md"><code>com-interop.md</code></a> §11. Single-thread v1 ships first
+(<a href="../../../design/subsystems/pal-rhi.md"><code>pal-rhi.md</code></a> §0), so device-lost recovery is a forward item, not yet a code
+path in this leaf — <code>Check()</code> throws on a failed HRESULT today.</li>
+</ul>
+<h2 id="directwrite-text">DirectWrite text</h2>
+<p><code>DirectWriteFontSystem</code> (<code>src/FluentGpu.Text.DirectWrite/DirectWriteFontSystem.cs</code>) implements <code>IFontSystem</code> — the text
+seam owned by <code>FluentGpu.Text</code>. It is a thin wrapper over <code>TextLayoutEngine</code>, and its whole reason for existing is one
+invariant: <strong>measure ≡ hit-test ≡ render.</strong> Every member (measurement on the UI thread at phase-6 layout, <em>and</em> the
+editor queries at edit/drag time) funnels through one private <code>LayoutFor</code> call running the full pipeline — itemize →
+shape → wrap/trim → position (kerning, ligatures, complex script, UAX #14 line breaking, CJK/emoji fallback) — so the
+measured box, the hit-tested caret, and the selection rects all come from the <em>same</em> layout the GPU <code>GlyphRenderer</code>
+draws from.</p>
+<p>This parity is not cosmetic: it is the fix for the &quot;bold everywhere&quot; class of bug. When the renderer shapes but
+measurement is per-character, shaped glyphs overlap and read as bold — see the memory note on text shaping. The shared
+<code>TextLayoutEngine</code> is what keeps the two in lockstep.</p>
+<p><strong>Where to change what:</strong></p>
+<table>
+<thead>
+<tr>
+<th>If you're changing…</th>
+<th>Edit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The <code>IFontSystem</code> surface (measure + the caret/hit-test/range-rect queries)</td>
+<td><code>src/FluentGpu.Text.DirectWrite/DirectWriteFontSystem.cs</code></td>
+</tr>
+<tr>
+<td>Itemization (BiDi/script segmentation, the callee CCWs)</td>
+<td><code>…/DWriteItemizer.cs</code> (<code>--itemtest</code> self-test)</td>
+</tr>
+<tr>
+<td>Shaping (glyph runs, advances, clusters)</td>
+<td><code>…/DWriteTextShaper.cs</code> (<code>--shapetest</code> self-test)</td>
+</tr>
+<tr>
+<td>The full layout engine (wrap, trim, line stacking, range rects)</td>
+<td><code>…/TextLayoutEngine.cs</code> (<code>--layouttest</code> self-test)</td>
+</tr>
+<tr>
+<td>The GPU rasterization of that layout (atlas + run cache)</td>
+<td><code>src/FluentGpu.Rhi.D3D12/GlyphRenderer.cs</code></td>
+</tr>
+</tbody>
+</table>
+<p>The two threads never share a layout engine instance: the UI thread owns this <code>DirectWriteFontSystem</code>'s engine for
+measurement/queries, and the render thread's <code>GlyphRenderer</code> owns a separate one — so an edit-time query can never
+corrupt render-side buffers. Query results live in the engine's reused grow-only tables, so a keystroke or pointer-move
+is 0 steady-state allocation. The <code>GlyphRenderer</code> consumes the recorded <code>DrawGlyphRunCmd</code> and runs <code>LayoutRun</code> against
+that same engine to produce instances; the <code>text.run</code> diagnostics (<code>runsShaped</code> should be ~0 in steady state) tell you
+whether the run cache is holding.</p>
+<p>The three <code>--*test</code> self-tests (wired in the gallery's <code>Program.cs</code>) are fast, headless smoke checks for the text path
+specifically — run them when you touch itemization/shaping/layout.</p>
+<h2 id="win32-windowing-and-theme">Win32 windowing and theme</h2>
+<p><code>Win32App</code> + <code>Win32Window</code> (<code>src/FluentGpu.Pal.Windows/Win32Platform.cs</code>) are the real Win32 PAL: <code>RegisterClassExW</code>
+once, <code>CreateWindowExW</code>, a single static <code>[UnmanagedCallersOnly]</code> <code>WndProc</code> thunk, and a <code>PeekMessage</code> pump that drains
+<code>WM_*</code> into the POD <code>InputEventRing</code> (<a href="../../../design/subsystems/pal-rhi.md"><code>pal-rhi.md</code></a> §1.2). Per-window dispatch is
+a <code>GCHandle</code> stored in <code>GWLP_USERDATA</code> (set in <code>WM_NCCREATE</code>, freed on dispose) — no managed allocation per message.</p>
+<p><strong>Where to change what:</strong></p>
+<table>
+<thead>
+<tr>
+<th>If you're changing…</th>
+<th>Edit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Window class, creation, the <code>WndProc</code>, the pump, DPI handling</td>
+<td><code>src/FluentGpu.Pal.Windows/Win32Platform.cs</code> (<code>Win32App</code>, <code>Win32Window</code>)</td>
+</tr>
+<tr>
+<td>The accent pickup + DWM dark caption + Mica/Acrylic backdrop</td>
+<td><code>src/FluentGpu.Pal.Windows/Win32Theme.cs</code></td>
+</tr>
+<tr>
+<td>Clipboard, popup windows, text input/IME</td>
+<td><code>…/Win32Clipboard.cs</code>, <code>Win32PopupWindow.cs</code>, <code>Win32TextInput.cs</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="dpi">DPI</h3>
+<p>The process is <code>PER_MONITOR_AWARE_V2</code> (set programmatically in the <code>Win32App</code> ctor — manifest-free, AOT-friendly), so the
+OS never bitmap-stretches. <code>Scale</code> is the window's effective DPI / 96. <code>WM_DPICHANGED</code> updates <code>_scale</code> <em>first</em>, then
+adopts the OS-suggested rect (which raises <code>WM_SIZE</code> → the host re-lays-out in DIPs and re-rasterizes glyphs at the new
+scale), keeping the window's apparent DIP size across monitors. Pointer coordinates are converted physical→DIP at the
+pump boundary so they match the DIP scene bounds.</p>
+<h3 id="the-custom-frame-windowdesccustomframe">The custom frame (<code>WindowDesc.CustomFrame</code>)</h3>
+<p><code>CustomFrame</code> is the WinUI <code>ExtendsContentIntoTitleBar</code> analogue — opt-in (the gallery passes <code>customFrame: true</code>; the
+basic demos keep the standard OS frame). When set, the leaf strips the OS caption via <code>WM_NCCALCSIZE</code> (restoring the top
+inset to reclaim the caption strip as client, while keeping the thin L/R/B resize frame — the Windows Terminal recipe so
+the DWM shadow, Win11 rounded corners, and resize borders stay system-handled), answers <code>WM_NCHITTEST</code> from the
+engine-reported <code>TitleBarRegion</code>s (<code>SetTitleBarRegions</code>), and <strong>synthesizes pointer input</strong> for the engine-drawn caption
+buttons: <code>WM_NCMOUSEMOVE</code>/<code>WM_NCLBUTTONDOWN</code>/<code>WM_NCLBUTTONUP</code> become <code>PointerMove</code>/<code>PointerDown</code>/<code>PointerUp</code> at the
+button's center, driving the engine button's hover/press ramps exactly like a real pointer. <code>Minimize</code>/<code>ToggleMaximize</code>/
+<code>CloseWindow</code> post the matching <code>WM_SYSCOMMAND</code>. This is intricate — read the <code>WM_NC*</code> cases in <code>Handle32</code> before
+touching it; the comments document the Fitts-corner and double-click edge cases.</p>
+<h3 id="mica-via-dwmextendframeintoclientarea--accent-pickup">Mica via <code>DwmExtendFrameIntoClientArea</code> + accent pickup</h3>
+<p><code>Win32Theme</code> (<code>src/FluentGpu.Pal.Windows/Win32Theme.cs</code>) is the <strong>sole owner</strong> of the DWM backdrop calls — all flat C
+exports via <code>[LibraryImport]</code>, all on the UI thread, none touching a <code>ComPtr</code> or the render thread (consistent with
+<a href="../../../design/subsystems/window-backdrop-mica.md"><code>window-backdrop-mica.md</code></a>: DWM rasterizes, we just present
+transparent pixels). <code>ApplyWindowMaterial(hwnd, dark, mica, customFrame)</code> does three things:</p>
+<ul>
+<li><strong>Dark caption</strong> — <code>DwmSetWindowAttribute(DWMWA_USE_IMMERSIVE_DARK_MODE)</code>.</li>
+<li><strong>Backdrop type</strong> — <code>DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE)</code> with <code>DWMSBT_MAINWINDOW</code> (Mica) or
+<code>DWMSBT_TRANSIENTWINDOW</code> (Acrylic).</li>
+<li><strong>Frame extension</strong> — and this is the subtle one:</li>
+</ul>
+<pre><code class="lang-csharp">if (customFrame)
+{
+    // All-zero margins (Terminal's Mica case): DWM owns no caption visuals;
+    // snap flyout anchors purely from the engine's WM_NCHITTEST regions.
+    MARGINS m = new();
+    DwmExtendFrameIntoClientArea(hwnd, in m);
+}
+else if (mica)
+{
+    // Sheet-of-glass: extend the DWM frame across the ENTIRE client area so Mica
+    // composites behind the transparent (DirectComposition) client pixels.
+    MARGINS m = new() { cxLeftWidth = -1, cxRightWidth = -1, cyTopHeight = -1, cyBottomHeight = -1 };
+    DwmExtendFrameIntoClientArea(hwnd, in m);
+}
+</code></pre>
+<p>The margin is a known footgun documented right in the method (and in the memory note on Mica): with a custom frame the
+extension must be <strong>all-zero</strong>, because any non-zero margin lets DWM paint its own caption visuals over the client — a
+<code>-1</code> sheet-of-glass composites DWM's <em>own</em> min/max/close buttons (the &quot;double caption buttons&quot; bug), and even a 1px
+sliver re-anchors the Win11 snap flyout off the extended frame. With the <strong>standard</strong> frame, <code>-1</code> full-window glass is
+correct (the DWM caption buttons land in the real OS titlebar, not the client). Get this wrong and you will see either
+doubled caption buttons or an opaque white pane instead of Mica.</p>
+<p>Accent pickup lives here too: <code>AccentLight2()</code> reads the <code>AccentPalette</code> registry blob (8×RGBA, index 1 = Light2 — the
+dark-theme accent fill WinUI uses), and <code>Accent()</code> reads <code>AccentColorMenu</code> with a <code>DwmGetColorizationColor</code> fallback.
+<code>FluentApp.Run</code> calls these to seed <code>Theme.Accent</code> before the first frame.</p>
+<h2 id="the-tiered-com-policy">The tiered COM policy</h2>
+<p>The full policy is owned by <a href="../../../design/subsystems/com-interop.md"><code>com-interop.md</code></a> and
+<a href="../../../design/dotnet10-csharp14-zero-alloc.md"><code>dotnet10-csharp14-zero-alloc.md</code></a> §4 — do not restate it; the rule
+in one line is <strong>hand-vtable <code>calli</code> on the per-frame hot path, <code>[GeneratedComInterface]</code>/<code>[GeneratedComClass]</code>
+everywhere cold, <code>[LibraryImport]</code> for flat C exports, and no <code>ComWrappers</code> on the hot path.</strong> What you see in the
+Windows leaves today:</p>
+<ul>
+<li><strong>Hot-path consume</strong> (D3D12 command list/queue/fence, swapchain <code>Present</code>, DComp <code>Commit</code>/visuals, the DirectWrite
+glyph path) is hand-vtable <code>calli</code> via <strong>TerraFX.Interop.Windows</strong> (<code>src/FluentGpu.Rhi.D3D12/*.cs</code>,
+<code>…/Text.DirectWrite/*.cs</code>). The design target (<a href="../../../design/subsystems/com-interop.md"><code>com-interop.md</code></a> §2–3) is
+to <em>generate</em> these bindings from a harvested, runtime-self-checked <code>*.comabi.json</code> so no human ever types a vtable
+slot; as-built, TerraFX is the vendored binding surface and the generator pipeline is forward work. Either way the
+call site is the same <code>calli</code> through <code>T** lpVtbl</code>.</li>
+<li><strong>Flat C exports</strong> (<code>D3D12CreateDevice</code>, <code>CreateDXGIFactory2</code>, <code>DCompositionCreateDevice</code>, and the DWM/registry/Win32
+user32 calls) are <code>[LibraryImport]</code> — blittable, no-marshal, AOT-clean. See the <code>[LibraryImport]</code> partials in
+<code>Win32Theme.cs</code> and <code>Win32Platform.cs</code>.</li>
+<li><strong>WIC</strong> (the image codec, <a href="#the-real-image-pipeline">below</a>) creates and uses all its COM objects <strong>entirely on the
+calling worker thread</strong> (a <code>[ThreadStatic]</code> per-worker factory) and never crosses the scheduler seam — only POD pixels
+do. That is the per-worker confinement domain from
+<a href="../../../design/subsystems/com-interop.md"><code>com-interop.md</code></a> §1.2.</li>
+</ul>
+<p>The confinement contract that matters when you edit these leaves: <strong>the render thread owns every <code>ComPtr</code></strong> (single-thread
+v1 satisfies this trivially — one thread). Do not introduce a path where a COM pointer is touched from two threads; the
+WIC codec is the model for &quot;own it on one thread, hand off POD.&quot;</p>
+<h2 id="the-real-image-pipeline">The real image pipeline</h2>
+<p><code>Ui.Image</code> is backed by an <code>ImageCache</code> over an <code>IImageDecoder</code>. The live (non-headless) chain that <code>FluentApp.Run</code>
+builds is three pieces, each a separate leaf so the codec stays swappable:</p>
+<ul>
+<li><strong><code>DefaultImageFetcher</code></strong> (<code>src/FluentGpu.Media/DefaultImageFetcher.cs</code>) — <code>IImageFetcher</code>. One pooled
+<code>SocketsHttpHandler</code> (never <code>new HttpClient()</code> per request), HTTP/2 with bounded <code>MaxConnectionsPerServer</code>,
+<code>PooledConnectionLifetime</code> for DNS/CDN-edge rotation, automatic decompression, per-request deadline via the token, and
+a disk-first <code>DiskImageCache</code>. Bodies stream into an <code>ArrayPool</code> buffer — no per-fetch <code>byte[]</code>.</li>
+<li><strong><code>DecodeScheduler</code></strong> (<code>src/FluentGpu.Media/DecodeScheduler.cs</code>) — <code>IImageDecoder</code>. A worker pool draining three
+priority lanes (Visible &gt; Overscan &gt; Prefetch). <code>Begin</code> is a non-blocking UI-thread enqueue; workers fetch+decode
+concurrently; <code>Pump</code> drains finished results on the UI thread and uploads pixels (returning the pooled decode buffer).
+<code>Prioritize</code> promotes a prefetch that scrolled into view; <code>Cancel</code> drops a recycled row's decode. Under backpressure
+the lowest off-screen lane is dropped — never Visible.</li>
+<li><strong><code>WicImageCodec</code></strong> (<code>src/FluentGpu.Media.Codecs.Wic/WicImageCodec.cs</code>) — <code>IImageCodec</code>. Windows Imaging Component
+<strong>constrained</strong> decode: it scales straight to the target bucket via <code>IWICBitmapScaler</code> (a 3000px cover never
+materializes full-res in CPU memory) and converts to <code>32bppPBGRA</code> (premultiplied BGRA — the engine's blend posture and
+the GPU texture format). All WIC COM is worker-thread-confined as described above.</li>
+</ul>
+<p>On the GPU side those decoded pixels land in <code>ImageTextureStore</code> (atlas pages for thumbnails ≤128px, a per-bucket pool
+for 256/512 art) and draw through <code>ImagePipeline</code> — see <code>src/FluentGpu.Rhi.D3D12/ImageTextureStore.cs</code> /
+<code>ImagePipeline.cs</code>. <code>D3D12Device.UploadImage</code>/<code>EvictImage</code> are the seam between the decode completion and the resident
+texture. The decode-pipeline architecture is owned by <code>media-pipeline.md</code>; this is its Windows realization.</p>
+<h2 id="screenshot-capture-capturebgra--pngwriter-for-fidelity-diffs">Screenshot capture (<code>CaptureBgra</code> → <code>PngWriter</code>) for fidelity diffs</h2>
+<p>The harness verifies engine <em>logic</em> headlessly; on-screen D3D12 pixels are a separate, manual <strong>needs-pixels</strong> pass (see
+the <a href="index.html#the-golden-rule-verify-with-the-headless-harness-before-claiming-done">Engine Contributors index</a>). The
+screenshot path is the tooling for that visual loop:</p>
+<ul>
+<li><p><code>FluentApp.Run(..., screenshot: &quot;&lt;path&gt;&quot;)</code> runs a fixed number of settle frames (the gallery's <code>Program.cs</code> uses 6),
+then, if the device is a <code>D3D12Device</code>, reads the last back buffer back to CPU and writes a PNG:</p>
+<pre><code class="lang-csharp">var px = d3d.CaptureBgra(out int cw, out int ch);
+PngWriter.WriteBgra(screenshot, px, cw, ch);
+</code></pre>
+</li>
+<li><p><strong><code>D3D12Device.CaptureBgra(out w, out h)</code></strong> (<code>src/FluentGpu.Rhi.D3D12/D3D12Device.cs</code>) — <code>WaitForGpu</code>, then a
+<code>COPY_SOURCE</code> → READBACK-heap <code>CopyTextureRegion</code>, mapped and re-packed on the CPU to tight top-down BGRA8 (the readback
+<code>RowPitch</code> is 256-aligned, so the per-row copy strips the padding). It is explicitly <strong>not</strong> a hot-path method — it
+stalls the GPU. With <code>FLIP_DISCARD</code> the just-presented buffer at <code>_frameIndex</code> is still intact until reused.</p>
+</li>
+<li><p><strong><code>PngWriter.WriteBgra(path, bgra, w, h)</code></strong> (<code>src/FluentGpu.Foundation/PngWriter.cs</code>) — a minimal pure-managed PNG
+encoder (no WIC / <code>System.Drawing</code>, AOT-safe, zero new deps) emitting an opaque RGB PNG from that buffer.</p>
+</li>
+</ul>
+<p>The gallery exposes this end-to-end: <code>WindowsApp --screenshot out.png --shot &lt;id&gt; [--mica] [--w N --h H]</code> renders a
+deterministic <code>ShotScene</code> (opaque by default; <code>--mica</code> reproduces the composited path) and exits. Width matters — wrap
+and clip bugs are width-dependent, so reproduce the reported geometry.</p>
+<h2 id="the-nativeaottrim-build-baseline-and-the-native-link">The NativeAOT/trim build baseline and the native link</h2>
+<p>The language/GC baseline from <a href="../../../design/dotnet10-csharp14-zero-alloc.md"><code>dotnet10-csharp14-zero-alloc.md</code></a> §1 is
+set solution-wide in <code>src/Directory.Build.props</code>: <code>net10.0</code>, <code>LangVersion 14</code>, <code>Nullable</code>/<code>AllowUnsafeBlocks</code>,
+<code>InvariantGlobalization</code>, <code>Deterministic</code>, and <strong>Workstation + Concurrent GC</strong> (<code>ServerGarbageCollection=false</code>,
+<code>ConcurrentGarbageCollection=true</code>). <code>GenerateDocumentationFile</code> is on (with <code>CS1591</code> suppressed) so <code>docfx metadata</code> has
+XML to read.</p>
+<blockquote>
+<p><strong>As-built vs the AOT target.</strong> The props comment says it plainly: <em>&quot;Zero-alloc / perf posture (AOT/trim engage at
+publish; harmless at build).&quot;</em> The full <code>PublishAot</code> / <code>TrimMode full</code> / <code>[assembly: DisableRuntimeMarshalling]</code>
+assembly-split baseline in <a href="../../../design/dotnet10-csharp14-zero-alloc.md"><code>dotnet10-csharp14-zero-alloc.md</code></a> §1 is
+the <strong>publish target</strong>; the committed solution does not set <code>PublishAot</code> in <code>Directory.Build.props</code> today, and the
+Windows leaves use the vendored TerraFX bindings rather than the <code>DisableRuntimeMarshalling</code>-proven generated surface.
+Treat the AOT baseline as the contract a <code>PublishAot</code> configuration must satisfy, not as something every <code>dotnet build</code> already enforces.</p>
+</blockquote>
+<p><strong>The native link.</strong> The Windows leaves bind real system DLLs through <strong>TerraFX.Interop.Windows 10.0.26100.6</strong>
+(<code>PackageReference</code> in <code>src/FluentGpu.Rhi.D3D12/FluentGpu.Rhi.D3D12.csproj</code>); a plain <code>dotnet build</code>/<code>dotnet run</code> of the
+gallery (<code>src/FluentGpu.WindowsApp</code>) needs only the .NET 10 SDK and resolves d3d12/dxgi/dcomp/dwrite/dwmapi at runtime —
+no extra toolchain. The native link step that <em>does</em> need the MSVC linker is a <strong><code>PublishAot</code></strong> publish: NativeAOT shells
+out to <code>link.exe</code>, so a publish must run from a <strong>Visual Studio Developer Command Prompt / Developer PowerShell</strong> (or
+otherwise have <code>vcvars</code> on <code>PATH</code>) for the C++ Build Tools' linker and Windows SDK libs to be found. A normal debug
+iteration does not.</p>
+<h2 id="verifying">Verifying</h2>
+<p>These are backend leaves, so the headless golden harness does <strong>not</strong> exercise them directly — it runs on
+<code>FluentGpu.Rhi.Headless</code> / <code>FluentGpu.Pal.Headless</code> / <code>FluentGpu.Text.Headless</code>. Two distinct bars, kept separate:</p>
+<ul>
+<li><p><strong>Logic / DrawList correctness</strong> — still the headless harness. After <em>any</em> engine change, including one that touches a
+Windows leaf's shared contract, run it and confirm <code>ALL CHECKS PASSED</code>:</p>
+<pre><code class="lang-bash">dotnet build src/FluentGpu.VerticalSlice                 # clean build first
+dotnet run   --project src/FluentGpu.VerticalSlice       # expect: ALL CHECKS PASSED
+</code></pre>
+</li>
+<li><p><strong>On-screen pixels</strong> — the needs-pixels pass, which is what these leaves actually produce. Build and run the gallery on
+the real Windows path, or capture a deterministic shot:</p>
+<pre><code class="lang-bash">dotnet run --project src/FluentGpu.WindowsApp                                   # the live gallery (custom frame + Mica)
+dotnet run --project src/FluentGpu.WindowsApp -- --screenshot shot.png --mica   # one composited frame → PNG, then exit
+</code></pre>
+<p>The DirectWrite path also has focused self-tests: <code>--itemtest</code>, <code>--shapetest</code>, <code>--layouttest</code> (each runs and exits).</p>
+</li>
+</ul>
+<p>A green harness means the logic and the recorded DrawList are correct; it does <strong>not</strong> by itself mean a control looks
+right on screen. When you change a Windows leaf, you almost always owe a needs-pixels check in addition to the harness.</p>
+<h2 id="canon-links">Canon links</h2>
+<ul>
+<li><a href="../../../design/subsystems/pal-rhi.md"><code>pal-rhi.md</code></a> — the authoritative PAL/RHI/windowing/present design: the seam
+vocabulary, the D3D12 backend, the DXGI flip + DComp present-tree, device-lost, resize, and the new PAL seams.</li>
+<li><a href="../../../design/subsystems/window-backdrop-mica.md"><code>window-backdrop-mica.md</code></a> — the host-window backdrop (Mica via
+the DWM system-backdrop attribute, the fallback policy, the passthrough contract).</li>
+<li><a href="../../../design/subsystems/com-interop.md"><code>com-interop.md</code></a> — the tiered COM policy: the ABI harvest pipeline, the
+two generators, <code>ComPtr&lt;T&gt;</code> confinement + Move-only, and the CI gates.</li>
+<li><a href="../../../design/dotnet10-csharp14-zero-alloc.md"><code>dotnet10-csharp14-zero-alloc.md</code></a> — the .NET 10 / C# 14 AOT, trim,
+GC, and interop baseline these leaves are built to.</li>
+<li><a href="../../../design/SPEC-INDEX.md"><code>SPEC-INDEX.md</code></a> — the precedence authority (the color contract, the handle layout, the
+threading model, the COM ruling).</li>
+</ul>
+<p>Sibling site pages: <a href="seams-rhi-pal-text.html">The RHI, PAL, and Text seams</a> (the portable contracts these leaves
+implement), <a href="render-pipeline-and-scenerecorder.html">Render Pipeline and SceneRecorder</a> (what produces the DrawList these
+leaves consume), and the <a href="contributor-map.html">Contributor Map</a> (the full where-to-change-what routing table).</p>
+
+</article>
+
+
+        <div class="next-article d-print-none border-top" id="nextArticle"></div>
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

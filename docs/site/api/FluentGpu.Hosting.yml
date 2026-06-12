@@ -1,0 +1,96 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Hosting
+  commentId: N:FluentGpu.Hosting
+  id: FluentGpu.Hosting
+  children:
+  - FluentGpu.Hosting.AppHost
+  - FluentGpu.Hosting.FixedFrameTimeSource
+  - FluentGpu.Hosting.FrameDiagnostics
+  - FluentGpu.Hosting.FrameStats
+  - FluentGpu.Hosting.IFrameTimeSource
+  - FluentGpu.Hosting.ManualFrameTimeSource
+  - FluentGpu.Hosting.PopupWindowSlot
+  - FluentGpu.Hosting.StopwatchFrameTimeSource
+  langs:
+  - csharp
+  - vb
+  name: FluentGpu.Hosting
+  nameWithType: FluentGpu.Hosting
+  fullName: FluentGpu.Hosting
+  type: Namespace
+  assemblies:
+  - FluentGpu.Hosting
+references:
+- uid: FluentGpu.Hosting.FrameStats
+  commentId: T:FluentGpu.Hosting.FrameStats
+  parent: FluentGpu.Hosting
+  href: FluentGpu.Hosting.FrameStats.html
+  name: FrameStats
+  nameWithType: FrameStats
+  fullName: FluentGpu.Hosting.FrameStats
+- uid: FluentGpu.Hosting.PopupWindowSlot
+  commentId: T:FluentGpu.Hosting.PopupWindowSlot
+  href: FluentGpu.Hosting.PopupWindowSlot.html
+  name: PopupWindowSlot
+  nameWithType: PopupWindowSlot
+  fullName: FluentGpu.Hosting.PopupWindowSlot
+- uid: FluentGpu.Hosting.AppHost
+  commentId: T:FluentGpu.Hosting.AppHost
+  href: FluentGpu.Hosting.AppHost.html
+  name: AppHost
+  nameWithType: AppHost
+  fullName: FluentGpu.Hosting.AppHost
+- uid: FluentGpu.Hosting.FrameDiagnostics
+  commentId: T:FluentGpu.Hosting.FrameDiagnostics
+  href: FluentGpu.Hosting.FrameDiagnostics.html
+  name: FrameDiagnostics
+  nameWithType: FrameDiagnostics
+  fullName: FluentGpu.Hosting.FrameDiagnostics
+- uid: FluentGpu.Hosting.IFrameTimeSource
+  commentId: T:FluentGpu.Hosting.IFrameTimeSource
+  parent: FluentGpu.Hosting
+  href: FluentGpu.Hosting.IFrameTimeSource.html
+  name: IFrameTimeSource
+  nameWithType: IFrameTimeSource
+  fullName: FluentGpu.Hosting.IFrameTimeSource
+- uid: FluentGpu.Hosting.FixedFrameTimeSource
+  commentId: T:FluentGpu.Hosting.FixedFrameTimeSource
+  href: FluentGpu.Hosting.FixedFrameTimeSource.html
+  name: FixedFrameTimeSource
+  nameWithType: FixedFrameTimeSource
+  fullName: FluentGpu.Hosting.FixedFrameTimeSource
+- uid: FluentGpu.Hosting.ManualFrameTimeSource
+  commentId: T:FluentGpu.Hosting.ManualFrameTimeSource
+  href: FluentGpu.Hosting.ManualFrameTimeSource.html
+  name: ManualFrameTimeSource
+  nameWithType: ManualFrameTimeSource
+  fullName: FluentGpu.Hosting.ManualFrameTimeSource
+- uid: FluentGpu.Hosting.StopwatchFrameTimeSource
+  commentId: T:FluentGpu.Hosting.StopwatchFrameTimeSource
+  href: FluentGpu.Hosting.StopwatchFrameTimeSource.html
+  name: StopwatchFrameTimeSource
+  nameWithType: StopwatchFrameTimeSource
+  fullName: FluentGpu.Hosting.StopwatchFrameTimeSource
+- uid: FluentGpu.Hosting
+  commentId: N:FluentGpu.Hosting
+  href: FluentGpu.html
+  name: FluentGpu.Hosting
+  nameWithType: FluentGpu.Hosting
+  fullName: FluentGpu.Hosting
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hosting
+    name: Hosting
+    href: FluentGpu.Hosting.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hosting
+    name: Hosting
+    href: FluentGpu.Hosting.html

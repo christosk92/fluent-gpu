@@ -1,0 +1,675 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Scene.TextEditState
+  commentId: T:FluentGpu.Scene.TextEditState
+  id: TextEditState
+  parent: FluentGpu.Scene
+  children:
+  - FluentGpu.Scene.TextEditState.CaretH
+  - FluentGpu.Scene.TextEditState.CaretTop
+  - FluentGpu.Scene.TextEditState.CaretVisible
+  - FluentGpu.Scene.TextEditState.CaretX
+  - FluentGpu.Scene.TextEditState.CompLen
+  - FluentGpu.Scene.TextEditState.CompStart
+  - FluentGpu.Scene.TextEditState.Flags
+  - FluentGpu.Scene.TextEditState.Focused
+  - FluentGpu.Scene.TextEditState.ScrollX
+  - FluentGpu.Scene.TextEditState.SelectionActive
+  langs:
+  - csharp
+  - vb
+  name: TextEditState
+  nameWithType: TextEditState
+  fullName: FluentGpu.Scene.TextEditState
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextEditState
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 254
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    Sparse text-edit state for an editor's TEXT node (side-table, O(editors)): caret geometry + caret-follow scroll +
+
+    in-flight IME composition span + focus/blink flags. Written by the editing control (UI thread, edit/drag time) and
+
+    the <code>CaretBlinker</code> phase-7 ticker; the recorder only READS it (plus the pooled decoration rects on
+
+    <xref href="FluentGpu.Scene.SceneStore.SetTextEditRects(FluentGpu.Foundation.NodeHandle%2cSystem.ReadOnlySpan%7bFluentGpu.Foundation.RectF%7d%2cSystem.ReadOnlySpan%7bFluentGpu.Foundation.RectF%7d)" data-throw-if-not-resolved="false"></xref>) to emit selection highlight / selected-text recolor / IME underlines /
+
+    the caret bar — retained scene state, never composed elements (0 alloc in phases 6–13).
+  example: []
+  syntax:
+    content: public struct TextEditState
+    content.vb: Public Structure TextEditState
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Scene.TextEditState.CompStart
+  commentId: F:FluentGpu.Scene.TextEditState.CompStart
+  id: CompStart
+  parent: FluentGpu.Scene.TextEditState
+  langs:
+  - csharp
+  - vb
+  name: CompStart
+  nameWithType: TextEditState.CompStart
+  fullName: FluentGpu.Scene.TextEditState.CompStart
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CompStart
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 256
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public int CompStart
+    return:
+      type: System.Int32
+    content.vb: Public CompStart As Integer
+- uid: FluentGpu.Scene.TextEditState.CompLen
+  commentId: F:FluentGpu.Scene.TextEditState.CompLen
+  id: CompLen
+  parent: FluentGpu.Scene.TextEditState
+  langs:
+  - csharp
+  - vb
+  name: CompLen
+  nameWithType: TextEditState.CompLen
+  fullName: FluentGpu.Scene.TextEditState.CompLen
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CompLen
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 256
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public int CompLen
+    return:
+      type: System.Int32
+    content.vb: Public CompLen As Integer
+- uid: FluentGpu.Scene.TextEditState.ScrollX
+  commentId: F:FluentGpu.Scene.TextEditState.ScrollX
+  id: ScrollX
+  parent: FluentGpu.Scene.TextEditState
+  langs:
+  - csharp
+  - vb
+  name: ScrollX
+  nameWithType: TextEditState.ScrollX
+  fullName: FluentGpu.Scene.TextEditState.ScrollX
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ScrollX
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 257
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float ScrollX
+    return:
+      type: System.Single
+    content.vb: Public ScrollX As Single
+- uid: FluentGpu.Scene.TextEditState.CaretX
+  commentId: F:FluentGpu.Scene.TextEditState.CaretX
+  id: CaretX
+  parent: FluentGpu.Scene.TextEditState
+  langs:
+  - csharp
+  - vb
+  name: CaretX
+  nameWithType: TextEditState.CaretX
+  fullName: FluentGpu.Scene.TextEditState.CaretX
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CaretX
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 258
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float CaretX
+    return:
+      type: System.Single
+    content.vb: Public CaretX As Single
+- uid: FluentGpu.Scene.TextEditState.CaretTop
+  commentId: F:FluentGpu.Scene.TextEditState.CaretTop
+  id: CaretTop
+  parent: FluentGpu.Scene.TextEditState
+  langs:
+  - csharp
+  - vb
+  name: CaretTop
+  nameWithType: TextEditState.CaretTop
+  fullName: FluentGpu.Scene.TextEditState.CaretTop
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CaretTop
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 258
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float CaretTop
+    return:
+      type: System.Single
+    content.vb: Public CaretTop As Single
+- uid: FluentGpu.Scene.TextEditState.CaretH
+  commentId: F:FluentGpu.Scene.TextEditState.CaretH
+  id: CaretH
+  parent: FluentGpu.Scene.TextEditState
+  langs:
+  - csharp
+  - vb
+  name: CaretH
+  nameWithType: TextEditState.CaretH
+  fullName: FluentGpu.Scene.TextEditState.CaretH
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CaretH
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 258
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float CaretH
+    return:
+      type: System.Single
+    content.vb: Public CaretH As Single
+- uid: FluentGpu.Scene.TextEditState.Flags
+  commentId: F:FluentGpu.Scene.TextEditState.Flags
+  id: Flags
+  parent: FluentGpu.Scene.TextEditState
+  langs:
+  - csharp
+  - vb
+  name: Flags
+  nameWithType: TextEditState.Flags
+  fullName: FluentGpu.Scene.TextEditState.Flags
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Flags
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 259
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public byte Flags
+    return:
+      type: System.Byte
+    content.vb: Public Flags As Byte
+- uid: FluentGpu.Scene.TextEditState.CaretVisible
+  commentId: F:FluentGpu.Scene.TextEditState.CaretVisible
+  id: CaretVisible
+  parent: FluentGpu.Scene.TextEditState
+  langs:
+  - csharp
+  - vb
+  name: CaretVisible
+  nameWithType: TextEditState.CaretVisible
+  fullName: FluentGpu.Scene.TextEditState.CaretVisible
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CaretVisible
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 260
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public const byte CaretVisible = 1
+    return:
+      type: System.Byte
+    content.vb: Public Const CaretVisible As Byte = 1
+- uid: FluentGpu.Scene.TextEditState.Focused
+  commentId: F:FluentGpu.Scene.TextEditState.Focused
+  id: Focused
+  parent: FluentGpu.Scene.TextEditState
+  langs:
+  - csharp
+  - vb
+  name: Focused
+  nameWithType: TextEditState.Focused
+  fullName: FluentGpu.Scene.TextEditState.Focused
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Focused
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 260
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public const byte Focused = 2
+    return:
+      type: System.Byte
+    content.vb: Public Const Focused As Byte = 2
+- uid: FluentGpu.Scene.TextEditState.SelectionActive
+  commentId: F:FluentGpu.Scene.TextEditState.SelectionActive
+  id: SelectionActive
+  parent: FluentGpu.Scene.TextEditState
+  langs:
+  - csharp
+  - vb
+  name: SelectionActive
+  nameWithType: TextEditState.SelectionActive
+  fullName: FluentGpu.Scene.TextEditState.SelectionActive
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SelectionActive
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 260
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public const byte SelectionActive = 4
+    return:
+      type: System.Byte
+    content.vb: Public Const SelectionActive As Byte = 4
+references:
+- uid: FluentGpu.Scene.SceneStore.SetTextEditRects(FluentGpu.Foundation.NodeHandle,System.ReadOnlySpan{FluentGpu.Foundation.RectF},System.ReadOnlySpan{FluentGpu.Foundation.RectF})
+  commentId: M:FluentGpu.Scene.SceneStore.SetTextEditRects(FluentGpu.Foundation.NodeHandle,System.ReadOnlySpan{FluentGpu.Foundation.RectF},System.ReadOnlySpan{FluentGpu.Foundation.RectF})
+  isExternal: true
+  href: FluentGpu.Scene.SceneStore.html#FluentGpu_Scene_SceneStore_SetTextEditRects_FluentGpu_Foundation_NodeHandle_System_ReadOnlySpan_FluentGpu_Foundation_RectF__System_ReadOnlySpan_FluentGpu_Foundation_RectF__
+  name: SetTextEditRects(NodeHandle, ReadOnlySpan<RectF>, ReadOnlySpan<RectF>)
+  nameWithType: SceneStore.SetTextEditRects(NodeHandle, ReadOnlySpan<RectF>, ReadOnlySpan<RectF>)
+  fullName: FluentGpu.Scene.SceneStore.SetTextEditRects(FluentGpu.Foundation.NodeHandle, System.ReadOnlySpan<FluentGpu.Foundation.RectF>, System.ReadOnlySpan<FluentGpu.Foundation.RectF>)
+  nameWithType.vb: SceneStore.SetTextEditRects(NodeHandle, ReadOnlySpan(Of RectF), ReadOnlySpan(Of RectF))
+  fullName.vb: FluentGpu.Scene.SceneStore.SetTextEditRects(FluentGpu.Foundation.NodeHandle, System.ReadOnlySpan(Of FluentGpu.Foundation.RectF), System.ReadOnlySpan(Of FluentGpu.Foundation.RectF))
+  name.vb: SetTextEditRects(NodeHandle, ReadOnlySpan(Of RectF), ReadOnlySpan(Of RectF))
+  spec.csharp:
+  - uid: FluentGpu.Scene.SceneStore.SetTextEditRects(FluentGpu.Foundation.NodeHandle,System.ReadOnlySpan{FluentGpu.Foundation.RectF},System.ReadOnlySpan{FluentGpu.Foundation.RectF})
+    name: SetTextEditRects
+    href: FluentGpu.Scene.SceneStore.html#FluentGpu_Scene_SceneStore_SetTextEditRects_FluentGpu_Foundation_NodeHandle_System_ReadOnlySpan_FluentGpu_Foundation_RectF__System_ReadOnlySpan_FluentGpu_Foundation_RectF__
+  - name: (
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: ','
+  - name: " "
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - uid: FluentGpu.Foundation.RectF
+    name: RectF
+    href: FluentGpu.Foundation.RectF.html
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - uid: FluentGpu.Foundation.RectF
+    name: RectF
+    href: FluentGpu.Foundation.RectF.html
+  - name: '>'
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Scene.SceneStore.SetTextEditRects(FluentGpu.Foundation.NodeHandle,System.ReadOnlySpan{FluentGpu.Foundation.RectF},System.ReadOnlySpan{FluentGpu.Foundation.RectF})
+    name: SetTextEditRects
+    href: FluentGpu.Scene.SceneStore.html#FluentGpu_Scene_SceneStore_SetTextEditRects_FluentGpu_Foundation_NodeHandle_System_ReadOnlySpan_FluentGpu_Foundation_RectF__System_ReadOnlySpan_FluentGpu_Foundation_RectF__
+  - name: (
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: ','
+  - name: " "
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.RectF
+    name: RectF
+    href: FluentGpu.Foundation.RectF.html
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.RectF
+    name: RectF
+    href: FluentGpu.Foundation.RectF.html
+  - name: )
+  - name: )
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System.Byte
+  commentId: T:System.Byte
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.byte
+  name: byte
+  nameWithType: byte
+  fullName: byte
+  nameWithType.vb: Byte
+  fullName.vb: Byte
+  name.vb: Byte

@@ -1,0 +1,108 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Hosting.IFrameTimeSource
+  commentId: T:FluentGpu.Hosting.IFrameTimeSource
+  id: IFrameTimeSource
+  parent: FluentGpu.Hosting
+  children:
+  - FluentGpu.Hosting.IFrameTimeSource.NextDeltaMs
+  langs:
+  - csharp
+  - vb
+  name: IFrameTimeSource
+  nameWithType: IFrameTimeSource
+  fullName: FluentGpu.Hosting.IFrameTimeSource
+  type: Interface
+  source:
+    remote:
+      path: src/FluentGpu.Hosting/FrameTimeSource.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IFrameTimeSource
+    path: ../../src/FluentGpu.Hosting/FrameTimeSource.cs
+    startLine: 4
+  assemblies:
+  - FluentGpu.Hosting
+  namespace: FluentGpu.Hosting
+  syntax:
+    content: public interface IFrameTimeSource
+    content.vb: Public Interface IFrameTimeSource
+  derivedClasses:
+  - FluentGpu.Hosting.FixedFrameTimeSource
+  - FluentGpu.Hosting.ManualFrameTimeSource
+  - FluentGpu.Hosting.StopwatchFrameTimeSource
+- uid: FluentGpu.Hosting.IFrameTimeSource.NextDeltaMs
+  commentId: M:FluentGpu.Hosting.IFrameTimeSource.NextDeltaMs
+  id: NextDeltaMs
+  parent: FluentGpu.Hosting.IFrameTimeSource
+  langs:
+  - csharp
+  - vb
+  name: NextDeltaMs()
+  nameWithType: IFrameTimeSource.NextDeltaMs()
+  fullName: FluentGpu.Hosting.IFrameTimeSource.NextDeltaMs()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Hosting/FrameTimeSource.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NextDeltaMs
+    path: ../../src/FluentGpu.Hosting/FrameTimeSource.cs
+    startLine: 6
+  assemblies:
+  - FluentGpu.Hosting
+  namespace: FluentGpu.Hosting
+  syntax:
+    content: float NextDeltaMs()
+    return:
+      type: System.Single
+    content.vb: Function NextDeltaMs() As Single
+  overload: FluentGpu.Hosting.IFrameTimeSource.NextDeltaMs*
+references:
+- uid: FluentGpu.Hosting
+  commentId: N:FluentGpu.Hosting
+  href: FluentGpu.html
+  name: FluentGpu.Hosting
+  nameWithType: FluentGpu.Hosting
+  fullName: FluentGpu.Hosting
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hosting
+    name: Hosting
+    href: FluentGpu.Hosting.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hosting
+    name: Hosting
+    href: FluentGpu.Hosting.html
+- uid: FluentGpu.Hosting.IFrameTimeSource.NextDeltaMs*
+  commentId: Overload:FluentGpu.Hosting.IFrameTimeSource.NextDeltaMs
+  href: FluentGpu.Hosting.IFrameTimeSource.html#FluentGpu_Hosting_IFrameTimeSource_NextDeltaMs
+  name: NextDeltaMs
+  nameWithType: IFrameTimeSource.NextDeltaMs
+  fullName: FluentGpu.Hosting.IFrameTimeSource.NextDeltaMs
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System

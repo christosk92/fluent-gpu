@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Class TextLayoutEngine | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Class TextLayoutEngine | FluentGpu Developer Docs ">
+      
+      <meta name="description" content="The DirectWrite layout engine (text.md &#167;8): itemize → shape (per run) → wrap (UAX #14 break opportunities) → position, with BiDi L2 reordering per line. Drives BOTH measurement (metrics) and rendering (positioned glyphs) so they layout identically — and the editor queries (//) read the retained per-glyph cluster + per-line tables of the SAME layout, so hit-testing matches rendering exactly. Owns its itemizer + shaper + face cache; reusable, single-thread-confined. Results live in reused grow-only buffers (valid until the next ; queries fire per keystroke/pointer-move with 0 steady-state allocation). v1: design-advance shaping with kerning/ligatures/complex-script; font fallback + color glyphs are layered on in later phases; query edge mapping is leading=left (LTR — BiDi-correct edges arrive with the RTL workstream, but the scan is already cluster-correct and walks the visual order).">
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/new/feat/prop-unification/apiSpec/new?filename=FluentGpu_Text_DirectWrite_TextLayoutEngine.md&amp;value=---%0Auid%3A%20FluentGpu.Text.DirectWrite.TextLayoutEngine%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="ManagedReference">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine">
+
+
+
+  <h1 id="FluentGpu_Text_DirectWrite_TextLayoutEngine" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine" class="text-break">
+Class TextLayoutEngine  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs/#L62"><i class="bi bi-code-slash"></i></a>
+  </h1>
+
+  <div class="facts text-secondary">
+    <dl><dt>Namespace</dt><dd><a class="xref" href="FluentGpu.html">FluentGpu</a>.<a class="xref" href="FluentGpu.Text.html">Text</a>.<a class="xref" href="FluentGpu.Text.DirectWrite.html">DirectWrite</a></dd></dl>
+  <dl><dt>Assembly</dt><dd>FluentGpu.Text.DirectWrite.dll</dd></dl>
+  </div>
+
+  <div class="markdown summary"><p>The DirectWrite layout engine (text.md §8): itemize → shape (per run) → wrap (UAX #14 break opportunities) → position,
+with BiDi L2 reordering per line. Drives BOTH measurement (metrics) and rendering (positioned glyphs) so they layout
+identically — and the editor queries (<a class="xref" href="FluentGpu.Text.DirectWrite.TextLayoutEngine.html#FluentGpu_Text_DirectWrite_TextLayoutEngine_HitTest_FluentGpu_Foundation_Point2_System_Boolean__">HitTest(Point2, out bool)</a>/<a class="xref" href="FluentGpu.Text.DirectWrite.TextLayoutEngine.html#FluentGpu_Text_DirectWrite_TextLayoutEngine_CaretAt_System_Int32_System_Single__System_Single__System_Single__System_Int32__">CaretAt(int, out float, out float, out float, out int)</a>/<a class="xref" href="FluentGpu.Text.DirectWrite.TextLayoutEngine.html#FluentGpu_Text_DirectWrite_TextLayoutEngine_RangeRects_System_Int32_System_Int32_System_Span_FluentGpu_Foundation_RectF__">RangeRects(int, int, Span&lt;RectF&gt;)</a>) read the
+retained per-glyph cluster + per-line tables of the SAME layout, so hit-testing matches rendering exactly. Owns its
+itemizer + shaper + face cache; reusable, single-thread-confined. Results live in reused grow-only buffers
+(valid until the next <a class="xref" href="FluentGpu.Text.DirectWrite.TextLayoutEngine.html#FluentGpu_Text_DirectWrite_TextLayoutEngine_Layout_System_ReadOnlySpan_System_Char__System_String_System_Int32_System_Single_System_Single_System_Int32_System_Int32_System_Int32_System_Single_System_Single_System_Int32_System_Int32_System_ReadOnlySpan_FluentGpu_Foundation_SpanStyle__FluentGpu_Foundation_StringTable_">Layout(ReadOnlySpan&lt;char&gt;, string, int, float, float, int, int, int, float, float, int, int, ReadOnlySpan&lt;SpanStyle&gt;, StringTable?)</a>; queries fire per keystroke/pointer-move with 0 steady-state allocation).
+v1: design-advance shaping with kerning/ligatures/complex-script; font fallback + color glyphs are layered on in
+later phases; query edge mapping is leading=left (LTR — BiDi-correct edges arrive with the RTL workstream, but the
+scan is already cluster-correct and walks the visual order).</p>
+</div>
+  <div class="markdown conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public sealed class TextLayoutEngine : IDisposable</code></pre>
+  </div>
+
+
+
+
+  <dl class="typelist inheritance">
+    <dt>Inheritance</dt>
+    <dd>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></div>
+      <div><span class="xref">TextLayoutEngine</span></div>
+    </dd>
+  </dl>
+
+  <dl class="typelist implements">
+    <dt>Implements</dt>
+    <dd>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.idisposable">IDisposable</a></div>
+    </dd>
+  </dl>
+
+
+  <dl class="typelist inheritedMembers">
+    <dt>Inherited Members</dt>
+    <dd>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)">object.Equals(object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)">object.Equals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gethashcode">object.GetHashCode()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gettype">object.GetType()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.referenceequals">object.ReferenceEquals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.tostring">object.ToString()</a>
+    </div>
+  </dd></dl>
+
+
+
+
+
+
+  <h2 class="section" id="constructors">Constructors
+</h2>
+
+
+  <a id="FluentGpu_Text_DirectWrite_TextLayoutEngine__ctor_" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.#ctor*"></a>
+
+  <h3 id="FluentGpu_Text_DirectWrite_TextLayoutEngine__ctor" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.#ctor">
+  TextLayoutEngine()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs/#L115"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public TextLayoutEngine()</code></pre>
+  </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  <h2 class="section" id="properties">Properties
+</h2>
+
+
+  <a id="FluentGpu_Text_DirectWrite_TextLayoutEngine_Baseline_" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.Baseline*"></a>
+
+  <h3 id="FluentGpu_Text_DirectWrite_TextLayoutEngine_Baseline" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.Baseline">
+  Baseline
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs/#L97"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float Baseline { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Text_DirectWrite_TextLayoutEngine_Clusters_" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.Clusters*"></a>
+
+  <h3 id="FluentGpu_Text_DirectWrite_TextLayoutEngine_Clusters" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.Clusters">
+  Clusters
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs/#L108"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Cluster map of the current layout, in placement (visual) order — parallel to <a class="xref" href="FluentGpu.Text.DirectWrite.TextLayoutEngine.html#FluentGpu_Text_DirectWrite_TextLayoutEngine_Glyphs">Glyphs</a> minus
+the synthetic trim ellipsis. Valid until the next <a class="xref" href="FluentGpu.Text.DirectWrite.TextLayoutEngine.html#FluentGpu_Text_DirectWrite_TextLayoutEngine_Layout_System_ReadOnlySpan_System_Char__System_String_System_Int32_System_Single_System_Single_System_Int32_System_Int32_System_Int32_System_Single_System_Single_System_Int32_System_Int32_System_ReadOnlySpan_FluentGpu_Foundation_SpanStyle__FluentGpu_Foundation_StringTable_">Layout(ReadOnlySpan&lt;char&gt;, string, int, float, float, int, int, int, float, float, int, int, ReadOnlySpan&lt;SpanStyle&gt;, StringTable?)</a>.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public ReadOnlySpan&lt;LaidCluster&gt; Clusters { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.readonlyspan-1">ReadOnlySpan</a>&lt;<a class="xref" href="FluentGpu.Text.DirectWrite.LaidCluster.html">LaidCluster</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Text_DirectWrite_TextLayoutEngine_Glyphs_" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.Glyphs*"></a>
+
+  <h3 id="FluentGpu_Text_DirectWrite_TextLayoutEngine_Glyphs" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.Glyphs">
+  Glyphs
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs/#L105"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public ReadOnlySpan&lt;LaidGlyph&gt; Glyphs { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.readonlyspan-1">ReadOnlySpan</a>&lt;<a class="xref" href="FluentGpu.Text.DirectWrite.LaidGlyph.html">LaidGlyph</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Text_DirectWrite_TextLayoutEngine_Height_" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.Height*"></a>
+
+  <h3 id="FluentGpu_Text_DirectWrite_TextLayoutEngine_Height" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.Height">
+  Height
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs/#L96"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float Height { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Text_DirectWrite_TextLayoutEngine_LineCount_" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.LineCount*"></a>
+
+  <h3 id="FluentGpu_Text_DirectWrite_TextLayoutEngine_LineCount" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.LineCount">
+  LineCount
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs/#L98"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int LineCount { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Text_DirectWrite_TextLayoutEngine_Lines_" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.Lines*"></a>
+
+  <h3 id="FluentGpu_Text_DirectWrite_TextLayoutEngine_Lines" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.Lines">
+  Lines
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs/#L111"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Per-line table of the current layout (always ≥ 1 entry, even for empty text). Valid until the next
+<a class="xref" href="FluentGpu.Text.DirectWrite.TextLayoutEngine.html#FluentGpu_Text_DirectWrite_TextLayoutEngine_Layout_System_ReadOnlySpan_System_Char__System_String_System_Int32_System_Single_System_Single_System_Int32_System_Int32_System_Int32_System_Single_System_Single_System_Int32_System_Int32_System_ReadOnlySpan_FluentGpu_Foundation_SpanStyle__FluentGpu_Foundation_StringTable_">Layout(ReadOnlySpan&lt;char&gt;, string, int, float, float, int, int, int, float, float, int, int, ReadOnlySpan&lt;SpanStyle&gt;, StringTable?)</a>.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public ReadOnlySpan&lt;LaidLine&gt; Lines { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.readonlyspan-1">ReadOnlySpan</a>&lt;<a class="xref" href="FluentGpu.Text.DirectWrite.LaidLine.html">LaidLine</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Text_DirectWrite_TextLayoutEngine_StrikeY_" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.StrikeY*"></a>
+
+  <h3 id="FluentGpu_Text_DirectWrite_TextLayoutEngine_StrikeY" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.StrikeY">
+  StrikeY
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs/#L104"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Strikethrough bar position, measured DOWN from the line top (same frame as <a class="xref" href="FluentGpu.Text.DirectWrite.TextLayoutEngine.html#FluentGpu_Text_DirectWrite_TextLayoutEngine_UnderlineY">UnderlineY</a>).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float StrikeY { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Text_DirectWrite_TextLayoutEngine_UnderlineThickness_" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.UnderlineThickness*"></a>
+
+  <h3 id="FluentGpu_Text_DirectWrite_TextLayoutEngine_UnderlineThickness" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.UnderlineThickness">
+  UnderlineThickness
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs/#L102"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float UnderlineThickness { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Text_DirectWrite_TextLayoutEngine_UnderlineY_" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.UnderlineY*"></a>
+
+  <h3 id="FluentGpu_Text_DirectWrite_TextLayoutEngine_UnderlineY" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.UnderlineY">
+  UnderlineY
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs/#L101"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Underline bar position for the laid family/size, measured DOWN from the line top (top-down DIP;
+DWrite's positive-up design value is flipped over <a class="xref" href="FluentGpu.Text.DirectWrite.TextLayoutEngine.html#FluentGpu_Text_DirectWrite_TextLayoutEngine_Baseline">Baseline</a>). Per-line: add the line's Top.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float UnderlineY { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Text_DirectWrite_TextLayoutEngine_Width_" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.Width*"></a>
+
+  <h3 id="FluentGpu_Text_DirectWrite_TextLayoutEngine_Width" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.Width">
+  Width
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs/#L95"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float Width { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <h2 class="section" id="methods">Methods
+</h2>
+
+
+  <a id="FluentGpu_Text_DirectWrite_TextLayoutEngine_CaretAt_" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.CaretAt*"></a>
+
+  <h3 id="FluentGpu_Text_DirectWrite_TextLayoutEngine_CaretAt_System_Int32_System_Single__System_Single__System_Single__System_Int32__" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.CaretAt(System.Int32,System.Single@,System.Single@,System.Single@,System.Int32@)">
+  CaretAt(int, out float, out float, out float, out int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs/#L459"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Caret geometry for a UTF-16 index. Returns the LEADING position of <code class="paramref">charIndex</code>: at a
+soft-wrap boundary that is the START of the continuation line — trailing affinity (pinning the caret to the END
+of the wrapped line) is the caller's job; <code class="paramref">charIndex</code> == text length → the trailing edge of the
+last line. An index inside a multi-char cluster (ligature/surrogate pair) snaps forward to the cluster's
+trailing edge. Out-of-range indices clamp.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void CaretAt(int charIndex, out float x, out float lineTop, out float lineHeight, out int lineIndex)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>charIndex</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>x</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>lineTop</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>lineHeight</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>lineIndex</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Text_DirectWrite_TextLayoutEngine_Dispose_" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.Dispose*"></a>
+
+  <h3 id="FluentGpu_Text_DirectWrite_TextLayoutEngine_Dispose" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.Dispose">
+  Dispose()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs/#L689"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void Dispose()</code></pre>
+  </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Text_DirectWrite_TextLayoutEngine_HitTest_" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.HitTest*"></a>
+
+  <h3 id="FluentGpu_Text_DirectWrite_TextLayoutEngine_HitTest_FluentGpu_Foundation_Point2_System_Boolean__" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.HitTest(FluentGpu.Foundation.Point2,System.Boolean@)">
+  HitTest(Point2, out bool)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs/#L424"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Point → UTF-16 insertion index. The index is SNAPPED to the nearest edge of the hit glyph cluster — its
+leading edge when the point falls in the left half, its trailing edge (= the next cluster's start, or the line
+end) in the right half — and <code class="paramref">trailing</code> reports which. Out-of-bounds points clamp: above → first
+line, below → last line, left → line start, right → line end; a hard-broken line clamps to the position BEFORE
+its terminator cluster, so a click past the text never jumps the caret to the next line. Multi-glyph clusters
+(base + marks) are walked as one box; an index is never produced inside a cluster.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int HitTest(Point2 point, out bool trailing)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>point</code> <a class="xref" href="FluentGpu.Foundation.Point2.html">Point2</a></dt>
+    <dd></dd>
+    <dt><code>trailing</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Text_DirectWrite_TextLayoutEngine_Layout_" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.Layout*"></a>
+
+  <h3 id="FluentGpu_Text_DirectWrite_TextLayoutEngine_Layout_System_ReadOnlySpan_System_Char__System_String_System_Int32_System_Single_System_Single_System_Int32_System_Int32_System_Int32_System_Single_System_Single_System_Int32_System_Int32_System_ReadOnlySpan_FluentGpu_Foundation_SpanStyle__FluentGpu_Foundation_StringTable_" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.Layout(System.ReadOnlySpan{System.Char},System.String,System.Int32,System.Single,System.Single,System.Int32,System.Int32,System.Int32,System.Single,System.Single,System.Int32,System.Int32,System.ReadOnlySpan{FluentGpu.Foundation.SpanStyle},FluentGpu.Foundation.StringTable)">
+  Layout(ReadOnlySpan&lt;char&gt;, string, int, float, float, int, int, int, float, float, int, int, ReadOnlySpan&lt;SpanStyle&gt;, StringTable?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs/#L148"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Lay out <code class="paramref">text</code>; fills <a class="xref" href="FluentGpu.Text.DirectWrite.TextLayoutEngine.html#FluentGpu_Text_DirectWrite_TextLayoutEngine_Glyphs">Glyphs</a> + metrics. <code class="paramref">wrap</code>/<code class="paramref">trim</code>
+are the TextWrap/TextTrim enum ints; <code class="paramref">size</code> is DIP. <code class="paramref">weight</code> is the NUMERIC
+font weight — the int IS the DWRITE_FONT_WEIGHT (clamped 1..999; ≤0 → 400). <code class="paramref">charSpacing</code> is
+WinUI CharacterSpacing in 1/1000 em; <code class="paramref">lineHeight</code> (DIP; NaN/≤0 = font-natural) resolves per
+<code class="paramref">stacking</code> (LineStacking enum int) and <code class="paramref">lineBounds</code> (TextLineBounds enum int).</p>
+<pre><code>&lt;p&gt;&lt;code class=&quot;paramref&quot;&gt;spans&lt;/code&gt; (rtb-01 inline runs): per-char-range style overlays applied over the base style —
+the text still shapes as ONE flow (one itemize + one wrap pass, like a WinUI paragraph's inline collection);
+each span resolves its own face/weight/size for its range. &lt;code class=&quot;paramref&quot;&gt;names&lt;/code&gt; resolves span family ids
+(null ⇒ span families fall back to the base family). Line box: the MAX ascent/descent across base + spans —
+one uniform line height per paragraph (the per-line LineStackingStrategy=MaxHeight refinement for mixed-size
+lines is future work; uniform-size spans, the overwhelming case, are exact).&lt;/p&gt;
+</code></pre>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void Layout(ReadOnlySpan&lt;char&gt; text, string family, int weight, float size, float maxWidth, int wrap, int trim, int maxLines, float charSpacing = 0, float lineHeight = NaN, int stacking = 0, int lineBounds = 0, ReadOnlySpan&lt;SpanStyle&gt; spans = default, StringTable? names = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>text</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.readonlyspan-1">ReadOnlySpan</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.char">char</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>family</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>weight</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>size</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>maxWidth</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>wrap</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>trim</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>maxLines</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>charSpacing</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>lineHeight</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>stacking</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>lineBounds</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>spans</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.readonlyspan-1">ReadOnlySpan</a>&lt;<a class="xref" href="FluentGpu.Foundation.SpanStyle.html">SpanStyle</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>names</code> <a class="xref" href="FluentGpu.Foundation.StringTable.html">StringTable</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Text_DirectWrite_TextLayoutEngine_RangeRects_" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.RangeRects*"></a>
+
+  <h3 id="FluentGpu_Text_DirectWrite_TextLayoutEngine_RangeRects_System_Int32_System_Int32_System_Span_FluentGpu_Foundation_RectF__" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.RangeRects(System.Int32,System.Int32,System.Span{FluentGpu.Foundation.RectF})">
+  RangeRects(int, int, Span&lt;RectF&gt;)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs/#L475"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>One rect per line fragment covered by [<code class="paramref">start</code>, <code class="paramref">end</code>): per line,
+[max(start, lineStart), min(end, lineEnd)) → x-from/x-to via cluster edges. Returns the count written
+(≤ <code class="paramref">rects</code>.Length; excess fragments are dropped — callers size generously). Zero-width ranges —
+and fragments whose clusters have no advance (e.g. a bare line terminator) — produce nothing.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int RangeRects(int start, int end, Span&lt;RectF&gt; rects)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>start</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>end</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>rects</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.span-1">Span</a>&lt;<a class="xref" href="FluentGpu.Foundation.RectF.html">RectF</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Text_DirectWrite_TextLayoutEngine_SelfTest_" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.SelfTest*"></a>
+
+  <h3 id="FluentGpu_Text_DirectWrite_TextLayoutEngine_SelfTest" data-uid="FluentGpu.Text.DirectWrite.TextLayoutEngine.SelfTest">
+  SelfTest()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Text.DirectWrite/TextLayoutEngine.cs/#L668"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static void SelfTest()</code></pre>
+  </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+</article>
+
+
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

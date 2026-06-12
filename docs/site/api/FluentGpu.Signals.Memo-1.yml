@@ -1,0 +1,779 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Signals.Memo`1
+  commentId: T:FluentGpu.Signals.Memo`1
+  id: Memo`1
+  parent: FluentGpu.Signals
+  children:
+  - FluentGpu.Signals.Memo`1.#ctor(FluentGpu.Signals.ReactiveRuntime,System.Func{`0},System.Collections.Generic.IEqualityComparer{`0},FluentGpu.Signals.Computation)
+  - FluentGpu.Signals.Memo`1.Peek
+  - FluentGpu.Signals.Memo`1.Value
+  langs:
+  - csharp
+  - vb
+  name: Memo<T>
+  nameWithType: Memo<T>
+  fullName: FluentGpu.Signals.Memo<T>
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Signals/Memo.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Memo
+    path: ../../src/FluentGpu.Foundation/Signals/Memo.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Signals
+  summary: >-
+    A derived reactive value (the Solid <code>createMemo</code> / Vue <code>computed</code>): recomputes lazily from the signals it
+
+    reads, caches the result, and only notifies its own subscribers when the cached value actually changes. It is both a
+
+    computation (it subscribes upstream) and a source (downstream subscribes to it).
+  example: []
+  syntax:
+    content: 'public sealed class Memo<T> : Computation, IDisposable, IReadSignal<T>'
+    typeParameters:
+    - id: T
+    content.vb: Public NotInheritable Class Memo(Of T) Inherits Computation Implements IDisposable, IReadSignal(Of T)
+  inheritance:
+  - System.Object
+  - FluentGpu.Signals.Computation
+  implements:
+  - System.IDisposable
+  - FluentGpu.Signals.IReadSignal{{T}}
+  inheritedMembers:
+  - FluentGpu.Signals.Computation.RunNow
+  - FluentGpu.Signals.Computation.Schedule
+  - FluentGpu.Signals.Computation.Dispose
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+  nameWithType.vb: Memo(Of T)
+  fullName.vb: FluentGpu.Signals.Memo(Of T)
+  name.vb: Memo(Of T)
+- uid: FluentGpu.Signals.Memo`1.#ctor(FluentGpu.Signals.ReactiveRuntime,System.Func{`0},System.Collections.Generic.IEqualityComparer{`0},FluentGpu.Signals.Computation)
+  commentId: M:FluentGpu.Signals.Memo`1.#ctor(FluentGpu.Signals.ReactiveRuntime,System.Func{`0},System.Collections.Generic.IEqualityComparer{`0},FluentGpu.Signals.Computation)
+  id: '#ctor(FluentGpu.Signals.ReactiveRuntime,System.Func{`0},System.Collections.Generic.IEqualityComparer{`0},FluentGpu.Signals.Computation)'
+  parent: FluentGpu.Signals.Memo`1
+  langs:
+  - csharp
+  - vb
+  name: Memo(ReactiveRuntime, Func<T>, IEqualityComparer<T>?, Computation?)
+  nameWithType: Memo<T>.Memo(ReactiveRuntime, Func<T>, IEqualityComparer<T>?, Computation?)
+  fullName: FluentGpu.Signals.Memo<T>.Memo(FluentGpu.Signals.ReactiveRuntime, System.Func<T>, System.Collections.Generic.IEqualityComparer<T>?, FluentGpu.Signals.Computation?)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Signals/Memo.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/Signals/Memo.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Signals
+  syntax:
+    content: public Memo(ReactiveRuntime runtime, Func<T> fn, IEqualityComparer<T>? comparer = null, Computation? owner = null)
+    parameters:
+    - id: runtime
+      type: FluentGpu.Signals.ReactiveRuntime
+    - id: fn
+      type: System.Func{{T}}
+    - id: comparer
+      type: System.Collections.Generic.IEqualityComparer{{T}}
+    - id: owner
+      type: FluentGpu.Signals.Computation
+    content.vb: Public Sub New(runtime As ReactiveRuntime, fn As Func(Of T), comparer As IEqualityComparer(Of T) = Nothing, owner As Computation = Nothing)
+  overload: FluentGpu.Signals.Memo`1.#ctor*
+  nameWithType.vb: Memo(Of T).New(ReactiveRuntime, Func(Of T), IEqualityComparer(Of T), Computation)
+  fullName.vb: FluentGpu.Signals.Memo(Of T).New(FluentGpu.Signals.ReactiveRuntime, System.Func(Of T), System.Collections.Generic.IEqualityComparer(Of T), FluentGpu.Signals.Computation)
+  name.vb: New(ReactiveRuntime, Func(Of T), IEqualityComparer(Of T), Computation)
+- uid: FluentGpu.Signals.Memo`1.Value
+  commentId: P:FluentGpu.Signals.Memo`1.Value
+  id: Value
+  parent: FluentGpu.Signals.Memo`1
+  langs:
+  - csharp
+  - vb
+  name: Value
+  nameWithType: Memo<T>.Value
+  fullName: FluentGpu.Signals.Memo<T>.Value
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Signals/Memo.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Value
+    path: ../../src/FluentGpu.Foundation/Signals/Memo.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Signals
+  summary: Read the value AND subscribe the current computation (if any).
+  example: []
+  syntax:
+    content: public T Value { get; }
+    parameters: []
+    return:
+      type: '{T}'
+    content.vb: Public ReadOnly Property Value As T
+  overload: FluentGpu.Signals.Memo`1.Value*
+  implements:
+  - FluentGpu.Signals.IReadSignal{{T}}.Value
+  nameWithType.vb: Memo(Of T).Value
+  fullName.vb: FluentGpu.Signals.Memo(Of T).Value
+- uid: FluentGpu.Signals.Memo`1.Peek
+  commentId: M:FluentGpu.Signals.Memo`1.Peek
+  id: Peek
+  parent: FluentGpu.Signals.Memo`1
+  langs:
+  - csharp
+  - vb
+  name: Peek()
+  nameWithType: Memo<T>.Peek()
+  fullName: FluentGpu.Signals.Memo<T>.Peek()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Signals/Memo.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Peek
+    path: ../../src/FluentGpu.Foundation/Signals/Memo.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Signals
+  summary: Read without subscribing.
+  example: []
+  syntax:
+    content: public T Peek()
+    return:
+      type: '{T}'
+    content.vb: Public Function Peek() As T
+  overload: FluentGpu.Signals.Memo`1.Peek*
+  implements:
+  - FluentGpu.Signals.IReadSignal{{T}}.Peek
+  nameWithType.vb: Memo(Of T).Peek()
+  fullName.vb: FluentGpu.Signals.Memo(Of T).Peek()
+references:
+- uid: FluentGpu.Signals
+  commentId: N:FluentGpu.Signals
+  href: FluentGpu.html
+  name: FluentGpu.Signals
+  nameWithType: FluentGpu.Signals
+  fullName: FluentGpu.Signals
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Signals.Computation
+  commentId: T:FluentGpu.Signals.Computation
+  parent: FluentGpu.Signals
+  href: FluentGpu.Signals.Computation.html
+  name: Computation
+  nameWithType: Computation
+  fullName: FluentGpu.Signals.Computation
+- uid: System.IDisposable
+  commentId: T:System.IDisposable
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.idisposable
+  name: IDisposable
+  nameWithType: IDisposable
+  fullName: System.IDisposable
+- uid: FluentGpu.Signals.IReadSignal{{T}}
+  commentId: T:FluentGpu.Signals.IReadSignal{`0}
+  parent: FluentGpu.Signals
+  definition: FluentGpu.Signals.IReadSignal`1
+  href: FluentGpu.Signals.IReadSignal-1.html
+  name: IReadSignal<T>
+  nameWithType: IReadSignal<T>
+  fullName: FluentGpu.Signals.IReadSignal<T>
+  nameWithType.vb: IReadSignal(Of T)
+  fullName.vb: FluentGpu.Signals.IReadSignal(Of T)
+  name.vb: IReadSignal(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Signals.Computation.RunNow
+  commentId: M:FluentGpu.Signals.Computation.RunNow
+  parent: FluentGpu.Signals.Computation
+  href: FluentGpu.Signals.Computation.html#FluentGpu_Signals_Computation_RunNow
+  name: RunNow()
+  nameWithType: Computation.RunNow()
+  fullName: FluentGpu.Signals.Computation.RunNow()
+  spec.csharp:
+  - uid: FluentGpu.Signals.Computation.RunNow
+    name: RunNow
+    href: FluentGpu.Signals.Computation.html#FluentGpu_Signals_Computation_RunNow
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Signals.Computation.RunNow
+    name: RunNow
+    href: FluentGpu.Signals.Computation.html#FluentGpu_Signals_Computation_RunNow
+  - name: (
+  - name: )
+- uid: FluentGpu.Signals.Computation.Schedule
+  commentId: M:FluentGpu.Signals.Computation.Schedule
+  parent: FluentGpu.Signals.Computation
+  href: FluentGpu.Signals.Computation.html#FluentGpu_Signals_Computation_Schedule
+  name: Schedule()
+  nameWithType: Computation.Schedule()
+  fullName: FluentGpu.Signals.Computation.Schedule()
+  spec.csharp:
+  - uid: FluentGpu.Signals.Computation.Schedule
+    name: Schedule
+    href: FluentGpu.Signals.Computation.html#FluentGpu_Signals_Computation_Schedule
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Signals.Computation.Schedule
+    name: Schedule
+    href: FluentGpu.Signals.Computation.html#FluentGpu_Signals_Computation_Schedule
+  - name: (
+  - name: )
+- uid: FluentGpu.Signals.Computation.Dispose
+  commentId: M:FluentGpu.Signals.Computation.Dispose
+  parent: FluentGpu.Signals.Computation
+  href: FluentGpu.Signals.Computation.html#FluentGpu_Signals_Computation_Dispose
+  name: Dispose()
+  nameWithType: Computation.Dispose()
+  fullName: FluentGpu.Signals.Computation.Dispose()
+  spec.csharp:
+  - uid: FluentGpu.Signals.Computation.Dispose
+    name: Dispose
+    href: FluentGpu.Signals.Computation.html#FluentGpu_Signals_Computation_Dispose
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Signals.Computation.Dispose
+    name: Dispose
+    href: FluentGpu.Signals.Computation.html#FluentGpu_Signals_Computation_Dispose
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Signals.IReadSignal`1
+  commentId: T:FluentGpu.Signals.IReadSignal`1
+  href: FluentGpu.Signals.IReadSignal-1.html
+  name: IReadSignal<T>
+  nameWithType: IReadSignal<T>
+  fullName: FluentGpu.Signals.IReadSignal<T>
+  nameWithType.vb: IReadSignal(Of T)
+  fullName.vb: FluentGpu.Signals.IReadSignal(Of T)
+  name.vb: IReadSignal(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Signals.Memo`1.#ctor*
+  commentId: Overload:FluentGpu.Signals.Memo`1.#ctor
+  href: FluentGpu.Signals.Memo-1.html#FluentGpu_Signals_Memo_1__ctor_FluentGpu_Signals_ReactiveRuntime_System_Func__0__System_Collections_Generic_IEqualityComparer__0__FluentGpu_Signals_Computation_
+  name: Memo
+  nameWithType: Memo<T>.Memo
+  fullName: FluentGpu.Signals.Memo<T>.Memo
+  nameWithType.vb: Memo(Of T).New
+  fullName.vb: FluentGpu.Signals.Memo(Of T).New
+  name.vb: New
+- uid: FluentGpu.Signals.ReactiveRuntime
+  commentId: T:FluentGpu.Signals.ReactiveRuntime
+  parent: FluentGpu.Signals
+  href: FluentGpu.Signals.ReactiveRuntime.html
+  name: ReactiveRuntime
+  nameWithType: ReactiveRuntime
+  fullName: FluentGpu.Signals.ReactiveRuntime
+- uid: System.Func{{T}}
+  commentId: T:System.Func{`0}
+  parent: System
+  definition: System.Func`1
+  href: https://learn.microsoft.com/dotnet/api/system.func-1
+  name: Func<T>
+  nameWithType: Func<T>
+  fullName: System.Func<T>
+  nameWithType.vb: Func(Of T)
+  fullName.vb: System.Func(Of T)
+  name.vb: Func(Of T)
+  spec.csharp:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Collections.Generic.IEqualityComparer{{T}}
+  commentId: T:System.Collections.Generic.IEqualityComparer{`0}
+  parent: System.Collections.Generic
+  definition: System.Collections.Generic.IEqualityComparer`1
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.iequalitycomparer-1
+  name: IEqualityComparer<T>
+  nameWithType: IEqualityComparer<T>
+  fullName: System.Collections.Generic.IEqualityComparer<T>
+  nameWithType.vb: IEqualityComparer(Of T)
+  fullName.vb: System.Collections.Generic.IEqualityComparer(Of T)
+  name.vb: IEqualityComparer(Of T)
+  spec.csharp:
+  - uid: System.Collections.Generic.IEqualityComparer`1
+    name: IEqualityComparer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.iequalitycomparer-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IEqualityComparer`1
+    name: IEqualityComparer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.iequalitycomparer-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Func`1
+  commentId: T:System.Func`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.func-1
+  name: Func<TResult>
+  nameWithType: Func<TResult>
+  fullName: System.Func<TResult>
+  nameWithType.vb: Func(Of TResult)
+  fullName.vb: System.Func(Of TResult)
+  name.vb: Func(Of TResult)
+  spec.csharp:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: <
+  - name: TResult
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: TResult
+  - name: )
+- uid: System.Collections.Generic.IEqualityComparer`1
+  commentId: T:System.Collections.Generic.IEqualityComparer`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.iequalitycomparer-1
+  name: IEqualityComparer<T>
+  nameWithType: IEqualityComparer<T>
+  fullName: System.Collections.Generic.IEqualityComparer<T>
+  nameWithType.vb: IEqualityComparer(Of T)
+  fullName.vb: System.Collections.Generic.IEqualityComparer(Of T)
+  name.vb: IEqualityComparer(Of T)
+  spec.csharp:
+  - uid: System.Collections.Generic.IEqualityComparer`1
+    name: IEqualityComparer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.iequalitycomparer-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IEqualityComparer`1
+    name: IEqualityComparer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.iequalitycomparer-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Collections.Generic
+  commentId: N:System.Collections.Generic
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System.Collections.Generic
+  nameWithType: System.Collections.Generic
+  fullName: System.Collections.Generic
+  spec.csharp:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+  spec.vb:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+- uid: FluentGpu.Signals.Memo`1.Value*
+  commentId: Overload:FluentGpu.Signals.Memo`1.Value
+  href: FluentGpu.Signals.Memo-1.html#FluentGpu_Signals_Memo_1_Value
+  name: Value
+  nameWithType: Memo<T>.Value
+  fullName: FluentGpu.Signals.Memo<T>.Value
+  nameWithType.vb: Memo(Of T).Value
+  fullName.vb: FluentGpu.Signals.Memo(Of T).Value
+- uid: FluentGpu.Signals.IReadSignal{{T}}.Value
+  commentId: P:FluentGpu.Signals.IReadSignal{`0}.Value
+  parent: FluentGpu.Signals.IReadSignal{{T}}
+  definition: FluentGpu.Signals.IReadSignal`1.Value
+  href: FluentGpu.Signals.IReadSignal-1.html#FluentGpu_Signals_IReadSignal_1_Value
+  name: Value
+  nameWithType: IReadSignal<T>.Value
+  fullName: FluentGpu.Signals.IReadSignal<T>.Value
+  nameWithType.vb: IReadSignal(Of T).Value
+  fullName.vb: FluentGpu.Signals.IReadSignal(Of T).Value
+- uid: '{T}'
+  commentId: '!:T'
+  definition: T
+  name: T
+  nameWithType: T
+  fullName: T
+- uid: FluentGpu.Signals.IReadSignal`1.Value
+  commentId: P:FluentGpu.Signals.IReadSignal`1.Value
+  href: FluentGpu.Signals.IReadSignal-1.html#FluentGpu_Signals_IReadSignal_1_Value
+  name: Value
+  nameWithType: IReadSignal<T>.Value
+  fullName: FluentGpu.Signals.IReadSignal<T>.Value
+  nameWithType.vb: IReadSignal(Of T).Value
+  fullName.vb: FluentGpu.Signals.IReadSignal(Of T).Value
+- uid: T
+  name: T
+  nameWithType: T
+  fullName: T
+- uid: FluentGpu.Signals.Memo`1.Peek*
+  commentId: Overload:FluentGpu.Signals.Memo`1.Peek
+  href: FluentGpu.Signals.Memo-1.html#FluentGpu_Signals_Memo_1_Peek
+  name: Peek
+  nameWithType: Memo<T>.Peek
+  fullName: FluentGpu.Signals.Memo<T>.Peek
+  nameWithType.vb: Memo(Of T).Peek
+  fullName.vb: FluentGpu.Signals.Memo(Of T).Peek
+- uid: FluentGpu.Signals.IReadSignal{{T}}.Peek
+  commentId: M:FluentGpu.Signals.IReadSignal{`0}.Peek
+  parent: FluentGpu.Signals.IReadSignal{{T}}
+  definition: FluentGpu.Signals.IReadSignal`1.Peek
+  href: FluentGpu.Signals.IReadSignal-1.html#FluentGpu_Signals_IReadSignal_1_Peek
+  name: Peek()
+  nameWithType: IReadSignal<T>.Peek()
+  fullName: FluentGpu.Signals.IReadSignal<T>.Peek()
+  nameWithType.vb: IReadSignal(Of T).Peek()
+  fullName.vb: FluentGpu.Signals.IReadSignal(Of T).Peek()
+  spec.csharp:
+  - uid: FluentGpu.Signals.IReadSignal{`0}.Peek
+    name: Peek
+    href: FluentGpu.Signals.IReadSignal-1.html#FluentGpu_Signals_IReadSignal_1_Peek
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Signals.IReadSignal{`0}.Peek
+    name: Peek
+    href: FluentGpu.Signals.IReadSignal-1.html#FluentGpu_Signals_IReadSignal_1_Peek
+  - name: (
+  - name: )
+- uid: FluentGpu.Signals.IReadSignal`1.Peek
+  commentId: M:FluentGpu.Signals.IReadSignal`1.Peek
+  href: FluentGpu.Signals.IReadSignal-1.html#FluentGpu_Signals_IReadSignal_1_Peek
+  name: Peek()
+  nameWithType: IReadSignal<T>.Peek()
+  fullName: FluentGpu.Signals.IReadSignal<T>.Peek()
+  nameWithType.vb: IReadSignal(Of T).Peek()
+  fullName.vb: FluentGpu.Signals.IReadSignal(Of T).Peek()
+  spec.csharp:
+  - uid: FluentGpu.Signals.IReadSignal`1.Peek
+    name: Peek
+    href: FluentGpu.Signals.IReadSignal-1.html#FluentGpu_Signals_IReadSignal_1_Peek
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Signals.IReadSignal`1.Peek
+    name: Peek
+    href: FluentGpu.Signals.IReadSignal-1.html#FluentGpu_Signals_IReadSignal_1_Peek
+  - name: (
+  - name: )

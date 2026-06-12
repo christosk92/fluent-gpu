@@ -1,0 +1,790 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Hosting.FrameStats
+  commentId: T:FluentGpu.Hosting.FrameStats
+  id: FrameStats
+  parent: FluentGpu.Hosting
+  children:
+  - FluentGpu.Hosting.FrameStats.#ctor(System.Int32,System.Int32,System.Int64,System.Boolean)
+  - FluentGpu.Hosting.FrameStats.ClicksHandled
+  - FluentGpu.Hosting.FrameStats.ComponentsRendered
+  - FluentGpu.Hosting.FrameStats.CulledNodeCount
+  - FluentGpu.Hosting.FrameStats.DrawCommandCount
+  - FluentGpu.Hosting.FrameStats.DrawNodeCount
+  - FluentGpu.Hosting.FrameStats.Fps
+  - FluentGpu.Hosting.FrameStats.FrameMs
+  - FluentGpu.Hosting.FrameStats.HotPhaseAllocBytes
+  - FluentGpu.Hosting.FrameStats.NodesVisited
+  - FluentGpu.Hosting.FrameStats.Rendered
+  langs:
+  - csharp
+  - vb
+  name: FrameStats
+  nameWithType: FrameStats
+  fullName: FluentGpu.Hosting.FrameStats
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Hosting/AppHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FrameStats
+    path: ../../src/FluentGpu.Hosting/AppHost.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Hosting
+  namespace: FluentGpu.Hosting
+  syntax:
+    content: 'public readonly record struct FrameStats : IEquatable<FrameStats>'
+    content.vb: Public Structure FrameStats Implements IEquatable(Of FrameStats)
+  implements:
+  - System.IEquatable{FluentGpu.Hosting.FrameStats}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Hosting.FrameStats.#ctor(System.Int32,System.Int32,System.Int64,System.Boolean)
+  commentId: M:FluentGpu.Hosting.FrameStats.#ctor(System.Int32,System.Int32,System.Int64,System.Boolean)
+  id: '#ctor(System.Int32,System.Int32,System.Int64,System.Boolean)'
+  parent: FluentGpu.Hosting.FrameStats
+  langs:
+  - csharp
+  - vb
+  name: FrameStats(int, int, long, bool)
+  nameWithType: FrameStats.FrameStats(int, int, long, bool)
+  fullName: FluentGpu.Hosting.FrameStats.FrameStats(int, int, long, bool)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Hosting/AppHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Hosting/AppHost.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Hosting
+  namespace: FluentGpu.Hosting
+  syntax:
+    content: public FrameStats(int DrawCommandCount, int ClicksHandled, long HotPhaseAllocBytes, bool Rendered)
+    parameters:
+    - id: DrawCommandCount
+      type: System.Int32
+    - id: ClicksHandled
+      type: System.Int32
+    - id: HotPhaseAllocBytes
+      type: System.Int64
+    - id: Rendered
+      type: System.Boolean
+    content.vb: Public Sub New(DrawCommandCount As Integer, ClicksHandled As Integer, HotPhaseAllocBytes As Long, Rendered As Boolean)
+  overload: FluentGpu.Hosting.FrameStats.#ctor*
+  nameWithType.vb: FrameStats.New(Integer, Integer, Long, Boolean)
+  fullName.vb: FluentGpu.Hosting.FrameStats.New(Integer, Integer, Long, Boolean)
+  name.vb: New(Integer, Integer, Long, Boolean)
+- uid: FluentGpu.Hosting.FrameStats.DrawCommandCount
+  commentId: P:FluentGpu.Hosting.FrameStats.DrawCommandCount
+  id: DrawCommandCount
+  parent: FluentGpu.Hosting.FrameStats
+  langs:
+  - csharp
+  - vb
+  name: DrawCommandCount
+  nameWithType: FrameStats.DrawCommandCount
+  fullName: FluentGpu.Hosting.FrameStats.DrawCommandCount
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Hosting/AppHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DrawCommandCount
+    path: ../../src/FluentGpu.Hosting/AppHost.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Hosting
+  namespace: FluentGpu.Hosting
+  syntax:
+    content: public int DrawCommandCount { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property DrawCommandCount As Integer
+  overload: FluentGpu.Hosting.FrameStats.DrawCommandCount*
+- uid: FluentGpu.Hosting.FrameStats.ClicksHandled
+  commentId: P:FluentGpu.Hosting.FrameStats.ClicksHandled
+  id: ClicksHandled
+  parent: FluentGpu.Hosting.FrameStats
+  langs:
+  - csharp
+  - vb
+  name: ClicksHandled
+  nameWithType: FrameStats.ClicksHandled
+  fullName: FluentGpu.Hosting.FrameStats.ClicksHandled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Hosting/AppHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ClicksHandled
+    path: ../../src/FluentGpu.Hosting/AppHost.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Hosting
+  namespace: FluentGpu.Hosting
+  syntax:
+    content: public int ClicksHandled { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property ClicksHandled As Integer
+  overload: FluentGpu.Hosting.FrameStats.ClicksHandled*
+- uid: FluentGpu.Hosting.FrameStats.HotPhaseAllocBytes
+  commentId: P:FluentGpu.Hosting.FrameStats.HotPhaseAllocBytes
+  id: HotPhaseAllocBytes
+  parent: FluentGpu.Hosting.FrameStats
+  langs:
+  - csharp
+  - vb
+  name: HotPhaseAllocBytes
+  nameWithType: FrameStats.HotPhaseAllocBytes
+  fullName: FluentGpu.Hosting.FrameStats.HotPhaseAllocBytes
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Hosting/AppHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HotPhaseAllocBytes
+    path: ../../src/FluentGpu.Hosting/AppHost.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Hosting
+  namespace: FluentGpu.Hosting
+  syntax:
+    content: public long HotPhaseAllocBytes { get; init; }
+    parameters: []
+    return:
+      type: System.Int64
+    content.vb: Public Property HotPhaseAllocBytes As Long
+  overload: FluentGpu.Hosting.FrameStats.HotPhaseAllocBytes*
+- uid: FluentGpu.Hosting.FrameStats.Rendered
+  commentId: P:FluentGpu.Hosting.FrameStats.Rendered
+  id: Rendered
+  parent: FluentGpu.Hosting.FrameStats
+  langs:
+  - csharp
+  - vb
+  name: Rendered
+  nameWithType: FrameStats.Rendered
+  fullName: FluentGpu.Hosting.FrameStats.Rendered
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Hosting/AppHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Rendered
+    path: ../../src/FluentGpu.Hosting/AppHost.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Hosting
+  namespace: FluentGpu.Hosting
+  syntax:
+    content: public bool Rendered { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property Rendered As Boolean
+  overload: FluentGpu.Hosting.FrameStats.Rendered*
+- uid: FluentGpu.Hosting.FrameStats.NodesVisited
+  commentId: P:FluentGpu.Hosting.FrameStats.NodesVisited
+  id: NodesVisited
+  parent: FluentGpu.Hosting.FrameStats
+  langs:
+  - csharp
+  - vb
+  name: NodesVisited
+  nameWithType: FrameStats.NodesVisited
+  fullName: FluentGpu.Hosting.FrameStats.NodesVisited
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Hosting/AppHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NodesVisited
+    path: ../../src/FluentGpu.Hosting/AppHost.cs
+    startLine: 21
+  assemblies:
+  - FluentGpu.Hosting
+  namespace: FluentGpu.Hosting
+  syntax:
+    content: public int NodesVisited { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property NodesVisited As Integer
+  overload: FluentGpu.Hosting.FrameStats.NodesVisited*
+- uid: FluentGpu.Hosting.FrameStats.DrawNodeCount
+  commentId: P:FluentGpu.Hosting.FrameStats.DrawNodeCount
+  id: DrawNodeCount
+  parent: FluentGpu.Hosting.FrameStats
+  langs:
+  - csharp
+  - vb
+  name: DrawNodeCount
+  nameWithType: FrameStats.DrawNodeCount
+  fullName: FluentGpu.Hosting.FrameStats.DrawNodeCount
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Hosting/AppHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DrawNodeCount
+    path: ../../src/FluentGpu.Hosting/AppHost.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Hosting
+  namespace: FluentGpu.Hosting
+  syntax:
+    content: public int DrawNodeCount { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property DrawNodeCount As Integer
+  overload: FluentGpu.Hosting.FrameStats.DrawNodeCount*
+- uid: FluentGpu.Hosting.FrameStats.CulledNodeCount
+  commentId: P:FluentGpu.Hosting.FrameStats.CulledNodeCount
+  id: CulledNodeCount
+  parent: FluentGpu.Hosting.FrameStats
+  langs:
+  - csharp
+  - vb
+  name: CulledNodeCount
+  nameWithType: FrameStats.CulledNodeCount
+  fullName: FluentGpu.Hosting.FrameStats.CulledNodeCount
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Hosting/AppHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CulledNodeCount
+    path: ../../src/FluentGpu.Hosting/AppHost.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Hosting
+  namespace: FluentGpu.Hosting
+  syntax:
+    content: public int CulledNodeCount { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property CulledNodeCount As Integer
+  overload: FluentGpu.Hosting.FrameStats.CulledNodeCount*
+- uid: FluentGpu.Hosting.FrameStats.Fps
+  commentId: P:FluentGpu.Hosting.FrameStats.Fps
+  id: Fps
+  parent: FluentGpu.Hosting.FrameStats
+  langs:
+  - csharp
+  - vb
+  name: Fps
+  nameWithType: FrameStats.Fps
+  fullName: FluentGpu.Hosting.FrameStats.Fps
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Hosting/AppHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Fps
+    path: ../../src/FluentGpu.Hosting/AppHost.cs
+    startLine: 24
+  assemblies:
+  - FluentGpu.Hosting
+  namespace: FluentGpu.Hosting
+  syntax:
+    content: public double Fps { get; init; }
+    parameters: []
+    return:
+      type: System.Double
+    content.vb: Public Property Fps As Double
+  overload: FluentGpu.Hosting.FrameStats.Fps*
+- uid: FluentGpu.Hosting.FrameStats.FrameMs
+  commentId: P:FluentGpu.Hosting.FrameStats.FrameMs
+  id: FrameMs
+  parent: FluentGpu.Hosting.FrameStats
+  langs:
+  - csharp
+  - vb
+  name: FrameMs
+  nameWithType: FrameStats.FrameMs
+  fullName: FluentGpu.Hosting.FrameStats.FrameMs
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Hosting/AppHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FrameMs
+    path: ../../src/FluentGpu.Hosting/AppHost.cs
+    startLine: 25
+  assemblies:
+  - FluentGpu.Hosting
+  namespace: FluentGpu.Hosting
+  syntax:
+    content: public double FrameMs { get; init; }
+    parameters: []
+    return:
+      type: System.Double
+    content.vb: Public Property FrameMs As Double
+  overload: FluentGpu.Hosting.FrameStats.FrameMs*
+- uid: FluentGpu.Hosting.FrameStats.ComponentsRendered
+  commentId: P:FluentGpu.Hosting.FrameStats.ComponentsRendered
+  id: ComponentsRendered
+  parent: FluentGpu.Hosting.FrameStats
+  langs:
+  - csharp
+  - vb
+  name: ComponentsRendered
+  nameWithType: FrameStats.ComponentsRendered
+  fullName: FluentGpu.Hosting.FrameStats.ComponentsRendered
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Hosting/AppHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ComponentsRendered
+    path: ../../src/FluentGpu.Hosting/AppHost.cs
+    startLine: 26
+  assemblies:
+  - FluentGpu.Hosting
+  namespace: FluentGpu.Hosting
+  syntax:
+    content: public int ComponentsRendered { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property ComponentsRendered As Integer
+  overload: FluentGpu.Hosting.FrameStats.ComponentsRendered*
+references:
+- uid: FluentGpu.Hosting
+  commentId: N:FluentGpu.Hosting
+  href: FluentGpu.html
+  name: FluentGpu.Hosting
+  nameWithType: FluentGpu.Hosting
+  fullName: FluentGpu.Hosting
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hosting
+    name: Hosting
+    href: FluentGpu.Hosting.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hosting
+    name: Hosting
+    href: FluentGpu.Hosting.html
+- uid: System.IEquatable{FluentGpu.Hosting.FrameStats}
+  commentId: T:System.IEquatable{FluentGpu.Hosting.FrameStats}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<FrameStats>
+  nameWithType: IEquatable<FrameStats>
+  fullName: System.IEquatable<FluentGpu.Hosting.FrameStats>
+  nameWithType.vb: IEquatable(Of FrameStats)
+  fullName.vb: System.IEquatable(Of FluentGpu.Hosting.FrameStats)
+  name.vb: IEquatable(Of FrameStats)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Hosting.FrameStats
+    name: FrameStats
+    href: FluentGpu.Hosting.FrameStats.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Hosting.FrameStats
+    name: FrameStats
+    href: FluentGpu.Hosting.FrameStats.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Hosting.FrameStats.#ctor*
+  commentId: Overload:FluentGpu.Hosting.FrameStats.#ctor
+  href: FluentGpu.Hosting.FrameStats.html#FluentGpu_Hosting_FrameStats__ctor_System_Int32_System_Int32_System_Int64_System_Boolean_
+  name: FrameStats
+  nameWithType: FrameStats.FrameStats
+  fullName: FluentGpu.Hosting.FrameStats.FrameStats
+  nameWithType.vb: FrameStats.New
+  fullName.vb: FluentGpu.Hosting.FrameStats.New
+  name.vb: New
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: System.Int64
+  commentId: T:System.Int64
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int64
+  name: long
+  nameWithType: long
+  fullName: long
+  nameWithType.vb: Long
+  fullName.vb: Long
+  name.vb: Long
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Hosting.FrameStats.DrawCommandCount*
+  commentId: Overload:FluentGpu.Hosting.FrameStats.DrawCommandCount
+  href: FluentGpu.Hosting.FrameStats.html#FluentGpu_Hosting_FrameStats_DrawCommandCount
+  name: DrawCommandCount
+  nameWithType: FrameStats.DrawCommandCount
+  fullName: FluentGpu.Hosting.FrameStats.DrawCommandCount
+- uid: FluentGpu.Hosting.FrameStats.ClicksHandled*
+  commentId: Overload:FluentGpu.Hosting.FrameStats.ClicksHandled
+  href: FluentGpu.Hosting.FrameStats.html#FluentGpu_Hosting_FrameStats_ClicksHandled
+  name: ClicksHandled
+  nameWithType: FrameStats.ClicksHandled
+  fullName: FluentGpu.Hosting.FrameStats.ClicksHandled
+- uid: FluentGpu.Hosting.FrameStats.HotPhaseAllocBytes*
+  commentId: Overload:FluentGpu.Hosting.FrameStats.HotPhaseAllocBytes
+  href: FluentGpu.Hosting.FrameStats.html#FluentGpu_Hosting_FrameStats_HotPhaseAllocBytes
+  name: HotPhaseAllocBytes
+  nameWithType: FrameStats.HotPhaseAllocBytes
+  fullName: FluentGpu.Hosting.FrameStats.HotPhaseAllocBytes
+- uid: FluentGpu.Hosting.FrameStats.Rendered*
+  commentId: Overload:FluentGpu.Hosting.FrameStats.Rendered
+  href: FluentGpu.Hosting.FrameStats.html#FluentGpu_Hosting_FrameStats_Rendered
+  name: Rendered
+  nameWithType: FrameStats.Rendered
+  fullName: FluentGpu.Hosting.FrameStats.Rendered
+- uid: FluentGpu.Hosting.FrameStats.NodesVisited*
+  commentId: Overload:FluentGpu.Hosting.FrameStats.NodesVisited
+  href: FluentGpu.Hosting.FrameStats.html#FluentGpu_Hosting_FrameStats_NodesVisited
+  name: NodesVisited
+  nameWithType: FrameStats.NodesVisited
+  fullName: FluentGpu.Hosting.FrameStats.NodesVisited
+- uid: FluentGpu.Hosting.FrameStats.DrawNodeCount*
+  commentId: Overload:FluentGpu.Hosting.FrameStats.DrawNodeCount
+  href: FluentGpu.Hosting.FrameStats.html#FluentGpu_Hosting_FrameStats_DrawNodeCount
+  name: DrawNodeCount
+  nameWithType: FrameStats.DrawNodeCount
+  fullName: FluentGpu.Hosting.FrameStats.DrawNodeCount
+- uid: FluentGpu.Hosting.FrameStats.CulledNodeCount*
+  commentId: Overload:FluentGpu.Hosting.FrameStats.CulledNodeCount
+  href: FluentGpu.Hosting.FrameStats.html#FluentGpu_Hosting_FrameStats_CulledNodeCount
+  name: CulledNodeCount
+  nameWithType: FrameStats.CulledNodeCount
+  fullName: FluentGpu.Hosting.FrameStats.CulledNodeCount
+- uid: FluentGpu.Hosting.FrameStats.Fps*
+  commentId: Overload:FluentGpu.Hosting.FrameStats.Fps
+  href: FluentGpu.Hosting.FrameStats.html#FluentGpu_Hosting_FrameStats_Fps
+  name: Fps
+  nameWithType: FrameStats.Fps
+  fullName: FluentGpu.Hosting.FrameStats.Fps
+- uid: System.Double
+  commentId: T:System.Double
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.double
+  name: double
+  nameWithType: double
+  fullName: double
+  nameWithType.vb: Double
+  fullName.vb: Double
+  name.vb: Double
+- uid: FluentGpu.Hosting.FrameStats.FrameMs*
+  commentId: Overload:FluentGpu.Hosting.FrameStats.FrameMs
+  href: FluentGpu.Hosting.FrameStats.html#FluentGpu_Hosting_FrameStats_FrameMs
+  name: FrameMs
+  nameWithType: FrameStats.FrameMs
+  fullName: FluentGpu.Hosting.FrameStats.FrameMs
+- uid: FluentGpu.Hosting.FrameStats.ComponentsRendered*
+  commentId: Overload:FluentGpu.Hosting.FrameStats.ComponentsRendered
+  href: FluentGpu.Hosting.FrameStats.html#FluentGpu_Hosting_FrameStats_ComponentsRendered
+  name: ComponentsRendered
+  nameWithType: FrameStats.ComponentsRendered
+  fullName: FluentGpu.Hosting.FrameStats.ComponentsRendered

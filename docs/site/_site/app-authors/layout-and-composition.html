@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Layout and composition | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Layout and composition | FluentGpu Developer Docs ">
+      
+      
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="../toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/docs/site/app-authors/layout-and-composition.md/#L1">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+
+      <div class="content">
+        <div class="actionbar">
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="">
+<h1 id="layout-and-composition">Layout and composition</h1>
+
+<p>How you describe <em>what</em> is on screen and <em>where</em> it sits. This page is the app-author's tour of the
+composition surface: the immutable <code>Element</code> records, the terse <code>Ui.*</code> builders that produce them, the
+flexbox and CSS-grid layout knobs, and the fluent modifiers that skin a node. Every name here is the real
+surface — copy it straight into a <code>Render()</code>.</p>
+<p>It assumes you have read the <a href="../../guide/reactivity.md">reactivity guide</a>: a tree is <strong>described</strong>, never
+mutated. You build <code>Element</code> records in <code>Render()</code>/<code>Setup()</code> and return the root; the reconciler diffs your
+description against the live scene and patches the difference. Layout and paint fall out of that — you never
+call a &quot;draw&quot; or &quot;measure&quot; yourself.</p>
+<blockquote>
+<p>Companion reference: <a href="../../guide/components-elements-layout.md">Elements, layout, controls &amp; theming</a> (the
+dense table version) and the <a href="../../guide/pitfalls.md">pitfalls table</a> (symptom → cause → fix). The layout
+and scene contracts these builders compile down to live in the design corpus — start at
+<a href="../../../design/SPEC-INDEX.md">SPEC-INDEX.md</a> and the <a href="../../../design/subsystems/layout.md">layout subsystem</a>.</p>
+</blockquote>
+<h2 id="the-element-zoo">The element zoo</h2>
+<p><code>Element</code> is an immutable record describing one node — cheap to build, never touches the scene directly. There
+are a handful of concrete record types; the <code>Ui.*</code> builders are just terse constructors for them. Reach for a
+record's object-initializer (<code>new BoxEl { … }</code>) when you need a prop the builder doesn't expose; reach for the
+builder when you don't.</p>
+<table>
+<thead>
+<tr>
+<th>Element</th>
+<th>What it is</th>
+<th>Build it with</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>BoxEl</code></td>
+<td>container + optional surface (fill / border / shadow / gradient / acrylic) — the workhorse</td>
+<td><code>VStack</code> / <code>HStack</code> / <code>Panel</code> / <code>ZStack</code> / <code>Card</code> / <code>Layer</code> / <code>Divider</code> / <code>Pill</code>, or <code>new BoxEl { … }</code></td>
+</tr>
+<tr>
+<td><code>TextEl</code></td>
+<td>one text or glyph run</td>
+<td><code>Text</code> / <code>Heading</code> / <code>Icon</code>, the type-ramp factories (<code>Body</code>/<code>Caption</code>/<code>Title</code>…), or <code>new TextEl(&quot;…&quot;)</code></td>
+</tr>
+<tr>
+<td><code>SpanTextEl</code></td>
+<td>a rich-text paragraph of typed inline runs (Run/Bold/Hyperlink)</td>
+<td><code>new SpanTextEl(spans)</code></td>
+</tr>
+<tr>
+<td><code>ImageEl</code></td>
+<td>async, cached, residency-pinned bitmap (album art)</td>
+<td><code>Image(src, w, h, …)</code> or <code>new ImageEl { … }</code></td>
+</tr>
+<tr>
+<td><code>ScrollEl</code></td>
+<td>a clipping, scrolling viewport over one (oversized) child</td>
+<td><code>ScrollView(content)</code></td>
+</tr>
+<tr>
+<td><code>GridEl</code></td>
+<td>CSS-grid container (Pixel / Star / Auto tracks)</td>
+<td><code>Grid</code> / <code>UniformGrid</code> / <code>AutoGrid</code></td>
+</tr>
+<tr>
+<td><code>VirtualListEl</code></td>
+<td>a virtualized collection (10k+ rows)</td>
+<td><code>Virtual.List</code> / <code>Virtual.Grid</code> / <code>Virtual.ListBound</code>, <code>Repeater.ItemsRepeater</code></td>
+</tr>
+<tr>
+<td><code>ComponentEl</code></td>
+<td>embeds a child <code>Component</code> (its own state + hooks)</td>
+<td><code>Embed.Comp(() =&gt; new C())</code></td>
+</tr>
+<tr>
+<td><code>ContextProviderEl</code></td>
+<td>provides a context value to its subtree</td>
+<td><code>Ctx.Provide(channel, value, child)</code></td>
+</tr>
+<tr>
+<td><code>ShowEl</code> / <code>ForEl</code></td>
+<td>reactive conditional / keyed list — re-run as a boundary, not a re-render</td>
+<td><code>Flow.Show</code> / <code>Flow.For</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>BoxEl</code>, <code>TextEl</code>, <code>ImageEl</code>, <code>ScrollEl</code>, and <code>GridEl</code> are defined in
+<a href="../../../src/FluentGpu.Dsl/Element.cs"><code>src/FluentGpu.Dsl/Element.cs</code></a>; the control-flow and context records
+live alongside in the same DSL assembly.</p>
+<p>A note that saves hours: <strong>a button is a <code>BoxEl</code>.</strong> There is no <code>ButtonEl</code>. <code>Button.Accent(&quot;Save&quot;, onSave)</code>
+returns a <code>BoxEl</code> with an <code>OnClick</code>, hover/press fills, corners, and an <code>AutomationRole</code>. The same is true of
+pills, cards, and most controls — they are <code>BoxEl</code>/<code>TextEl</code> compositions, so every modifier and layout prop
+below applies to them too.</p>
+<h2 id="ui-builders"><code>Ui.*</code> builders</h2>
+<p>Add <code>using static FluentGpu.Dsl.Ui;</code> and author trees as plain expressions. The builders are in
+<a href="../../../src/FluentGpu.Dsl/Factories.cs"><code>src/FluentGpu.Dsl/Factories.cs</code></a> (and the type-ramp text factories in
+<a href="../../../src/FluentGpu.Dsl/Typography.cs"><code>Typography.cs</code></a>).</p>
+<pre><code class="lang-csharp">// Containers
+VStack(float gap, params Element[] children)             // column flex (Direction = 1)
+HStack(float gap, params Element[] children)             // row flex (Direction = 0)
+Panel(Edges4 padding, float gap, params Element[] kids)  // a padded column
+ZStack(params Element[] children)                        // overlay at the origin, last child on top
+
+// Fluent surfaces (semantic tokens — see Theming)
+Card(params Element[] children)                          // card fill + 1px stroke + overlay corners + padding
+Layer(Edges4 pad, params Element[] children)             // flyout/expander body: layer fill + stroke + corners + shadow
+Divider(bool vertical = false)                           // 1px hairline, stretches across its parent's cross axis
+Pill(string label, bool selected, Action onClick)        // SelectorBar pill (accent when selected)
+SectionHeader(string title, string? caption = null)      // a BodyStrong title (+ optional caption) with top rhythm
+
+// Text / glyphs
+Heading(string text)                                     // 28pt bold
+Text(string text)                                        // 14pt body
+Icon(string glyph, float size = 16, ColorF? color = null, string? family = null)  // a FontIcon glyph
+// …plus the full Fluent type ramp: Caption / Body / BodyStrong / BodyLarge / Subtitle / Title / TitleLarge / Display
+
+// Media + scroll
+Image(string source, float w, float h, float corners = 0, ColorF? placeholder = null,
+      string? blurHash = null, ImageTransition? transition = null)
+ScrollView(Element content, bool horizontal = false)
+
+// Grids
+Grid(TrackSize[] columns, float colGap, float rowGap, float rowHeight, params Element[] children)
+UniformGrid(int columns, float gap, float rowHeight, params Element[] children)
+AutoGrid(float minColWidth, float gap, float rowHeight, params Element[] children)   // responsive auto-fill
+
+// Gradient specs (apply with .Gradient(...))
+LinearGradient(float angleDeg, params GradientStop[] stops)   // angle 0 = left→right, 90 = top→bottom
+RadialGradient(params GradientStop[] stops)                   // centre → edge
+</code></pre>
+<p>The <code>Ui.*</code> builders are deliberately terse, but the control-style surfaces (<code>Card</code>, <code>Layer</code>, <code>Pill</code>,
+<code>Divider</code>, the type ramp) read theme tokens — so they re-skin with the theme instead of baking in a colour. See
+<a href="#theming-read-tokens-never-hard-code-colour">Theming</a> at the end.</p>
+<p>A small composed example — a card from the gallery's Home page
+(<a href="../../../src/FluentGpu.WindowsApp/Home.cs"><code>src/FluentGpu.WindowsApp/Home.cs</code></a>):</p>
+<pre><code class="lang-csharp">new BoxEl
+{
+    Height = 88, Direction = 0, Gap = 14, AlignItems = FlexAlign.Center, Padding = Edges4.All(14),
+    Fill = Tok.FillCardDefault, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, Corners = Radii.OverlayAll,
+    HoverFill = Tok.FillCardSecondary, PressedFill = Tok.FillSubtleTertiary, OnClick = OnOpen,
+    Children =
+    [
+        Icon(Glyph, 28f).Foreground(Tok.AccentDefault),
+        new BoxEl { Direction = 1, Gap = 2, Grow = 1, Children = [BodyStrong(Title), Caption(Subtitle).Secondary()] },
+    ],
+};
+</code></pre>
+<h2 id="flexbox-layout">Flexbox layout</h2>
+<p>Flexbox (a Yoga-style model) is the default layout. A <code>BoxEl</code> is a flex container; its <code>Direction</code> picks the
+main axis, <code>Justify</code> distributes children along it, and <code>AlignItems</code> aligns them across it. The layout props on
+<code>BoxEl</code> (all in <a href="../../../src/FluentGpu.Dsl/Element.cs"><code>Element.cs</code></a>):</p>
+<table>
+<thead>
+<tr>
+<th>Prop</th>
+<th>Type</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Direction</code></td>
+<td><code>byte</code></td>
+<td><code>0</code> = row, <code>1</code> = column (default column). <code>VStack</code>/<code>HStack</code> set this for you.</td>
+</tr>
+<tr>
+<td><code>Gap</code></td>
+<td><code>float</code></td>
+<td>inter-child spacing on the main axis</td>
+</tr>
+<tr>
+<td><code>Padding</code> / <code>Margin</code></td>
+<td><code>Edges4</code></td>
+<td>inner / outer thickness — <code>Edges4.All(v)</code> or <code>new Edges4(l, t, r, b)</code></td>
+</tr>
+<tr>
+<td><code>Width</code> / <code>Height</code> / <code>Min*</code> / <code>Max*</code></td>
+<td><code>Prop&lt;float&gt;</code></td>
+<td>DIPs; <code>NaN</code> (the default) = auto/unset</td>
+</tr>
+<tr>
+<td><code>Grow</code> / <code>Shrink</code> / <code>Basis</code></td>
+<td><code>float</code></td>
+<td>flex coefficients — <code>Grow = 1</code> claims free main-axis space</td>
+</tr>
+<tr>
+<td><code>Justify</code></td>
+<td><code>FlexJustify</code></td>
+<td><code>Start</code> · <code>Center</code> · <code>End</code> · <code>SpaceBetween</code> · <code>SpaceAround</code> · <code>SpaceEvenly</code></td>
+</tr>
+<tr>
+<td><code>AlignItems</code> / <code>AlignSelf</code></td>
+<td><code>FlexAlign</code></td>
+<td><code>Auto</code> · <code>Start</code> · <code>Center</code> · <code>End</code> · <code>Stretch</code> (cross-axis)</td>
+</tr>
+<tr>
+<td><code>Wrap</code></td>
+<td><code>bool</code></td>
+<td>wrap children onto multiple lines</td>
+</tr>
+<tr>
+<td><code>ZStack</code></td>
+<td><code>bool</code></td>
+<td>children overlay at the origin, painted in order (last on top)</td>
+</tr>
+<tr>
+<td><code>ClipToBounds</code></td>
+<td><code>bool</code></td>
+<td>clip children to the box — <strong>and a layout-boundary signal</strong> (see below)</td>
+</tr>
+</tbody>
+</table>
+<p><code>FlexJustify</code> and <code>FlexAlign</code> are byte enums in
+<a href="../../../src/FluentGpu.Foundation/LayoutTypes.cs"><code>src/FluentGpu.Foundation/LayoutTypes.cs</code></a>. <code>Edges4</code> is
+<code>(Left, Top, Right, Bottom)</code> from <a href="../../../src/FluentGpu.Foundation/Geometry.cs"><code>Geometry.cs</code></a>.</p>
+<p>Each knob in isolation, lifted from the gallery's Flex page
+(<a href="../../../src/FluentGpu.WindowsApp/GalleryPages.cs"><code>GalleryPages.cs</code></a>):</p>
+<pre><code class="lang-csharp">// justify-content — three tiles, only the main-axis distribution changes
+new BoxEl
+{
+    Direction = 0, Gap = 6f, Grow = 1f,
+    Justify = FlexJustify.SpaceBetween,        // or Center / End / SpaceAround / SpaceEvenly
+    AlignItems = FlexAlign.Center,
+    Children = [Tile(1), Tile(2), Tile(3)],
+};
+
+// flex-grow — no fixed widths; free space splits 1 : 2 : 1
+new BoxEl
+{
+    Direction = 0, Gap = 6f, Height = 44, AlignItems = FlexAlign.Stretch,
+    Children =
+    [
+        new BoxEl { Grow = 1f, /* … */ },
+        new BoxEl { Grow = 2f, /* … */ },
+        new BoxEl { Grow = 1f, /* … */ },
+    ],
+};
+
+// flex-wrap — a width-constrained row spills onto new lines
+new BoxEl
+{
+    Direction = 0, Wrap = true, Gap = 6f, Width = 240, AlignItems = FlexAlign.Start,
+    Children = wrapTiles,
+};
+</code></pre>
+<p><code>Stretch</code> is the default <code>AlignItems</code>, which is why a <code>Divider()</code> (a 1px box with <code>AlignSelf = Stretch</code>) fills
+its parent's cross axis automatically. A child sets <code>AlignSelf</code> to opt out of the container's <code>AlignItems</code> for
+itself.</p>
+<h2 id="css-grid">CSS Grid</h2>
+<p>When you need <em>true</em> two-dimensional alignment — every cell in a column sharing one measured width, so rows stay
+aligned — use <code>GridEl</code> instead of nesting flex rows. Columns are typed tracks (<code>TrackSize</code>, from
+<a href="../../../src/FluentGpu.Foundation/TrackSize.cs"><code>src/FluentGpu.Foundation/TrackSize.cs</code></a>); children flow
+row-major into the cells at a uniform row height.</p>
+<pre><code class="lang-csharp">TrackSize.Px(80)       // a fixed 80-DIP column
+TrackSize.Star(1f)     // a fractional (1fr) column — shares leftover width by weight
+TrackSize.Star(2f)     // 2fr — takes twice the share of a 1fr track
+TrackSize.Auto         // shrinks to fit its content
+</code></pre>
+<p>Three flavours:</p>
+<pre><code class="lang-csharp">// Heterogeneous tracks: 80px | 1fr | 2fr | auto
+var columns = new[] { TrackSize.Px(80), TrackSize.Star(1f), TrackSize.Star(2f), TrackSize.Auto };
+Grid(columns, colGap: 12f, rowGap: 12f, rowHeight: 64f, c0, c1, c2, c3);
+
+// N equal star columns — the common album/artist card grid
+UniformGrid(columns: 4, gap: 12f, rowHeight: 90f, cells);
+
+// Responsive auto-fill: as many equal (1fr) columns as fit at &gt;= minColWidth,
+// stretched to fill the width with no ragged edge — CSS repeat(auto-fill, minmax(280, 1fr)).
+AutoGrid(minColWidth: 280f, gap: 12f, rowHeight: 88f, cards);
+</code></pre>
+<p><code>AutoGrid</code> reflows its column count as the available width changes — the Home page uses it so the sample-card
+grid re-columns on window resize with no code of yours:</p>
+<pre><code class="lang-csharp">AutoGrid(280f, 12f, 88f, cards) with { Padding = new Edges4(36, 0, 36, 36) },
+</code></pre>
+<p>A grid resolves its star tracks against a concrete width, so give it (or an ancestor) a width — inside a
+<code>ScrollView</code> or a sized box it works without one because the viewport supplies the width. The grid contract
+(true tracks vs nested-flex faking, width-awareness) is owned by
+<a href="../../../design/subsystems/layout.md">the layout subsystem, §7</a>.</p>
+<h2 id="fluent-modifiers">Fluent modifiers</h2>
+<p>A modifier is a fluent extension method that returns a record <code>with</code>-copy — it tweaks one instance without
+forking a control's default style. They are in
+<a href="../../../src/FluentGpu.Dsl/Modifiers.cs"><code>src/FluentGpu.Dsl/Modifiers.cs</code></a>. Because every modifier returns the
+same record type, you can chain them, and you can apply them to a control: <code>Button.Accent(&quot;Save&quot;, onSave).Rounded(20)</code>
+just rounds that one button.</p>
+<pre><code class="lang-csharp">// Box surface + paint
+box.Background(c).HoverColor(c).PressedColor(c)        // resting / hover / pressed fill
+   .Border(c, width).Rounded(r).Pad(all)              // or .Pad(left, top, right, bottom)
+   .Shadow(s).Elevate(preset).Gradient(g)             // rich paint
+   .BorderBrush(g, width).Acrylic(a)                  // gradient stroke / frosted glass
+// Composited transform + opacity — animate WITHOUT relayout (see Compositor)
+   .Offset(dx, dy).Scale(s)  /* or .Scale(sx, sy) */ .Rotate(deg).Alpha(opacity)
+
+// Text
+text.Foreground(c).FontSize(px).Strong().Font(family)  // Strong() = SemiBold 600, not Bold 700
+    .Wrapped().NoWrap().Trim().Ellipsis().MaxLines(n)
+</code></pre>
+<p><code>Strong()</code> is SemiBold (weight 600), matching the WinUI BodyStrong ramp — use <code>Bold = true</code> (or
+<code>FontWeight(700)</code>) for true bold. The text-tier colour helpers (<code>Secondary()</code>, <code>Tertiary()</code>, <code>Accent()</code>,
+<code>Disabled()</code>) are in <a href="../../../src/FluentGpu.Dsl/Typography.cs"><code>Typography.cs</code></a> and read theme tokens, so
+prefer <code>Body(&quot;…&quot;).Secondary()</code> over <code>.Foreground(someGrey)</code>.</p>
+<p>Modifiers in action (the gallery's Typography page):</p>
+<pre><code class="lang-csharp">Text(&quot;Accent text&quot;).Foreground(Theme.Accent).FontSize(18f)
+Text(&quot;The quick brown fox — Consolas&quot;).Font(&quot;Consolas&quot;).FontSize(16f)
+new TextEl(&quot;The quick brown fox&quot;) { Size = 18f, Color = Theme.WindowText }.Strong()
+</code></pre>
+<p>For the rich-paint presets — <code>Shadow</code>/<code>Elevate</code> take a <code>ShadowSpec</code>, and the <code>Elevation.*</code> presets
+(<code>Card</code>, <code>CardHover</code>, <code>Tooltip</code>, <code>Flyout</code>, <code>Dialog</code>) live in
+<a href="../../../src/FluentGpu.Dsl/Elevation.cs"><code>src/FluentGpu.Dsl/Elevation.cs</code></a>:</p>
+<pre><code class="lang-csharp">Card(content).Elevate(Elevation.Flyout);                          // a lifted, flyout-band shadow
+box.Gradient(LinearGradient(118f,
+        new GradientStop(0f, Tok.HeroGradientTop),
+        new GradientStop(1f, Tok.HeroGradientBottom)));           // gradient fill (supersedes Fill)
+box.Acrylic(new AcrylicSpec(Tok.AccentDefault, tintOpacity: 0.6f,
+        blurSigma: 30f, noiseOpacity: 0.02f, luminosityOpacity: 0.8f));  // per-node frosted glass
+</code></pre>
+<blockquote>
+<p>One generic door, not a styling knob per control. To restyle a <em>control's internal template part</em> (an
+Expander header, a slider rail) the path is <code>Parts</code>, the signals-native <code>::part</code> modifier — not a new
+per-control property. That surface is documented in
+<a href="../../guide/components-elements-layout.md">components-elements-layout.md → Template parts</a> and
+<a href="../../guide/control-fidelity.md">control-fidelity.md</a>.</p>
+</blockquote>
+<h2 id="boxel-visuals"><code>BoxEl</code> visuals</h2>
+<p>A <code>BoxEl</code> is both a layout container and a paintable surface. The surface props (all in
+<a href="../../../src/FluentGpu.Dsl/Element.cs"><code>Element.cs</code></a>):</p>
+<ul>
+<li><strong><code>Fill</code></strong> — the resting background. It is a <code>Prop&lt;ColorF&gt;</code>: a static colour, a <code>Func&lt;ColorF&gt;</code> thunk
+(<code>Prop.Of(() =&gt; …)</code>), or a concrete signal. <strong><code>HoverFill</code></strong> / <strong><code>PressedFill</code></strong> are the eased interaction
+states; the renderer cross-fades between them on pointer enter/press with no work from you (give the box a
+pointer handler so it receives the hover/press flags — most controls already do).</li>
+<li><strong><code>BorderColor</code></strong> + <strong><code>BorderWidth</code></strong>, with optional <strong><code>HoverBorderColor</code></strong> / <strong><code>PressedBorderColor</code></strong> (an
+<code>A == 0</code> state colour means &quot;auto-lighten/darken the resting border&quot;).</li>
+<li><strong><code>Corners</code></strong> — a <code>CornerRadius4</code> (<code>(TopLeft, TopRight, BottomRight, BottomLeft)</code>). Use
+<code>CornerRadius4.All(r)</code>, <code>.Rounded(r)</code>, or the Fluent ramp <code>Radii.ControlAll</code> / <code>Radii.OverlayAll</code> /
+<code>Radii.PillAll</code> (from <a href="../../../src/FluentGpu.Dsl/Radii.cs"><code>Radii.cs</code></a>).</li>
+<li><strong><code>Shadow</code></strong> (<code>ShadowSpec?</code>) — a soft drop shadow drawn beneath the fill (the <code>Elevation.*</code> presets).</li>
+<li><strong><code>Gradient</code></strong> (<code>GradientSpec?</code>) — a gradient fill that supersedes <code>Fill</code> at record time; up to four stops.</li>
+<li><strong><code>BorderBrush</code></strong> (<code>GradientSpec?</code>) — a gradient stroke (the WinUI control-elevation border); needs
+<code>BorderWidth &gt; 0</code>.</li>
+<li><strong><code>Acrylic</code></strong> (<code>AcrylicSpec?</code>) — a per-node frosted-glass backdrop (blur + tint + noise).</li>
+</ul>
+<pre><code class="lang-csharp">// A tile that brightens on hover (the gallery Grid page)
+new BoxEl
+{
+    Direction = 1, Justify = FlexJustify.Center, AlignItems = FlexAlign.Center,
+    Fill = tint with { A = 0.85f },
+    HoverFill = tint,                         // eased cross-fade on pointer enter, automatically
+    Corners = CornerRadius4.All(8f),
+    Children = [new TextEl(number.ToString()) { Size = 20f, Bold = true, Color = ColorF.FromRgba(20, 20, 24) }],
+};
+</code></pre>
+<h3 id="composited-transforms-animate-with-no-relayout">Composited transforms (animate with no relayout)</h3>
+<p><code>OffsetX</code>/<code>OffsetY</code>, <code>ScaleX</code>/<code>ScaleY</code>, <code>Rotation</code>, and <code>Opacity</code> are <strong>composited</strong> — applied at record time
+to the node and its subtree, never touching layout or hit-testing geometry. They are the cheap channel: change
+one and the frame is compositor-only (no render, no reconcile, no layout). The <code>.Offset/.Scale/.Rotate/.Alpha</code>
+modifiers set them.</p>
+<pre><code class="lang-csharp">// The gallery Compositor page — static transforms; the Animation page drives them over time.
+Tile(&quot;45&quot;).Rotate(45f)        // rotate about the node's transform origin; siblings don't reflow
+Tile(&quot;1.3x&quot;).Scale(1.3f)      // visual scale only; the layout box is unchanged
+Tile(&quot;0.3&quot;).Alpha(0.3f)       // per-node opacity multiplies into the node's pixels
+Tile(&quot;-12&quot;).Offset(0f, -12f)  // translate the painted node without moving its layout slot
+</code></pre>
+<p>For <em>hot</em> per-frame values, don't set these statically and re-render each frame — <strong>bind</strong> the channel instead.
+<code>Transform</code> is a whole-matrix <code>Prop&lt;Affine2D&gt;</code> and <code>Opacity</code>/<code>Fill</code> are bound <code>Prop&lt;T&gt;</code> channels: point them at
+a <code>Func</code> or a signal and writes update just that node's column, with zero render/reconcile/layout. This is the
+slider-scrubber fix:</p>
+<pre><code class="lang-csharp">var x = UseFloatSignal(0.3f);   // a hot scalar — bind it, don't setState per move
+
+Slider.Bind(x);                 // the drag writes the signal
+
+new BoxEl
+{
+    Width = 32, Height = 32,
+    Transform = Prop.Of(() =&gt; Affine2D.Translation(x.Value * 184f, 0f)),  // compositor-only
+    Fill      = Prop.Of(() =&gt; ColorF.Lerp(grey, Tok.AccentDefault, x.Value)),  // compositor-only
+};
+</code></pre>
+<p>The binding mechanism, why <code>.Value</code> subscribes (and <code>.Peek()</code> does not), and the three update tiers are the
+subject of the <a href="../../guide/reactivity.md">reactivity guide</a> — read it before you reach for <code>setState</code> on a
+drag. The contract that a static value and a bound <code>Func</code>/signal flow through the <em>same</em> <code>Prop&lt;T&gt;</code> channel is
+the unified property surface; only one owner may drive a channel at a time (a bound <code>Transform</code> and a static
+<code>OffsetX</code> on the same node fight — see the pitfall below).</p>
+<h2 id="dip-sizing-and-responsive-layout">DIP sizing and responsive layout</h2>
+<p>All sizes are in <strong>device-independent pixels (DIP)</strong>; the host scales by the monitor DPI, so a <code>Width = 200</code>
+box is 200 DIP on every display. You generally lay out with intrinsic sizing (<code>Grow</code>, <code>AlignItems = Stretch</code>,
+auto <code>NaN</code> sizes) and let content drive extent — explicit <code>Width</code>/<code>Height</code> are for when a box must be a fixed
+size or a layout boundary.</p>
+<p>For layout that adapts to the window, read the ambient client size. <code>Viewport.Size</code> is a context channel (in
+<a href="../../../src/FluentGpu.Hooks/Context.cs"><code>src/FluentGpu.Hooks/Context.cs</code></a>) the host pushes each frame:</p>
+<pre><code class="lang-csharp">public override Element Render()
+{
+    var size = UseContext(Viewport.Size);   // Size2 in DIP — reading it re-renders on resize
+    bool wide = size.Width &gt;= 1008f;
+    return wide ? TwoColumn() : OneColumn();
+}
+</code></pre>
+<p><code>NavigationView</code> already adapts its display mode (Expanded / Compact / Minimal) off <code>Viewport.Size</code> at the
+1008 / 641 DIP thresholds, and <code>AutoGrid</code> reflows its columns against the available width — so for grids and the
+left-nav you rarely need to read the viewport yourself. When you do, remember that reading a context value
+<em>subscribes</em> this component, so it re-renders on resize (that is the point); keep the work in that <code>Render()</code>
+cheap.</p>
+<h2 id="cliptobounds-as-a-layout-boundary"><code>ClipToBounds</code> as a layout boundary</h2>
+<p><code>ClipToBounds = true</code> does the obvious thing — it clips children to the box. It also does something
+load-bearing for performance: <strong>it marks the box a layout boundary.</strong> When a descendant relayouts, the
+invalidation walks <em>up</em> until it hits a boundary; without one it can reach the root and relayout the whole page.
+A boundary needs a concrete size to clip against, so the recipe is an explicit <code>Width</code> + <code>Height</code> +
+<code>ClipToBounds = true</code> on the enclosing container:</p>
+<pre><code class="lang-csharp">new BoxEl
+{
+    Width = 360, Height = 480, ClipToBounds = true,   // a scoped relayout stops here
+    Children = [/* a subtree whose changes shouldn't relayout the page */],
+};
+</code></pre>
+<p>This is exactly the fix for the &quot;a small change relayouts the whole page&quot; pitfall. The full reasoning — scoped
+relayout, the up-walk, why a <code>ScrollView</code> is already a boundary — belongs to the rendering and performance
+guide, <a href="../../guide/rendering-and-performance.md#scoped-relayout">Scoped relayout</a>; this page just flags the
+signal so you reach for it while you compose, not after the page feels slow.</p>
+<h2 id="theming-read-tokens-never-hard-code-colour">Theming: read tokens, never hard-code colour</h2>
+<p>The <code>Ui.*</code> surfaces and tier helpers read semantic tokens from <code>Tok</code> (in
+<a href="../../../src/FluentGpu.Dsl/Tokens.cs"><code>src/FluentGpu.Dsl/Tokens.cs</code></a>) so a theme switch re-skins them. Prefer a
+token to a literal <code>ColorF</code>:</p>
+<pre><code class="lang-csharp">Fill = Tok.FillCardDefault, BorderColor = Tok.StrokeCardDefault,   // not a raw ColorF
+Children = [BodyStrong(Title), Caption(Subtitle).Secondary()],     // tier helpers, not .Foreground(grey)
+</code></pre>
+<p>Hard-coded colours are the &quot;colours look wrong across themes&quot; pitfall. The token catalogue and theme switching
+(<code>Tok.Use(theme)</code>, <code>Tok.SetAccent</code>) are covered in
+<a href="../../guide/components-elements-layout.md">components-elements-layout.md → Theming</a>.</p>
+<h2 id="gotchas">Gotchas</h2>
+<p>These are the composition-time failure modes from the <a href="../../guide/pitfalls.md">pitfalls table</a> — worth
+internalising before they bite:</p>
+<ul>
+<li><strong>Constructor args freeze at mount.</strong> A child <code>Component</code>'s public fields are set once, when <code>Embed.Comp</code>
+realizes it; a parent re-render does <strong>not</strong> re-invoke the factory. To flow changing data to a child, pass a
+<code>Signal&lt;T&gt;</code> or use <code>Ctx.Provide</code> + <code>UseContext</code> — never a plain field. (See the <code>SelectorBar</code> in
+<a href="../../../src/FluentGpu.WindowsApp/Home.cs"><code>Home.cs</code></a>: selection is owned by the page and threaded as
+arguments to a <em>stateless factory</em>, precisely because a stateful child would freeze its selection at mount.)</li>
+<li><strong>One owner per composited channel.</strong> A static <code>OffsetX</code>/<code>ScaleX</code>/<code>Opacity</code> you set will &quot;snap back&quot; each
+frame if an animation or a bound <code>Transform</code>/<code>Opacity</code> already owns that channel — the reconciler won't also
+write the static value (it would fight the animator). Drive the value through <em>one</em> path.</li>
+<li><strong>Text doesn't wrap by default.</strong> <code>Wrap = NoWrap</code> is the default; <code>text.Wrapped()</code> needs a width to wrap
+against — an explicit <code>Width</code> or a stretching parent.</li>
+<li><strong>An element needs size + a handler to be clickable.</strong> <code>HitTestVisible</code> defaults true, but a zero-size box or
+one with no <code>OnClick</code>/<code>OnPointerDown</code> won't receive input.</li>
+<li><strong>Hot values: bind, don't <code>setState</code>.</strong> A <code>setState</code> per pointer-move re-renders the owning component every
+frame and tanks FPS. Bind the value to <code>Transform</code>/<code>Opacity</code>/<code>Fill</code> (compositor-only) or use
+<code>Slider.Bind(FloatSignal)</code>. Confirm <code>FrameStats.Rendered == false</code> on the drag.</li>
+</ul>
+<h2 id="where-to-go-next">Where to go next</h2>
+<ul>
+<li><a href="../../guide/reactivity.md">Reactivity</a> — the signals mental model; the three update tiers; why bindings are
+the cheapest path. <strong>Read this first if you haven't.</strong></li>
+<li><a href="../../guide/components-elements-layout.md">Elements, layout, controls &amp; theming</a> — the dense reference: the
+full hooks list, the controls surface, virtualization, and theming.</li>
+<li><a href="../../guide/rendering-and-performance.md">Rendering and performance</a> — the frame pipeline, scoped relayout,
+and the zero-alloc rules <code>ClipToBounds</code> boundaries serve.</li>
+<li><a href="../../guide/pitfalls.md">Pitfalls</a> — symptom → cause → fix for every failure mode above.</li>
+<li>Design corpus (contracts, not usage): <a href="../../../design/SPEC-INDEX.md">SPEC-INDEX.md</a> (precedence authority),
+<a href="../../../design/subsystems/layout.md">the layout subsystem</a>.</li>
+</ul>
+
+</article>
+
+
+        <div class="next-article d-print-none border-top" id="nextArticle"></div>
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

@@ -1,0 +1,992 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.LayoutTransition
+  commentId: T:FluentGpu.Foundation.LayoutTransition
+  id: LayoutTransition
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.LayoutTransition.#ctor(FluentGpu.Foundation.TransitionChannels,FluentGpu.Foundation.TransitionDynamics,FluentGpu.Foundation.SizeMode,FluentGpu.Foundation.EnterExit,FluentGpu.Foundation.EnterExit,System.UInt16,System.Nullable{FluentGpu.Foundation.TransitionDynamics},System.Single,FluentGpu.Foundation.SizeAnchor)
+  - FluentGpu.Foundation.LayoutTransition.Anchor
+  - FluentGpu.Foundation.LayoutTransition.AutoAll
+  - FluentGpu.Foundation.LayoutTransition.BoundsT(FluentGpu.Foundation.SizeMode)
+  - FluentGpu.Foundation.LayoutTransition.Channels
+  - FluentGpu.Foundation.LayoutTransition.CustomCurveId
+  - FluentGpu.Foundation.LayoutTransition.DelayMs
+  - FluentGpu.Foundation.LayoutTransition.Dynamics
+  - FluentGpu.Foundation.LayoutTransition.Enter
+  - FluentGpu.Foundation.LayoutTransition.Exit
+  - FluentGpu.Foundation.LayoutTransition.ExitDynamics
+  - FluentGpu.Foundation.LayoutTransition.Fade
+  - FluentGpu.Foundation.LayoutTransition.Size
+  - FluentGpu.Foundation.LayoutTransition.Slide
+  langs:
+  - csharp
+  - vb
+  name: LayoutTransition
+  nameWithType: LayoutTransition
+  fullName: FluentGpu.Foundation.LayoutTransition
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LayoutTransition
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 78
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    The whole authoring surface (interned POD). Channels × dynamics × size-mode × enter/exit compose
+        orthogonally — translate / scale / rotate / opacity / clip-reveal all fall out, with no per-control special cases.
+  example: []
+  syntax:
+    content: 'public readonly record struct LayoutTransition : IEquatable<LayoutTransition>'
+    content.vb: Public Structure LayoutTransition Implements IEquatable(Of LayoutTransition)
+  implements:
+  - System.IEquatable{FluentGpu.Foundation.LayoutTransition}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Foundation.LayoutTransition.#ctor(FluentGpu.Foundation.TransitionChannels,FluentGpu.Foundation.TransitionDynamics,FluentGpu.Foundation.SizeMode,FluentGpu.Foundation.EnterExit,FluentGpu.Foundation.EnterExit,System.UInt16,System.Nullable{FluentGpu.Foundation.TransitionDynamics},System.Single,FluentGpu.Foundation.SizeAnchor)
+  commentId: M:FluentGpu.Foundation.LayoutTransition.#ctor(FluentGpu.Foundation.TransitionChannels,FluentGpu.Foundation.TransitionDynamics,FluentGpu.Foundation.SizeMode,FluentGpu.Foundation.EnterExit,FluentGpu.Foundation.EnterExit,System.UInt16,System.Nullable{FluentGpu.Foundation.TransitionDynamics},System.Single,FluentGpu.Foundation.SizeAnchor)
+  id: '#ctor(FluentGpu.Foundation.TransitionChannels,FluentGpu.Foundation.TransitionDynamics,FluentGpu.Foundation.SizeMode,FluentGpu.Foundation.EnterExit,FluentGpu.Foundation.EnterExit,System.UInt16,System.Nullable{FluentGpu.Foundation.TransitionDynamics},System.Single,FluentGpu.Foundation.SizeAnchor)'
+  parent: FluentGpu.Foundation.LayoutTransition
+  langs:
+  - csharp
+  - vb
+  name: LayoutTransition(TransitionChannels, TransitionDynamics, SizeMode, EnterExit, EnterExit, ushort, TransitionDynamics?, float, SizeAnchor)
+  nameWithType: LayoutTransition.LayoutTransition(TransitionChannels, TransitionDynamics, SizeMode, EnterExit, EnterExit, ushort, TransitionDynamics?, float, SizeAnchor)
+  fullName: FluentGpu.Foundation.LayoutTransition.LayoutTransition(FluentGpu.Foundation.TransitionChannels, FluentGpu.Foundation.TransitionDynamics, FluentGpu.Foundation.SizeMode, FluentGpu.Foundation.EnterExit, FluentGpu.Foundation.EnterExit, ushort, FluentGpu.Foundation.TransitionDynamics?, float, FluentGpu.Foundation.SizeAnchor)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 78
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    The whole authoring surface (interned POD). Channels × dynamics × size-mode × enter/exit compose
+        orthogonally — translate / scale / rotate / opacity / clip-reveal all fall out, with no per-control special cases.
+  example: []
+  syntax:
+    content: public LayoutTransition(TransitionChannels Channels, TransitionDynamics Dynamics = default, SizeMode Size = SizeMode.Auto, EnterExit Enter = default, EnterExit Exit = default, ushort CustomCurveId = 0, TransitionDynamics? ExitDynamics = null, float DelayMs = 0, SizeAnchor Anchor = SizeAnchor.Leading)
+    parameters:
+    - id: Channels
+      type: FluentGpu.Foundation.TransitionChannels
+    - id: Dynamics
+      type: FluentGpu.Foundation.TransitionDynamics
+    - id: Size
+      type: FluentGpu.Foundation.SizeMode
+    - id: Enter
+      type: FluentGpu.Foundation.EnterExit
+    - id: Exit
+      type: FluentGpu.Foundation.EnterExit
+    - id: CustomCurveId
+      type: System.UInt16
+    - id: ExitDynamics
+      type: System.Nullable{FluentGpu.Foundation.TransitionDynamics}
+    - id: DelayMs
+      type: System.Single
+    - id: Anchor
+      type: FluentGpu.Foundation.SizeAnchor
+    content.vb: Public Sub New(Channels As TransitionChannels, Dynamics As TransitionDynamics = Nothing, Size As SizeMode = SizeMode.Auto, Enter As EnterExit = Nothing, [Exit] As EnterExit = Nothing, CustomCurveId As UShort = 0, ExitDynamics As TransitionDynamics? = Nothing, DelayMs As Single = 0, Anchor As SizeAnchor = SizeAnchor.Leading)
+  overload: FluentGpu.Foundation.LayoutTransition.#ctor*
+  nameWithType.vb: LayoutTransition.New(TransitionChannels, TransitionDynamics, SizeMode, EnterExit, EnterExit, UShort, TransitionDynamics?, Single, SizeAnchor)
+  fullName.vb: FluentGpu.Foundation.LayoutTransition.New(FluentGpu.Foundation.TransitionChannels, FluentGpu.Foundation.TransitionDynamics, FluentGpu.Foundation.SizeMode, FluentGpu.Foundation.EnterExit, FluentGpu.Foundation.EnterExit, UShort, FluentGpu.Foundation.TransitionDynamics?, Single, FluentGpu.Foundation.SizeAnchor)
+  name.vb: New(TransitionChannels, TransitionDynamics, SizeMode, EnterExit, EnterExit, UShort, TransitionDynamics?, Single, SizeAnchor)
+- uid: FluentGpu.Foundation.LayoutTransition.Channels
+  commentId: P:FluentGpu.Foundation.LayoutTransition.Channels
+  id: Channels
+  parent: FluentGpu.Foundation.LayoutTransition
+  langs:
+  - csharp
+  - vb
+  name: Channels
+  nameWithType: LayoutTransition.Channels
+  fullName: FluentGpu.Foundation.LayoutTransition.Channels
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Channels
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 79
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public TransitionChannels Channels { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.TransitionChannels
+    content.vb: Public Property Channels As TransitionChannels
+  overload: FluentGpu.Foundation.LayoutTransition.Channels*
+- uid: FluentGpu.Foundation.LayoutTransition.Dynamics
+  commentId: P:FluentGpu.Foundation.LayoutTransition.Dynamics
+  id: Dynamics
+  parent: FluentGpu.Foundation.LayoutTransition
+  langs:
+  - csharp
+  - vb
+  name: Dynamics
+  nameWithType: LayoutTransition.Dynamics
+  fullName: FluentGpu.Foundation.LayoutTransition.Dynamics
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Dynamics
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 80
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public TransitionDynamics Dynamics { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.TransitionDynamics
+    content.vb: Public Property Dynamics As TransitionDynamics
+  overload: FluentGpu.Foundation.LayoutTransition.Dynamics*
+- uid: FluentGpu.Foundation.LayoutTransition.Size
+  commentId: P:FluentGpu.Foundation.LayoutTransition.Size
+  id: Size
+  parent: FluentGpu.Foundation.LayoutTransition
+  langs:
+  - csharp
+  - vb
+  name: Size
+  nameWithType: LayoutTransition.Size
+  fullName: FluentGpu.Foundation.LayoutTransition.Size
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Size
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 81
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public SizeMode Size { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.SizeMode
+    content.vb: Public Property Size As SizeMode
+  overload: FluentGpu.Foundation.LayoutTransition.Size*
+- uid: FluentGpu.Foundation.LayoutTransition.Enter
+  commentId: P:FluentGpu.Foundation.LayoutTransition.Enter
+  id: Enter
+  parent: FluentGpu.Foundation.LayoutTransition
+  langs:
+  - csharp
+  - vb
+  name: Enter
+  nameWithType: LayoutTransition.Enter
+  fullName: FluentGpu.Foundation.LayoutTransition.Enter
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Enter
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 82
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public EnterExit Enter { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.EnterExit
+    content.vb: Public Property Enter As EnterExit
+  overload: FluentGpu.Foundation.LayoutTransition.Enter*
+- uid: FluentGpu.Foundation.LayoutTransition.Exit
+  commentId: P:FluentGpu.Foundation.LayoutTransition.Exit
+  id: Exit
+  parent: FluentGpu.Foundation.LayoutTransition
+  langs:
+  - csharp
+  - vb
+  name: Exit
+  nameWithType: LayoutTransition.Exit
+  fullName: FluentGpu.Foundation.LayoutTransition.Exit
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Exit
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 83
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public EnterExit Exit { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.EnterExit
+    content.vb: Public Property [Exit] As EnterExit
+  overload: FluentGpu.Foundation.LayoutTransition.Exit*
+- uid: FluentGpu.Foundation.LayoutTransition.CustomCurveId
+  commentId: P:FluentGpu.Foundation.LayoutTransition.CustomCurveId
+  id: CustomCurveId
+  parent: FluentGpu.Foundation.LayoutTransition
+  langs:
+  - csharp
+  - vb
+  name: CustomCurveId
+  nameWithType: LayoutTransition.CustomCurveId
+  fullName: FluentGpu.Foundation.LayoutTransition.CustomCurveId
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CustomCurveId
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 84
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public ushort CustomCurveId { get; init; }
+    parameters: []
+    return:
+      type: System.UInt16
+    content.vb: Public Property CustomCurveId As UShort
+  overload: FluentGpu.Foundation.LayoutTransition.CustomCurveId*
+- uid: FluentGpu.Foundation.LayoutTransition.ExitDynamics
+  commentId: P:FluentGpu.Foundation.LayoutTransition.ExitDynamics
+  id: ExitDynamics
+  parent: FluentGpu.Foundation.LayoutTransition
+  langs:
+  - csharp
+  - vb
+  name: ExitDynamics
+  nameWithType: LayoutTransition.ExitDynamics
+  fullName: FluentGpu.Foundation.LayoutTransition.ExitDynamics
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ExitDynamics
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 87
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public TransitionDynamics? ExitDynamics { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.TransitionDynamics}
+    content.vb: Public Property ExitDynamics As TransitionDynamics?
+  overload: FluentGpu.Foundation.LayoutTransition.ExitDynamics*
+- uid: FluentGpu.Foundation.LayoutTransition.DelayMs
+  commentId: P:FluentGpu.Foundation.LayoutTransition.DelayMs
+  id: DelayMs
+  parent: FluentGpu.Foundation.LayoutTransition
+  langs:
+  - csharp
+  - vb
+  name: DelayMs
+  nameWithType: LayoutTransition.DelayMs
+  fullName: FluentGpu.Foundation.LayoutTransition.DelayMs
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DelayMs
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 90
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float DelayMs { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property DelayMs As Single
+  overload: FluentGpu.Foundation.LayoutTransition.DelayMs*
+- uid: FluentGpu.Foundation.LayoutTransition.Anchor
+  commentId: P:FluentGpu.Foundation.LayoutTransition.Anchor
+  id: Anchor
+  parent: FluentGpu.Foundation.LayoutTransition
+  langs:
+  - csharp
+  - vb
+  name: Anchor
+  nameWithType: LayoutTransition.Anchor
+  fullName: FluentGpu.Foundation.LayoutTransition.Anchor
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Anchor
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 93
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public SizeAnchor Anchor { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.SizeAnchor
+    content.vb: Public Property Anchor As SizeAnchor
+  overload: FluentGpu.Foundation.LayoutTransition.Anchor*
+- uid: FluentGpu.Foundation.LayoutTransition.Slide
+  commentId: P:FluentGpu.Foundation.LayoutTransition.Slide
+  id: Slide
+  parent: FluentGpu.Foundation.LayoutTransition
+  langs:
+  - csharp
+  - vb
+  name: Slide
+  nameWithType: LayoutTransition.Slide
+  fullName: FluentGpu.Foundation.LayoutTransition.Slide
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Slide
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 96
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Translate-only reflow (the default for reordered / moved items). Springs.
+  example: []
+  syntax:
+    content: public static LayoutTransition Slide { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.LayoutTransition
+    content.vb: Public Shared ReadOnly Property Slide As LayoutTransition
+  overload: FluentGpu.Foundation.LayoutTransition.Slide*
+- uid: FluentGpu.Foundation.LayoutTransition.Fade
+  commentId: P:FluentGpu.Foundation.LayoutTransition.Fade
+  id: Fade
+  parent: FluentGpu.Foundation.LayoutTransition
+  langs:
+  - csharp
+  - vb
+  name: Fade
+  nameWithType: LayoutTransition.Fade
+  fullName: FluentGpu.Foundation.LayoutTransition.Fade
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Fade
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 99
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Cross-fade only (no geometry).
+  example: []
+  syntax:
+    content: public static LayoutTransition Fade { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.LayoutTransition
+    content.vb: Public Shared ReadOnly Property Fade As LayoutTransition
+  overload: FluentGpu.Foundation.LayoutTransition.Fade*
+- uid: FluentGpu.Foundation.LayoutTransition.BoundsT(FluentGpu.Foundation.SizeMode)
+  commentId: M:FluentGpu.Foundation.LayoutTransition.BoundsT(FluentGpu.Foundation.SizeMode)
+  id: BoundsT(FluentGpu.Foundation.SizeMode)
+  parent: FluentGpu.Foundation.LayoutTransition
+  langs:
+  - csharp
+  - vb
+  name: BoundsT(SizeMode)
+  nameWithType: LayoutTransition.BoundsT(SizeMode)
+  fullName: FluentGpu.Foundation.LayoutTransition.BoundsT(FluentGpu.Foundation.SizeMode)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BoundsT
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 102
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Position + size, the size animated via <code class="paramref">size</code> (Reveal = translate + clip, no distortion).
+  example: []
+  syntax:
+    content: public static LayoutTransition BoundsT(SizeMode size)
+    parameters:
+    - id: size
+      type: FluentGpu.Foundation.SizeMode
+    return:
+      type: FluentGpu.Foundation.LayoutTransition
+    content.vb: Public Shared Function BoundsT(size As SizeMode) As LayoutTransition
+  overload: FluentGpu.Foundation.LayoutTransition.BoundsT*
+- uid: FluentGpu.Foundation.LayoutTransition.AutoAll
+  commentId: P:FluentGpu.Foundation.LayoutTransition.AutoAll
+  id: AutoAll
+  parent: FluentGpu.Foundation.LayoutTransition
+  langs:
+  - csharp
+  - vb
+  name: AutoAll
+  nameWithType: LayoutTransition.AutoAll
+  fullName: FluentGpu.Foundation.LayoutTransition.AutoAll
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AutoAll
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 105
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: 'The catch-all: position + size (Auto) + opacity. "Animate my layout, figure out the rest."'
+  example: []
+  syntax:
+    content: public static LayoutTransition AutoAll { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.LayoutTransition
+    content.vb: Public Shared ReadOnly Property AutoAll As LayoutTransition
+  overload: FluentGpu.Foundation.LayoutTransition.AutoAll*
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.IEquatable{FluentGpu.Foundation.LayoutTransition}
+  commentId: T:System.IEquatable{FluentGpu.Foundation.LayoutTransition}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<LayoutTransition>
+  nameWithType: IEquatable<LayoutTransition>
+  fullName: System.IEquatable<FluentGpu.Foundation.LayoutTransition>
+  nameWithType.vb: IEquatable(Of LayoutTransition)
+  fullName.vb: System.IEquatable(Of FluentGpu.Foundation.LayoutTransition)
+  name.vb: IEquatable(Of LayoutTransition)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Foundation.LayoutTransition
+    name: LayoutTransition
+    href: FluentGpu.Foundation.LayoutTransition.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.LayoutTransition
+    name: LayoutTransition
+    href: FluentGpu.Foundation.LayoutTransition.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Foundation.LayoutTransition.#ctor*
+  commentId: Overload:FluentGpu.Foundation.LayoutTransition.#ctor
+  href: FluentGpu.Foundation.LayoutTransition.html#FluentGpu_Foundation_LayoutTransition__ctor_FluentGpu_Foundation_TransitionChannels_FluentGpu_Foundation_TransitionDynamics_FluentGpu_Foundation_SizeMode_FluentGpu_Foundation_EnterExit_FluentGpu_Foundation_EnterExit_System_UInt16_System_Nullable_FluentGpu_Foundation_TransitionDynamics__System_Single_FluentGpu_Foundation_SizeAnchor_
+  name: LayoutTransition
+  nameWithType: LayoutTransition.LayoutTransition
+  fullName: FluentGpu.Foundation.LayoutTransition.LayoutTransition
+  nameWithType.vb: LayoutTransition.New
+  fullName.vb: FluentGpu.Foundation.LayoutTransition.New
+  name.vb: New
+- uid: FluentGpu.Foundation.TransitionChannels
+  commentId: T:FluentGpu.Foundation.TransitionChannels
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.TransitionChannels.html
+  name: TransitionChannels
+  nameWithType: TransitionChannels
+  fullName: FluentGpu.Foundation.TransitionChannels
+- uid: FluentGpu.Foundation.TransitionDynamics
+  commentId: T:FluentGpu.Foundation.TransitionDynamics
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.TransitionDynamics.html
+  name: TransitionDynamics
+  nameWithType: TransitionDynamics
+  fullName: FluentGpu.Foundation.TransitionDynamics
+- uid: FluentGpu.Foundation.SizeMode
+  commentId: T:FluentGpu.Foundation.SizeMode
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.SizeMode.html
+  name: SizeMode
+  nameWithType: SizeMode
+  fullName: FluentGpu.Foundation.SizeMode
+- uid: FluentGpu.Foundation.EnterExit
+  commentId: T:FluentGpu.Foundation.EnterExit
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.EnterExit.html
+  name: EnterExit
+  nameWithType: EnterExit
+  fullName: FluentGpu.Foundation.EnterExit
+- uid: System.UInt16
+  commentId: T:System.UInt16
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.uint16
+  name: ushort
+  nameWithType: ushort
+  fullName: ushort
+  nameWithType.vb: UShort
+  fullName.vb: UShort
+  name.vb: UShort
+- uid: System.Nullable{FluentGpu.Foundation.TransitionDynamics}
+  commentId: T:System.Nullable{FluentGpu.Foundation.TransitionDynamics}
+  parent: System
+  definition: System.Nullable`1
+  href: FluentGpu.Foundation.TransitionDynamics.html
+  name: TransitionDynamics?
+  nameWithType: TransitionDynamics?
+  fullName: FluentGpu.Foundation.TransitionDynamics?
+  spec.csharp:
+  - uid: FluentGpu.Foundation.TransitionDynamics
+    name: TransitionDynamics
+    href: FluentGpu.Foundation.TransitionDynamics.html
+  - name: '?'
+  spec.vb:
+  - uid: FluentGpu.Foundation.TransitionDynamics
+    name: TransitionDynamics
+    href: FluentGpu.Foundation.TransitionDynamics.html
+  - name: '?'
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.SizeAnchor
+  commentId: T:FluentGpu.Foundation.SizeAnchor
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.SizeAnchor.html
+  name: SizeAnchor
+  nameWithType: SizeAnchor
+  fullName: FluentGpu.Foundation.SizeAnchor
+- uid: System.Nullable`1
+  commentId: T:System.Nullable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  name: Nullable<T>
+  nameWithType: Nullable<T>
+  fullName: System.Nullable<T>
+  nameWithType.vb: Nullable(Of T)
+  fullName.vb: System.Nullable(Of T)
+  name.vb: Nullable(Of T)
+  spec.csharp:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Foundation.LayoutTransition.Channels*
+  commentId: Overload:FluentGpu.Foundation.LayoutTransition.Channels
+  href: FluentGpu.Foundation.LayoutTransition.html#FluentGpu_Foundation_LayoutTransition_Channels
+  name: Channels
+  nameWithType: LayoutTransition.Channels
+  fullName: FluentGpu.Foundation.LayoutTransition.Channels
+- uid: FluentGpu.Foundation.LayoutTransition.Dynamics*
+  commentId: Overload:FluentGpu.Foundation.LayoutTransition.Dynamics
+  href: FluentGpu.Foundation.LayoutTransition.html#FluentGpu_Foundation_LayoutTransition_Dynamics
+  name: Dynamics
+  nameWithType: LayoutTransition.Dynamics
+  fullName: FluentGpu.Foundation.LayoutTransition.Dynamics
+- uid: FluentGpu.Foundation.LayoutTransition.Size*
+  commentId: Overload:FluentGpu.Foundation.LayoutTransition.Size
+  href: FluentGpu.Foundation.LayoutTransition.html#FluentGpu_Foundation_LayoutTransition_Size
+  name: Size
+  nameWithType: LayoutTransition.Size
+  fullName: FluentGpu.Foundation.LayoutTransition.Size
+- uid: FluentGpu.Foundation.LayoutTransition.Enter*
+  commentId: Overload:FluentGpu.Foundation.LayoutTransition.Enter
+  href: FluentGpu.Foundation.LayoutTransition.html#FluentGpu_Foundation_LayoutTransition_Enter
+  name: Enter
+  nameWithType: LayoutTransition.Enter
+  fullName: FluentGpu.Foundation.LayoutTransition.Enter
+- uid: FluentGpu.Foundation.LayoutTransition.Exit*
+  commentId: Overload:FluentGpu.Foundation.LayoutTransition.Exit
+  href: FluentGpu.Foundation.LayoutTransition.html#FluentGpu_Foundation_LayoutTransition_Exit
+  name: Exit
+  nameWithType: LayoutTransition.Exit
+  fullName: FluentGpu.Foundation.LayoutTransition.Exit
+- uid: FluentGpu.Foundation.LayoutTransition.CustomCurveId*
+  commentId: Overload:FluentGpu.Foundation.LayoutTransition.CustomCurveId
+  href: FluentGpu.Foundation.LayoutTransition.html#FluentGpu_Foundation_LayoutTransition_CustomCurveId
+  name: CustomCurveId
+  nameWithType: LayoutTransition.CustomCurveId
+  fullName: FluentGpu.Foundation.LayoutTransition.CustomCurveId
+- uid: FluentGpu.Foundation.LayoutTransition.ExitDynamics*
+  commentId: Overload:FluentGpu.Foundation.LayoutTransition.ExitDynamics
+  href: FluentGpu.Foundation.LayoutTransition.html#FluentGpu_Foundation_LayoutTransition_ExitDynamics
+  name: ExitDynamics
+  nameWithType: LayoutTransition.ExitDynamics
+  fullName: FluentGpu.Foundation.LayoutTransition.ExitDynamics
+- uid: FluentGpu.Foundation.LayoutTransition.DelayMs*
+  commentId: Overload:FluentGpu.Foundation.LayoutTransition.DelayMs
+  href: FluentGpu.Foundation.LayoutTransition.html#FluentGpu_Foundation_LayoutTransition_DelayMs
+  name: DelayMs
+  nameWithType: LayoutTransition.DelayMs
+  fullName: FluentGpu.Foundation.LayoutTransition.DelayMs
+- uid: FluentGpu.Foundation.LayoutTransition.Anchor*
+  commentId: Overload:FluentGpu.Foundation.LayoutTransition.Anchor
+  href: FluentGpu.Foundation.LayoutTransition.html#FluentGpu_Foundation_LayoutTransition_Anchor
+  name: Anchor
+  nameWithType: LayoutTransition.Anchor
+  fullName: FluentGpu.Foundation.LayoutTransition.Anchor
+- uid: FluentGpu.Foundation.LayoutTransition.Slide*
+  commentId: Overload:FluentGpu.Foundation.LayoutTransition.Slide
+  href: FluentGpu.Foundation.LayoutTransition.html#FluentGpu_Foundation_LayoutTransition_Slide
+  name: Slide
+  nameWithType: LayoutTransition.Slide
+  fullName: FluentGpu.Foundation.LayoutTransition.Slide
+- uid: FluentGpu.Foundation.LayoutTransition
+  commentId: T:FluentGpu.Foundation.LayoutTransition
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.LayoutTransition.html
+  name: LayoutTransition
+  nameWithType: LayoutTransition
+  fullName: FluentGpu.Foundation.LayoutTransition
+- uid: FluentGpu.Foundation.LayoutTransition.Fade*
+  commentId: Overload:FluentGpu.Foundation.LayoutTransition.Fade
+  href: FluentGpu.Foundation.LayoutTransition.html#FluentGpu_Foundation_LayoutTransition_Fade
+  name: Fade
+  nameWithType: LayoutTransition.Fade
+  fullName: FluentGpu.Foundation.LayoutTransition.Fade
+- uid: FluentGpu.Foundation.LayoutTransition.BoundsT*
+  commentId: Overload:FluentGpu.Foundation.LayoutTransition.BoundsT
+  href: FluentGpu.Foundation.LayoutTransition.html#FluentGpu_Foundation_LayoutTransition_BoundsT_FluentGpu_Foundation_SizeMode_
+  name: BoundsT
+  nameWithType: LayoutTransition.BoundsT
+  fullName: FluentGpu.Foundation.LayoutTransition.BoundsT
+- uid: FluentGpu.Foundation.LayoutTransition.AutoAll*
+  commentId: Overload:FluentGpu.Foundation.LayoutTransition.AutoAll
+  href: FluentGpu.Foundation.LayoutTransition.html#FluentGpu_Foundation_LayoutTransition_AutoAll
+  name: AutoAll
+  nameWithType: LayoutTransition.AutoAll
+  fullName: FluentGpu.Foundation.LayoutTransition.AutoAll

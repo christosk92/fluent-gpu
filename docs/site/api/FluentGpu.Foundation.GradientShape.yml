@@ -1,0 +1,112 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.GradientShape
+  commentId: T:FluentGpu.Foundation.GradientShape
+  id: GradientShape
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.GradientShape.Linear
+  - FluentGpu.Foundation.GradientShape.Radial
+  langs:
+  - csharp
+  - vb
+  name: GradientShape
+  nameWithType: GradientShape
+  fullName: FluentGpu.Foundation.GradientShape
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GradientShape
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: 'public enum GradientShape : byte'
+    content.vb: Public Enum GradientShape As Byte
+- uid: FluentGpu.Foundation.GradientShape.Linear
+  commentId: F:FluentGpu.Foundation.GradientShape.Linear
+  id: Linear
+  parent: FluentGpu.Foundation.GradientShape
+  langs:
+  - csharp
+  - vb
+  name: Linear
+  nameWithType: GradientShape.Linear
+  fullName: FluentGpu.Foundation.GradientShape.Linear
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Linear
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Linear = 0
+    return:
+      type: FluentGpu.Foundation.GradientShape
+- uid: FluentGpu.Foundation.GradientShape.Radial
+  commentId: F:FluentGpu.Foundation.GradientShape.Radial
+  id: Radial
+  parent: FluentGpu.Foundation.GradientShape
+  langs:
+  - csharp
+  - vb
+  name: Radial
+  nameWithType: GradientShape.Radial
+  fullName: FluentGpu.Foundation.GradientShape.Radial
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Radial
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Radial = 1
+    return:
+      type: FluentGpu.Foundation.GradientShape
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Foundation.GradientShape
+  commentId: T:FluentGpu.Foundation.GradientShape
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.GradientShape.html
+  name: GradientShape
+  nameWithType: GradientShape
+  fullName: FluentGpu.Foundation.GradientShape

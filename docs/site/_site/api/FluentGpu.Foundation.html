@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Namespace FluentGpu.Foundation | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Namespace FluentGpu.Foundation | FluentGpu Developer Docs ">
+      
+      
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="ManagedReference">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="FluentGpu.Foundation">
+
+  <h1 id="FluentGpu_Foundation" data-uid="FluentGpu.Foundation" class="text-break">Namespace FluentGpu.Foundation</h1>
+  <div class="markdown level0 summary"></div>
+  <div class="markdown level0 conceptual"></div>
+  <div class="markdown level0 remarks"></div>
+
+    <h3 id="classes">
+Classes
+</h3>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.ArenaAllocator.html">ArenaAllocator</a></dt>
+      <dd><p>Per-frame bump allocator. O(1) <a class="xref" href="FluentGpu.Foundation.ArenaAllocator.html#FluentGpu_Foundation_ArenaAllocator_Reset">Reset()</a>. Spans are invalidated by Reset (and by a grow).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.BlurHash.html">BlurHash</a></dt>
+      <dd><p>BlurHash decoder — turns a compact ~20–30-char string into a tiny blurred preview (the LQIP placeholder used by
+Next.js <code>blurDataURL</code>, SwiftUI/Nuke BlurHash). The engine uploads the decoded tile as an image's initial
+texture so a recognizable blur shows instantly while the full-res art decodes off-thread. Pure math (no deps),
+AOT-safe. Algorithm: <code>github.com/woltapp/blurhash</code>.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.CharEventArgs.html">CharEventArgs</a></dt>
+      <dd><p>Character (text) input passed to <code>OnCharInput</code> handlers — the layout/IME-resolved Unicode codepoint, distinct
+from the raw virtual-key of <a class="xref" href="FluentGpu.Foundation.KeyEventArgs.html">KeyEventArgs</a> (Win32 splits WM_KEYDOWN from WM_CHAR; we mirror that).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.Diag.html">Diag</a></dt>
+      <dd><p>The standardized, reusable engine-wide diagnostics facility. Every subsystem instruments through it the same way:
+<code>Diag.Count(&quot;text.glyph&quot;,&quot;rasterized&quot;)</code>, <code>Diag.Set(&quot;d3d12&quot;,&quot;glyphInstances&quot;, n)</code>,
+<code>Diag.Event(&quot;rhi&quot;,&quot;device-lost&quot;)</code>, <code>using (Diag.Time(&quot;frame&quot;,&quot;record&quot;)) { … }</code>.</p>
+<p>COST MODEL: the recording methods are <code>[Conditional(&quot;DEBUG&quot;), Conditional(&quot;FLUENTGPU_DIAG&quot;)]</code>, so on a Release
+build (with neither symbol defined) the compiler removes the call site AND the argument evaluation entirely — a
+<code>Diag.Set(&quot;text.atlas&quot;,&quot;nonZero&quot;, ExpensiveScan())</code> costs literally nothing in production. Define
+<code>FLUENTGPU_DIAG</code> to keep diagnostics in a Release build; toggle at runtime with the AppContext switch
+<code>&quot;FluentGpu.Diagnostics&quot;</code> or by setting <a class="xref" href="FluentGpu.Foundation.Diag.html#FluentGpu_Foundation_Diag_Enabled">Enabled</a>. Route output by setting <a class="xref" href="FluentGpu.Foundation.Diag.html#FluentGpu_Foundation_Diag_Sink">Sink</a>.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.DragEventArgs.html">DragEventArgs</a></dt>
+      <dd><p>Drag-reorder lifecycle payload for <code>OnDragStarted</code>/<code>OnDragDelta</code>/<code>OnDragCompleted</code>: the pointer in
+the dragged node's CURRENT box (<a class="xref" href="FluentGpu.Foundation.DragEventArgs.html#FluentGpu_Foundation_DragEventArgs_Local">Local</a> stays ≈ the grab offset) and in window space, the accumulated
+gesture translation since the arming press, and the smoothed pointer velocity (px/s, ~50ms EMA) for flick/settle
+decisions. ONE instance is reused for the whole gesture (0 steady-state alloc per move) — handlers must copy
+fields they keep, never hold the reference.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.DragSession.html">DragSession</a></dt>
+      <dd><p>THE live drag session (E5-L2): ONE mutable instance owned by <code>Input.DragDropContext</code>, opened when an L1 drag
+promotes on a chain carrying a <a class="xref" href="FluentGpu.Foundation.DragSource.html">DragSource</a> (payload resolved once), updated per pointer move, handed
+to every <a class="xref" href="FluentGpu.Foundation.DropTargetSpec.html">DropTargetSpec</a> handler, and cleared (incl. the Payload GC edge) when the gesture ends.
+Handlers copy what they keep — never hold the reference across gestures.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.DragSource.html">DragSource</a></dt>
+      <dd><p>E5-L2 typed drag SOURCE spec (<code>BoxEl.Draggable</code> — the Flutter Draggable / react-beautiful-dnd model; user
+ruling 2026-06-10: deliberately NOT WinUI's OLE DataPackage/DoDragDrop modal loop): <code class="paramref">Kind</code> is a
+string discriminator so target accept-tests are cast-free; <code class="paramref">PayloadFactory</code> resolves the typed
+payload ONCE when the L1 press promotes past the drag box (never per move). Trimming-safe: plain delegates.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.DropTargetSpec.html">DropTargetSpec</a></dt>
+      <dd><p>E5-L2 drop TARGET spec (<code>BoxEl.DropTarget</code> — Flutter DragTarget / SwiftUI dropDestination): receives sessions
+whose Kind is in <a class="xref" href="FluentGpu.Foundation.DropTargetSpec.html#FluentGpu_Foundation_DropTargetSpec_AcceptKinds">AcceptKinds</a>. Discovery is hit-test-chain based — per pointer move the engine picks
+the NEAREST enabled accepting target under the pointer (a non-accepting target never blocks an accepting
+ancestor). OnEnter/OnLeave fire on hover transitions, OnOver every move while inside, OnDrop on release over it
+(BEFORE the L1 completion). The <a class="xref" href="FluentGpu.Foundation.DragSession.html">DragSession</a> argument is THE one live reused instance — copy what
+you keep.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.Easings.html">Easings</a></dt>
+      <dd><p>Evaluates an <a class="xref" href="FluentGpu.Foundation.Easing.html">Easing</a> curve at normalized time t (0..1).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.KeyEventArgs.html">KeyEventArgs</a></dt>
+      <dd><p>Keyboard event passed to node handlers during tunnel/bubble routing. <a class="xref" href="FluentGpu.Foundation.KeyEventArgs.html#FluentGpu_Foundation_KeyEventArgs_Handled">Handled</a> stops propagation.
+Carries the modifier chord and the auto-repeat flag (Win32 lParam bit 30) so editors can do Ctrl+arrow word
+navigation and Shift+arrow selection without re-querying the keyboard.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.Keys.html">Keys</a></dt>
+      <dd><p>Well-known virtual-key codes (Win32 VK_*) used by the input router.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.ObjectPool-1.html">ObjectPool&lt;T&gt;</a></dt>
+      <dd><p>Edge-only recycle pool for managed objects (Component / RenderContext). Cap-bounded.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.PngWriter.html">PngWriter</a></dt>
+      <dd><p>Minimal pure-managed PNG encoder for debug frame captures — no WIC / System.Drawing, AOT-safe, zero new deps.
+Emits an opaque RGB PNG (color type 2) from a tightly-packed top-down BGRA8 buffer (the D3D12 readback format).
+Used only by the <code>--screenshot</code> tooling path; never on the hot frame path.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.PointerEventArgs.html">PointerEventArgs</a></dt>
+      <dd><p>Position-aware pointer-press payload for <code>OnPointerPressed</code>: local coords + the click count (1/2/3 — the
+dispatcher tracks double/triple-click timing and slop), the modifier chord, the button (0=left 1=right 2=middle)
+and the device kind. Allocated only on an actual press (cold user-gesture edge).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.SlabAllocator-1.html">SlabAllocator&lt;T&gt;</a></dt>
+      <dd><p>Stable, generation-versioned slab over <code class="typeparamref">T</code>. Index 0 is reserved as the null slot,
+so <code>default(Handle)</code> is null. Generation is bumped on Free (ABA defense). O(1) alloc/free via an
+intrusive int free-list. Pointer-bearing T uses a side <code>_next</code> array (we always do, here).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.SpanRun.html">SpanRun</a></dt>
+      <dd><p>A registered span run: the immutable per-span shaping overlays plus the seam-published layout artifacts.
+Lives in <a class="xref" href="FluentGpu.Foundation.SpanRunTable.html#FluentGpu_Foundation_SpanRunTable_Shared">Shared</a>; referenced from <code>TextStyle.SpanRunId</code> (the measure-cache /
+shaped-run-cache key), so a style change ⇒ a fresh run id ⇒ every downstream cache self-invalidates.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.SpanRunRects.html">SpanRunRects</a></dt>
+      <dd><p>An immutable snapshot of a span run's laid-out rect artifacts at one wrap width. Published whole by the
+text seam on a measure-cache miss (content/width change) and read lock-free by the recorder (decoration bars) and
+the input dispatcher (hyperlink cursor/click) — steady frames never re-touch the font seam.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.SpanRunTable.html">SpanRunTable</a></dt>
+      <dd><p>Process-wide registry of span runs — the interner-style side channel that lets the multi-run style overlay ride an
+<code>int</code> through the POD pipeline (<code>TextStyle.SpanRunId</code> → DrawList <code>DrawGlyphRunCmd.SpanRunId</code>) the way
+strings ride <a class="xref" href="FluentGpu.Foundation.StringId.html">StringId</a> through <a class="xref" href="FluentGpu.Foundation.StringTable.html">StringTable</a>.</p>
+<p><b>Seam-safe (threading-render-seam.md §9, the StringTable discipline):</b> chunked backing store — chunks are
+allocated once and never moved; a release-store of the count publishes each new slot, the reader acquire-loads the
+count before indexing. The UI thread is the single writer (reconciler, at element-change time — never in frame
+phases 6–13); the render-side glyph path resolves the previous frame's ids concurrently.</p>
+<p><b>Static <a class="xref" href="FluentGpu.Foundation.SpanRunTable.html#FluentGpu_Foundation_SpanRunTable_Shared">Shared</a> (deliberate):</b> unlike <a class="xref" href="FluentGpu.Foundation.StringTable.html">StringTable</a> (host-instanced and threaded
+through every constructor), the render-side consumer reaches a span run only through the POD id baked in the draw
+stream — there is no host seam to hand an instance through. One process = one UI thread = one writer, ids burn
+monotonically and are never reused, so a process-global table is safe by the same argument that makes the ids safe.</p>
+<p><b>Reclamation:</b> owners (the scene's span-text side-table) pair <a class="xref" href="FluentGpu.Foundation.SpanRunTable.html#FluentGpu_Foundation_SpanRunTable_AddRef_System_Int32_">AddRef(int)</a>/<a class="xref" href="FluentGpu.Foundation.SpanRunTable.html#FluentGpu_Foundation_SpanRunTable_Release_System_Int32_">Release(int)</a>;
+a run whose count hits 0 has its slot cleared after a creation-distance quarantine (≥ <span class="xref">FluentGpu.Foundation.SpanRunTable.QuarantineDistance</span>
+newer runs registered — far beyond the in-flight frame depth at any realistic churn), so a draw list recorded just
+before the release still resolves. A cleared id resolves null → consumers fall back to the base style. Ids are
+never reused.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.StringTable.html">StringTable</a></dt>
+      <dd><p>String interner with REF-COUNTED reclamation. Lives in Foundation so Render can resolve without depending on Scene.</p>
+<pre><code> &lt;p&gt;&lt;b&gt;Seam-safe (threading-render-seam.md §9):&lt;/b&gt; the UI thread interns (&lt;xref href=&quot;FluentGpu.Foundation.StringTable.Intern(System.String)&quot; data-throw-if-not-resolved=&quot;false&quot;&gt;&lt;/xref&gt;, the single writer) while
+ the render thread resolves (&lt;xref href=&quot;FluentGpu.Foundation.StringTable.Resolve(FluentGpu.Foundation.StringId)&quot; data-throw-if-not-resolved=&quot;false&quot;&gt;&lt;/xref&gt;) the previous frame's ids concurrently. The backing store is therefore
+ &lt;i&gt;chunked&lt;/i&gt;: chunks are allocated once and never resized or moved, so a concurrent reader can never observe a torn or
+ reallocated array (a plain &lt;code&gt;List&lt;string&gt;&lt;/code&gt; would race on its geometric Add-realloc). A release-store of the count
+ publishes each new slot; the reader acquire-loads the count before indexing, so it only ever reads fully-written slots.&lt;/p&gt;
+
+ &lt;p&gt;&lt;b&gt;Reclamation (virtualization workloads):&lt;/b&gt; a 100k-row virtual list streams unique row text through the table —
+ append-only interning is an unbounded leak. Owners (the scene's text columns) pair &lt;xref href=&quot;FluentGpu.Foundation.StringTable.AddRef(FluentGpu.Foundation.StringId)&quot; data-throw-if-not-resolved=&quot;false&quot;&gt;&lt;/xref&gt;/&lt;xref href=&quot;FluentGpu.Foundation.StringTable.Release(FluentGpu.Foundation.StringId)&quot; data-throw-if-not-resolved=&quot;false&quot;&gt;&lt;/xref&gt;;
+ when an id's count hits 0 its map entry is removed (a re-intern of the same content gets a NEW id) and the slot is cleared
+ after a reader quarantine (&lt;xref href=&quot;FluentGpu.Foundation.StringTable.Tick&quot; data-throw-if-not-resolved=&quot;false&quot;&gt;&lt;/xref&gt; per frame, far beyond the in-flight frame depth). &lt;b&gt;Ids are never reused&lt;/b&gt; —
+ reclaimed ids stay burned, so a stale id can never alias different content (the shaped-run cache keys on ids and ages out in
+ well under the id space). Fully-dead chunks free their backing array. Strings never AddRef'd are simply permanent.&lt;/p&gt;
+</code></pre>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.WheelEventArgs.html">WheelEventArgs</a></dt>
+      <dd><p>Element-level wheel payload for <code>OnPointerWheel</code> (WinUI PointerWheelChanged): the platform wheel delta —
+the same value the viewport scroll path consumes — plus the modifier chord. Setting <a class="xref" href="FluentGpu.Foundation.WheelEventArgs.html#FluentGpu_Foundation_WheelEventArgs_Handled">Handled</a> stops
+the dispatcher from scrolling the enclosing viewport (NumberBox value-stepping inside a scrollable form,
+NumberBox.cpp:578-597 OnNumberBoxScroll marks the routed event handled). Unhandled, the wheel keeps walking up
+to the next handler / the nearest scrollable (routed-event semantics). Allocated per wheel event (cold edge).</p>
+</dd>
+    </dl>
+    <h3 id="structs">
+Structs
+</h3>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.AcrylicSpec.html">AcrylicSpec</a></dt>
+      <dd><p>A per-node acrylic (frosted glass): the engine samples the canvas behind the node, resolves transparent backdrop
+through <a class="xref" href="FluentGpu.Foundation.AcrylicSpec.html#FluentGpu_Foundation_AcrylicSpec_Fallback">Fallback</a>, blurs it (<a class="xref" href="FluentGpu.Foundation.AcrylicSpec.html#FluentGpu_Foundation_AcrylicSpec_BlurSigma">BlurSigma</a>), then applies WinUI's luminosity/tint recipe.
+Realized by the <code>PushLayer</code>/<code>PopLayer</code> backdrop subsystem.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.Affine2D.html">Affine2D</a></dt>
+      <dd><p>2x3 affine (local→parent). 2.5D/perspective out of scope (per spec).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.ArcSpec.html">ArcSpec</a></dt>
+      <dd><p>A circular-arc stroke (WinUI ProgressRing — a trimmed, round-capped ring). The arc is centred in the node's box with
+radius (min(W,H)-Thickness)/2, a <a class="xref" href="FluentGpu.Foundation.ArcSpec.html#FluentGpu_Foundation_ArcSpec_Thickness">Thickness</a>-wide stroke, swept from <a class="xref" href="FluentGpu.Foundation.ArcSpec.html#FluentGpu_Foundation_ArcSpec_StartDeg">StartDeg</a> for
+<a class="xref" href="FluentGpu.Foundation.ArcSpec.html#FluentGpu_Foundation_ArcSpec_SweepDeg">SweepDeg</a> degrees (0° = 12 o'clock, clockwise). The recorder emits a <code>DrawArc</code>; the GPU draws the SDF
+arc with round caps. A full ring is SweepDeg = 360.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.BrushHandle.html">BrushHandle</a></dt>
+      <dd><p>Typed wrapper for brushes interned in the BrushTable.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.ColorF.html">ColorF</a></dt>
+      <dd><p>Straight-alpha sRGB color (P8: brush color = straight-alpha sRGB float4).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.CornerRadius4.html">CornerRadius4</a></dt>
+      <dd></dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.CursorId.html">CursorId</a></dt>
+      <dd></dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.DiagScope.html">DiagScope</a></dt>
+      <dd><p>Timing scope from <a class="xref" href="FluentGpu.Foundation.Diag.html#FluentGpu_Foundation_Diag_Time_System_String_System_String_">Time(string, string)</a>. Zero-work on Release (the <code>Diag.CompiledIn</code> const folds out).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.EasingSpec.html">EasingSpec</a></dt>
+      <dd></dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.Edges4.html">Edges4</a></dt>
+      <dd><p>Per-edge thickness (margin/padding/border). [InlineArray]-shaped logically; struct of 4 floats here.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.EnterExit.html">EnterExit</a></dt>
+      <dd><p>Presented-space terminal for an inserted/removed node: where it animates FROM on enter / TO on exit
+(offset + scale + opacity), relative to its laid-out rect. <code>Active</code>=false ⇒ the node simply snaps in/out.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.GradientSpec.html">GradientSpec</a></dt>
+      <dd><p>A gradient fill. <a class="xref" href="FluentGpu.Foundation.GradientSpec.html#FluentGpu_Foundation_GradientSpec_AngleDeg">AngleDeg</a> is the linear axis (0 = left-to-right, 90 = top-to-bottom). Up to 4 stops are
+carried into the POD draw command; extras are ignored. When set on a node it supersedes the solid fill at record time.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.GradientStop.html">GradientStop</a></dt>
+      <dd><p>One gradient stop: a normalized position (0..1 along the gradient axis) and its color.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.Handle.html">Handle</a></dt>
+      <dd><p>Generational handle — 8 bytes {u32 index, u32 gen}. The canonical FluentGpu handle layout.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.ImageTransition.html">ImageTransition</a></dt>
+      <dd><p>The placeholder→image reveal transition (the cross-fade) — spec'd with the engine's shared motion vocabulary (a
+duration in ms + an <a class="xref" href="FluentGpu.Foundation.ImageTransition.html#FluentGpu_Foundation_ImageTransition_Easing">Easing</a> curve) so image reveals animate exactly like every other control. Override
+per-image via <code>ImageEl.Transition</code>, or change the app-wide <a class="xref" href="FluentGpu.Foundation.ImageTransition.html#FluentGpu_Foundation_ImageTransition_Default">Default</a> once at startup. Set
+<a class="xref" href="FluentGpu.Foundation.ImageTransition.html#FluentGpu_Foundation_ImageTransition_DurationMs">DurationMs</a> = 0 (or use <a class="xref" href="FluentGpu.Foundation.ImageTransition.html#FluentGpu_Foundation_ImageTransition_None">None</a>) to DISABLE the fade — the image then appears instantly.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.KeyAccelerator.html">KeyAccelerator</a></dt>
+      <dd><p>A keyboard accelerator chord (WinUI KeyboardAccelerator): <a class="xref" href="FluentGpu.Foundation.KeyAccelerator.html#FluentGpu_Foundation_KeyAccelerator_Key">Key</a> + <a class="xref" href="FluentGpu.Foundation.KeyAccelerator.html#FluentGpu_Foundation_KeyAccelerator_Mods">Mods</a> invoke the
+owning node's click handler from anywhere (dispatched after focused routing leaves the key unhandled).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.LayoutTransition.html">LayoutTransition</a></dt>
+      <dd><p>The whole authoring surface (interned POD). Channels × dynamics × size-mode × enter/exit compose
+orthogonally — translate / scale / rotate / opacity / clip-reveal all fall out, with no per-control special cases.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.NativeHandle.html">NativeHandle</a></dt>
+      <dd><p>POD across the PAL/RHI seam — never a boxed <code>object</code>. The D3D12 leaf switches on <a class="xref" href="FluentGpu.Foundation.NativeHandle.html#FluentGpu_Foundation_NativeHandle_Kind">Kind</a>.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.NodeHandle.html">NodeHandle</a></dt>
+      <dd><p>Zero-cost typed wrapper over <a class="xref" href="FluentGpu.Foundation.Handle.html">Handle</a> for nodes in the SceneStore.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.Point2.html">Point2</a></dt>
+      <dd></dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.PolylineStrokeSpec.html">PolylineStrokeSpec</a></dt>
+      <dd><p>A retained stroked polyline with normalized trim controls. Points are local DIP coordinates inside the node's box;
+trim values are path-distance fractions (0..1), so animation can reveal the stroke in draw order.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.RectF.html">RectF</a></dt>
+      <dd><p>Axis-aligned rectangle in DIPs. Local to its node (P8: Bounds are node-LOCAL).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.ShadowSpec.html">ShadowSpec</a></dt>
+      <dd><p>A drop shadow / elevation descriptor (CSS box-shadow shape). Lives in Foundation so Scene/Render/Reconciler can
+read it without referencing Dsl. Carried by an elevated node; the recorder emits a <code>DrawShadow</code> beneath the fill.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.Size2.html">Size2</a></dt>
+      <dd></dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.SpanRect.html">SpanRect</a></dt>
+      <dd><p>One laid-out rect artifact of a span run (paragraph-node-local DIP): the line-fragment geometry of a
+decorated/link span. <a class="xref" href="FluentGpu.Foundation.SpanRect.html#FluentGpu_Foundation_SpanRect_Kind">Kind</a> is the single <a class="xref" href="FluentGpu.Foundation.SpanStyle.html">SpanStyle</a> flag bit it serves — Link rects are
+the FULL line-fragment band (hit-testing, Hand cursor); Underline/Strikethrough rects are the positioned BARS
+(the recorder fills them verbatim, no font-seam touch at record time).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.SpanStyle.html">SpanStyle</a></dt>
+      <dd><p>The POD shaping overlay for one span of a span run: the UTF-16 char range [<a class="xref" href="FluentGpu.Foundation.SpanStyle.html#FluentGpu_Foundation_SpanStyle_Start">Start</a>, <a class="xref" href="FluentGpu.Foundation.SpanStyle.html#FluentGpu_Foundation_SpanStyle_End">End</a>)
+of the CONCATENATED paragraph text plus the style deltas the text seam applies over the base
+<code>TextStyle</code>. Weight 0 / SizeDip 0 / FontFamily empty / Color A==0 = inherit the base. Built by the
+reconciler from <a class="xref" href="FluentGpu.Foundation.TextSpan.html">TextSpan</a>s; resolved by both text backends and the glyph renderer through
+<a class="xref" href="FluentGpu.Foundation.SpanRunTable.html#FluentGpu_Foundation_SpanRunTable_Shared">Shared</a>, so measure ≡ hit-test ≡ render for span runs too.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.StringId.html">StringId</a></dt>
+      <dd><p>4-byte interned string id. Id 0 = empty. No <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a> reaches the paint path.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.TextSpan.html">TextSpan</a></dt>
+      <dd><p>One inline run of a rich-text paragraph (the WinUI <code>TextBlock.Inlines</code> Run/Bold/Hyperlink model, rtb-01).
+A <code>SpanTextEl</code> paragraph is an array of these; the WHOLE paragraph shapes as ONE flow (spans concatenated,
+wrapped together — exactly how WinUI lays a paragraph's inline collection, RichTextBlock.g.h:63 get_Blocks).</p>
+<p><a class="xref" href="FluentGpu.Foundation.TextSpan.html#FluentGpu_Foundation_TextSpan_Weight">Weight</a> 0 / <a class="xref" href="FluentGpu.Foundation.TextSpan.html#FluentGpu_Foundation_TextSpan_Size">Size</a> null / <a class="xref" href="FluentGpu.Foundation.TextSpan.html#FluentGpu_Foundation_TextSpan_FontFamily">FontFamily</a> null / <a class="xref" href="FluentGpu.Foundation.TextSpan.html#FluentGpu_Foundation_TextSpan_Color">Color</a> A==0
+all mean "inherit the paragraph base". <a class="xref" href="FluentGpu.Foundation.TextSpan.html#FluentGpu_Foundation_TextSpan_OnClick">OnClick</a> non-null makes this a HYPERLINK span: the engine
+resolves the Hand cursor over the span's laid-out rects and fires the action on click/tap — WinUI's inline
+Hyperlink (SetCursor(MouseCursorHand) on hyperlink hover, RichTextBlock.cpp:2995 / TextBlock.cpp:3488). Accent
+foreground + underline styling is the CALLER's job (HyperlinkForeground theming, generic.xaml:1120-1122).</p>
+<p>No italic axis: the shaper resolves faces by (family, weight) only — DWRITE_FONT_STYLE_NORMAL is fixed
+(TextLayoutEngine face resolution); FontStyle arrives with the italics workstream (plan §Text display).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.TrackSize.html">TrackSize</a></dt>
+      <dd></dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.TransitionDynamics.html">TransitionDynamics</a></dt>
+      <dd><p>The dynamics of a transition. Springs are the default (interruptible, jump-free retarget): <code>Response</code> ≈ the
+settle time in seconds, <code>DampingRatio</code> 1 = critical (no overshoot), &lt;1 = bouncy. A tween is opt-in:
+fixed <code>DurationMs</code> + <code>Easing</code> (an <a class="xref" href="FluentGpu.Foundation.EasingSpec.html">EasingSpec</a>, so authored WinUI KeySplines are expressible;
+a default spec is normalized by the engine to <a class="xref" href="FluentGpu.Foundation.Easing.html#FluentGpu_Foundation_Easing_FluentDecelerate">FluentDecelerate</a>). Stored as scalars
+(not the AnimEngine's <code>SpringParams</code>) so the spec can live in Foundation; the engine converts at seed time.
+A <code>default</code> value (all zero) is normalized by the engine to the spring defaults.</p>
+</dd>
+    </dl>
+    <h3 id="enums">
+Enums
+</h3>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.AutomationRole.html">AutomationRole</a></dt>
+      <dd><p>The semantic role of a node, set by the control factories (a button IS a BoxEl, so the role is how it announces
+itself). Carried on the input/a11y column; surfaced to the future UIA layer (ControlType), devtools, and UI tests.
+Default <a class="xref" href="FluentGpu.Foundation.AutomationRole.html#FluentGpu_Foundation_AutomationRole_None">None</a> = a plain box/container.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.DropEffect.html">DropEffect</a></dt>
+      <dd><p>The semantic outcome of an IN-APP drop (E5-L2 — the Flutter/SwiftUI model, never OLE): advisory — the
+engine sets Move while over an accepting target, None otherwise; targets may refine it in OnEnter/OnOver.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.DynamicTextKind.html">DynamicTextKind</a></dt>
+      <dd><p>Retained text slots whose contents are refreshed by the host without re-rendering or relayout.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.DynamicsKind.html">DynamicsKind</a></dt>
+      <dd><p>Spring (velocity-carrying, interruptible — the default) or an eased fixed-duration tween.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.Easing.html">Easing</a></dt>
+      <dd><p>Easing curves — a FOUNDATIONAL motion primitive shared by every layer that animates: the animation-track engine,
+declarative transitions, and the image placeholder→art cross-fade. Living in Foundation lets any subsystem (Dsl,
+Scene, Render, Animation) spec a transition with the same vocabulary. Includes the real Fluent 2 / WinUI curves.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.FlexAlign.html">FlexAlign</a></dt>
+      <dd><p>Cross-axis alignment (flexbox align-items / align-self). <a class="xref" href="FluentGpu.Foundation.FlexAlign.html#FluentGpu_Foundation_FlexAlign_Auto">Auto</a> on a child = inherit the container's align-items.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.FlexJustify.html">FlexJustify</a></dt>
+      <dd><p>Main-axis distribution of free space (flexbox justify-content).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.GradientShape.html">GradientShape</a></dt>
+      <dd></dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.ImageFit.html">ImageFit</a></dt>
+      <dd><p>How an image's pixels map into its (possibly differently-shaped) layout box — the CSS <code>object-fit</code> model,
+cleaner than WinUI's <code>Stretch</code> because box-sizing is a separate concern (see <code>AspectRatio</code>). Default
+<a class="xref" href="FluentGpu.Foundation.ImageFit.html#FluentGpu_Foundation_ImageFit_Cover">Cover</a> (what album art / thumbnails want): never distorts, never letterboxes.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.KeyModifiers.html">KeyModifiers</a></dt>
+      <dd><p>Keyboard modifier state, captured per input event at the platform pump (Win32 GetKeyState).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.LineStacking.html">LineStacking</a></dt>
+      <dd><p>How an explicit LineHeight interacts with the font-natural line box (mirrors WinUI LineStackingStrategy;
+BaselineToBaseline is not modeled). MaxHeight — the WinUI BaseTextBlockStyle default
+(TextBlock_themeresources.xaml:16) — makes the line advance max(font-natural, LineHeight); BlockLineHeight makes
+the line advance exactly LineHeight (lines may visually overlap when smaller than natural).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.NativeHandleKind.html">NativeHandleKind</a></dt>
+      <dd></dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.NodeFlags.html">NodeFlags</a></dt>
+      <dd><p>Per-node dirty + state bits (a single 32-bit SceneStore column). Three orthogonal dirty axes.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.PointerKind.html">PointerKind</a></dt>
+      <dd><p>The physical pointer device class an event came from (WinUI PointerDeviceType) — controls touch-vs-mouse
+behavioral splits (RatingControl hover scale, touch paddings).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.SizeAnchor.html">SizeAnchor</a></dt>
+      <dd><p>Which edge of a <a class="xref" href="FluentGpu.Foundation.SizeMode.html#FluentGpu_Foundation_SizeMode_Reflow">Reflow</a> node its CONTENT is anchored to while the size animates.
+<a class="xref" href="FluentGpu.Foundation.SizeAnchor.html#FluentGpu_Foundation_SizeAnchor_Leading">Leading</a> = content stays put, the far edge sweeps (a wipe). <a class="xref" href="FluentGpu.Foundation.SizeAnchor.html#FluentGpu_Foundation_SizeAnchor_Trailing">Trailing</a> = the content's
+end edge rides the animated edge (the WinUI Expander &quot;slide out from under the header&quot;: at reveal 0 the content
+sits fully behind the leading edge; its trailing rounded corners stay visible mid-motion). Applied by the recorder
+as a child-group offset — compositor-composed, no per-child knowledge.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.SizeMode.html">SizeMode</a></dt>
+      <dd><p>How a SIZE change is animated. <a class="xref" href="FluentGpu.Foundation.SizeMode.html#FluentGpu_Foundation_SizeMode_Auto">Auto</a> picks per node: pure-chrome leaf → <a class="xref" href="FluentGpu.Foundation.SizeMode.html#FluentGpu_Foundation_SizeMode_ScaleCorrect">ScaleCorrect</a>;
+a text/wrapping subtree under budget → <a class="xref" href="FluentGpu.Foundation.SizeMode.html#FluentGpu_Foundation_SizeMode_Relayout">Relayout</a>; everything else → <a class="xref" href="FluentGpu.Foundation.SizeMode.html#FluentGpu_Foundation_SizeMode_Reveal">Reveal</a>.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.TextLineBounds.html">TextLineBounds</a></dt>
+      <dd><p>Which vertical band a text line reports as its box (mirrors WinUI TextLineBounds, minimum set —
+TrimToCapHeight/TrimToBaseline individually are not modeled). Full — the WinUI BaseTextBlockStyle default
+(TextBlock_themeresources.xaml:17) — is the font-natural ascent..descent box; Tight trims the box to
+cap-height..baseline so vertical centering is optical (e.g. PersonPicture initials, PersonPicture.xaml:66).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.TextTrim.html">TextTrim</a></dt>
+      <dd><p>How overflowing text is truncated (mirrors WinUI TextTrimming). Applies to the last visible line.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.TextWrap.html">TextWrap</a></dt>
+      <dd><p>How a text run breaks across lines (mirrors WinUI TextWrapping).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.TrackKind.html">TrackKind</a></dt>
+      <dd><p>A CSS-Grid track sizing function. (Lives in Foundation so both the DSL and the layout/scene see it.)</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Foundation.TransitionChannels.html">TransitionChannels</a></dt>
+      <dd><p>The general layout-transition spec — the entire authoring surface for &quot;animate this node's layout changes&quot;.
+A plain POD (no closures) so it is hot-path safe, and it lives in Foundation (below the AnimEngine, which reads it
+and converts the dynamics to its internal spring/tween). It attaches to a node via <code>BoxEl.Animate</code> (or
+<code>RenderContext.UseLayoutAnimation</code>); the host diffs the node's presented rect vs its new laid-out rect each
+commit and drives the presented geometry toward target through these channels/dynamics — no relayout, no per-frame
+re-render, and zero control-type knowledge.</p>
+</dd>
+    </dl>
+
+
+</article>
+
+
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

@@ -1,0 +1,107 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Pal.IPlatformLocale
+  commentId: T:FluentGpu.Pal.IPlatformLocale
+  id: IPlatformLocale
+  parent: FluentGpu.Pal
+  children:
+  - FluentGpu.Pal.IPlatformLocale.Epoch
+  langs:
+  - csharp
+  - vb
+  name: IPlatformLocale
+  nameWithType: IPlatformLocale
+  fullName: FluentGpu.Pal.IPlatformLocale
+  type: Interface
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IPlatformLocale
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 206
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: Versioned external-store-shaped locale seam (modeled on ISystemColors). L9.
+  example: []
+  syntax:
+    content: public interface IPlatformLocale
+    content.vb: Public Interface IPlatformLocale
+- uid: FluentGpu.Pal.IPlatformLocale.Epoch
+  commentId: P:FluentGpu.Pal.IPlatformLocale.Epoch
+  id: Epoch
+  parent: FluentGpu.Pal.IPlatformLocale
+  langs:
+  - csharp
+  - vb
+  name: Epoch
+  nameWithType: IPlatformLocale.Epoch
+  fullName: FluentGpu.Pal.IPlatformLocale.Epoch
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Epoch
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 208
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: uint Epoch { get; }
+    parameters: []
+    return:
+      type: System.UInt32
+    content.vb: ReadOnly Property Epoch As UInteger
+  overload: FluentGpu.Pal.IPlatformLocale.Epoch*
+references:
+- uid: FluentGpu.Pal
+  commentId: N:FluentGpu.Pal
+  href: FluentGpu.html
+  name: FluentGpu.Pal
+  nameWithType: FluentGpu.Pal
+  fullName: FluentGpu.Pal
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+- uid: FluentGpu.Pal.IPlatformLocale.Epoch*
+  commentId: Overload:FluentGpu.Pal.IPlatformLocale.Epoch
+  href: FluentGpu.Pal.IPlatformLocale.html#FluentGpu_Pal_IPlatformLocale_Epoch
+  name: Epoch
+  nameWithType: IPlatformLocale.Epoch
+  fullName: FluentGpu.Pal.IPlatformLocale.Epoch
+- uid: System.UInt32
+  commentId: T:System.UInt32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.uint32
+  name: uint
+  nameWithType: uint
+  fullName: uint
+  nameWithType.vb: UInteger
+  fullName.vb: UInteger
+  name.vb: UInteger
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System

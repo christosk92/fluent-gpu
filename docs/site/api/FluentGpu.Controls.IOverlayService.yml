@@ -1,0 +1,459 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.IOverlayService
+  commentId: T:FluentGpu.Controls.IOverlayService
+  id: IOverlayService
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.IOverlayService.AnyOpen
+  - FluentGpu.Controls.IOverlayService.CloseAll
+  - FluentGpu.Controls.IOverlayService.CloseTop
+  - FluentGpu.Controls.IOverlayService.Open(System.Func{FluentGpu.Foundation.NodeHandle},System.Func{FluentGpu.Dsl.Element},FluentGpu.Controls.FlyoutPlacement)
+  - FluentGpu.Controls.IOverlayService.Open(System.Func{FluentGpu.Foundation.NodeHandle},System.Func{FluentGpu.Dsl.Element},FluentGpu.Controls.FlyoutPlacement,FluentGpu.Controls.PopupOptions)
+  - FluentGpu.Controls.IOverlayService.OpenAt(System.Func{FluentGpu.Foundation.RectF},System.Func{FluentGpu.Dsl.Element},FluentGpu.Controls.FlyoutPlacement,FluentGpu.Controls.PopupOptions,System.Func{FluentGpu.Foundation.NodeHandle})
+  langs:
+  - csharp
+  - vb
+  name: IOverlayService
+  nameWithType: IOverlayService
+  fullName: FluentGpu.Controls.IOverlayService
+  type: Interface
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IOverlayService
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 96
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public interface IOverlayService
+    content.vb: Public Interface IOverlayService
+- uid: FluentGpu.Controls.IOverlayService.Open(System.Func{FluentGpu.Foundation.NodeHandle},System.Func{FluentGpu.Dsl.Element},FluentGpu.Controls.FlyoutPlacement)
+  commentId: M:FluentGpu.Controls.IOverlayService.Open(System.Func{FluentGpu.Foundation.NodeHandle},System.Func{FluentGpu.Dsl.Element},FluentGpu.Controls.FlyoutPlacement)
+  id: Open(System.Func{FluentGpu.Foundation.NodeHandle},System.Func{FluentGpu.Dsl.Element},FluentGpu.Controls.FlyoutPlacement)
+  parent: FluentGpu.Controls.IOverlayService
+  langs:
+  - csharp
+  - vb
+  name: Open(Func<NodeHandle>, Func<Element>, FlyoutPlacement)
+  nameWithType: IOverlayService.Open(Func<NodeHandle>, Func<Element>, FlyoutPlacement)
+  fullName: FluentGpu.Controls.IOverlayService.Open(System.Func<FluentGpu.Foundation.NodeHandle>, System.Func<FluentGpu.Dsl.Element>, FluentGpu.Controls.FlyoutPlacement)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Open
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 98
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: OverlayHandle Open(Func<NodeHandle> anchor, Func<Element> content, FlyoutPlacement placement = FlyoutPlacement.BottomLeft)
+    parameters:
+    - id: anchor
+      type: System.Func{FluentGpu.Foundation.NodeHandle}
+    - id: content
+      type: System.Func{FluentGpu.Dsl.Element}
+    - id: placement
+      type: FluentGpu.Controls.FlyoutPlacement
+    return:
+      type: FluentGpu.Controls.OverlayHandle
+    content.vb: Function Open(anchor As Func(Of NodeHandle), content As Func(Of Element), placement As FlyoutPlacement = FlyoutPlacement.BottomLeft) As OverlayHandle
+  overload: FluentGpu.Controls.IOverlayService.Open*
+  nameWithType.vb: IOverlayService.Open(Func(Of NodeHandle), Func(Of Element), FlyoutPlacement)
+  fullName.vb: FluentGpu.Controls.IOverlayService.Open(System.Func(Of FluentGpu.Foundation.NodeHandle), System.Func(Of FluentGpu.Dsl.Element), FluentGpu.Controls.FlyoutPlacement)
+  name.vb: Open(Func(Of NodeHandle), Func(Of Element), FlyoutPlacement)
+- uid: FluentGpu.Controls.IOverlayService.Open(System.Func{FluentGpu.Foundation.NodeHandle},System.Func{FluentGpu.Dsl.Element},FluentGpu.Controls.FlyoutPlacement,FluentGpu.Controls.PopupOptions)
+  commentId: M:FluentGpu.Controls.IOverlayService.Open(System.Func{FluentGpu.Foundation.NodeHandle},System.Func{FluentGpu.Dsl.Element},FluentGpu.Controls.FlyoutPlacement,FluentGpu.Controls.PopupOptions)
+  id: Open(System.Func{FluentGpu.Foundation.NodeHandle},System.Func{FluentGpu.Dsl.Element},FluentGpu.Controls.FlyoutPlacement,FluentGpu.Controls.PopupOptions)
+  parent: FluentGpu.Controls.IOverlayService
+  langs:
+  - csharp
+  - vb
+  name: Open(Func<NodeHandle>, Func<Element>, FlyoutPlacement, PopupOptions)
+  nameWithType: IOverlayService.Open(Func<NodeHandle>, Func<Element>, FlyoutPlacement, PopupOptions)
+  fullName: FluentGpu.Controls.IOverlayService.Open(System.Func<FluentGpu.Foundation.NodeHandle>, System.Func<FluentGpu.Dsl.Element>, FluentGpu.Controls.FlyoutPlacement, FluentGpu.Controls.PopupOptions)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Open
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 99
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: OverlayHandle Open(Func<NodeHandle> anchor, Func<Element> content, FlyoutPlacement placement, PopupOptions options)
+    parameters:
+    - id: anchor
+      type: System.Func{FluentGpu.Foundation.NodeHandle}
+    - id: content
+      type: System.Func{FluentGpu.Dsl.Element}
+    - id: placement
+      type: FluentGpu.Controls.FlyoutPlacement
+    - id: options
+      type: FluentGpu.Controls.PopupOptions
+    return:
+      type: FluentGpu.Controls.OverlayHandle
+    content.vb: Function Open(anchor As Func(Of NodeHandle), content As Func(Of Element), placement As FlyoutPlacement, options As PopupOptions) As OverlayHandle
+  overload: FluentGpu.Controls.IOverlayService.Open*
+  nameWithType.vb: IOverlayService.Open(Func(Of NodeHandle), Func(Of Element), FlyoutPlacement, PopupOptions)
+  fullName.vb: FluentGpu.Controls.IOverlayService.Open(System.Func(Of FluentGpu.Foundation.NodeHandle), System.Func(Of FluentGpu.Dsl.Element), FluentGpu.Controls.FlyoutPlacement, FluentGpu.Controls.PopupOptions)
+  name.vb: Open(Func(Of NodeHandle), Func(Of Element), FlyoutPlacement, PopupOptions)
+- uid: FluentGpu.Controls.IOverlayService.OpenAt(System.Func{FluentGpu.Foundation.RectF},System.Func{FluentGpu.Dsl.Element},FluentGpu.Controls.FlyoutPlacement,FluentGpu.Controls.PopupOptions,System.Func{FluentGpu.Foundation.NodeHandle})
+  commentId: M:FluentGpu.Controls.IOverlayService.OpenAt(System.Func{FluentGpu.Foundation.RectF},System.Func{FluentGpu.Dsl.Element},FluentGpu.Controls.FlyoutPlacement,FluentGpu.Controls.PopupOptions,System.Func{FluentGpu.Foundation.NodeHandle})
+  id: OpenAt(System.Func{FluentGpu.Foundation.RectF},System.Func{FluentGpu.Dsl.Element},FluentGpu.Controls.FlyoutPlacement,FluentGpu.Controls.PopupOptions,System.Func{FluentGpu.Foundation.NodeHandle})
+  parent: FluentGpu.Controls.IOverlayService
+  langs:
+  - csharp
+  - vb
+  name: OpenAt(Func<RectF>, Func<Element>, FlyoutPlacement, PopupOptions, Func<NodeHandle>?)
+  nameWithType: IOverlayService.OpenAt(Func<RectF>, Func<Element>, FlyoutPlacement, PopupOptions, Func<NodeHandle>?)
+  fullName: FluentGpu.Controls.IOverlayService.OpenAt(System.Func<FluentGpu.Foundation.RectF>, System.Func<FluentGpu.Dsl.Element>, FluentGpu.Controls.FlyoutPlacement, FluentGpu.Controls.PopupOptions, System.Func<FluentGpu.Foundation.NodeHandle>?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OpenAt
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 104
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Open anchored to an arbitrary window-DIP RECT instead of a scene node — pointer-relative placement
+        (ToolTip PlacementMode.Mouse, context menus at the right-tap point). <code class="paramref">owner</code> (optional) is the
+        logical owner node, used only to resolve the nested-overlay parent chain for cascade close.
+  example: []
+  syntax:
+    content: OverlayHandle OpenAt(Func<RectF> anchorRect, Func<Element> content, FlyoutPlacement placement, PopupOptions options = default, Func<NodeHandle>? owner = null)
+    parameters:
+    - id: anchorRect
+      type: System.Func{FluentGpu.Foundation.RectF}
+    - id: content
+      type: System.Func{FluentGpu.Dsl.Element}
+    - id: placement
+      type: FluentGpu.Controls.FlyoutPlacement
+    - id: options
+      type: FluentGpu.Controls.PopupOptions
+    - id: owner
+      type: System.Func{FluentGpu.Foundation.NodeHandle}
+    return:
+      type: FluentGpu.Controls.OverlayHandle
+    content.vb: Function OpenAt(anchorRect As Func(Of RectF), content As Func(Of Element), placement As FlyoutPlacement, options As PopupOptions = Nothing, owner As Func(Of NodeHandle) = Nothing) As OverlayHandle
+  overload: FluentGpu.Controls.IOverlayService.OpenAt*
+  nameWithType.vb: IOverlayService.OpenAt(Func(Of RectF), Func(Of Element), FlyoutPlacement, PopupOptions, Func(Of NodeHandle))
+  fullName.vb: FluentGpu.Controls.IOverlayService.OpenAt(System.Func(Of FluentGpu.Foundation.RectF), System.Func(Of FluentGpu.Dsl.Element), FluentGpu.Controls.FlyoutPlacement, FluentGpu.Controls.PopupOptions, System.Func(Of FluentGpu.Foundation.NodeHandle))
+  name.vb: OpenAt(Func(Of RectF), Func(Of Element), FlyoutPlacement, PopupOptions, Func(Of NodeHandle))
+- uid: FluentGpu.Controls.IOverlayService.CloseTop
+  commentId: M:FluentGpu.Controls.IOverlayService.CloseTop
+  id: CloseTop
+  parent: FluentGpu.Controls.IOverlayService
+  langs:
+  - csharp
+  - vb
+  name: CloseTop()
+  nameWithType: IOverlayService.CloseTop()
+  fullName: FluentGpu.Controls.IOverlayService.CloseTop()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CloseTop
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 106
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: void CloseTop()
+    content.vb: Sub CloseTop()
+  overload: FluentGpu.Controls.IOverlayService.CloseTop*
+- uid: FluentGpu.Controls.IOverlayService.CloseAll
+  commentId: M:FluentGpu.Controls.IOverlayService.CloseAll
+  id: CloseAll
+  parent: FluentGpu.Controls.IOverlayService
+  langs:
+  - csharp
+  - vb
+  name: CloseAll()
+  nameWithType: IOverlayService.CloseAll()
+  fullName: FluentGpu.Controls.IOverlayService.CloseAll()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CloseAll
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 107
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: void CloseAll()
+    content.vb: Sub CloseAll()
+  overload: FluentGpu.Controls.IOverlayService.CloseAll*
+- uid: FluentGpu.Controls.IOverlayService.AnyOpen
+  commentId: P:FluentGpu.Controls.IOverlayService.AnyOpen
+  id: AnyOpen
+  parent: FluentGpu.Controls.IOverlayService
+  langs:
+  - csharp
+  - vb
+  name: AnyOpen
+  nameWithType: IOverlayService.AnyOpen
+  fullName: FluentGpu.Controls.IOverlayService.AnyOpen
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AnyOpen
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 108
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: bool AnyOpen { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: ReadOnly Property AnyOpen As Boolean
+  overload: FluentGpu.Controls.IOverlayService.AnyOpen*
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.IOverlayService.Open*
+  commentId: Overload:FluentGpu.Controls.IOverlayService.Open
+  href: FluentGpu.Controls.IOverlayService.html#FluentGpu_Controls_IOverlayService_Open_System_Func_FluentGpu_Foundation_NodeHandle__System_Func_FluentGpu_Dsl_Element__FluentGpu_Controls_FlyoutPlacement_
+  name: Open
+  nameWithType: IOverlayService.Open
+  fullName: FluentGpu.Controls.IOverlayService.Open
+- uid: System.Func{FluentGpu.Foundation.NodeHandle}
+  commentId: T:System.Func{FluentGpu.Foundation.NodeHandle}
+  parent: System
+  definition: System.Func`1
+  href: https://learn.microsoft.com/dotnet/api/system.func-1
+  name: Func<NodeHandle>
+  nameWithType: Func<NodeHandle>
+  fullName: System.Func<FluentGpu.Foundation.NodeHandle>
+  nameWithType.vb: Func(Of NodeHandle)
+  fullName.vb: System.Func(Of FluentGpu.Foundation.NodeHandle)
+  name.vb: Func(Of NodeHandle)
+  spec.csharp:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: <
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: )
+- uid: System.Func{FluentGpu.Dsl.Element}
+  commentId: T:System.Func{FluentGpu.Dsl.Element}
+  parent: System
+  definition: System.Func`1
+  href: https://learn.microsoft.com/dotnet/api/system.func-1
+  name: Func<Element>
+  nameWithType: Func<Element>
+  fullName: System.Func<FluentGpu.Dsl.Element>
+  nameWithType.vb: Func(Of Element)
+  fullName.vb: System.Func(Of FluentGpu.Dsl.Element)
+  name.vb: Func(Of Element)
+  spec.csharp:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: <
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: )
+- uid: FluentGpu.Controls.FlyoutPlacement
+  commentId: T:FluentGpu.Controls.FlyoutPlacement
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.FlyoutPlacement.html
+  name: FlyoutPlacement
+  nameWithType: FlyoutPlacement
+  fullName: FluentGpu.Controls.FlyoutPlacement
+- uid: FluentGpu.Controls.OverlayHandle
+  commentId: T:FluentGpu.Controls.OverlayHandle
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.OverlayHandle.html
+  name: OverlayHandle
+  nameWithType: OverlayHandle
+  fullName: FluentGpu.Controls.OverlayHandle
+- uid: System.Func`1
+  commentId: T:System.Func`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.func-1
+  name: Func<TResult>
+  nameWithType: Func<TResult>
+  fullName: System.Func<TResult>
+  nameWithType.vb: Func(Of TResult)
+  fullName.vb: System.Func(Of TResult)
+  name.vb: Func(Of TResult)
+  spec.csharp:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: <
+  - name: TResult
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: TResult
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Controls.PopupOptions
+  commentId: T:FluentGpu.Controls.PopupOptions
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.PopupOptions.html
+  name: PopupOptions
+  nameWithType: PopupOptions
+  fullName: FluentGpu.Controls.PopupOptions
+- uid: FluentGpu.Controls.IOverlayService.OpenAt*
+  commentId: Overload:FluentGpu.Controls.IOverlayService.OpenAt
+  href: FluentGpu.Controls.IOverlayService.html#FluentGpu_Controls_IOverlayService_OpenAt_System_Func_FluentGpu_Foundation_RectF__System_Func_FluentGpu_Dsl_Element__FluentGpu_Controls_FlyoutPlacement_FluentGpu_Controls_PopupOptions_System_Func_FluentGpu_Foundation_NodeHandle__
+  name: OpenAt
+  nameWithType: IOverlayService.OpenAt
+  fullName: FluentGpu.Controls.IOverlayService.OpenAt
+- uid: System.Func{FluentGpu.Foundation.RectF}
+  commentId: T:System.Func{FluentGpu.Foundation.RectF}
+  parent: System
+  definition: System.Func`1
+  href: https://learn.microsoft.com/dotnet/api/system.func-1
+  name: Func<RectF>
+  nameWithType: Func<RectF>
+  fullName: System.Func<FluentGpu.Foundation.RectF>
+  nameWithType.vb: Func(Of RectF)
+  fullName.vb: System.Func(Of FluentGpu.Foundation.RectF)
+  name.vb: Func(Of RectF)
+  spec.csharp:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: <
+  - uid: FluentGpu.Foundation.RectF
+    name: RectF
+    href: FluentGpu.Foundation.RectF.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.RectF
+    name: RectF
+    href: FluentGpu.Foundation.RectF.html
+  - name: )
+- uid: FluentGpu.Controls.IOverlayService.CloseTop*
+  commentId: Overload:FluentGpu.Controls.IOverlayService.CloseTop
+  href: FluentGpu.Controls.IOverlayService.html#FluentGpu_Controls_IOverlayService_CloseTop
+  name: CloseTop
+  nameWithType: IOverlayService.CloseTop
+  fullName: FluentGpu.Controls.IOverlayService.CloseTop
+- uid: FluentGpu.Controls.IOverlayService.CloseAll*
+  commentId: Overload:FluentGpu.Controls.IOverlayService.CloseAll
+  href: FluentGpu.Controls.IOverlayService.html#FluentGpu_Controls_IOverlayService_CloseAll
+  name: CloseAll
+  nameWithType: IOverlayService.CloseAll
+  fullName: FluentGpu.Controls.IOverlayService.CloseAll
+- uid: FluentGpu.Controls.IOverlayService.AnyOpen*
+  commentId: Overload:FluentGpu.Controls.IOverlayService.AnyOpen
+  href: FluentGpu.Controls.IOverlayService.html#FluentGpu_Controls_IOverlayService_AnyOpen
+  name: AnyOpen
+  nameWithType: IOverlayService.AnyOpen
+  fullName: FluentGpu.Controls.IOverlayService.AnyOpen
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean

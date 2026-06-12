@@ -1,0 +1,412 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Pal.IPlatformApp
+  commentId: T:FluentGpu.Pal.IPlatformApp
+  id: IPlatformApp
+  parent: FluentGpu.Pal
+  children:
+  - FluentGpu.Pal.IPlatformApp.Clipboard
+  - FluentGpu.Pal.IPlatformApp.CreatePopupWindow(FluentGpu.Pal.PopupWindowDesc@)
+  - FluentGpu.Pal.IPlatformApp.CreateWindow(FluentGpu.Pal.WindowDesc@)
+  - FluentGpu.Pal.IPlatformApp.GetWorkArea(FluentGpu.Foundation.Point2)
+  - FluentGpu.Pal.IPlatformApp.OpenUri(System.String)
+  langs:
+  - csharp
+  - vb
+  name: IPlatformApp
+  nameWithType: IPlatformApp
+  fullName: FluentGpu.Pal.IPlatformApp
+  type: Interface
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IPlatformApp
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 78
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: 'public interface IPlatformApp : IDisposable'
+    content.vb: Public Interface IPlatformApp Inherits IDisposable
+  derivedClasses:
+  - FluentGpu.Pal.Windows.Win32App
+  inheritedMembers:
+  - System.IDisposable.Dispose
+- uid: FluentGpu.Pal.IPlatformApp.CreateWindow(FluentGpu.Pal.WindowDesc@)
+  commentId: M:FluentGpu.Pal.IPlatformApp.CreateWindow(FluentGpu.Pal.WindowDesc@)
+  id: CreateWindow(FluentGpu.Pal.WindowDesc@)
+  parent: FluentGpu.Pal.IPlatformApp
+  langs:
+  - csharp
+  - vb
+  name: CreateWindow(in WindowDesc)
+  nameWithType: IPlatformApp.CreateWindow(in WindowDesc)
+  fullName: FluentGpu.Pal.IPlatformApp.CreateWindow(in FluentGpu.Pal.WindowDesc)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CreateWindow
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 80
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: IPlatformWindow CreateWindow(in WindowDesc desc)
+    parameters:
+    - id: desc
+      type: FluentGpu.Pal.WindowDesc
+    return:
+      type: FluentGpu.Pal.IPlatformWindow
+    content.vb: Function CreateWindow(desc As WindowDesc) As IPlatformWindow
+  overload: FluentGpu.Pal.IPlatformApp.CreateWindow*
+  nameWithType.vb: IPlatformApp.CreateWindow(WindowDesc)
+  fullName.vb: FluentGpu.Pal.IPlatformApp.CreateWindow(FluentGpu.Pal.WindowDesc)
+  name.vb: CreateWindow(WindowDesc)
+- uid: FluentGpu.Pal.IPlatformApp.Clipboard
+  commentId: P:FluentGpu.Pal.IPlatformApp.Clipboard
+  id: Clipboard
+  parent: FluentGpu.Pal.IPlatformApp
+  langs:
+  - csharp
+  - vb
+  name: Clipboard
+  nameWithType: IPlatformApp.Clipboard
+  fullName: FluentGpu.Pal.IPlatformApp.Clipboard
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Clipboard
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 83
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: The system clipboard (UI-thread only).
+  example: []
+  syntax:
+    content: IClipboard Clipboard { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Pal.IClipboard
+    content.vb: ReadOnly Property Clipboard As IClipboard
+  overload: FluentGpu.Pal.IPlatformApp.Clipboard*
+- uid: FluentGpu.Pal.IPlatformApp.OpenUri(System.String)
+  commentId: M:FluentGpu.Pal.IPlatformApp.OpenUri(System.String)
+  id: OpenUri(System.String)
+  parent: FluentGpu.Pal.IPlatformApp
+  langs:
+  - csharp
+  - vb
+  name: OpenUri(string)
+  nameWithType: IPlatformApp.OpenUri(string)
+  fullName: FluentGpu.Pal.IPlatformApp.OpenUri(string)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OpenUri
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 90
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: >-
+    Launch <code class="paramref">uri</code> in the OS default handler (browser/mail) — the WinUI
+        <code>Launcher::TryInvokeLauncher</code> step of HyperlinkButton.OnClick (Click raised first at :166, then the
+        launch at :172 — microsoft-ui-xaml dxaml\xcp\dxaml\lib\HyperLinkButton_Partial.cpp:149-177). Fire-and-forget
+        on the UI thread; failures are swallowed (WinUI's TryInvokeLauncher is equally best-effort). Headless
+        implementations record the URI instead of launching.
+  example: []
+  syntax:
+    content: void OpenUri(string uri)
+    parameters:
+    - id: uri
+      type: System.String
+    content.vb: Sub OpenUri(uri As String)
+  overload: FluentGpu.Pal.IPlatformApp.OpenUri*
+  nameWithType.vb: IPlatformApp.OpenUri(String)
+  fullName.vb: FluentGpu.Pal.IPlatformApp.OpenUri(String)
+  name.vb: OpenUri(String)
+- uid: FluentGpu.Pal.IPlatformApp.GetWorkArea(FluentGpu.Foundation.Point2)
+  commentId: M:FluentGpu.Pal.IPlatformApp.GetWorkArea(FluentGpu.Foundation.Point2)
+  id: GetWorkArea(FluentGpu.Foundation.Point2)
+  parent: FluentGpu.Pal.IPlatformApp
+  langs:
+  - csharp
+  - vb
+  name: GetWorkArea(Point2)
+  nameWithType: IPlatformApp.GetWorkArea(Point2)
+  fullName: FluentGpu.Pal.IPlatformApp.GetWorkArea(FluentGpu.Foundation.Point2)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GetWorkArea
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 100
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: >-
+    The WORK AREA (desktop minus taskbar/docked bars) of the monitor containing <code class="paramref">screenPointPx</code>,
+
+    in physical virtual-screen px — the multi-monitor placement seam WinUI's windowed popups use
+
+    (Popup.cpp monitor-bounds placement; <code>DXamlCore::CalculateAvailableMonitorRect</code>,
+
+    FlyoutBase_Partial.cpp:3382-3388 <code>useMonitorBounds = IsWindowedPopup()</code>). Win32 backs this with
+
+    <code>MonitorFromPoint(MONITOR_DEFAULTTONEAREST)</code> + <code>GetMonitorInfoW().rcWork</code>; headless returns the
+
+    configurable <code>WorkArea</code>. Default: unbounded (no monitor information available).
+  example: []
+  syntax:
+    content: RectF GetWorkArea(Point2 screenPointPx)
+    parameters:
+    - id: screenPointPx
+      type: FluentGpu.Foundation.Point2
+    return:
+      type: FluentGpu.Foundation.RectF
+    content.vb: Function GetWorkArea(screenPointPx As Point2) As RectF
+  overload: FluentGpu.Pal.IPlatformApp.GetWorkArea*
+- uid: FluentGpu.Pal.IPlatformApp.CreatePopupWindow(FluentGpu.Pal.PopupWindowDesc@)
+  commentId: M:FluentGpu.Pal.IPlatformApp.CreatePopupWindow(FluentGpu.Pal.PopupWindowDesc@)
+  id: CreatePopupWindow(FluentGpu.Pal.PopupWindowDesc@)
+  parent: FluentGpu.Pal.IPlatformApp
+  langs:
+  - csharp
+  - vb
+  name: CreatePopupWindow(in PopupWindowDesc)
+  nameWithType: IPlatformApp.CreatePopupWindow(in PopupWindowDesc)
+  fullName: FluentGpu.Pal.IPlatformApp.CreatePopupWindow(in FluentGpu.Pal.PopupWindowDesc)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CreatePopupWindow
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 111
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: >-
+    Create a top-level POPUP window (out-of-bounds overlay surface) owned by <xref href="FluentGpu.Pal.PopupWindowDesc.Owner" data-throw-if-not-resolved="false"></xref> —
+
+    the engine analogue of WinUI's windowed <code>CPopup</code> (Popup_Partial.cpp:1019 <code>SetIsWindowed</code> creates an
+
+    HWND via PopupSiteBridge so a flyout can render OUTSIDE the XAML window). Win32: a
+
+    <code>WS_POPUP | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP</code> owned window that never takes
+
+    activation (focus stays on the main window) and forwards its mouse input to the owner; headless: a recorder.
+
+    Returns null when the platform cannot create popup windows (callers fall back to root-bounds-constrained
+
+    placement — exactly WinUI's <code>CPopup::DoesPlatformSupportWindowedPopup</code> gate, FlyoutBase_Partial.cpp:3188).
+  example: []
+  syntax:
+    content: IPlatformPopupWindow? CreatePopupWindow(in PopupWindowDesc desc)
+    parameters:
+    - id: desc
+      type: FluentGpu.Pal.PopupWindowDesc
+    return:
+      type: FluentGpu.Pal.IPlatformPopupWindow
+    content.vb: Function CreatePopupWindow(desc As PopupWindowDesc) As IPlatformPopupWindow
+  overload: FluentGpu.Pal.IPlatformApp.CreatePopupWindow*
+  nameWithType.vb: IPlatformApp.CreatePopupWindow(PopupWindowDesc)
+  fullName.vb: FluentGpu.Pal.IPlatformApp.CreatePopupWindow(FluentGpu.Pal.PopupWindowDesc)
+  name.vb: CreatePopupWindow(PopupWindowDesc)
+references:
+- uid: FluentGpu.Pal
+  commentId: N:FluentGpu.Pal
+  href: FluentGpu.html
+  name: FluentGpu.Pal
+  nameWithType: FluentGpu.Pal
+  fullName: FluentGpu.Pal
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+- uid: System.IDisposable.Dispose
+  commentId: M:System.IDisposable.Dispose
+  parent: System.IDisposable
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  name: Dispose()
+  nameWithType: IDisposable.Dispose()
+  fullName: System.IDisposable.Dispose()
+  spec.csharp:
+  - uid: System.IDisposable.Dispose
+    name: Dispose
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.IDisposable.Dispose
+    name: Dispose
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  - name: (
+  - name: )
+- uid: System.IDisposable
+  commentId: T:System.IDisposable
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.idisposable
+  name: IDisposable
+  nameWithType: IDisposable
+  fullName: System.IDisposable
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Pal.IPlatformApp.CreateWindow*
+  commentId: Overload:FluentGpu.Pal.IPlatformApp.CreateWindow
+  href: FluentGpu.Pal.IPlatformApp.html#FluentGpu_Pal_IPlatformApp_CreateWindow_FluentGpu_Pal_WindowDesc__
+  name: CreateWindow
+  nameWithType: IPlatformApp.CreateWindow
+  fullName: FluentGpu.Pal.IPlatformApp.CreateWindow
+- uid: FluentGpu.Pal.WindowDesc
+  commentId: T:FluentGpu.Pal.WindowDesc
+  parent: FluentGpu.Pal
+  href: FluentGpu.Pal.WindowDesc.html
+  name: WindowDesc
+  nameWithType: WindowDesc
+  fullName: FluentGpu.Pal.WindowDesc
+- uid: FluentGpu.Pal.IPlatformWindow
+  commentId: T:FluentGpu.Pal.IPlatformWindow
+  parent: FluentGpu.Pal
+  href: FluentGpu.Pal.IPlatformWindow.html
+  name: IPlatformWindow
+  nameWithType: IPlatformWindow
+  fullName: FluentGpu.Pal.IPlatformWindow
+- uid: FluentGpu.Pal.IPlatformApp.Clipboard*
+  commentId: Overload:FluentGpu.Pal.IPlatformApp.Clipboard
+  href: FluentGpu.Pal.IPlatformApp.html#FluentGpu_Pal_IPlatformApp_Clipboard
+  name: Clipboard
+  nameWithType: IPlatformApp.Clipboard
+  fullName: FluentGpu.Pal.IPlatformApp.Clipboard
+- uid: FluentGpu.Pal.IClipboard
+  commentId: T:FluentGpu.Pal.IClipboard
+  parent: FluentGpu.Pal
+  href: FluentGpu.Pal.IClipboard.html
+  name: IClipboard
+  nameWithType: IClipboard
+  fullName: FluentGpu.Pal.IClipboard
+- uid: FluentGpu.Pal.IPlatformApp.OpenUri*
+  commentId: Overload:FluentGpu.Pal.IPlatformApp.OpenUri
+  href: FluentGpu.Pal.IPlatformApp.html#FluentGpu_Pal_IPlatformApp_OpenUri_System_String_
+  name: OpenUri
+  nameWithType: IPlatformApp.OpenUri
+  fullName: FluentGpu.Pal.IPlatformApp.OpenUri
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Pal.IPlatformApp.GetWorkArea*
+  commentId: Overload:FluentGpu.Pal.IPlatformApp.GetWorkArea
+  href: FluentGpu.Pal.IPlatformApp.html#FluentGpu_Pal_IPlatformApp_GetWorkArea_FluentGpu_Foundation_Point2_
+  name: GetWorkArea
+  nameWithType: IPlatformApp.GetWorkArea
+  fullName: FluentGpu.Pal.IPlatformApp.GetWorkArea
+- uid: FluentGpu.Foundation.Point2
+  commentId: T:FluentGpu.Foundation.Point2
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Point2.html
+  name: Point2
+  nameWithType: Point2
+  fullName: FluentGpu.Foundation.Point2
+- uid: FluentGpu.Foundation.RectF
+  commentId: T:FluentGpu.Foundation.RectF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.RectF.html
+  name: RectF
+  nameWithType: RectF
+  fullName: FluentGpu.Foundation.RectF
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Pal.PopupWindowDesc.Owner
+  commentId: P:FluentGpu.Pal.PopupWindowDesc.Owner
+  href: FluentGpu.Pal.PopupWindowDesc.html#FluentGpu_Pal_PopupWindowDesc_Owner
+  name: Owner
+  nameWithType: PopupWindowDesc.Owner
+  fullName: FluentGpu.Pal.PopupWindowDesc.Owner
+- uid: FluentGpu.Pal.IPlatformApp.CreatePopupWindow*
+  commentId: Overload:FluentGpu.Pal.IPlatformApp.CreatePopupWindow
+  href: FluentGpu.Pal.IPlatformApp.html#FluentGpu_Pal_IPlatformApp_CreatePopupWindow_FluentGpu_Pal_PopupWindowDesc__
+  name: CreatePopupWindow
+  nameWithType: IPlatformApp.CreatePopupWindow
+  fullName: FluentGpu.Pal.IPlatformApp.CreatePopupWindow
+- uid: FluentGpu.Pal.PopupWindowDesc
+  commentId: T:FluentGpu.Pal.PopupWindowDesc
+  parent: FluentGpu.Pal
+  href: FluentGpu.Pal.PopupWindowDesc.html
+  name: PopupWindowDesc
+  nameWithType: PopupWindowDesc
+  fullName: FluentGpu.Pal.PopupWindowDesc
+- uid: FluentGpu.Pal.IPlatformPopupWindow
+  commentId: T:FluentGpu.Pal.IPlatformPopupWindow
+  parent: FluentGpu.Pal
+  href: FluentGpu.Pal.IPlatformPopupWindow.html
+  name: IPlatformPopupWindow
+  nameWithType: IPlatformPopupWindow
+  fullName: FluentGpu.Pal.IPlatformPopupWindow

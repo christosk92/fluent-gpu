@@ -1,0 +1,905 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Text.DirectWrite.DWriteItemizer
+  commentId: T:FluentGpu.Text.DirectWrite.DWriteItemizer
+  id: DWriteItemizer
+  parent: FluentGpu.Text.DirectWrite
+  children:
+  - FluentGpu.Text.DirectWrite.DWriteItemizer.#ctor
+  - FluentGpu.Text.DirectWrite.DWriteItemizer.Dispose
+  - FluentGpu.Text.DirectWrite.DWriteItemizer.Itemize(System.ReadOnlySpan{System.Char},System.Collections.Generic.List{FluentGpu.Text.ItemRun},System.Collections.Generic.List{FluentGpu.Text.BreakOpp})
+  - FluentGpu.Text.DirectWrite.DWriteItemizer.SelfTest
+  langs:
+  - csharp
+  - vb
+  name: DWriteItemizer
+  nameWithType: DWriteItemizer
+  fullName: FluentGpu.Text.DirectWrite.DWriteItemizer
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Text.DirectWrite/DWriteItemizer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DWriteItemizer
+    path: ../../src/FluentGpu.Text.DirectWrite/DWriteItemizer.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Text.DirectWrite
+  namespace: FluentGpu.Text.DirectWrite
+  summary: >-
+    DirectWrite itemizer (text.md §4.4): segments text into BiDi × script runs and computes UAX #14 line-break
+
+    opportunities via <code>IDWriteTextAnalyzer</code>. DirectWrite calls back into the hand-authored callee CCWs
+
+    <xref href="FluentGpu.Text.DirectWrite.TextAnalysisSourceCcw" data-throw-if-not-resolved="false"></xref> (supplies the text) and <xref href="FluentGpu.Text.DirectWrite.TextAnalysisSinkCcw" data-throw-if-not-resolved="false"></xref> (collects the runs).
+
+    COM bound via TerraFX raw pointers; the CCW vtables mirror the ComputeSharp PixelShaderEffect pattern.
+
+    Single-thread-confined: <xref href="FluentGpu.Text.DirectWrite.DWriteItemizer.Itemize(System.ReadOnlySpan%7bSystem.Char%7d%2cSystem.Collections.Generic.List%7bFluentGpu.Text.ItemRun%7d%2cSystem.Collections.Generic.List%7bFluentGpu.Text.BreakOpp%7d)" data-throw-if-not-resolved="false"></xref> calls AnalyzeBidi/Script/LineBreakpoints serially on the caller thread.
+  example: []
+  syntax:
+    content: 'public sealed class DWriteItemizer : ITextItemizer, IDisposable'
+    content.vb: Public NotInheritable Class DWriteItemizer Implements ITextItemizer, IDisposable
+  inheritance:
+  - System.Object
+  implements:
+  - FluentGpu.Text.ITextItemizer
+  - System.IDisposable
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Text.DirectWrite.DWriteItemizer.#ctor
+  commentId: M:FluentGpu.Text.DirectWrite.DWriteItemizer.#ctor
+  id: '#ctor'
+  parent: FluentGpu.Text.DirectWrite.DWriteItemizer
+  langs:
+  - csharp
+  - vb
+  name: DWriteItemizer()
+  nameWithType: DWriteItemizer.DWriteItemizer()
+  fullName: FluentGpu.Text.DirectWrite.DWriteItemizer.DWriteItemizer()
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Text.DirectWrite/DWriteItemizer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Text.DirectWrite/DWriteItemizer.cs
+    startLine: 25
+  assemblies:
+  - FluentGpu.Text.DirectWrite
+  namespace: FluentGpu.Text.DirectWrite
+  syntax:
+    content: public DWriteItemizer()
+    content.vb: Public Sub New()
+  overload: FluentGpu.Text.DirectWrite.DWriteItemizer.#ctor*
+  nameWithType.vb: DWriteItemizer.New()
+  fullName.vb: FluentGpu.Text.DirectWrite.DWriteItemizer.New()
+  name.vb: New()
+- uid: FluentGpu.Text.DirectWrite.DWriteItemizer.Itemize(System.ReadOnlySpan{System.Char},System.Collections.Generic.List{FluentGpu.Text.ItemRun},System.Collections.Generic.List{FluentGpu.Text.BreakOpp})
+  commentId: M:FluentGpu.Text.DirectWrite.DWriteItemizer.Itemize(System.ReadOnlySpan{System.Char},System.Collections.Generic.List{FluentGpu.Text.ItemRun},System.Collections.Generic.List{FluentGpu.Text.BreakOpp})
+  id: Itemize(System.ReadOnlySpan{System.Char},System.Collections.Generic.List{FluentGpu.Text.ItemRun},System.Collections.Generic.List{FluentGpu.Text.BreakOpp})
+  parent: FluentGpu.Text.DirectWrite.DWriteItemizer
+  langs:
+  - csharp
+  - vb
+  name: Itemize(ReadOnlySpan<char>, List<ItemRun>, List<BreakOpp>)
+  nameWithType: DWriteItemizer.Itemize(ReadOnlySpan<char>, List<ItemRun>, List<BreakOpp>)
+  fullName: FluentGpu.Text.DirectWrite.DWriteItemizer.Itemize(System.ReadOnlySpan<char>, System.Collections.Generic.List<FluentGpu.Text.ItemRun>, System.Collections.Generic.List<FluentGpu.Text.BreakOpp>)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text.DirectWrite/DWriteItemizer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Itemize
+    path: ../../src/FluentGpu.Text.DirectWrite/DWriteItemizer.cs
+    startLine: 38
+  assemblies:
+  - FluentGpu.Text.DirectWrite
+  namespace: FluentGpu.Text.DirectWrite
+  summary: >-
+    Itemize <code class="paramref">text</code> into <code class="paramref">runs</code> (BiDi × script segmentation, logical order)
+        and <code class="paramref">breaks</code> (one entry per UTF-16 unit). Both lists are cleared and refilled.
+  example: []
+  syntax:
+    content: public void Itemize(ReadOnlySpan<char> text, List<ItemRun> runs, List<BreakOpp> breaks)
+    parameters:
+    - id: text
+      type: System.ReadOnlySpan{System.Char}
+    - id: runs
+      type: System.Collections.Generic.List{FluentGpu.Text.ItemRun}
+    - id: breaks
+      type: System.Collections.Generic.List{FluentGpu.Text.BreakOpp}
+    content.vb: Public Sub Itemize(text As ReadOnlySpan(Of Char), runs As List(Of ItemRun), breaks As List(Of BreakOpp))
+  overload: FluentGpu.Text.DirectWrite.DWriteItemizer.Itemize*
+  implements:
+  - FluentGpu.Text.ITextItemizer.Itemize(System.ReadOnlySpan{System.Char},System.Collections.Generic.List{FluentGpu.Text.ItemRun},System.Collections.Generic.List{FluentGpu.Text.BreakOpp})
+  nameWithType.vb: DWriteItemizer.Itemize(ReadOnlySpan(Of Char), List(Of ItemRun), List(Of BreakOpp))
+  fullName.vb: FluentGpu.Text.DirectWrite.DWriteItemizer.Itemize(System.ReadOnlySpan(Of Char), System.Collections.Generic.List(Of FluentGpu.Text.ItemRun), System.Collections.Generic.List(Of FluentGpu.Text.BreakOpp))
+  name.vb: Itemize(ReadOnlySpan(Of Char), List(Of ItemRun), List(Of BreakOpp))
+- uid: FluentGpu.Text.DirectWrite.DWriteItemizer.SelfTest
+  commentId: M:FluentGpu.Text.DirectWrite.DWriteItemizer.SelfTest
+  id: SelfTest
+  parent: FluentGpu.Text.DirectWrite.DWriteItemizer
+  langs:
+  - csharp
+  - vb
+  name: SelfTest()
+  nameWithType: DWriteItemizer.SelfTest()
+  fullName: FluentGpu.Text.DirectWrite.DWriteItemizer.SelfTest()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text.DirectWrite/DWriteItemizer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SelfTest
+    path: ../../src/FluentGpu.Text.DirectWrite/DWriteItemizer.cs
+    startLine: 78
+  assemblies:
+  - FluentGpu.Text.DirectWrite
+  namespace: FluentGpu.Text.DirectWrite
+  summary: >-
+    Smoke test on the real DirectWrite analyzer (Windows only): itemize a mixed LTR/RTL/CJK string and print
+        the runs + break opportunities. Proves the CCW round-trip works without an access violation.
+  example: []
+  syntax:
+    content: public static void SelfTest()
+    content.vb: Public Shared Sub SelfTest()
+  overload: FluentGpu.Text.DirectWrite.DWriteItemizer.SelfTest*
+- uid: FluentGpu.Text.DirectWrite.DWriteItemizer.Dispose
+  commentId: M:FluentGpu.Text.DirectWrite.DWriteItemizer.Dispose
+  id: Dispose
+  parent: FluentGpu.Text.DirectWrite.DWriteItemizer
+  langs:
+  - csharp
+  - vb
+  name: Dispose()
+  nameWithType: DWriteItemizer.Dispose()
+  fullName: FluentGpu.Text.DirectWrite.DWriteItemizer.Dispose()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text.DirectWrite/DWriteItemizer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Dispose
+    path: ../../src/FluentGpu.Text.DirectWrite/DWriteItemizer.cs
+    startLine: 98
+  assemblies:
+  - FluentGpu.Text.DirectWrite
+  namespace: FluentGpu.Text.DirectWrite
+  summary: Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.
+  example: []
+  syntax:
+    content: public void Dispose()
+    content.vb: Public Sub Dispose()
+  overload: FluentGpu.Text.DirectWrite.DWriteItemizer.Dispose*
+  implements:
+  - System.IDisposable.Dispose
+references:
+- uid: FluentGpu.Text.DirectWrite.TextAnalysisSourceCcw
+  commentId: T:FluentGpu.Text.DirectWrite.TextAnalysisSourceCcw
+  name: TextAnalysisSourceCcw
+  nameWithType: TextAnalysisSourceCcw
+  fullName: FluentGpu.Text.DirectWrite.TextAnalysisSourceCcw
+- uid: FluentGpu.Text.DirectWrite.TextAnalysisSinkCcw
+  commentId: T:FluentGpu.Text.DirectWrite.TextAnalysisSinkCcw
+  name: TextAnalysisSinkCcw
+  nameWithType: TextAnalysisSinkCcw
+  fullName: FluentGpu.Text.DirectWrite.TextAnalysisSinkCcw
+- uid: FluentGpu.Text.DirectWrite.DWriteItemizer.Itemize(System.ReadOnlySpan{System.Char},System.Collections.Generic.List{FluentGpu.Text.ItemRun},System.Collections.Generic.List{FluentGpu.Text.BreakOpp})
+  commentId: M:FluentGpu.Text.DirectWrite.DWriteItemizer.Itemize(System.ReadOnlySpan{System.Char},System.Collections.Generic.List{FluentGpu.Text.ItemRun},System.Collections.Generic.List{FluentGpu.Text.BreakOpp})
+  isExternal: true
+  href: FluentGpu.Text.DirectWrite.DWriteItemizer.html#FluentGpu_Text_DirectWrite_DWriteItemizer_Itemize_System_ReadOnlySpan_System_Char__System_Collections_Generic_List_FluentGpu_Text_ItemRun__System_Collections_Generic_List_FluentGpu_Text_BreakOpp__
+  name: Itemize(ReadOnlySpan<char>, List<ItemRun>, List<BreakOpp>)
+  nameWithType: DWriteItemizer.Itemize(ReadOnlySpan<char>, List<ItemRun>, List<BreakOpp>)
+  fullName: FluentGpu.Text.DirectWrite.DWriteItemizer.Itemize(System.ReadOnlySpan<char>, System.Collections.Generic.List<FluentGpu.Text.ItemRun>, System.Collections.Generic.List<FluentGpu.Text.BreakOpp>)
+  nameWithType.vb: DWriteItemizer.Itemize(ReadOnlySpan(Of Char), List(Of ItemRun), List(Of BreakOpp))
+  fullName.vb: FluentGpu.Text.DirectWrite.DWriteItemizer.Itemize(System.ReadOnlySpan(Of Char), System.Collections.Generic.List(Of FluentGpu.Text.ItemRun), System.Collections.Generic.List(Of FluentGpu.Text.BreakOpp))
+  name.vb: Itemize(ReadOnlySpan(Of Char), List(Of ItemRun), List(Of BreakOpp))
+  spec.csharp:
+  - uid: FluentGpu.Text.DirectWrite.DWriteItemizer.Itemize(System.ReadOnlySpan{System.Char},System.Collections.Generic.List{FluentGpu.Text.ItemRun},System.Collections.Generic.List{FluentGpu.Text.BreakOpp})
+    name: Itemize
+    href: FluentGpu.Text.DirectWrite.DWriteItemizer.html#FluentGpu_Text_DirectWrite_DWriteItemizer_Itemize_System_ReadOnlySpan_System_Char__System_Collections_Generic_List_FluentGpu_Text_ItemRun__System_Collections_Generic_List_FluentGpu_Text_BreakOpp__
+  - name: (
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - uid: System.Char
+    name: char
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.char
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: <
+  - uid: FluentGpu.Text.ItemRun
+    name: ItemRun
+    href: FluentGpu.Text.ItemRun.html
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: <
+  - uid: FluentGpu.Text.BreakOpp
+    name: BreakOpp
+    href: FluentGpu.Text.BreakOpp.html
+  - name: '>'
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Text.DirectWrite.DWriteItemizer.Itemize(System.ReadOnlySpan{System.Char},System.Collections.Generic.List{FluentGpu.Text.ItemRun},System.Collections.Generic.List{FluentGpu.Text.BreakOpp})
+    name: Itemize
+    href: FluentGpu.Text.DirectWrite.DWriteItemizer.html#FluentGpu_Text_DirectWrite_DWriteItemizer_Itemize_System_ReadOnlySpan_System_Char__System_Collections_Generic_List_FluentGpu_Text_ItemRun__System_Collections_Generic_List_FluentGpu_Text_BreakOpp__
+  - name: (
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Char
+    name: Char
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.char
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Text.ItemRun
+    name: ItemRun
+    href: FluentGpu.Text.ItemRun.html
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Text.BreakOpp
+    name: BreakOpp
+    href: FluentGpu.Text.BreakOpp.html
+  - name: )
+  - name: )
+- uid: FluentGpu.Text.DirectWrite
+  commentId: N:FluentGpu.Text.DirectWrite
+  href: FluentGpu.html
+  name: FluentGpu.Text.DirectWrite
+  nameWithType: FluentGpu.Text.DirectWrite
+  fullName: FluentGpu.Text.DirectWrite
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+  - name: .
+  - uid: FluentGpu.Text.DirectWrite
+    name: DirectWrite
+    href: FluentGpu.Text.DirectWrite.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+  - name: .
+  - uid: FluentGpu.Text.DirectWrite
+    name: DirectWrite
+    href: FluentGpu.Text.DirectWrite.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Text.ITextItemizer
+  commentId: T:FluentGpu.Text.ITextItemizer
+  parent: FluentGpu.Text
+  href: FluentGpu.Text.ITextItemizer.html
+  name: ITextItemizer
+  nameWithType: ITextItemizer
+  fullName: FluentGpu.Text.ITextItemizer
+- uid: System.IDisposable
+  commentId: T:System.IDisposable
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.idisposable
+  name: IDisposable
+  nameWithType: IDisposable
+  fullName: System.IDisposable
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Text
+  commentId: N:FluentGpu.Text
+  href: FluentGpu.html
+  name: FluentGpu.Text
+  nameWithType: FluentGpu.Text
+  fullName: FluentGpu.Text
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+- uid: FluentGpu.Text.DirectWrite.DWriteItemizer.#ctor*
+  commentId: Overload:FluentGpu.Text.DirectWrite.DWriteItemizer.#ctor
+  href: FluentGpu.Text.DirectWrite.DWriteItemizer.html#FluentGpu_Text_DirectWrite_DWriteItemizer__ctor
+  name: DWriteItemizer
+  nameWithType: DWriteItemizer.DWriteItemizer
+  fullName: FluentGpu.Text.DirectWrite.DWriteItemizer.DWriteItemizer
+  nameWithType.vb: DWriteItemizer.New
+  fullName.vb: FluentGpu.Text.DirectWrite.DWriteItemizer.New
+  name.vb: New
+- uid: FluentGpu.Text.DirectWrite.DWriteItemizer.Itemize*
+  commentId: Overload:FluentGpu.Text.DirectWrite.DWriteItemizer.Itemize
+  href: FluentGpu.Text.DirectWrite.DWriteItemizer.html#FluentGpu_Text_DirectWrite_DWriteItemizer_Itemize_System_ReadOnlySpan_System_Char__System_Collections_Generic_List_FluentGpu_Text_ItemRun__System_Collections_Generic_List_FluentGpu_Text_BreakOpp__
+  name: Itemize
+  nameWithType: DWriteItemizer.Itemize
+  fullName: FluentGpu.Text.DirectWrite.DWriteItemizer.Itemize
+- uid: FluentGpu.Text.ITextItemizer.Itemize(System.ReadOnlySpan{System.Char},System.Collections.Generic.List{FluentGpu.Text.ItemRun},System.Collections.Generic.List{FluentGpu.Text.BreakOpp})
+  commentId: M:FluentGpu.Text.ITextItemizer.Itemize(System.ReadOnlySpan{System.Char},System.Collections.Generic.List{FluentGpu.Text.ItemRun},System.Collections.Generic.List{FluentGpu.Text.BreakOpp})
+  parent: FluentGpu.Text.ITextItemizer
+  isExternal: true
+  href: FluentGpu.Text.ITextItemizer.html#FluentGpu_Text_ITextItemizer_Itemize_System_ReadOnlySpan_System_Char__System_Collections_Generic_List_FluentGpu_Text_ItemRun__System_Collections_Generic_List_FluentGpu_Text_BreakOpp__
+  name: Itemize(ReadOnlySpan<char>, List<ItemRun>, List<BreakOpp>)
+  nameWithType: ITextItemizer.Itemize(ReadOnlySpan<char>, List<ItemRun>, List<BreakOpp>)
+  fullName: FluentGpu.Text.ITextItemizer.Itemize(System.ReadOnlySpan<char>, System.Collections.Generic.List<FluentGpu.Text.ItemRun>, System.Collections.Generic.List<FluentGpu.Text.BreakOpp>)
+  nameWithType.vb: ITextItemizer.Itemize(ReadOnlySpan(Of Char), List(Of ItemRun), List(Of BreakOpp))
+  fullName.vb: FluentGpu.Text.ITextItemizer.Itemize(System.ReadOnlySpan(Of Char), System.Collections.Generic.List(Of FluentGpu.Text.ItemRun), System.Collections.Generic.List(Of FluentGpu.Text.BreakOpp))
+  name.vb: Itemize(ReadOnlySpan(Of Char), List(Of ItemRun), List(Of BreakOpp))
+  spec.csharp:
+  - uid: FluentGpu.Text.ITextItemizer.Itemize(System.ReadOnlySpan{System.Char},System.Collections.Generic.List{FluentGpu.Text.ItemRun},System.Collections.Generic.List{FluentGpu.Text.BreakOpp})
+    name: Itemize
+    href: FluentGpu.Text.ITextItemizer.html#FluentGpu_Text_ITextItemizer_Itemize_System_ReadOnlySpan_System_Char__System_Collections_Generic_List_FluentGpu_Text_ItemRun__System_Collections_Generic_List_FluentGpu_Text_BreakOpp__
+  - name: (
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - uid: System.Char
+    name: char
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.char
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: <
+  - uid: FluentGpu.Text.ItemRun
+    name: ItemRun
+    href: FluentGpu.Text.ItemRun.html
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: <
+  - uid: FluentGpu.Text.BreakOpp
+    name: BreakOpp
+    href: FluentGpu.Text.BreakOpp.html
+  - name: '>'
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Text.ITextItemizer.Itemize(System.ReadOnlySpan{System.Char},System.Collections.Generic.List{FluentGpu.Text.ItemRun},System.Collections.Generic.List{FluentGpu.Text.BreakOpp})
+    name: Itemize
+    href: FluentGpu.Text.ITextItemizer.html#FluentGpu_Text_ITextItemizer_Itemize_System_ReadOnlySpan_System_Char__System_Collections_Generic_List_FluentGpu_Text_ItemRun__System_Collections_Generic_List_FluentGpu_Text_BreakOpp__
+  - name: (
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Char
+    name: Char
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.char
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Text.ItemRun
+    name: ItemRun
+    href: FluentGpu.Text.ItemRun.html
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Text.BreakOpp
+    name: BreakOpp
+    href: FluentGpu.Text.BreakOpp.html
+  - name: )
+  - name: )
+- uid: System.ReadOnlySpan{System.Char}
+  commentId: T:System.ReadOnlySpan{System.Char}
+  parent: System
+  definition: System.ReadOnlySpan`1
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<char>
+  nameWithType: ReadOnlySpan<char>
+  fullName: System.ReadOnlySpan<char>
+  nameWithType.vb: ReadOnlySpan(Of Char)
+  fullName.vb: System.ReadOnlySpan(Of Char)
+  name.vb: ReadOnlySpan(Of Char)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - uid: System.Char
+    name: char
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.char
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Char
+    name: Char
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.char
+  - name: )
+- uid: System.Collections.Generic.List{FluentGpu.Text.ItemRun}
+  commentId: T:System.Collections.Generic.List{FluentGpu.Text.ItemRun}
+  parent: System.Collections.Generic
+  definition: System.Collections.Generic.List`1
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  name: List<ItemRun>
+  nameWithType: List<ItemRun>
+  fullName: System.Collections.Generic.List<FluentGpu.Text.ItemRun>
+  nameWithType.vb: List(Of ItemRun)
+  fullName.vb: System.Collections.Generic.List(Of FluentGpu.Text.ItemRun)
+  name.vb: List(Of ItemRun)
+  spec.csharp:
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: <
+  - uid: FluentGpu.Text.ItemRun
+    name: ItemRun
+    href: FluentGpu.Text.ItemRun.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Text.ItemRun
+    name: ItemRun
+    href: FluentGpu.Text.ItemRun.html
+  - name: )
+- uid: System.Collections.Generic.List{FluentGpu.Text.BreakOpp}
+  commentId: T:System.Collections.Generic.List{FluentGpu.Text.BreakOpp}
+  parent: System.Collections.Generic
+  definition: System.Collections.Generic.List`1
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  name: List<BreakOpp>
+  nameWithType: List<BreakOpp>
+  fullName: System.Collections.Generic.List<FluentGpu.Text.BreakOpp>
+  nameWithType.vb: List(Of BreakOpp)
+  fullName.vb: System.Collections.Generic.List(Of FluentGpu.Text.BreakOpp)
+  name.vb: List(Of BreakOpp)
+  spec.csharp:
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: <
+  - uid: FluentGpu.Text.BreakOpp
+    name: BreakOpp
+    href: FluentGpu.Text.BreakOpp.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Text.BreakOpp
+    name: BreakOpp
+    href: FluentGpu.Text.BreakOpp.html
+  - name: )
+- uid: System.ReadOnlySpan`1
+  commentId: T:System.ReadOnlySpan`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<T>
+  nameWithType: ReadOnlySpan<T>
+  fullName: System.ReadOnlySpan<T>
+  nameWithType.vb: ReadOnlySpan(Of T)
+  fullName.vb: System.ReadOnlySpan(Of T)
+  name.vb: ReadOnlySpan(Of T)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Collections.Generic.List`1
+  commentId: T:System.Collections.Generic.List`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  name: List<T>
+  nameWithType: List<T>
+  fullName: System.Collections.Generic.List<T>
+  nameWithType.vb: List(Of T)
+  fullName.vb: System.Collections.Generic.List(Of T)
+  name.vb: List(Of T)
+  spec.csharp:
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Collections.Generic
+  commentId: N:System.Collections.Generic
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System.Collections.Generic
+  nameWithType: System.Collections.Generic
+  fullName: System.Collections.Generic
+  spec.csharp:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+  spec.vb:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+- uid: FluentGpu.Text.DirectWrite.DWriteItemizer.SelfTest*
+  commentId: Overload:FluentGpu.Text.DirectWrite.DWriteItemizer.SelfTest
+  href: FluentGpu.Text.DirectWrite.DWriteItemizer.html#FluentGpu_Text_DirectWrite_DWriteItemizer_SelfTest
+  name: SelfTest
+  nameWithType: DWriteItemizer.SelfTest
+  fullName: FluentGpu.Text.DirectWrite.DWriteItemizer.SelfTest
+- uid: FluentGpu.Text.DirectWrite.DWriteItemizer.Dispose*
+  commentId: Overload:FluentGpu.Text.DirectWrite.DWriteItemizer.Dispose
+  href: FluentGpu.Text.DirectWrite.DWriteItemizer.html#FluentGpu_Text_DirectWrite_DWriteItemizer_Dispose
+  name: Dispose
+  nameWithType: DWriteItemizer.Dispose
+  fullName: FluentGpu.Text.DirectWrite.DWriteItemizer.Dispose
+- uid: System.IDisposable.Dispose
+  commentId: M:System.IDisposable.Dispose
+  parent: System.IDisposable
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  name: Dispose()
+  nameWithType: IDisposable.Dispose()
+  fullName: System.IDisposable.Dispose()
+  spec.csharp:
+  - uid: System.IDisposable.Dispose
+    name: Dispose
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.IDisposable.Dispose
+    name: Dispose
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  - name: (
+  - name: )

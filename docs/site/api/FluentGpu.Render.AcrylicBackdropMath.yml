@@ -1,0 +1,782 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Render.AcrylicBackdropMath
+  commentId: T:FluentGpu.Render.AcrylicBackdropMath
+  id: AcrylicBackdropMath
+  parent: FluentGpu.Render
+  children:
+  - FluentGpu.Render.AcrylicBackdropMath.BucketDim(System.Int32)
+  - FluentGpu.Render.AcrylicBackdropMath.DownsampleFactor(System.Single,System.Single)
+  - FluentGpu.Render.AcrylicBackdropMath.KernelRadius
+  - FluentGpu.Render.AcrylicBackdropMath.KernelSigma
+  - FluentGpu.Render.AcrylicBackdropMath.SnapshotRegion(FluentGpu.Foundation.RectF@,System.Single,System.Int32,System.Int32,System.Int32,System.Int32@,System.Int32@,System.Int32@,System.Int32@)
+  - FluentGpu.Render.AcrylicBackdropMath.TapCount
+  - FluentGpu.Render.AcrylicBackdropMath.TapOffsets
+  - FluentGpu.Render.AcrylicBackdropMath.TapWeights
+  langs:
+  - csharp
+  - vb
+  name: AcrylicBackdropMath
+  nameWithType: AcrylicBackdropMath
+  fullName: FluentGpu.Render.AcrylicBackdropMath
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Render/AcrylicBackdropMath.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AcrylicBackdropMath
+    path: ../../src/FluentGpu.Render/AcrylicBackdropMath.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  summary: >-
+    Portable math for the in-app acrylic effect runner (design/subsystems/backdrop-effects-animation.md §2.3 two-pass
+
+    PushLayer{Acrylic} schedule + §3 IEffectRunner seam, gpu-renderer.md §7 LayerPool). The GPU leaf
+
+    (Rhi.D3D12 <code>AcrylicCompositor</code>) consumes these values so the region / size-bucket / kernel logic is
+
+    headless-verifiable in the VerticalSlice while the COM/HLSL stays render-thread-confined in the leaf.
+
+
+    WinUI ground truth: microsoft-ui-xaml AcrylicBrush.h:64 <code>sc_blurRadius = 30.0f</code>, applied as Composition
+
+    <code>GaussianBlurEffect.BlurAmount</code> (= the gaussian STANDARD DEVIATION, in DIPs) over the backdrop resolved onto
+
+    the opaque FallbackColor (AcrylicBrush.cpp:500-528). The runner reproduces sigma = BlurSigma·dpiScale physical px
+
+    with ONE fixed-sigma separable kernel by choosing the snapshot downsample factor instead of the kernel width:
+
+    <code>down = round(sigmaPhys / KernelSigma)</code>, so blurring the 1/down-resolution snapshot with the fixed
+
+    sigma-7.5 kernel yields the requested full-resolution sigma (30 DIP ⇒ /4 at 100% DPI, /6 at 150%, /8 at 200%).
+  example: []
+  syntax:
+    content: public static class AcrylicBackdropMath
+    content.vb: Public Module AcrylicBackdropMath
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.MemberwiseClone
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Render.AcrylicBackdropMath.KernelSigma
+  commentId: F:FluentGpu.Render.AcrylicBackdropMath.KernelSigma
+  id: KernelSigma
+  parent: FluentGpu.Render.AcrylicBackdropMath
+  langs:
+  - csharp
+  - vb
+  name: KernelSigma
+  nameWithType: AcrylicBackdropMath.KernelSigma
+  fullName: FluentGpu.Render.AcrylicBackdropMath.KernelSigma
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Render/AcrylicBackdropMath.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: KernelSigma
+    path: ../../src/FluentGpu.Render/AcrylicBackdropMath.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  summary: Gaussian standard deviation of the FIXED separable blur kernel, in downsampled texels.
+  example: []
+  syntax:
+    content: public const float KernelSigma = 7.5
+    return:
+      type: System.Single
+    content.vb: Public Const KernelSigma As Single = 7.5
+- uid: FluentGpu.Render.AcrylicBackdropMath.KernelRadius
+  commentId: F:FluentGpu.Render.AcrylicBackdropMath.KernelRadius
+  id: KernelRadius
+  parent: FluentGpu.Render.AcrylicBackdropMath
+  langs:
+  - csharp
+  - vb
+  name: KernelRadius
+  nameWithType: AcrylicBackdropMath.KernelRadius
+  fullName: FluentGpu.Render.AcrylicBackdropMath.KernelRadius
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Render/AcrylicBackdropMath.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: KernelRadius
+    path: ../../src/FluentGpu.Render/AcrylicBackdropMath.cs
+    startLine: 24
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  summary: >-
+    Discrete kernel radius in downsampled texels (≈3σ support; the tail beyond carries &lt;0.4% weight —
+        the same truncation a D2D GaussianBlur uses for its kernel window).
+  example: []
+  syntax:
+    content: public const int KernelRadius = 22
+    return:
+      type: System.Int32
+    content.vb: Public Const KernelRadius As Integer = 22
+- uid: FluentGpu.Render.AcrylicBackdropMath.TapCount
+  commentId: F:FluentGpu.Render.AcrylicBackdropMath.TapCount
+  id: TapCount
+  parent: FluentGpu.Render.AcrylicBackdropMath
+  langs:
+  - csharp
+  - vb
+  name: TapCount
+  nameWithType: AcrylicBackdropMath.TapCount
+  fullName: FluentGpu.Render.AcrylicBackdropMath.TapCount
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Render/AcrylicBackdropMath.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TapCount
+    path: ../../src/FluentGpu.Render/AcrylicBackdropMath.cs
+    startLine: 28
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  summary: >-
+    Bilinear-optimized taps per pass: the center texel + 11 linear taps, each folding a texel pair of the
+        45-texel discrete kernel into one bilinear fetch (offset weighted between the pair).
+  example: []
+  syntax:
+    content: public const int TapCount = 12
+    return:
+      type: System.Int32
+    content.vb: Public Const TapCount As Integer = 12
+- uid: FluentGpu.Render.AcrylicBackdropMath.TapOffsets
+  commentId: P:FluentGpu.Render.AcrylicBackdropMath.TapOffsets
+  id: TapOffsets
+  parent: FluentGpu.Render.AcrylicBackdropMath
+  langs:
+  - csharp
+  - vb
+  name: TapOffsets
+  nameWithType: AcrylicBackdropMath.TapOffsets
+  fullName: FluentGpu.Render.AcrylicBackdropMath.TapOffsets
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/AcrylicBackdropMath.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TapOffsets
+    path: ../../src/FluentGpu.Render/AcrylicBackdropMath.cs
+    startLine: 59
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  summary: Per-pass bilinear tap offsets in source texels (index 0 = center). One-sided; the shader mirrors.
+  example: []
+  syntax:
+    content: public static ReadOnlySpan<float> TapOffsets { get; }
+    parameters: []
+    return:
+      type: System.ReadOnlySpan{System.Single}
+    content.vb: Public Shared ReadOnly Property TapOffsets As ReadOnlySpan(Of Single)
+  overload: FluentGpu.Render.AcrylicBackdropMath.TapOffsets*
+- uid: FluentGpu.Render.AcrylicBackdropMath.TapWeights
+  commentId: P:FluentGpu.Render.AcrylicBackdropMath.TapWeights
+  id: TapWeights
+  parent: FluentGpu.Render.AcrylicBackdropMath
+  langs:
+  - csharp
+  - vb
+  name: TapWeights
+  nameWithType: AcrylicBackdropMath.TapWeights
+  fullName: FluentGpu.Render.AcrylicBackdropMath.TapWeights
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/AcrylicBackdropMath.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TapWeights
+    path: ../../src/FluentGpu.Render/AcrylicBackdropMath.cs
+    startLine: 63
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  summary: >-
+    Per-pass tap weights (index 0 = center weight; indices 1.. are applied at ±offset, so the
+        total kernel mass is <code>w[0] + 2·Σ w[1..]</code> == 1).
+  example: []
+  syntax:
+    content: public static ReadOnlySpan<float> TapWeights { get; }
+    parameters: []
+    return:
+      type: System.ReadOnlySpan{System.Single}
+    content.vb: Public Shared ReadOnly Property TapWeights As ReadOnlySpan(Of Single)
+  overload: FluentGpu.Render.AcrylicBackdropMath.TapWeights*
+- uid: FluentGpu.Render.AcrylicBackdropMath.DownsampleFactor(System.Single,System.Single)
+  commentId: M:FluentGpu.Render.AcrylicBackdropMath.DownsampleFactor(System.Single,System.Single)
+  id: DownsampleFactor(System.Single,System.Single)
+  parent: FluentGpu.Render.AcrylicBackdropMath
+  langs:
+  - csharp
+  - vb
+  name: DownsampleFactor(float, float)
+  nameWithType: AcrylicBackdropMath.DownsampleFactor(float, float)
+  fullName: FluentGpu.Render.AcrylicBackdropMath.DownsampleFactor(float, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Render/AcrylicBackdropMath.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DownsampleFactor
+    path: ../../src/FluentGpu.Render/AcrylicBackdropMath.cs
+    startLine: 71
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  summary: >-
+    Snapshot downsample divisor for a requested blur sigma (in DIPs — WinUI BlurAmount semantics) at a DPI scale.
+
+    Effective full-resolution sigma = factor · <xref href="FluentGpu.Render.AcrylicBackdropMath.KernelSigma" data-throw-if-not-resolved="false"></xref> ≈ blurSigmaDip · scale physical px
+
+    (exact at 100/125/150/175/200% DPI for the WinUI sigma 30). Clamped to /8 — beyond that the bilinear
+
+    down/up-sample artifacts outweigh kernel fidelity.
+  example: []
+  syntax:
+    content: public static int DownsampleFactor(float blurSigmaDip, float scale)
+    parameters:
+    - id: blurSigmaDip
+      type: System.Single
+    - id: scale
+      type: System.Single
+    return:
+      type: System.Int32
+    content.vb: Public Shared Function DownsampleFactor(blurSigmaDip As Single, scale As Single) As Integer
+  overload: FluentGpu.Render.AcrylicBackdropMath.DownsampleFactor*
+  nameWithType.vb: AcrylicBackdropMath.DownsampleFactor(Single, Single)
+  fullName.vb: FluentGpu.Render.AcrylicBackdropMath.DownsampleFactor(Single, Single)
+  name.vb: DownsampleFactor(Single, Single)
+- uid: FluentGpu.Render.AcrylicBackdropMath.SnapshotRegion(FluentGpu.Foundation.RectF@,System.Single,System.Int32,System.Int32,System.Int32,System.Int32@,System.Int32@,System.Int32@,System.Int32@)
+  commentId: M:FluentGpu.Render.AcrylicBackdropMath.SnapshotRegion(FluentGpu.Foundation.RectF@,System.Single,System.Int32,System.Int32,System.Int32,System.Int32@,System.Int32@,System.Int32@,System.Int32@)
+  id: SnapshotRegion(FluentGpu.Foundation.RectF@,System.Single,System.Int32,System.Int32,System.Int32,System.Int32@,System.Int32@,System.Int32@,System.Int32@)
+  parent: FluentGpu.Render.AcrylicBackdropMath
+  langs:
+  - csharp
+  - vb
+  name: SnapshotRegion(in RectF, float, int, int, int, out int, out int, out int, out int)
+  nameWithType: AcrylicBackdropMath.SnapshotRegion(in RectF, float, int, int, int, out int, out int, out int, out int)
+  fullName: FluentGpu.Render.AcrylicBackdropMath.SnapshotRegion(in FluentGpu.Foundation.RectF, float, int, int, int, out int, out int, out int, out int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Render/AcrylicBackdropMath.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SnapshotRegion
+    path: ../../src/FluentGpu.Render/AcrylicBackdropMath.cs
+    startLine: 83
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  summary: >-
+    The backdrop region to snapshot beneath a layer rect, in physical px clamped to the canvas: the rect inflated
+
+    on every side by the full blur support (<xref href="FluentGpu.Render.AcrylicBackdropMath.KernelRadius" data-throw-if-not-resolved="false"></xref>·down physical px), so every blurred texel
+
+    under the rect samples REAL backdrop instead of a clamp-streaked edge (WinUI blurs the whole backdrop;
+
+    inflating by the kernel support makes the region blur bit-identical inside the rect).
+  example: []
+  syntax:
+    content: public static void SnapshotRegion(in RectF deviceRectDip, float scale, int down, int canvasW, int canvasH, out int x, out int y, out int w, out int h)
+    parameters:
+    - id: deviceRectDip
+      type: FluentGpu.Foundation.RectF
+    - id: scale
+      type: System.Single
+    - id: down
+      type: System.Int32
+    - id: canvasW
+      type: System.Int32
+    - id: canvasH
+      type: System.Int32
+    - id: x
+      type: System.Int32
+    - id: y
+      type: System.Int32
+    - id: w
+      type: System.Int32
+    - id: h
+      type: System.Int32
+    content.vb: Public Shared Sub SnapshotRegion(deviceRectDip As RectF, scale As Single, down As Integer, canvasW As Integer, canvasH As Integer, x As Integer, y As Integer, w As Integer, h As Integer)
+  overload: FluentGpu.Render.AcrylicBackdropMath.SnapshotRegion*
+  nameWithType.vb: AcrylicBackdropMath.SnapshotRegion(RectF, Single, Integer, Integer, Integer, Integer, Integer, Integer, Integer)
+  fullName.vb: FluentGpu.Render.AcrylicBackdropMath.SnapshotRegion(FluentGpu.Foundation.RectF, Single, Integer, Integer, Integer, Integer, Integer, Integer, Integer)
+  name.vb: SnapshotRegion(RectF, Single, Integer, Integer, Integer, Integer, Integer, Integer, Integer)
+- uid: FluentGpu.Render.AcrylicBackdropMath.BucketDim(System.Int32)
+  commentId: M:FluentGpu.Render.AcrylicBackdropMath.BucketDim(System.Int32)
+  id: BucketDim(System.Int32)
+  parent: FluentGpu.Render.AcrylicBackdropMath
+  langs:
+  - csharp
+  - vb
+  name: BucketDim(int)
+  nameWithType: AcrylicBackdropMath.BucketDim(int)
+  fullName: FluentGpu.Render.AcrylicBackdropMath.BucketDim(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Render/AcrylicBackdropMath.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BucketDim
+    path: ../../src/FluentGpu.Render/AcrylicBackdropMath.cs
+    startLine: 101
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  summary: >-
+    LayerPool size bucket (gpu-renderer.md §7.1: "pooled RT textures keyed by quantized power-of-two-ish size
+
+    buckets"): next power of two ≥ px, floor 64 — few distinct buckets ⇒ high cross-frame/cross-layer reuse, so
+
+    steady state acquires from the free list and never creates a texture.
+  example: []
+  syntax:
+    content: public static int BucketDim(int px)
+    parameters:
+    - id: px
+      type: System.Int32
+    return:
+      type: System.Int32
+    content.vb: Public Shared Function BucketDim(px As Integer) As Integer
+  overload: FluentGpu.Render.AcrylicBackdropMath.BucketDim*
+  nameWithType.vb: AcrylicBackdropMath.BucketDim(Integer)
+  fullName.vb: FluentGpu.Render.AcrylicBackdropMath.BucketDim(Integer)
+  name.vb: BucketDim(Integer)
+references:
+- uid: FluentGpu.Render
+  commentId: N:FluentGpu.Render
+  href: FluentGpu.html
+  name: FluentGpu.Render
+  nameWithType: FluentGpu.Render
+  fullName: FluentGpu.Render
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Render
+    name: Render
+    href: FluentGpu.Render.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Render
+    name: Render
+    href: FluentGpu.Render.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.MemberwiseClone
+  commentId: M:System.Object.MemberwiseClone
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  name: MemberwiseClone()
+  nameWithType: object.MemberwiseClone()
+  fullName: object.MemberwiseClone()
+  nameWithType.vb: Object.MemberwiseClone()
+  fullName.vb: Object.MemberwiseClone()
+  spec.csharp:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Render.AcrylicBackdropMath.TapOffsets*
+  commentId: Overload:FluentGpu.Render.AcrylicBackdropMath.TapOffsets
+  href: FluentGpu.Render.AcrylicBackdropMath.html#FluentGpu_Render_AcrylicBackdropMath_TapOffsets
+  name: TapOffsets
+  nameWithType: AcrylicBackdropMath.TapOffsets
+  fullName: FluentGpu.Render.AcrylicBackdropMath.TapOffsets
+- uid: System.ReadOnlySpan{System.Single}
+  commentId: T:System.ReadOnlySpan{System.Single}
+  parent: System
+  definition: System.ReadOnlySpan`1
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<float>
+  nameWithType: ReadOnlySpan<float>
+  fullName: System.ReadOnlySpan<float>
+  nameWithType.vb: ReadOnlySpan(Of Single)
+  fullName.vb: System.ReadOnlySpan(Of Single)
+  name.vb: ReadOnlySpan(Of Single)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: System.ReadOnlySpan`1
+  commentId: T:System.ReadOnlySpan`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<T>
+  nameWithType: ReadOnlySpan<T>
+  fullName: System.ReadOnlySpan<T>
+  nameWithType.vb: ReadOnlySpan(Of T)
+  fullName.vb: System.ReadOnlySpan(Of T)
+  name.vb: ReadOnlySpan(Of T)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Render.AcrylicBackdropMath.TapWeights*
+  commentId: Overload:FluentGpu.Render.AcrylicBackdropMath.TapWeights
+  href: FluentGpu.Render.AcrylicBackdropMath.html#FluentGpu_Render_AcrylicBackdropMath_TapWeights
+  name: TapWeights
+  nameWithType: AcrylicBackdropMath.TapWeights
+  fullName: FluentGpu.Render.AcrylicBackdropMath.TapWeights
+- uid: FluentGpu.Render.AcrylicBackdropMath.KernelSigma
+  commentId: F:FluentGpu.Render.AcrylicBackdropMath.KernelSigma
+  href: FluentGpu.Render.AcrylicBackdropMath.html#FluentGpu_Render_AcrylicBackdropMath_KernelSigma
+  name: KernelSigma
+  nameWithType: AcrylicBackdropMath.KernelSigma
+  fullName: FluentGpu.Render.AcrylicBackdropMath.KernelSigma
+- uid: FluentGpu.Render.AcrylicBackdropMath.DownsampleFactor*
+  commentId: Overload:FluentGpu.Render.AcrylicBackdropMath.DownsampleFactor
+  href: FluentGpu.Render.AcrylicBackdropMath.html#FluentGpu_Render_AcrylicBackdropMath_DownsampleFactor_System_Single_System_Single_
+  name: DownsampleFactor
+  nameWithType: AcrylicBackdropMath.DownsampleFactor
+  fullName: FluentGpu.Render.AcrylicBackdropMath.DownsampleFactor
+- uid: FluentGpu.Render.AcrylicBackdropMath.KernelRadius
+  commentId: F:FluentGpu.Render.AcrylicBackdropMath.KernelRadius
+  href: FluentGpu.Render.AcrylicBackdropMath.html#FluentGpu_Render_AcrylicBackdropMath_KernelRadius
+  name: KernelRadius
+  nameWithType: AcrylicBackdropMath.KernelRadius
+  fullName: FluentGpu.Render.AcrylicBackdropMath.KernelRadius
+- uid: FluentGpu.Render.AcrylicBackdropMath.SnapshotRegion*
+  commentId: Overload:FluentGpu.Render.AcrylicBackdropMath.SnapshotRegion
+  href: FluentGpu.Render.AcrylicBackdropMath.html#FluentGpu_Render_AcrylicBackdropMath_SnapshotRegion_FluentGpu_Foundation_RectF__System_Single_System_Int32_System_Int32_System_Int32_System_Int32__System_Int32__System_Int32__System_Int32__
+  name: SnapshotRegion
+  nameWithType: AcrylicBackdropMath.SnapshotRegion
+  fullName: FluentGpu.Render.AcrylicBackdropMath.SnapshotRegion
+- uid: FluentGpu.Foundation.RectF
+  commentId: T:FluentGpu.Foundation.RectF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.RectF.html
+  name: RectF
+  nameWithType: RectF
+  fullName: FluentGpu.Foundation.RectF
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Render.AcrylicBackdropMath.BucketDim*
+  commentId: Overload:FluentGpu.Render.AcrylicBackdropMath.BucketDim
+  href: FluentGpu.Render.AcrylicBackdropMath.html#FluentGpu_Render_AcrylicBackdropMath_BucketDim_System_Int32_
+  name: BucketDim
+  nameWithType: AcrylicBackdropMath.BucketDim
+  fullName: FluentGpu.Render.AcrylicBackdropMath.BucketDim

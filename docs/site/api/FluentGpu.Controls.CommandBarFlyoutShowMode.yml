@@ -1,0 +1,137 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.CommandBarFlyoutShowMode
+  commentId: T:FluentGpu.Controls.CommandBarFlyoutShowMode
+  id: CommandBarFlyoutShowMode
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.CommandBarFlyoutShowMode.Standard
+  - FluentGpu.Controls.CommandBarFlyoutShowMode.Transient
+  langs:
+  - csharp
+  - vb
+  name: CommandBarFlyoutShowMode
+  nameWithType: CommandBarFlyoutShowMode
+  fullName: FluentGpu.Controls.CommandBarFlyoutShowMode
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBarFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CommandBarFlyoutShowMode
+    path: ../../src/FluentGpu.Controls/CommandBarFlyout.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI FlyoutShowMode subset for <xref href="FluentGpu.Controls.CommandBarFlyout" data-throw-if-not-resolved="false"></xref> (CommandBarFlyout.cpp:162-201):
+        <xref href="FluentGpu.Controls.CommandBarFlyoutShowMode.Standard" data-throw-if-not-resolved="false"></xref> opens with the overflow ALREADY expanded — transitions suppressed while opening
+        (m_commandBarFlyoutIsOpening → UpdateUI(false), CommandBarFlyoutCommandBar.cpp:25/:121/:189-197) — and focuses the
+        first command (cpp:29-71). <xref href="FluentGpu.Controls.CommandBarFlyoutShowMode.Transient" data-throw-if-not-resolved="false"></xref> (the default) opens collapsed and never steals focus.
+        AlwaysExpanded forces Standard (CommandBarFlyout.cpp:173-177).
+  example: []
+  syntax:
+    content: 'public enum CommandBarFlyoutShowMode : byte'
+    content.vb: Public Enum CommandBarFlyoutShowMode As Byte
+- uid: FluentGpu.Controls.CommandBarFlyoutShowMode.Transient
+  commentId: F:FluentGpu.Controls.CommandBarFlyoutShowMode.Transient
+  id: Transient
+  parent: FluentGpu.Controls.CommandBarFlyoutShowMode
+  langs:
+  - csharp
+  - vb
+  name: Transient
+  nameWithType: CommandBarFlyoutShowMode.Transient
+  fullName: FluentGpu.Controls.CommandBarFlyoutShowMode.Transient
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBarFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Transient
+    path: ../../src/FluentGpu.Controls/CommandBarFlyout.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Transient = 0
+    return:
+      type: FluentGpu.Controls.CommandBarFlyoutShowMode
+- uid: FluentGpu.Controls.CommandBarFlyoutShowMode.Standard
+  commentId: F:FluentGpu.Controls.CommandBarFlyoutShowMode.Standard
+  id: Standard
+  parent: FluentGpu.Controls.CommandBarFlyoutShowMode
+  langs:
+  - csharp
+  - vb
+  name: Standard
+  nameWithType: CommandBarFlyoutShowMode.Standard
+  fullName: FluentGpu.Controls.CommandBarFlyoutShowMode.Standard
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBarFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Standard
+    path: ../../src/FluentGpu.Controls/CommandBarFlyout.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Standard = 1
+    return:
+      type: FluentGpu.Controls.CommandBarFlyoutShowMode
+references:
+- uid: FluentGpu.Controls.CommandBarFlyout
+  commentId: T:FluentGpu.Controls.CommandBarFlyout
+  href: FluentGpu.Controls.CommandBarFlyout.html
+  name: CommandBarFlyout
+  nameWithType: CommandBarFlyout
+  fullName: FluentGpu.Controls.CommandBarFlyout
+- uid: FluentGpu.Controls.CommandBarFlyoutShowMode.Standard
+  commentId: F:FluentGpu.Controls.CommandBarFlyoutShowMode.Standard
+  href: FluentGpu.Controls.CommandBarFlyoutShowMode.html#FluentGpu_Controls_CommandBarFlyoutShowMode_Standard
+  name: Standard
+  nameWithType: CommandBarFlyoutShowMode.Standard
+  fullName: FluentGpu.Controls.CommandBarFlyoutShowMode.Standard
+- uid: FluentGpu.Controls.CommandBarFlyoutShowMode.Transient
+  commentId: F:FluentGpu.Controls.CommandBarFlyoutShowMode.Transient
+  href: FluentGpu.Controls.CommandBarFlyoutShowMode.html#FluentGpu_Controls_CommandBarFlyoutShowMode_Transient
+  name: Transient
+  nameWithType: CommandBarFlyoutShowMode.Transient
+  fullName: FluentGpu.Controls.CommandBarFlyoutShowMode.Transient
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.CommandBarFlyoutShowMode
+  commentId: T:FluentGpu.Controls.CommandBarFlyoutShowMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.CommandBarFlyoutShowMode.html
+  name: CommandBarFlyoutShowMode
+  nameWithType: CommandBarFlyoutShowMode
+  fullName: FluentGpu.Controls.CommandBarFlyoutShowMode

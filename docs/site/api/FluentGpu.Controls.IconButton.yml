@@ -1,0 +1,616 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.IconButton
+  commentId: T:FluentGpu.Controls.IconButton
+  id: IconButton
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.IconButton.Create(System.String,System.Action,FluentGpu.Controls.IconButton.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)
+  - FluentGpu.Controls.IconButton.DefaultStyle
+  - FluentGpu.Controls.IconButton.PartGlyph
+  - FluentGpu.Controls.IconButton.PartIcon
+  - FluentGpu.Controls.IconButton.PartRoot
+  - FluentGpu.Controls.IconButton.StyleOverride
+  langs:
+  - csharp
+  - vb
+  name: IconButton
+  nameWithType: IconButton
+  fullName: FluentGpu.Controls.IconButton
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/IconButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IconButton
+    path: ../../src/FluentGpu.Controls/IconButton.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A compact icon/glyph button (transport play/next/prev, command-bar actions). WinUI shape:
+
+    AppBarButton/MediaTransportControls — a rounded-square (ControlCornerRadius 4), subtle fills, a 16px glyph.
+
+    State colors verified against controls\dev\CommonStyles\AppBarButton_themeresources.xaml (Default = dark :5-12,
+
+    Light :75-82). The BOX never scales (WinUI AppBarButton states swap colors only — lines 244-259); the inner glyph
+
+    wrapper carries the AnimatedIcon-analogue hover/press scale (WinUI sets <code>AnimatedIcon.State</code> on the
+
+    presenter — Button_themeresources.xaml:192/208 — and the animated glyph responds; see AnimatedIcon.cs).
+
+    Stateless/controlled: pass a click handler. Size/glyph/colours live on <xref href="FluentGpu.Controls.IconButton.Style" data-throw-if-not-resolved="false"></xref>; tweak via <code>with</code>.
+  example: []
+  syntax:
+    content: public static class IconButton
+    content.vb: Public Module IconButton
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.MemberwiseClone
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.IconButton.PartRoot
+  commentId: F:FluentGpu.Controls.IconButton.PartRoot
+  id: PartRoot
+  parent: FluentGpu.Controls.IconButton
+  langs:
+  - csharp
+  - vb
+  name: PartRoot
+  nameWithType: IconButton.PartRoot
+  fullName: FluentGpu.Controls.IconButton.PartRoot
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/IconButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartRoot
+    path: ../../src/FluentGpu.Controls/IconButton.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'The rounded-square chrome. Owned: OnClick, Role, Children (the icon wrapper mount).'
+  example: []
+  syntax:
+    content: public const string PartRoot = "Root"
+    return:
+      type: System.String
+    content.vb: Public Const PartRoot As String = "Root"
+- uid: FluentGpu.Controls.IconButton.PartIcon
+  commentId: F:FluentGpu.Controls.IconButton.PartIcon
+  id: PartIcon
+  parent: FluentGpu.Controls.IconButton
+  langs:
+  - csharp
+  - vb
+  name: PartIcon
+  nameWithType: IconButton.PartIcon
+  fullName: FluentGpu.Controls.IconButton.PartIcon
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/IconButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartIcon
+    path: ../../src/FluentGpu.Controls/IconButton.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The inner glyph wrapper carrying the AnimatedIcon-analogue hover/press scale (the scales are
+        style-driven — a modifier may override them). Owned: Children (the glyph mount).
+  example: []
+  syntax:
+    content: public const string PartIcon = "Icon"
+    return:
+      type: System.String
+    content.vb: Public Const PartIcon As String = "Icon"
+- uid: FluentGpu.Controls.IconButton.PartGlyph
+  commentId: F:FluentGpu.Controls.IconButton.PartGlyph
+  id: PartGlyph
+  parent: FluentGpu.Controls.IconButton
+  langs:
+  - csharp
+  - vb
+  name: PartGlyph
+  nameWithType: IconButton.PartGlyph
+  fullName: FluentGpu.Controls.IconButton.PartGlyph
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/IconButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartGlyph
+    path: ../../src/FluentGpu.Controls/IconButton.cs
+    startLine: 25
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The glyph run — a <xref href="FluentGpu.Dsl.TextEl" data-throw-if-not-resolved="false"></xref>, so customize via <code>parts.Set&lt;TextEl&gt;(IconButton.PartGlyph, …)</code>.
+        Owned: none.
+  example: []
+  syntax:
+    content: public const string PartGlyph = "Glyph"
+    return:
+      type: System.String
+    content.vb: Public Const PartGlyph As String = "Glyph"
+- uid: FluentGpu.Controls.IconButton.StyleOverride
+  commentId: F:FluentGpu.Controls.IconButton.StyleOverride
+  id: StyleOverride
+  parent: FluentGpu.Controls.IconButton
+  langs:
+  - csharp
+  - vb
+  name: StyleOverride
+  nameWithType: IconButton.StyleOverride
+  fullName: FluentGpu.Controls.IconButton.StyleOverride
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/IconButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StyleOverride
+    path: ../../src/FluentGpu.Controls/IconButton.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static IconButton.Style? StyleOverride
+    return:
+      type: FluentGpu.Controls.IconButton.Style
+    content.vb: Public Shared StyleOverride As IconButton.Style
+- uid: FluentGpu.Controls.IconButton.DefaultStyle
+  commentId: P:FluentGpu.Controls.IconButton.DefaultStyle
+  id: DefaultStyle
+  parent: FluentGpu.Controls.IconButton
+  langs:
+  - csharp
+  - vb
+  name: DefaultStyle
+  nameWithType: IconButton.DefaultStyle
+  fullName: FluentGpu.Controls.IconButton.DefaultStyle
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/IconButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DefaultStyle
+    path: ../../src/FluentGpu.Controls/IconButton.cs
+    startLine: 52
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static IconButton.Style DefaultStyle { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.IconButton.Style
+    content.vb: Public Shared ReadOnly Property DefaultStyle As IconButton.Style
+  overload: FluentGpu.Controls.IconButton.DefaultStyle*
+- uid: FluentGpu.Controls.IconButton.Create(System.String,System.Action,FluentGpu.Controls.IconButton.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)
+  commentId: M:FluentGpu.Controls.IconButton.Create(System.String,System.Action,FluentGpu.Controls.IconButton.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)
+  id: Create(System.String,System.Action,FluentGpu.Controls.IconButton.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)
+  parent: FluentGpu.Controls.IconButton
+  langs:
+  - csharp
+  - vb
+  name: Create(string, Action, Style?, bool, TemplateParts?)
+  nameWithType: IconButton.Create(string, Action, IconButton.Style?, bool, TemplateParts?)
+  fullName: FluentGpu.Controls.IconButton.Create(string, System.Action, FluentGpu.Controls.IconButton.Style?, bool, FluentGpu.Dsl.TemplateParts?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/IconButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/IconButton.cs
+    startLine: 65
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static BoxEl Create(string glyph, Action onClick, IconButton.Style? style = null, bool isEnabled = true, TemplateParts? parts = null)
+    parameters:
+    - id: glyph
+      type: System.String
+    - id: onClick
+      type: System.Action
+    - id: style
+      type: FluentGpu.Controls.IconButton.Style
+    - id: isEnabled
+      type: System.Boolean
+    - id: parts
+      type: FluentGpu.Dsl.TemplateParts
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Create(glyph As String, onClick As Action, style As IconButton.Style = Nothing, isEnabled As Boolean = True, parts As TemplateParts = Nothing) As BoxEl
+  overload: FluentGpu.Controls.IconButton.Create*
+  nameWithType.vb: IconButton.Create(String, Action, IconButton.Style, Boolean, TemplateParts)
+  fullName.vb: FluentGpu.Controls.IconButton.Create(String, System.Action, FluentGpu.Controls.IconButton.Style, Boolean, FluentGpu.Dsl.TemplateParts)
+  name.vb: Create(String, Action, Style, Boolean, TemplateParts)
+references:
+- uid: FluentGpu.Controls.IconButton.Style
+  commentId: T:FluentGpu.Controls.IconButton.Style
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.IconButton.html
+  name: IconButton.Style
+  nameWithType: IconButton.Style
+  fullName: FluentGpu.Controls.IconButton.Style
+  spec.csharp:
+  - uid: FluentGpu.Controls.IconButton
+    name: IconButton
+    href: FluentGpu.Controls.IconButton.html
+  - name: .
+  - uid: FluentGpu.Controls.IconButton.Style
+    name: Style
+    href: FluentGpu.Controls.IconButton.Style.html
+  spec.vb:
+  - uid: FluentGpu.Controls.IconButton
+    name: IconButton
+    href: FluentGpu.Controls.IconButton.html
+  - name: .
+  - uid: FluentGpu.Controls.IconButton.Style
+    name: Style
+    href: FluentGpu.Controls.IconButton.Style.html
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.MemberwiseClone
+  commentId: M:System.Object.MemberwiseClone
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  name: MemberwiseClone()
+  nameWithType: object.MemberwiseClone()
+  fullName: object.MemberwiseClone()
+  nameWithType.vb: Object.MemberwiseClone()
+  fullName.vb: Object.MemberwiseClone()
+  spec.csharp:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Dsl.TextEl
+  commentId: T:FluentGpu.Dsl.TextEl
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.TextEl.html
+  name: TextEl
+  nameWithType: TextEl
+  fullName: FluentGpu.Dsl.TextEl
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: FluentGpu.Controls.IconButton.DefaultStyle*
+  commentId: Overload:FluentGpu.Controls.IconButton.DefaultStyle
+  href: FluentGpu.Controls.IconButton.html#FluentGpu_Controls_IconButton_DefaultStyle
+  name: DefaultStyle
+  nameWithType: IconButton.DefaultStyle
+  fullName: FluentGpu.Controls.IconButton.DefaultStyle
+- uid: FluentGpu.Controls.IconButton.Create*
+  commentId: Overload:FluentGpu.Controls.IconButton.Create
+  href: FluentGpu.Controls.IconButton.html#FluentGpu_Controls_IconButton_Create_System_String_System_Action_FluentGpu_Controls_IconButton_Style_System_Boolean_FluentGpu_Dsl_TemplateParts_
+  name: Create
+  nameWithType: IconButton.Create
+  fullName: FluentGpu.Controls.IconButton.Create
+- uid: System.Action
+  commentId: T:System.Action
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action
+  name: Action
+  nameWithType: Action
+  fullName: System.Action
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Dsl.TemplateParts
+  commentId: T:FluentGpu.Dsl.TemplateParts
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.TemplateParts.html
+  name: TemplateParts
+  nameWithType: TemplateParts
+  fullName: FluentGpu.Dsl.TemplateParts
+- uid: FluentGpu.Dsl.BoxEl
+  commentId: T:FluentGpu.Dsl.BoxEl
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.BoxEl.html
+  name: BoxEl
+  nameWithType: BoxEl
+  fullName: FluentGpu.Dsl.BoxEl

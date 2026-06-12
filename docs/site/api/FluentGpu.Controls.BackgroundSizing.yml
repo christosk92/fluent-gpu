@@ -1,0 +1,129 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.BackgroundSizing
+  commentId: T:FluentGpu.Controls.BackgroundSizing
+  id: BackgroundSizing
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.BackgroundSizing.InnerBorderEdge
+  - FluentGpu.Controls.BackgroundSizing.OuterBorderEdge
+  langs:
+  - csharp
+  - vb
+  name: BackgroundSizing
+  nameWithType: BackgroundSizing
+  fullName: FluentGpu.Controls.BackgroundSizing
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BackgroundSizing
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>BackgroundSizing</code>: whether the control fill stops at the inner border edge or extends under the border
+
+    to its outer edge. WinUI DefaultButtonStyle = InnerBorderEdge, AccentButtonStyle = OuterBorderEdge
+
+    (microsoft-ui-xaml controls\dev\CommonStyles\Button_themeresources.xaml:156,238); ToggleButton flips
+
+    InnerBorderEdge → OuterBorderEdge while checked (ToggleButton_themeresources.xaml:182,6).
+
+    Carried on the button-family styles as the API/parity contract. HONEST NOTE: the renderer today draws every fill to
+
+    the OUTER rounded-rect edge with the border stroked on top — i.e. OuterBorderEdge-equivalent for all values; the
+
+    1px fill inset of InnerBorderEdge is a named E9 render-primitive gap, not silently dropped. With the WinUI hairline
+
+    (1px) translucent elevation borders the visual delta is sub-pixel-class.
+  example: []
+  syntax:
+    content: 'public enum BackgroundSizing : byte'
+    content.vb: Public Enum BackgroundSizing As Byte
+- uid: FluentGpu.Controls.BackgroundSizing.InnerBorderEdge
+  commentId: F:FluentGpu.Controls.BackgroundSizing.InnerBorderEdge
+  id: InnerBorderEdge
+  parent: FluentGpu.Controls.BackgroundSizing
+  langs:
+  - csharp
+  - vb
+  name: InnerBorderEdge
+  nameWithType: BackgroundSizing.InnerBorderEdge
+  fullName: FluentGpu.Controls.BackgroundSizing.InnerBorderEdge
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InnerBorderEdge
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: InnerBorderEdge = 0
+    return:
+      type: FluentGpu.Controls.BackgroundSizing
+- uid: FluentGpu.Controls.BackgroundSizing.OuterBorderEdge
+  commentId: F:FluentGpu.Controls.BackgroundSizing.OuterBorderEdge
+  id: OuterBorderEdge
+  parent: FluentGpu.Controls.BackgroundSizing
+  langs:
+  - csharp
+  - vb
+  name: OuterBorderEdge
+  nameWithType: BackgroundSizing.OuterBorderEdge
+  fullName: FluentGpu.Controls.BackgroundSizing.OuterBorderEdge
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Button.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OuterBorderEdge
+    path: ../../src/FluentGpu.Controls/Button.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: OuterBorderEdge = 1
+    return:
+      type: FluentGpu.Controls.BackgroundSizing
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.BackgroundSizing
+  commentId: T:FluentGpu.Controls.BackgroundSizing
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.BackgroundSizing.html
+  name: BackgroundSizing
+  nameWithType: BackgroundSizing
+  fullName: FluentGpu.Controls.BackgroundSizing

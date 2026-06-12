@@ -1,0 +1,1616 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Dsl.Modifiers
+  commentId: T:FluentGpu.Dsl.Modifiers
+  id: Modifiers
+  parent: FluentGpu.Dsl
+  children:
+  - FluentGpu.Dsl.Modifiers.Acrylic(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.AcrylicSpec)
+  - FluentGpu.Dsl.Modifiers.Alpha(FluentGpu.Dsl.BoxEl,System.Single)
+  - FluentGpu.Dsl.Modifiers.Background(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.ColorF)
+  - FluentGpu.Dsl.Modifiers.Border(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.ColorF,System.Single)
+  - FluentGpu.Dsl.Modifiers.BorderBrush(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.GradientSpec,System.Single)
+  - FluentGpu.Dsl.Modifiers.Elevate(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.ShadowSpec)
+  - FluentGpu.Dsl.Modifiers.Ellipsis(FluentGpu.Dsl.TextEl)
+  - FluentGpu.Dsl.Modifiers.Font(FluentGpu.Dsl.TextEl,System.String)
+  - FluentGpu.Dsl.Modifiers.FontSize(FluentGpu.Dsl.TextEl,System.Single)
+  - FluentGpu.Dsl.Modifiers.FontWeight(FluentGpu.Dsl.TextEl,System.UInt16)
+  - FluentGpu.Dsl.Modifiers.Foreground(FluentGpu.Dsl.TextEl,FluentGpu.Foundation.ColorF)
+  - FluentGpu.Dsl.Modifiers.Gradient(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.GradientSpec)
+  - FluentGpu.Dsl.Modifiers.HoverColor(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.ColorF)
+  - FluentGpu.Dsl.Modifiers.MaxLines(FluentGpu.Dsl.TextEl,System.Int32)
+  - FluentGpu.Dsl.Modifiers.NoWrap(FluentGpu.Dsl.TextEl)
+  - FluentGpu.Dsl.Modifiers.Offset(FluentGpu.Dsl.BoxEl,System.Single,System.Single)
+  - FluentGpu.Dsl.Modifiers.Pad(FluentGpu.Dsl.BoxEl,System.Single)
+  - FluentGpu.Dsl.Modifiers.Pad(FluentGpu.Dsl.BoxEl,System.Single,System.Single,System.Single,System.Single)
+  - FluentGpu.Dsl.Modifiers.PressedColor(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.ColorF)
+  - FluentGpu.Dsl.Modifiers.Rotate(FluentGpu.Dsl.BoxEl,System.Single)
+  - FluentGpu.Dsl.Modifiers.Rounded(FluentGpu.Dsl.BoxEl,System.Single)
+  - FluentGpu.Dsl.Modifiers.Scale(FluentGpu.Dsl.BoxEl,System.Single)
+  - FluentGpu.Dsl.Modifiers.Scale(FluentGpu.Dsl.BoxEl,System.Single,System.Single)
+  - FluentGpu.Dsl.Modifiers.Shadow(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.ShadowSpec)
+  - FluentGpu.Dsl.Modifiers.Strong(FluentGpu.Dsl.TextEl)
+  - FluentGpu.Dsl.Modifiers.Trim(FluentGpu.Dsl.TextEl,FluentGpu.Foundation.TextTrim)
+  - FluentGpu.Dsl.Modifiers.Wrapped(FluentGpu.Dsl.TextEl,FluentGpu.Foundation.TextWrap)
+  langs:
+  - csharp
+  - vb
+  name: Modifiers
+  nameWithType: Modifiers
+  fullName: FluentGpu.Dsl.Modifiers
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Modifiers
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: >-
+    Fluent per-element style overrides (React/Compose/WinUI-style): <code>Button("x", onClick).Background(c).Rounded(8)</code>.
+
+    Each returns a record <code>with</code>-copy, so any default style is overrideable inline without forking the control.
+  example: []
+  syntax:
+    content: public static class Modifiers
+    content.vb: Public Module Modifiers
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.MemberwiseClone
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Dsl.Modifiers.Background(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.ColorF)
+  commentId: M:FluentGpu.Dsl.Modifiers.Background(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.ColorF)
+  id: Background(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.ColorF)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: Background(BoxEl, ColorF)
+  nameWithType: Modifiers.Background(BoxEl, ColorF)
+  fullName: FluentGpu.Dsl.Modifiers.Background(FluentGpu.Dsl.BoxEl, FluentGpu.Foundation.ColorF)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Background
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static BoxEl Background(this BoxEl b, ColorF c)
+    parameters:
+    - id: b
+      type: FluentGpu.Dsl.BoxEl
+    - id: c
+      type: FluentGpu.Foundation.ColorF
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Background(b As BoxEl, c As ColorF) As BoxEl
+  overload: FluentGpu.Dsl.Modifiers.Background*
+- uid: FluentGpu.Dsl.Modifiers.HoverColor(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.ColorF)
+  commentId: M:FluentGpu.Dsl.Modifiers.HoverColor(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.ColorF)
+  id: HoverColor(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.ColorF)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: HoverColor(BoxEl, ColorF)
+  nameWithType: Modifiers.HoverColor(BoxEl, ColorF)
+  fullName: FluentGpu.Dsl.Modifiers.HoverColor(FluentGpu.Dsl.BoxEl, FluentGpu.Foundation.ColorF)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HoverColor
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 12
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static BoxEl HoverColor(this BoxEl b, ColorF c)
+    parameters:
+    - id: b
+      type: FluentGpu.Dsl.BoxEl
+    - id: c
+      type: FluentGpu.Foundation.ColorF
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function HoverColor(b As BoxEl, c As ColorF) As BoxEl
+  overload: FluentGpu.Dsl.Modifiers.HoverColor*
+- uid: FluentGpu.Dsl.Modifiers.PressedColor(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.ColorF)
+  commentId: M:FluentGpu.Dsl.Modifiers.PressedColor(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.ColorF)
+  id: PressedColor(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.ColorF)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: PressedColor(BoxEl, ColorF)
+  nameWithType: Modifiers.PressedColor(BoxEl, ColorF)
+  fullName: FluentGpu.Dsl.Modifiers.PressedColor(FluentGpu.Dsl.BoxEl, FluentGpu.Foundation.ColorF)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PressedColor
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static BoxEl PressedColor(this BoxEl b, ColorF c)
+    parameters:
+    - id: b
+      type: FluentGpu.Dsl.BoxEl
+    - id: c
+      type: FluentGpu.Foundation.ColorF
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function PressedColor(b As BoxEl, c As ColorF) As BoxEl
+  overload: FluentGpu.Dsl.Modifiers.PressedColor*
+- uid: FluentGpu.Dsl.Modifiers.Border(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.ColorF,System.Single)
+  commentId: M:FluentGpu.Dsl.Modifiers.Border(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.ColorF,System.Single)
+  id: Border(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.ColorF,System.Single)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: Border(BoxEl, ColorF, float)
+  nameWithType: Modifiers.Border(BoxEl, ColorF, float)
+  fullName: FluentGpu.Dsl.Modifiers.Border(FluentGpu.Dsl.BoxEl, FluentGpu.Foundation.ColorF, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Border
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static BoxEl Border(this BoxEl b, ColorF c, float width = 1)
+    parameters:
+    - id: b
+      type: FluentGpu.Dsl.BoxEl
+    - id: c
+      type: FluentGpu.Foundation.ColorF
+    - id: width
+      type: System.Single
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Border(b As BoxEl, c As ColorF, width As Single = 1) As BoxEl
+  overload: FluentGpu.Dsl.Modifiers.Border*
+  nameWithType.vb: Modifiers.Border(BoxEl, ColorF, Single)
+  fullName.vb: FluentGpu.Dsl.Modifiers.Border(FluentGpu.Dsl.BoxEl, FluentGpu.Foundation.ColorF, Single)
+  name.vb: Border(BoxEl, ColorF, Single)
+- uid: FluentGpu.Dsl.Modifiers.Rounded(FluentGpu.Dsl.BoxEl,System.Single)
+  commentId: M:FluentGpu.Dsl.Modifiers.Rounded(FluentGpu.Dsl.BoxEl,System.Single)
+  id: Rounded(FluentGpu.Dsl.BoxEl,System.Single)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: Rounded(BoxEl, float)
+  nameWithType: Modifiers.Rounded(BoxEl, float)
+  fullName: FluentGpu.Dsl.Modifiers.Rounded(FluentGpu.Dsl.BoxEl, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Rounded
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static BoxEl Rounded(this BoxEl b, float radius)
+    parameters:
+    - id: b
+      type: FluentGpu.Dsl.BoxEl
+    - id: radius
+      type: System.Single
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Rounded(b As BoxEl, radius As Single) As BoxEl
+  overload: FluentGpu.Dsl.Modifiers.Rounded*
+  nameWithType.vb: Modifiers.Rounded(BoxEl, Single)
+  fullName.vb: FluentGpu.Dsl.Modifiers.Rounded(FluentGpu.Dsl.BoxEl, Single)
+  name.vb: Rounded(BoxEl, Single)
+- uid: FluentGpu.Dsl.Modifiers.Pad(FluentGpu.Dsl.BoxEl,System.Single)
+  commentId: M:FluentGpu.Dsl.Modifiers.Pad(FluentGpu.Dsl.BoxEl,System.Single)
+  id: Pad(FluentGpu.Dsl.BoxEl,System.Single)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: Pad(BoxEl, float)
+  nameWithType: Modifiers.Pad(BoxEl, float)
+  fullName: FluentGpu.Dsl.Modifiers.Pad(FluentGpu.Dsl.BoxEl, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Pad
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static BoxEl Pad(this BoxEl b, float all)
+    parameters:
+    - id: b
+      type: FluentGpu.Dsl.BoxEl
+    - id: all
+      type: System.Single
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Pad(b As BoxEl, all As Single) As BoxEl
+  overload: FluentGpu.Dsl.Modifiers.Pad*
+  nameWithType.vb: Modifiers.Pad(BoxEl, Single)
+  fullName.vb: FluentGpu.Dsl.Modifiers.Pad(FluentGpu.Dsl.BoxEl, Single)
+  name.vb: Pad(BoxEl, Single)
+- uid: FluentGpu.Dsl.Modifiers.Pad(FluentGpu.Dsl.BoxEl,System.Single,System.Single,System.Single,System.Single)
+  commentId: M:FluentGpu.Dsl.Modifiers.Pad(FluentGpu.Dsl.BoxEl,System.Single,System.Single,System.Single,System.Single)
+  id: Pad(FluentGpu.Dsl.BoxEl,System.Single,System.Single,System.Single,System.Single)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: Pad(BoxEl, float, float, float, float)
+  nameWithType: Modifiers.Pad(BoxEl, float, float, float, float)
+  fullName: FluentGpu.Dsl.Modifiers.Pad(FluentGpu.Dsl.BoxEl, float, float, float, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Pad
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static BoxEl Pad(this BoxEl b, float left, float top, float right, float bottom)
+    parameters:
+    - id: b
+      type: FluentGpu.Dsl.BoxEl
+    - id: left
+      type: System.Single
+    - id: top
+      type: System.Single
+    - id: right
+      type: System.Single
+    - id: bottom
+      type: System.Single
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Pad(b As BoxEl, left As Single, top As Single, right As Single, bottom As Single) As BoxEl
+  overload: FluentGpu.Dsl.Modifiers.Pad*
+  nameWithType.vb: Modifiers.Pad(BoxEl, Single, Single, Single, Single)
+  fullName.vb: FluentGpu.Dsl.Modifiers.Pad(FluentGpu.Dsl.BoxEl, Single, Single, Single, Single)
+  name.vb: Pad(BoxEl, Single, Single, Single, Single)
+- uid: FluentGpu.Dsl.Modifiers.Shadow(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.ShadowSpec)
+  commentId: M:FluentGpu.Dsl.Modifiers.Shadow(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.ShadowSpec)
+  id: Shadow(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.ShadowSpec)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: Shadow(BoxEl, ShadowSpec)
+  nameWithType: Modifiers.Shadow(BoxEl, ShadowSpec)
+  fullName: FluentGpu.Dsl.Modifiers.Shadow(FluentGpu.Dsl.BoxEl, FluentGpu.Foundation.ShadowSpec)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Shadow
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static BoxEl Shadow(this BoxEl b, ShadowSpec s)
+    parameters:
+    - id: b
+      type: FluentGpu.Dsl.BoxEl
+    - id: s
+      type: FluentGpu.Foundation.ShadowSpec
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Shadow(b As BoxEl, s As ShadowSpec) As BoxEl
+  overload: FluentGpu.Dsl.Modifiers.Shadow*
+- uid: FluentGpu.Dsl.Modifiers.Elevate(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.ShadowSpec)
+  commentId: M:FluentGpu.Dsl.Modifiers.Elevate(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.ShadowSpec)
+  id: Elevate(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.ShadowSpec)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: Elevate(BoxEl, ShadowSpec)
+  nameWithType: Modifiers.Elevate(BoxEl, ShadowSpec)
+  fullName: FluentGpu.Dsl.Modifiers.Elevate(FluentGpu.Dsl.BoxEl, FluentGpu.Foundation.ShadowSpec)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Elevate
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 21
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static BoxEl Elevate(this BoxEl b, ShadowSpec preset)
+    parameters:
+    - id: b
+      type: FluentGpu.Dsl.BoxEl
+    - id: preset
+      type: FluentGpu.Foundation.ShadowSpec
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Elevate(b As BoxEl, preset As ShadowSpec) As BoxEl
+  overload: FluentGpu.Dsl.Modifiers.Elevate*
+- uid: FluentGpu.Dsl.Modifiers.Gradient(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.GradientSpec)
+  commentId: M:FluentGpu.Dsl.Modifiers.Gradient(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.GradientSpec)
+  id: Gradient(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.GradientSpec)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: Gradient(BoxEl, GradientSpec)
+  nameWithType: Modifiers.Gradient(BoxEl, GradientSpec)
+  fullName: FluentGpu.Dsl.Modifiers.Gradient(FluentGpu.Dsl.BoxEl, FluentGpu.Foundation.GradientSpec)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Gradient
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static BoxEl Gradient(this BoxEl b, GradientSpec g)
+    parameters:
+    - id: b
+      type: FluentGpu.Dsl.BoxEl
+    - id: g
+      type: FluentGpu.Foundation.GradientSpec
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Gradient(b As BoxEl, g As GradientSpec) As BoxEl
+  overload: FluentGpu.Dsl.Modifiers.Gradient*
+- uid: FluentGpu.Dsl.Modifiers.BorderBrush(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.GradientSpec,System.Single)
+  commentId: M:FluentGpu.Dsl.Modifiers.BorderBrush(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.GradientSpec,System.Single)
+  id: BorderBrush(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.GradientSpec,System.Single)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: BorderBrush(BoxEl, GradientSpec, float)
+  nameWithType: Modifiers.BorderBrush(BoxEl, GradientSpec, float)
+  fullName: FluentGpu.Dsl.Modifiers.BorderBrush(FluentGpu.Dsl.BoxEl, FluentGpu.Foundation.GradientSpec, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BorderBrush
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static BoxEl BorderBrush(this BoxEl b, GradientSpec g, float width = 1)
+    parameters:
+    - id: b
+      type: FluentGpu.Dsl.BoxEl
+    - id: g
+      type: FluentGpu.Foundation.GradientSpec
+    - id: width
+      type: System.Single
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function BorderBrush(b As BoxEl, g As GradientSpec, width As Single = 1) As BoxEl
+  overload: FluentGpu.Dsl.Modifiers.BorderBrush*
+  nameWithType.vb: Modifiers.BorderBrush(BoxEl, GradientSpec, Single)
+  fullName.vb: FluentGpu.Dsl.Modifiers.BorderBrush(FluentGpu.Dsl.BoxEl, FluentGpu.Foundation.GradientSpec, Single)
+  name.vb: BorderBrush(BoxEl, GradientSpec, Single)
+- uid: FluentGpu.Dsl.Modifiers.Acrylic(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.AcrylicSpec)
+  commentId: M:FluentGpu.Dsl.Modifiers.Acrylic(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.AcrylicSpec)
+  id: Acrylic(FluentGpu.Dsl.BoxEl,FluentGpu.Foundation.AcrylicSpec)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: Acrylic(BoxEl, AcrylicSpec)
+  nameWithType: Modifiers.Acrylic(BoxEl, AcrylicSpec)
+  fullName: FluentGpu.Dsl.Modifiers.Acrylic(FluentGpu.Dsl.BoxEl, FluentGpu.Foundation.AcrylicSpec)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Acrylic
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 24
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static BoxEl Acrylic(this BoxEl b, AcrylicSpec a)
+    parameters:
+    - id: b
+      type: FluentGpu.Dsl.BoxEl
+    - id: a
+      type: FluentGpu.Foundation.AcrylicSpec
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Acrylic(b As BoxEl, a As AcrylicSpec) As BoxEl
+  overload: FluentGpu.Dsl.Modifiers.Acrylic*
+- uid: FluentGpu.Dsl.Modifiers.Offset(FluentGpu.Dsl.BoxEl,System.Single,System.Single)
+  commentId: M:FluentGpu.Dsl.Modifiers.Offset(FluentGpu.Dsl.BoxEl,System.Single,System.Single)
+  id: Offset(FluentGpu.Dsl.BoxEl,System.Single,System.Single)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: Offset(BoxEl, float, float)
+  nameWithType: Modifiers.Offset(BoxEl, float, float)
+  fullName: FluentGpu.Dsl.Modifiers.Offset(FluentGpu.Dsl.BoxEl, float, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Offset
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static BoxEl Offset(this BoxEl b, float dx, float dy)
+    parameters:
+    - id: b
+      type: FluentGpu.Dsl.BoxEl
+    - id: dx
+      type: System.Single
+    - id: dy
+      type: System.Single
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Offset(b As BoxEl, dx As Single, dy As Single) As BoxEl
+  overload: FluentGpu.Dsl.Modifiers.Offset*
+  nameWithType.vb: Modifiers.Offset(BoxEl, Single, Single)
+  fullName.vb: FluentGpu.Dsl.Modifiers.Offset(FluentGpu.Dsl.BoxEl, Single, Single)
+  name.vb: Offset(BoxEl, Single, Single)
+- uid: FluentGpu.Dsl.Modifiers.Scale(FluentGpu.Dsl.BoxEl,System.Single)
+  commentId: M:FluentGpu.Dsl.Modifiers.Scale(FluentGpu.Dsl.BoxEl,System.Single)
+  id: Scale(FluentGpu.Dsl.BoxEl,System.Single)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: Scale(BoxEl, float)
+  nameWithType: Modifiers.Scale(BoxEl, float)
+  fullName: FluentGpu.Dsl.Modifiers.Scale(FluentGpu.Dsl.BoxEl, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Scale
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 28
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static BoxEl Scale(this BoxEl b, float s)
+    parameters:
+    - id: b
+      type: FluentGpu.Dsl.BoxEl
+    - id: s
+      type: System.Single
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Scale(b As BoxEl, s As Single) As BoxEl
+  overload: FluentGpu.Dsl.Modifiers.Scale*
+  nameWithType.vb: Modifiers.Scale(BoxEl, Single)
+  fullName.vb: FluentGpu.Dsl.Modifiers.Scale(FluentGpu.Dsl.BoxEl, Single)
+  name.vb: Scale(BoxEl, Single)
+- uid: FluentGpu.Dsl.Modifiers.Scale(FluentGpu.Dsl.BoxEl,System.Single,System.Single)
+  commentId: M:FluentGpu.Dsl.Modifiers.Scale(FluentGpu.Dsl.BoxEl,System.Single,System.Single)
+  id: Scale(FluentGpu.Dsl.BoxEl,System.Single,System.Single)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: Scale(BoxEl, float, float)
+  nameWithType: Modifiers.Scale(BoxEl, float, float)
+  fullName: FluentGpu.Dsl.Modifiers.Scale(FluentGpu.Dsl.BoxEl, float, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Scale
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 29
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static BoxEl Scale(this BoxEl b, float sx, float sy)
+    parameters:
+    - id: b
+      type: FluentGpu.Dsl.BoxEl
+    - id: sx
+      type: System.Single
+    - id: sy
+      type: System.Single
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Scale(b As BoxEl, sx As Single, sy As Single) As BoxEl
+  overload: FluentGpu.Dsl.Modifiers.Scale*
+  nameWithType.vb: Modifiers.Scale(BoxEl, Single, Single)
+  fullName.vb: FluentGpu.Dsl.Modifiers.Scale(FluentGpu.Dsl.BoxEl, Single, Single)
+  name.vb: Scale(BoxEl, Single, Single)
+- uid: FluentGpu.Dsl.Modifiers.Rotate(FluentGpu.Dsl.BoxEl,System.Single)
+  commentId: M:FluentGpu.Dsl.Modifiers.Rotate(FluentGpu.Dsl.BoxEl,System.Single)
+  id: Rotate(FluentGpu.Dsl.BoxEl,System.Single)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: Rotate(BoxEl, float)
+  nameWithType: Modifiers.Rotate(BoxEl, float)
+  fullName: FluentGpu.Dsl.Modifiers.Rotate(FluentGpu.Dsl.BoxEl, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Rotate
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 30
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static BoxEl Rotate(this BoxEl b, float degrees)
+    parameters:
+    - id: b
+      type: FluentGpu.Dsl.BoxEl
+    - id: degrees
+      type: System.Single
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Rotate(b As BoxEl, degrees As Single) As BoxEl
+  overload: FluentGpu.Dsl.Modifiers.Rotate*
+  nameWithType.vb: Modifiers.Rotate(BoxEl, Single)
+  fullName.vb: FluentGpu.Dsl.Modifiers.Rotate(FluentGpu.Dsl.BoxEl, Single)
+  name.vb: Rotate(BoxEl, Single)
+- uid: FluentGpu.Dsl.Modifiers.Alpha(FluentGpu.Dsl.BoxEl,System.Single)
+  commentId: M:FluentGpu.Dsl.Modifiers.Alpha(FluentGpu.Dsl.BoxEl,System.Single)
+  id: Alpha(FluentGpu.Dsl.BoxEl,System.Single)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: Alpha(BoxEl, float)
+  nameWithType: Modifiers.Alpha(BoxEl, float)
+  fullName: FluentGpu.Dsl.Modifiers.Alpha(FluentGpu.Dsl.BoxEl, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Alpha
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 31
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static BoxEl Alpha(this BoxEl b, float opacity)
+    parameters:
+    - id: b
+      type: FluentGpu.Dsl.BoxEl
+    - id: opacity
+      type: System.Single
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Alpha(b As BoxEl, opacity As Single) As BoxEl
+  overload: FluentGpu.Dsl.Modifiers.Alpha*
+  nameWithType.vb: Modifiers.Alpha(BoxEl, Single)
+  fullName.vb: FluentGpu.Dsl.Modifiers.Alpha(FluentGpu.Dsl.BoxEl, Single)
+  name.vb: Alpha(BoxEl, Single)
+- uid: FluentGpu.Dsl.Modifiers.Foreground(FluentGpu.Dsl.TextEl,FluentGpu.Foundation.ColorF)
+  commentId: M:FluentGpu.Dsl.Modifiers.Foreground(FluentGpu.Dsl.TextEl,FluentGpu.Foundation.ColorF)
+  id: Foreground(FluentGpu.Dsl.TextEl,FluentGpu.Foundation.ColorF)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: Foreground(TextEl, ColorF)
+  nameWithType: Modifiers.Foreground(TextEl, ColorF)
+  fullName: FluentGpu.Dsl.Modifiers.Foreground(FluentGpu.Dsl.TextEl, FluentGpu.Foundation.ColorF)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Foreground
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 34
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static TextEl Foreground(this TextEl t, ColorF c)
+    parameters:
+    - id: t
+      type: FluentGpu.Dsl.TextEl
+    - id: c
+      type: FluentGpu.Foundation.ColorF
+    return:
+      type: FluentGpu.Dsl.TextEl
+    content.vb: Public Shared Function Foreground(t As TextEl, c As ColorF) As TextEl
+  overload: FluentGpu.Dsl.Modifiers.Foreground*
+- uid: FluentGpu.Dsl.Modifiers.FontSize(FluentGpu.Dsl.TextEl,System.Single)
+  commentId: M:FluentGpu.Dsl.Modifiers.FontSize(FluentGpu.Dsl.TextEl,System.Single)
+  id: FontSize(FluentGpu.Dsl.TextEl,System.Single)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: FontSize(TextEl, float)
+  nameWithType: Modifiers.FontSize(TextEl, float)
+  fullName: FluentGpu.Dsl.Modifiers.FontSize(FluentGpu.Dsl.TextEl, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FontSize
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static TextEl FontSize(this TextEl t, float size)
+    parameters:
+    - id: t
+      type: FluentGpu.Dsl.TextEl
+    - id: size
+      type: System.Single
+    return:
+      type: FluentGpu.Dsl.TextEl
+    content.vb: Public Shared Function FontSize(t As TextEl, size As Single) As TextEl
+  overload: FluentGpu.Dsl.Modifiers.FontSize*
+  nameWithType.vb: Modifiers.FontSize(TextEl, Single)
+  fullName.vb: FluentGpu.Dsl.Modifiers.FontSize(FluentGpu.Dsl.TextEl, Single)
+  name.vb: FontSize(TextEl, Single)
+- uid: FluentGpu.Dsl.Modifiers.Strong(FluentGpu.Dsl.TextEl)
+  commentId: M:FluentGpu.Dsl.Modifiers.Strong(FluentGpu.Dsl.TextEl)
+  id: Strong(FluentGpu.Dsl.TextEl)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: Strong(TextEl)
+  nameWithType: Modifiers.Strong(TextEl)
+  fullName: FluentGpu.Dsl.Modifiers.Strong(FluentGpu.Dsl.TextEl)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Strong
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 38
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: >-
+    WinUI BodyStrong is SemiBold 600 (BaseTextBlockStyle FontWeight, TextBlock_themeresources.xaml:13)
+        — Strong() means SemiBold, not Bold 700. Use <xref href="FluentGpu.Dsl.Modifiers.FontWeight(FluentGpu.Dsl.TextEl%2cSystem.UInt16)" data-throw-if-not-resolved="false"></xref> or <code>Bold = true</code> for 700.
+  example: []
+  syntax:
+    content: public static TextEl Strong(this TextEl t)
+    parameters:
+    - id: t
+      type: FluentGpu.Dsl.TextEl
+    return:
+      type: FluentGpu.Dsl.TextEl
+    content.vb: Public Shared Function Strong(t As TextEl) As TextEl
+  overload: FluentGpu.Dsl.Modifiers.Strong*
+- uid: FluentGpu.Dsl.Modifiers.FontWeight(FluentGpu.Dsl.TextEl,System.UInt16)
+  commentId: M:FluentGpu.Dsl.Modifiers.FontWeight(FluentGpu.Dsl.TextEl,System.UInt16)
+  id: FontWeight(FluentGpu.Dsl.TextEl,System.UInt16)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: FontWeight(TextEl, ushort)
+  nameWithType: Modifiers.FontWeight(TextEl, ushort)
+  fullName: FluentGpu.Dsl.Modifiers.FontWeight(FluentGpu.Dsl.TextEl, ushort)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FontWeight
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 40
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: Numeric font weight (WinUI FontWeight; the value IS the DWrite weight, e.g. 350 SemiLight, 600 SemiBold).
+  example: []
+  syntax:
+    content: public static TextEl FontWeight(this TextEl t, ushort weight)
+    parameters:
+    - id: t
+      type: FluentGpu.Dsl.TextEl
+    - id: weight
+      type: System.UInt16
+    return:
+      type: FluentGpu.Dsl.TextEl
+    content.vb: Public Shared Function FontWeight(t As TextEl, weight As UShort) As TextEl
+  overload: FluentGpu.Dsl.Modifiers.FontWeight*
+  nameWithType.vb: Modifiers.FontWeight(TextEl, UShort)
+  fullName.vb: FluentGpu.Dsl.Modifiers.FontWeight(FluentGpu.Dsl.TextEl, UShort)
+  name.vb: FontWeight(TextEl, UShort)
+- uid: FluentGpu.Dsl.Modifiers.Font(FluentGpu.Dsl.TextEl,System.String)
+  commentId: M:FluentGpu.Dsl.Modifiers.Font(FluentGpu.Dsl.TextEl,System.String)
+  id: Font(FluentGpu.Dsl.TextEl,System.String)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: Font(TextEl, string)
+  nameWithType: Modifiers.Font(TextEl, string)
+  fullName: FluentGpu.Dsl.Modifiers.Font(FluentGpu.Dsl.TextEl, string)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Font
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 41
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static TextEl Font(this TextEl t, string family)
+    parameters:
+    - id: t
+      type: FluentGpu.Dsl.TextEl
+    - id: family
+      type: System.String
+    return:
+      type: FluentGpu.Dsl.TextEl
+    content.vb: Public Shared Function Font(t As TextEl, family As String) As TextEl
+  overload: FluentGpu.Dsl.Modifiers.Font*
+  nameWithType.vb: Modifiers.Font(TextEl, String)
+  fullName.vb: FluentGpu.Dsl.Modifiers.Font(FluentGpu.Dsl.TextEl, String)
+  name.vb: Font(TextEl, String)
+- uid: FluentGpu.Dsl.Modifiers.Wrapped(FluentGpu.Dsl.TextEl,FluentGpu.Foundation.TextWrap)
+  commentId: M:FluentGpu.Dsl.Modifiers.Wrapped(FluentGpu.Dsl.TextEl,FluentGpu.Foundation.TextWrap)
+  id: Wrapped(FluentGpu.Dsl.TextEl,FluentGpu.Foundation.TextWrap)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: Wrapped(TextEl, TextWrap)
+  nameWithType: Modifiers.Wrapped(TextEl, TextWrap)
+  fullName: FluentGpu.Dsl.Modifiers.Wrapped(FluentGpu.Dsl.TextEl, FluentGpu.Foundation.TextWrap)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Wrapped
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 42
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static TextEl Wrapped(this TextEl t, TextWrap wrap = TextWrap.Wrap)
+    parameters:
+    - id: t
+      type: FluentGpu.Dsl.TextEl
+    - id: wrap
+      type: FluentGpu.Foundation.TextWrap
+    return:
+      type: FluentGpu.Dsl.TextEl
+    content.vb: Public Shared Function Wrapped(t As TextEl, wrap As TextWrap = TextWrap.Wrap) As TextEl
+  overload: FluentGpu.Dsl.Modifiers.Wrapped*
+- uid: FluentGpu.Dsl.Modifiers.NoWrap(FluentGpu.Dsl.TextEl)
+  commentId: M:FluentGpu.Dsl.Modifiers.NoWrap(FluentGpu.Dsl.TextEl)
+  id: NoWrap(FluentGpu.Dsl.TextEl)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: NoWrap(TextEl)
+  nameWithType: Modifiers.NoWrap(TextEl)
+  fullName: FluentGpu.Dsl.Modifiers.NoWrap(FluentGpu.Dsl.TextEl)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NoWrap
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static TextEl NoWrap(this TextEl t)
+    parameters:
+    - id: t
+      type: FluentGpu.Dsl.TextEl
+    return:
+      type: FluentGpu.Dsl.TextEl
+    content.vb: Public Shared Function NoWrap(t As TextEl) As TextEl
+  overload: FluentGpu.Dsl.Modifiers.NoWrap*
+- uid: FluentGpu.Dsl.Modifiers.Trim(FluentGpu.Dsl.TextEl,FluentGpu.Foundation.TextTrim)
+  commentId: M:FluentGpu.Dsl.Modifiers.Trim(FluentGpu.Dsl.TextEl,FluentGpu.Foundation.TextTrim)
+  id: Trim(FluentGpu.Dsl.TextEl,FluentGpu.Foundation.TextTrim)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: Trim(TextEl, TextTrim)
+  nameWithType: Modifiers.Trim(TextEl, TextTrim)
+  fullName: FluentGpu.Dsl.Modifiers.Trim(FluentGpu.Dsl.TextEl, FluentGpu.Foundation.TextTrim)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Trim
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 44
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static TextEl Trim(this TextEl t, TextTrim trim = TextTrim.CharacterEllipsis)
+    parameters:
+    - id: t
+      type: FluentGpu.Dsl.TextEl
+    - id: trim
+      type: FluentGpu.Foundation.TextTrim
+    return:
+      type: FluentGpu.Dsl.TextEl
+    content.vb: Public Shared Function Trim(t As TextEl, trim As TextTrim = TextTrim.CharacterEllipsis) As TextEl
+  overload: FluentGpu.Dsl.Modifiers.Trim*
+- uid: FluentGpu.Dsl.Modifiers.Ellipsis(FluentGpu.Dsl.TextEl)
+  commentId: M:FluentGpu.Dsl.Modifiers.Ellipsis(FluentGpu.Dsl.TextEl)
+  id: Ellipsis(FluentGpu.Dsl.TextEl)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: Ellipsis(TextEl)
+  nameWithType: Modifiers.Ellipsis(TextEl)
+  fullName: FluentGpu.Dsl.Modifiers.Ellipsis(FluentGpu.Dsl.TextEl)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Ellipsis
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 45
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static TextEl Ellipsis(this TextEl t)
+    parameters:
+    - id: t
+      type: FluentGpu.Dsl.TextEl
+    return:
+      type: FluentGpu.Dsl.TextEl
+    content.vb: Public Shared Function Ellipsis(t As TextEl) As TextEl
+  overload: FluentGpu.Dsl.Modifiers.Ellipsis*
+- uid: FluentGpu.Dsl.Modifiers.MaxLines(FluentGpu.Dsl.TextEl,System.Int32)
+  commentId: M:FluentGpu.Dsl.Modifiers.MaxLines(FluentGpu.Dsl.TextEl,System.Int32)
+  id: MaxLines(FluentGpu.Dsl.TextEl,System.Int32)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.Modifiers
+  langs:
+  - csharp
+  - vb
+  name: MaxLines(TextEl, int)
+  nameWithType: Modifiers.MaxLines(TextEl, int)
+  fullName: FluentGpu.Dsl.Modifiers.MaxLines(FluentGpu.Dsl.TextEl, int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Modifiers.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MaxLines
+    path: ../../src/FluentGpu.Dsl/Modifiers.cs
+    startLine: 46
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static TextEl MaxLines(this TextEl t, int lines)
+    parameters:
+    - id: t
+      type: FluentGpu.Dsl.TextEl
+    - id: lines
+      type: System.Int32
+    return:
+      type: FluentGpu.Dsl.TextEl
+    content.vb: Public Shared Function MaxLines(t As TextEl, lines As Integer) As TextEl
+  overload: FluentGpu.Dsl.Modifiers.MaxLines*
+  nameWithType.vb: Modifiers.MaxLines(TextEl, Integer)
+  fullName.vb: FluentGpu.Dsl.Modifiers.MaxLines(FluentGpu.Dsl.TextEl, Integer)
+  name.vb: MaxLines(TextEl, Integer)
+references:
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.MemberwiseClone
+  commentId: M:System.Object.MemberwiseClone
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  name: MemberwiseClone()
+  nameWithType: object.MemberwiseClone()
+  fullName: object.MemberwiseClone()
+  nameWithType.vb: Object.MemberwiseClone()
+  fullName.vb: Object.MemberwiseClone()
+  spec.csharp:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Dsl.Modifiers.Background*
+  commentId: Overload:FluentGpu.Dsl.Modifiers.Background
+  href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_Background_FluentGpu_Dsl_BoxEl_FluentGpu_Foundation_ColorF_
+  name: Background
+  nameWithType: Modifiers.Background
+  fullName: FluentGpu.Dsl.Modifiers.Background
+- uid: FluentGpu.Dsl.BoxEl
+  commentId: T:FluentGpu.Dsl.BoxEl
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.BoxEl.html
+  name: BoxEl
+  nameWithType: BoxEl
+  fullName: FluentGpu.Dsl.BoxEl
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Dsl.Modifiers.HoverColor*
+  commentId: Overload:FluentGpu.Dsl.Modifiers.HoverColor
+  href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_HoverColor_FluentGpu_Dsl_BoxEl_FluentGpu_Foundation_ColorF_
+  name: HoverColor
+  nameWithType: Modifiers.HoverColor
+  fullName: FluentGpu.Dsl.Modifiers.HoverColor
+- uid: FluentGpu.Dsl.Modifiers.PressedColor*
+  commentId: Overload:FluentGpu.Dsl.Modifiers.PressedColor
+  href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_PressedColor_FluentGpu_Dsl_BoxEl_FluentGpu_Foundation_ColorF_
+  name: PressedColor
+  nameWithType: Modifiers.PressedColor
+  fullName: FluentGpu.Dsl.Modifiers.PressedColor
+- uid: FluentGpu.Dsl.Modifiers.Border*
+  commentId: Overload:FluentGpu.Dsl.Modifiers.Border
+  href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_Border_FluentGpu_Dsl_BoxEl_FluentGpu_Foundation_ColorF_System_Single_
+  name: Border
+  nameWithType: Modifiers.Border
+  fullName: FluentGpu.Dsl.Modifiers.Border
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Dsl.Modifiers.Rounded*
+  commentId: Overload:FluentGpu.Dsl.Modifiers.Rounded
+  href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_Rounded_FluentGpu_Dsl_BoxEl_System_Single_
+  name: Rounded
+  nameWithType: Modifiers.Rounded
+  fullName: FluentGpu.Dsl.Modifiers.Rounded
+- uid: FluentGpu.Dsl.Modifiers.Pad*
+  commentId: Overload:FluentGpu.Dsl.Modifiers.Pad
+  href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_Pad_FluentGpu_Dsl_BoxEl_System_Single_
+  name: Pad
+  nameWithType: Modifiers.Pad
+  fullName: FluentGpu.Dsl.Modifiers.Pad
+- uid: FluentGpu.Dsl.Modifiers.Shadow*
+  commentId: Overload:FluentGpu.Dsl.Modifiers.Shadow
+  href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_Shadow_FluentGpu_Dsl_BoxEl_FluentGpu_Foundation_ShadowSpec_
+  name: Shadow
+  nameWithType: Modifiers.Shadow
+  fullName: FluentGpu.Dsl.Modifiers.Shadow
+- uid: FluentGpu.Foundation.ShadowSpec
+  commentId: T:FluentGpu.Foundation.ShadowSpec
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ShadowSpec.html
+  name: ShadowSpec
+  nameWithType: ShadowSpec
+  fullName: FluentGpu.Foundation.ShadowSpec
+- uid: FluentGpu.Dsl.Modifiers.Elevate*
+  commentId: Overload:FluentGpu.Dsl.Modifiers.Elevate
+  href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_Elevate_FluentGpu_Dsl_BoxEl_FluentGpu_Foundation_ShadowSpec_
+  name: Elevate
+  nameWithType: Modifiers.Elevate
+  fullName: FluentGpu.Dsl.Modifiers.Elevate
+- uid: FluentGpu.Dsl.Modifiers.Gradient*
+  commentId: Overload:FluentGpu.Dsl.Modifiers.Gradient
+  href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_Gradient_FluentGpu_Dsl_BoxEl_FluentGpu_Foundation_GradientSpec_
+  name: Gradient
+  nameWithType: Modifiers.Gradient
+  fullName: FluentGpu.Dsl.Modifiers.Gradient
+- uid: FluentGpu.Foundation.GradientSpec
+  commentId: T:FluentGpu.Foundation.GradientSpec
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.GradientSpec.html
+  name: GradientSpec
+  nameWithType: GradientSpec
+  fullName: FluentGpu.Foundation.GradientSpec
+- uid: FluentGpu.Dsl.Modifiers.BorderBrush*
+  commentId: Overload:FluentGpu.Dsl.Modifiers.BorderBrush
+  href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_BorderBrush_FluentGpu_Dsl_BoxEl_FluentGpu_Foundation_GradientSpec_System_Single_
+  name: BorderBrush
+  nameWithType: Modifiers.BorderBrush
+  fullName: FluentGpu.Dsl.Modifiers.BorderBrush
+- uid: FluentGpu.Dsl.Modifiers.Acrylic*
+  commentId: Overload:FluentGpu.Dsl.Modifiers.Acrylic
+  href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_Acrylic_FluentGpu_Dsl_BoxEl_FluentGpu_Foundation_AcrylicSpec_
+  name: Acrylic
+  nameWithType: Modifiers.Acrylic
+  fullName: FluentGpu.Dsl.Modifiers.Acrylic
+- uid: FluentGpu.Foundation.AcrylicSpec
+  commentId: T:FluentGpu.Foundation.AcrylicSpec
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.AcrylicSpec.html
+  name: AcrylicSpec
+  nameWithType: AcrylicSpec
+  fullName: FluentGpu.Foundation.AcrylicSpec
+- uid: FluentGpu.Dsl.Modifiers.Offset*
+  commentId: Overload:FluentGpu.Dsl.Modifiers.Offset
+  href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_Offset_FluentGpu_Dsl_BoxEl_System_Single_System_Single_
+  name: Offset
+  nameWithType: Modifiers.Offset
+  fullName: FluentGpu.Dsl.Modifiers.Offset
+- uid: FluentGpu.Dsl.Modifiers.Scale*
+  commentId: Overload:FluentGpu.Dsl.Modifiers.Scale
+  href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_Scale_FluentGpu_Dsl_BoxEl_System_Single_
+  name: Scale
+  nameWithType: Modifiers.Scale
+  fullName: FluentGpu.Dsl.Modifiers.Scale
+- uid: FluentGpu.Dsl.Modifiers.Rotate*
+  commentId: Overload:FluentGpu.Dsl.Modifiers.Rotate
+  href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_Rotate_FluentGpu_Dsl_BoxEl_System_Single_
+  name: Rotate
+  nameWithType: Modifiers.Rotate
+  fullName: FluentGpu.Dsl.Modifiers.Rotate
+- uid: FluentGpu.Dsl.Modifiers.Alpha*
+  commentId: Overload:FluentGpu.Dsl.Modifiers.Alpha
+  href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_Alpha_FluentGpu_Dsl_BoxEl_System_Single_
+  name: Alpha
+  nameWithType: Modifiers.Alpha
+  fullName: FluentGpu.Dsl.Modifiers.Alpha
+- uid: FluentGpu.Dsl.Modifiers.Foreground*
+  commentId: Overload:FluentGpu.Dsl.Modifiers.Foreground
+  href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_Foreground_FluentGpu_Dsl_TextEl_FluentGpu_Foundation_ColorF_
+  name: Foreground
+  nameWithType: Modifiers.Foreground
+  fullName: FluentGpu.Dsl.Modifiers.Foreground
+- uid: FluentGpu.Dsl.TextEl
+  commentId: T:FluentGpu.Dsl.TextEl
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.TextEl.html
+  name: TextEl
+  nameWithType: TextEl
+  fullName: FluentGpu.Dsl.TextEl
+- uid: FluentGpu.Dsl.Modifiers.FontSize*
+  commentId: Overload:FluentGpu.Dsl.Modifiers.FontSize
+  href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_FontSize_FluentGpu_Dsl_TextEl_System_Single_
+  name: FontSize
+  nameWithType: Modifiers.FontSize
+  fullName: FluentGpu.Dsl.Modifiers.FontSize
+- uid: FluentGpu.Dsl.Modifiers.FontWeight(FluentGpu.Dsl.TextEl,System.UInt16)
+  commentId: M:FluentGpu.Dsl.Modifiers.FontWeight(FluentGpu.Dsl.TextEl,System.UInt16)
+  isExternal: true
+  href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_FontWeight_FluentGpu_Dsl_TextEl_System_UInt16_
+  name: FontWeight(TextEl, ushort)
+  nameWithType: Modifiers.FontWeight(TextEl, ushort)
+  fullName: FluentGpu.Dsl.Modifiers.FontWeight(FluentGpu.Dsl.TextEl, ushort)
+  nameWithType.vb: Modifiers.FontWeight(TextEl, UShort)
+  fullName.vb: FluentGpu.Dsl.Modifiers.FontWeight(FluentGpu.Dsl.TextEl, UShort)
+  name.vb: FontWeight(TextEl, UShort)
+  spec.csharp:
+  - uid: FluentGpu.Dsl.Modifiers.FontWeight(FluentGpu.Dsl.TextEl,System.UInt16)
+    name: FontWeight
+    href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_FontWeight_FluentGpu_Dsl_TextEl_System_UInt16_
+  - name: (
+  - uid: FluentGpu.Dsl.TextEl
+    name: TextEl
+    href: FluentGpu.Dsl.TextEl.html
+  - name: ','
+  - name: " "
+  - uid: System.UInt16
+    name: ushort
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.uint16
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Dsl.Modifiers.FontWeight(FluentGpu.Dsl.TextEl,System.UInt16)
+    name: FontWeight
+    href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_FontWeight_FluentGpu_Dsl_TextEl_System_UInt16_
+  - name: (
+  - uid: FluentGpu.Dsl.TextEl
+    name: TextEl
+    href: FluentGpu.Dsl.TextEl.html
+  - name: ','
+  - name: " "
+  - uid: System.UInt16
+    name: UShort
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.uint16
+  - name: )
+- uid: FluentGpu.Dsl.Modifiers.Strong*
+  commentId: Overload:FluentGpu.Dsl.Modifiers.Strong
+  href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_Strong_FluentGpu_Dsl_TextEl_
+  name: Strong
+  nameWithType: Modifiers.Strong
+  fullName: FluentGpu.Dsl.Modifiers.Strong
+- uid: FluentGpu.Dsl.Modifiers.FontWeight*
+  commentId: Overload:FluentGpu.Dsl.Modifiers.FontWeight
+  href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_FontWeight_FluentGpu_Dsl_TextEl_System_UInt16_
+  name: FontWeight
+  nameWithType: Modifiers.FontWeight
+  fullName: FluentGpu.Dsl.Modifiers.FontWeight
+- uid: System.UInt16
+  commentId: T:System.UInt16
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.uint16
+  name: ushort
+  nameWithType: ushort
+  fullName: ushort
+  nameWithType.vb: UShort
+  fullName.vb: UShort
+  name.vb: UShort
+- uid: FluentGpu.Dsl.Modifiers.Font*
+  commentId: Overload:FluentGpu.Dsl.Modifiers.Font
+  href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_Font_FluentGpu_Dsl_TextEl_System_String_
+  name: Font
+  nameWithType: Modifiers.Font
+  fullName: FluentGpu.Dsl.Modifiers.Font
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Dsl.Modifiers.Wrapped*
+  commentId: Overload:FluentGpu.Dsl.Modifiers.Wrapped
+  href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_Wrapped_FluentGpu_Dsl_TextEl_FluentGpu_Foundation_TextWrap_
+  name: Wrapped
+  nameWithType: Modifiers.Wrapped
+  fullName: FluentGpu.Dsl.Modifiers.Wrapped
+- uid: FluentGpu.Foundation.TextWrap
+  commentId: T:FluentGpu.Foundation.TextWrap
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.TextWrap.html
+  name: TextWrap
+  nameWithType: TextWrap
+  fullName: FluentGpu.Foundation.TextWrap
+- uid: FluentGpu.Dsl.Modifiers.NoWrap*
+  commentId: Overload:FluentGpu.Dsl.Modifiers.NoWrap
+  href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_NoWrap_FluentGpu_Dsl_TextEl_
+  name: NoWrap
+  nameWithType: Modifiers.NoWrap
+  fullName: FluentGpu.Dsl.Modifiers.NoWrap
+- uid: FluentGpu.Dsl.Modifiers.Trim*
+  commentId: Overload:FluentGpu.Dsl.Modifiers.Trim
+  href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_Trim_FluentGpu_Dsl_TextEl_FluentGpu_Foundation_TextTrim_
+  name: Trim
+  nameWithType: Modifiers.Trim
+  fullName: FluentGpu.Dsl.Modifiers.Trim
+- uid: FluentGpu.Foundation.TextTrim
+  commentId: T:FluentGpu.Foundation.TextTrim
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.TextTrim.html
+  name: TextTrim
+  nameWithType: TextTrim
+  fullName: FluentGpu.Foundation.TextTrim
+- uid: FluentGpu.Dsl.Modifiers.Ellipsis*
+  commentId: Overload:FluentGpu.Dsl.Modifiers.Ellipsis
+  href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_Ellipsis_FluentGpu_Dsl_TextEl_
+  name: Ellipsis
+  nameWithType: Modifiers.Ellipsis
+  fullName: FluentGpu.Dsl.Modifiers.Ellipsis
+- uid: FluentGpu.Dsl.Modifiers.MaxLines*
+  commentId: Overload:FluentGpu.Dsl.Modifiers.MaxLines
+  href: FluentGpu.Dsl.Modifiers.html#FluentGpu_Dsl_Modifiers_MaxLines_FluentGpu_Dsl_TextEl_System_Int32_
+  name: MaxLines
+  nameWithType: Modifiers.MaxLines
+  fullName: FluentGpu.Dsl.Modifiers.MaxLines
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer

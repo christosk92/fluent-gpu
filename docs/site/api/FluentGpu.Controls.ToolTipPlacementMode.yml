@@ -1,0 +1,139 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.ToolTipPlacementMode
+  commentId: T:FluentGpu.Controls.ToolTipPlacementMode
+  id: ToolTipPlacementMode
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.ToolTipPlacementMode.Mouse
+  - FluentGpu.Controls.ToolTipPlacementMode.Top
+  langs:
+  - csharp
+  - vb
+  name: ToolTipPlacementMode
+  nameWithType: ToolTipPlacementMode
+  fullName: FluentGpu.Controls.ToolTipPlacementMode
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToolTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ToolTipPlacementMode
+    path: ../../src/FluentGpu.Controls/ToolTip.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    How the tooltip bubble is positioned — WinUI <code>PlacementMode</code> (the two modes ToolTipService actually
+        drives): <xref href="FluentGpu.Controls.ToolTipPlacementMode.Top" data-throw-if-not-resolved="false"></xref> = centered above the TARGET, flipping on a collision (the WinUI default,
+        ToolTip_Partial.cpp:1119-1122 "Fall back to the default - PlacementMode_Top"), the target rect inflated by the
+        input-mode offset — 20px mouse / 12px keyboard (<xref href="FluentGpu.Controls.ToolTip.MousePlacementOffset" data-throw-if-not-resolved="false"></xref>); <xref href="FluentGpu.Controls.ToolTipPlacementMode.Mouse" data-throw-if-not-resolved="false"></xref> =
+        at the last POINTER position, offset 11px below the cursor (ToolTip_Partial.h:56
+        <code>m_mousePlacementVerticalOffset = 11</code>; ToolTip_Partial.cpp:976-984 "align ToolTip with the bottom left corner
+        of mouse bounding rectangle").
+  example: []
+  syntax:
+    content: 'public enum ToolTipPlacementMode : byte'
+    content.vb: Public Enum ToolTipPlacementMode As Byte
+- uid: FluentGpu.Controls.ToolTipPlacementMode.Top
+  commentId: F:FluentGpu.Controls.ToolTipPlacementMode.Top
+  id: Top
+  parent: FluentGpu.Controls.ToolTipPlacementMode
+  langs:
+  - csharp
+  - vb
+  name: Top
+  nameWithType: ToolTipPlacementMode.Top
+  fullName: FluentGpu.Controls.ToolTipPlacementMode.Top
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToolTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Top
+    path: ../../src/FluentGpu.Controls/ToolTip.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Top = 0
+    return:
+      type: FluentGpu.Controls.ToolTipPlacementMode
+- uid: FluentGpu.Controls.ToolTipPlacementMode.Mouse
+  commentId: F:FluentGpu.Controls.ToolTipPlacementMode.Mouse
+  id: Mouse
+  parent: FluentGpu.Controls.ToolTipPlacementMode
+  langs:
+  - csharp
+  - vb
+  name: Mouse
+  nameWithType: ToolTipPlacementMode.Mouse
+  fullName: FluentGpu.Controls.ToolTipPlacementMode.Mouse
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToolTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Mouse
+    path: ../../src/FluentGpu.Controls/ToolTip.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Mouse = 1
+    return:
+      type: FluentGpu.Controls.ToolTipPlacementMode
+references:
+- uid: FluentGpu.Controls.ToolTipPlacementMode.Top
+  commentId: F:FluentGpu.Controls.ToolTipPlacementMode.Top
+  href: FluentGpu.Controls.ToolTipPlacementMode.html#FluentGpu_Controls_ToolTipPlacementMode_Top
+  name: Top
+  nameWithType: ToolTipPlacementMode.Top
+  fullName: FluentGpu.Controls.ToolTipPlacementMode.Top
+- uid: FluentGpu.Controls.ToolTip.MousePlacementOffset
+  commentId: F:FluentGpu.Controls.ToolTip.MousePlacementOffset
+  href: FluentGpu.Controls.ToolTip.html#FluentGpu_Controls_ToolTip_MousePlacementOffset
+  name: MousePlacementOffset
+  nameWithType: ToolTip.MousePlacementOffset
+  fullName: FluentGpu.Controls.ToolTip.MousePlacementOffset
+- uid: FluentGpu.Controls.ToolTipPlacementMode.Mouse
+  commentId: F:FluentGpu.Controls.ToolTipPlacementMode.Mouse
+  href: FluentGpu.Controls.ToolTipPlacementMode.html#FluentGpu_Controls_ToolTipPlacementMode_Mouse
+  name: Mouse
+  nameWithType: ToolTipPlacementMode.Mouse
+  fullName: FluentGpu.Controls.ToolTipPlacementMode.Mouse
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.ToolTipPlacementMode
+  commentId: T:FluentGpu.Controls.ToolTipPlacementMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ToolTipPlacementMode.html
+  name: ToolTipPlacementMode
+  nameWithType: ToolTipPlacementMode
+  fullName: FluentGpu.Controls.ToolTipPlacementMode

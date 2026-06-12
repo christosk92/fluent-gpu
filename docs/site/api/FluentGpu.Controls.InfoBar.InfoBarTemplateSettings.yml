@@ -1,0 +1,682 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+  commentId: T:FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+  id: InfoBar.InfoBarTemplateSettings
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.#ctor(System.String,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF)
+  - FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.Background
+  - FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.For(FluentGpu.Controls.InfoBarSeverity)
+  - FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.Glyph
+  - FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.IconBackground
+  - FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.IconForeground
+  langs:
+  - csharp
+  - vb
+  name: InfoBar.InfoBarTemplateSettings
+  nameWithType: InfoBar.InfoBarTemplateSettings
+  fullName: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InfoBarTemplateSettings
+    path: ../../src/FluentGpu.Controls/InfoBar.cs
+    startLine: 103
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The TemplateSettings convention (per the audit's P3) - the per-severity computed geometry WinUI binds
+        into its severity VisualState: the standard status glyph, the icon-background fill (SystemFillColor*Brush), the
+        inverse glyph foreground, and the tinted content-root background (SystemFillColor*BackgroundBrush). Computed once
+        per severity by the pure factory <xref href="FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.For(FluentGpu.Controls.InfoBarSeverity)" data-throw-if-not-resolved="false"></xref> - no per-frame allocation.
+  example: []
+  syntax:
+    content: 'public readonly record struct InfoBar.InfoBarTemplateSettings : IEquatable<InfoBar.InfoBarTemplateSettings>'
+    content.vb: Public Structure InfoBar.InfoBarTemplateSettings Implements IEquatable(Of InfoBar.InfoBarTemplateSettings)
+  implements:
+  - System.IEquatable{FluentGpu.Controls.InfoBar.InfoBarTemplateSettings}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.#ctor(System.String,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF)
+  commentId: M:FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.#ctor(System.String,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF)
+  id: '#ctor(System.String,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF)'
+  parent: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: InfoBarTemplateSettings(string, ColorF, ColorF, ColorF)
+  nameWithType: InfoBar.InfoBarTemplateSettings.InfoBarTemplateSettings(string, ColorF, ColorF, ColorF)
+  fullName: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.InfoBarTemplateSettings(string, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.ColorF)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Controls/InfoBar.cs
+    startLine: 103
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The TemplateSettings convention (per the audit's P3) - the per-severity computed geometry WinUI binds
+        into its severity VisualState: the standard status glyph, the icon-background fill (SystemFillColor*Brush), the
+        inverse glyph foreground, and the tinted content-root background (SystemFillColor*BackgroundBrush). Computed once
+        per severity by the pure factory <xref href="FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.For(FluentGpu.Controls.InfoBarSeverity)" data-throw-if-not-resolved="false"></xref> - no per-frame allocation.
+  example: []
+  syntax:
+    content: public InfoBarTemplateSettings(string Glyph, ColorF IconBackground, ColorF IconForeground, ColorF Background)
+    parameters:
+    - id: Glyph
+      type: System.String
+    - id: IconBackground
+      type: FluentGpu.Foundation.ColorF
+    - id: IconForeground
+      type: FluentGpu.Foundation.ColorF
+    - id: Background
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Sub New(Glyph As String, IconBackground As ColorF, IconForeground As ColorF, Background As ColorF)
+  overload: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.#ctor*
+  nameWithType.vb: InfoBar.InfoBarTemplateSettings.New(String, ColorF, ColorF, ColorF)
+  fullName.vb: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.New(String, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.ColorF)
+  name.vb: New(String, ColorF, ColorF, ColorF)
+- uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.Glyph
+  commentId: P:FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.Glyph
+  id: Glyph
+  parent: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: Glyph
+  nameWithType: InfoBar.InfoBarTemplateSettings.Glyph
+  fullName: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.Glyph
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Glyph
+    path: ../../src/FluentGpu.Controls/InfoBar.cs
+    startLine: 103
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string Glyph { get; init; }
+    parameters: []
+    return:
+      type: System.String
+    content.vb: Public Property Glyph As String
+  overload: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.Glyph*
+- uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.IconBackground
+  commentId: P:FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.IconBackground
+  id: IconBackground
+  parent: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: IconBackground
+  nameWithType: InfoBar.InfoBarTemplateSettings.IconBackground
+  fullName: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.IconBackground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IconBackground
+    path: ../../src/FluentGpu.Controls/InfoBar.cs
+    startLine: 103
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF IconBackground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property IconBackground As ColorF
+  overload: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.IconBackground*
+- uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.IconForeground
+  commentId: P:FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.IconForeground
+  id: IconForeground
+  parent: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: IconForeground
+  nameWithType: InfoBar.InfoBarTemplateSettings.IconForeground
+  fullName: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.IconForeground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IconForeground
+    path: ../../src/FluentGpu.Controls/InfoBar.cs
+    startLine: 103
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF IconForeground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property IconForeground As ColorF
+  overload: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.IconForeground*
+- uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.Background
+  commentId: P:FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.Background
+  id: Background
+  parent: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: Background
+  nameWithType: InfoBar.InfoBarTemplateSettings.Background
+  fullName: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.Background
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Background
+    path: ../../src/FluentGpu.Controls/InfoBar.cs
+    startLine: 103
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF Background { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property Background As ColorF
+  overload: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.Background*
+- uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.For(FluentGpu.Controls.InfoBarSeverity)
+  commentId: M:FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.For(FluentGpu.Controls.InfoBarSeverity)
+  id: For(FluentGpu.Controls.InfoBarSeverity)
+  parent: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: For(InfoBarSeverity)
+  nameWithType: InfoBar.InfoBarTemplateSettings.For(InfoBarSeverity)
+  fullName: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.For(FluentGpu.Controls.InfoBarSeverity)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: For
+    path: ../../src/FluentGpu.Controls/InfoBar.cs
+    startLine: 105
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static InfoBar.InfoBarTemplateSettings For(InfoBarSeverity severity)
+    parameters:
+    - id: severity
+      type: FluentGpu.Controls.InfoBarSeverity
+    return:
+      type: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+    content.vb: Public Shared Function [For](severity As InfoBarSeverity) As InfoBar.InfoBarTemplateSettings
+  overload: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.For*
+references:
+- uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.For(FluentGpu.Controls.InfoBarSeverity)
+  commentId: M:FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.For(FluentGpu.Controls.InfoBarSeverity)
+  href: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.html#FluentGpu_Controls_InfoBar_InfoBarTemplateSettings_For_FluentGpu_Controls_InfoBarSeverity_
+  name: For(InfoBarSeverity)
+  nameWithType: InfoBar.InfoBarTemplateSettings.For(InfoBarSeverity)
+  fullName: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.For(FluentGpu.Controls.InfoBarSeverity)
+  spec.csharp:
+  - uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.For(FluentGpu.Controls.InfoBarSeverity)
+    name: For
+    href: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.html#FluentGpu_Controls_InfoBar_InfoBarTemplateSettings_For_FluentGpu_Controls_InfoBarSeverity_
+  - name: (
+  - uid: FluentGpu.Controls.InfoBarSeverity
+    name: InfoBarSeverity
+    href: FluentGpu.Controls.InfoBarSeverity.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.For(FluentGpu.Controls.InfoBarSeverity)
+    name: For
+    href: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.html#FluentGpu_Controls_InfoBar_InfoBarTemplateSettings_For_FluentGpu_Controls_InfoBarSeverity_
+  - name: (
+  - uid: FluentGpu.Controls.InfoBarSeverity
+    name: InfoBarSeverity
+    href: FluentGpu.Controls.InfoBarSeverity.html
+  - name: )
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.IEquatable{FluentGpu.Controls.InfoBar.InfoBarTemplateSettings}
+  commentId: T:System.IEquatable{FluentGpu.Controls.InfoBar.InfoBarTemplateSettings}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<InfoBar.InfoBarTemplateSettings>
+  nameWithType: IEquatable<InfoBar.InfoBarTemplateSettings>
+  fullName: System.IEquatable<FluentGpu.Controls.InfoBar.InfoBarTemplateSettings>
+  nameWithType.vb: IEquatable(Of InfoBar.InfoBarTemplateSettings)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.InfoBar.InfoBarTemplateSettings)
+  name.vb: IEquatable(Of InfoBar.InfoBarTemplateSettings)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.InfoBar
+    name: InfoBar
+    href: FluentGpu.Controls.InfoBar.html
+  - name: .
+  - uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+    name: InfoBarTemplateSettings
+    href: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.InfoBar
+    name: InfoBar
+    href: FluentGpu.Controls.InfoBar.html
+  - name: .
+  - uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+    name: InfoBarTemplateSettings
+    href: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.#ctor*
+  commentId: Overload:FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.#ctor
+  href: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.html#FluentGpu_Controls_InfoBar_InfoBarTemplateSettings__ctor_System_String_FluentGpu_Foundation_ColorF_FluentGpu_Foundation_ColorF_FluentGpu_Foundation_ColorF_
+  name: InfoBarTemplateSettings
+  nameWithType: InfoBar.InfoBarTemplateSettings.InfoBarTemplateSettings
+  fullName: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.InfoBarTemplateSettings
+  nameWithType.vb: InfoBar.InfoBarTemplateSettings.New
+  fullName.vb: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.New
+  name.vb: New
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.Glyph*
+  commentId: Overload:FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.Glyph
+  href: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.html#FluentGpu_Controls_InfoBar_InfoBarTemplateSettings_Glyph
+  name: Glyph
+  nameWithType: InfoBar.InfoBarTemplateSettings.Glyph
+  fullName: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.Glyph
+- uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.IconBackground*
+  commentId: Overload:FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.IconBackground
+  href: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.html#FluentGpu_Controls_InfoBar_InfoBarTemplateSettings_IconBackground
+  name: IconBackground
+  nameWithType: InfoBar.InfoBarTemplateSettings.IconBackground
+  fullName: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.IconBackground
+- uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.IconForeground*
+  commentId: Overload:FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.IconForeground
+  href: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.html#FluentGpu_Controls_InfoBar_InfoBarTemplateSettings_IconForeground
+  name: IconForeground
+  nameWithType: InfoBar.InfoBarTemplateSettings.IconForeground
+  fullName: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.IconForeground
+- uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.Background*
+  commentId: Overload:FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.Background
+  href: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.html#FluentGpu_Controls_InfoBar_InfoBarTemplateSettings_Background
+  name: Background
+  nameWithType: InfoBar.InfoBarTemplateSettings.Background
+  fullName: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.Background
+- uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.For*
+  commentId: Overload:FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.For
+  href: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.html#FluentGpu_Controls_InfoBar_InfoBarTemplateSettings_For_FluentGpu_Controls_InfoBarSeverity_
+  name: For
+  nameWithType: InfoBar.InfoBarTemplateSettings.For
+  fullName: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.For
+- uid: FluentGpu.Controls.InfoBarSeverity
+  commentId: T:FluentGpu.Controls.InfoBarSeverity
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.InfoBarSeverity.html
+  name: InfoBarSeverity
+  nameWithType: InfoBarSeverity
+  fullName: FluentGpu.Controls.InfoBarSeverity
+- uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+  commentId: T:FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.InfoBar.html
+  name: InfoBar.InfoBarTemplateSettings
+  nameWithType: InfoBar.InfoBarTemplateSettings
+  fullName: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+  spec.csharp:
+  - uid: FluentGpu.Controls.InfoBar
+    name: InfoBar
+    href: FluentGpu.Controls.InfoBar.html
+  - name: .
+  - uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+    name: InfoBarTemplateSettings
+    href: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.html
+  spec.vb:
+  - uid: FluentGpu.Controls.InfoBar
+    name: InfoBar
+    href: FluentGpu.Controls.InfoBar.html
+  - name: .
+  - uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+    name: InfoBarTemplateSettings
+    href: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.html

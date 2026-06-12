@@ -1,0 +1,528 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Scene.ImageHandle
+  commentId: T:FluentGpu.Scene.ImageHandle
+  id: ImageHandle
+  parent: FluentGpu.Scene
+  children:
+  - FluentGpu.Scene.ImageHandle.#ctor(System.Int32)
+  - FluentGpu.Scene.ImageHandle.Id
+  - FluentGpu.Scene.ImageHandle.IsNull
+  - FluentGpu.Scene.ImageHandle.Null
+  langs:
+  - csharp
+  - vb
+  name: ImageHandle
+  nameWithType: ImageHandle
+  fullName: FluentGpu.Scene.ImageHandle
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ImageHandle
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 39
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: A generational-free image handle into the <xref href="FluentGpu.Scene.ImageCache" data-throw-if-not-resolved="false"></xref> (0 = none).
+  example: []
+  syntax:
+    content: 'public readonly record struct ImageHandle : IEquatable<ImageHandle>'
+    content.vb: Public Structure ImageHandle Implements IEquatable(Of ImageHandle)
+  implements:
+  - System.IEquatable{FluentGpu.Scene.ImageHandle}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Scene.ImageHandle.#ctor(System.Int32)
+  commentId: M:FluentGpu.Scene.ImageHandle.#ctor(System.Int32)
+  id: '#ctor(System.Int32)'
+  parent: FluentGpu.Scene.ImageHandle
+  langs:
+  - csharp
+  - vb
+  name: ImageHandle(int)
+  nameWithType: ImageHandle.ImageHandle(int)
+  fullName: FluentGpu.Scene.ImageHandle.ImageHandle(int)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 39
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: A generational-free image handle into the <xref href="FluentGpu.Scene.ImageCache" data-throw-if-not-resolved="false"></xref> (0 = none).
+  example: []
+  syntax:
+    content: public ImageHandle(int Id)
+    parameters:
+    - id: Id
+      type: System.Int32
+    content.vb: Public Sub New(Id As Integer)
+  overload: FluentGpu.Scene.ImageHandle.#ctor*
+  nameWithType.vb: ImageHandle.New(Integer)
+  fullName.vb: FluentGpu.Scene.ImageHandle.New(Integer)
+  name.vb: New(Integer)
+- uid: FluentGpu.Scene.ImageHandle.Id
+  commentId: P:FluentGpu.Scene.ImageHandle.Id
+  id: Id
+  parent: FluentGpu.Scene.ImageHandle
+  langs:
+  - csharp
+  - vb
+  name: Id
+  nameWithType: ImageHandle.Id
+  fullName: FluentGpu.Scene.ImageHandle.Id
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Id
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 39
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public int Id { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property Id As Integer
+  overload: FluentGpu.Scene.ImageHandle.Id*
+- uid: FluentGpu.Scene.ImageHandle.IsNull
+  commentId: P:FluentGpu.Scene.ImageHandle.IsNull
+  id: IsNull
+  parent: FluentGpu.Scene.ImageHandle
+  langs:
+  - csharp
+  - vb
+  name: IsNull
+  nameWithType: ImageHandle.IsNull
+  fullName: FluentGpu.Scene.ImageHandle.IsNull
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsNull
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 41
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public bool IsNull { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property IsNull As Boolean
+  overload: FluentGpu.Scene.ImageHandle.IsNull*
+- uid: FluentGpu.Scene.ImageHandle.Null
+  commentId: P:FluentGpu.Scene.ImageHandle.Null
+  id: "Null"
+  parent: FluentGpu.Scene.ImageHandle
+  langs:
+  - csharp
+  - vb
+  name: "Null"
+  nameWithType: ImageHandle.Null
+  fullName: FluentGpu.Scene.ImageHandle.Null
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: "Null"
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 42
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public static ImageHandle Null { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Scene.ImageHandle
+    content.vb: Public Shared ReadOnly Property Null As ImageHandle
+  overload: FluentGpu.Scene.ImageHandle.Null*
+references:
+- uid: FluentGpu.Scene.ImageCache
+  commentId: T:FluentGpu.Scene.ImageCache
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImageCache.html
+  name: ImageCache
+  nameWithType: ImageCache
+  fullName: FluentGpu.Scene.ImageCache
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: System.IEquatable{FluentGpu.Scene.ImageHandle}
+  commentId: T:System.IEquatable{FluentGpu.Scene.ImageHandle}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<ImageHandle>
+  nameWithType: IEquatable<ImageHandle>
+  fullName: System.IEquatable<FluentGpu.Scene.ImageHandle>
+  nameWithType.vb: IEquatable(Of ImageHandle)
+  fullName.vb: System.IEquatable(Of FluentGpu.Scene.ImageHandle)
+  name.vb: IEquatable(Of ImageHandle)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Scene.ImageHandle
+    name: ImageHandle
+    href: FluentGpu.Scene.ImageHandle.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Scene.ImageHandle
+    name: ImageHandle
+    href: FluentGpu.Scene.ImageHandle.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Scene.ImageHandle.#ctor*
+  commentId: Overload:FluentGpu.Scene.ImageHandle.#ctor
+  href: FluentGpu.Scene.ImageHandle.html#FluentGpu_Scene_ImageHandle__ctor_System_Int32_
+  name: ImageHandle
+  nameWithType: ImageHandle.ImageHandle
+  fullName: FluentGpu.Scene.ImageHandle.ImageHandle
+  nameWithType.vb: ImageHandle.New
+  fullName.vb: FluentGpu.Scene.ImageHandle.New
+  name.vb: New
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Scene.ImageHandle.Id*
+  commentId: Overload:FluentGpu.Scene.ImageHandle.Id
+  href: FluentGpu.Scene.ImageHandle.html#FluentGpu_Scene_ImageHandle_Id
+  name: Id
+  nameWithType: ImageHandle.Id
+  fullName: FluentGpu.Scene.ImageHandle.Id
+- uid: FluentGpu.Scene.ImageHandle.IsNull*
+  commentId: Overload:FluentGpu.Scene.ImageHandle.IsNull
+  href: FluentGpu.Scene.ImageHandle.html#FluentGpu_Scene_ImageHandle_IsNull
+  name: IsNull
+  nameWithType: ImageHandle.IsNull
+  fullName: FluentGpu.Scene.ImageHandle.IsNull
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Scene.ImageHandle.Null*
+  commentId: Overload:FluentGpu.Scene.ImageHandle.Null
+  href: FluentGpu.Scene.ImageHandle.html#FluentGpu_Scene_ImageHandle_Null
+  name: "Null"
+  nameWithType: ImageHandle.Null
+  fullName: FluentGpu.Scene.ImageHandle.Null
+- uid: FluentGpu.Scene.ImageHandle
+  commentId: T:FluentGpu.Scene.ImageHandle
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImageHandle.html
+  name: ImageHandle
+  nameWithType: ImageHandle
+  fullName: FluentGpu.Scene.ImageHandle

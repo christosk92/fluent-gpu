@@ -94,8 +94,9 @@ dotnet run --project src/FluentGpu.WindowsApp
 ```
 
 Authoring an app is one call — `FluentApp.Run(() => new App())` brings up a DPI-aware window, D3D12, Mica + the OS
-accent, the font + image systems, and the frame loop. The 18-assembly solution (`src/FluentGpu.slnx`) is .NET 10 /
-C# 14 / NativeAOT-ready; see [`src/README.md`](./src/README.md).
+accent, the font + image systems, and the frame loop. The solution (`src/FluentGpu.slnx`) is 4 libraries + 4
+satellites = 8 projects (the portable `FluentGpu.Engine`, `FluentGpu.Controls`, the swappable `FluentGpu.Windows`
+backend, `FluentGpu.WindowsApi`, 2 analyzers, 2 exes), .NET 10 / C# 14 / NativeAOT-ready; see [`src/README.md`](./src/README.md).
 
 ## Documentation & agents
 

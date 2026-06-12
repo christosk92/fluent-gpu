@@ -1,0 +1,166 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.NativeHandleKind
+  commentId: T:FluentGpu.Foundation.NativeHandleKind
+  id: NativeHandleKind
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.NativeHandleKind.Headless
+  - FluentGpu.Foundation.NativeHandleKind.Hwnd
+  - FluentGpu.Foundation.NativeHandleKind.None
+  - FluentGpu.Foundation.NativeHandleKind.NsView
+  langs:
+  - csharp
+  - vb
+  name: NativeHandleKind
+  nameWithType: NativeHandleKind
+  fullName: FluentGpu.Foundation.NativeHandleKind
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Platform.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NativeHandleKind
+    path: ../../src/FluentGpu.Foundation/Platform.cs
+    startLine: 2
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: 'public enum NativeHandleKind : byte'
+    content.vb: Public Enum NativeHandleKind As Byte
+- uid: FluentGpu.Foundation.NativeHandleKind.None
+  commentId: F:FluentGpu.Foundation.NativeHandleKind.None
+  id: None
+  parent: FluentGpu.Foundation.NativeHandleKind
+  langs:
+  - csharp
+  - vb
+  name: None
+  nameWithType: NativeHandleKind.None
+  fullName: FluentGpu.Foundation.NativeHandleKind.None
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Platform.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: None
+    path: ../../src/FluentGpu.Foundation/Platform.cs
+    startLine: 2
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: None = 0
+    return:
+      type: FluentGpu.Foundation.NativeHandleKind
+- uid: FluentGpu.Foundation.NativeHandleKind.Hwnd
+  commentId: F:FluentGpu.Foundation.NativeHandleKind.Hwnd
+  id: Hwnd
+  parent: FluentGpu.Foundation.NativeHandleKind
+  langs:
+  - csharp
+  - vb
+  name: Hwnd
+  nameWithType: NativeHandleKind.Hwnd
+  fullName: FluentGpu.Foundation.NativeHandleKind.Hwnd
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Platform.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Hwnd
+    path: ../../src/FluentGpu.Foundation/Platform.cs
+    startLine: 2
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Hwnd = 1
+    return:
+      type: FluentGpu.Foundation.NativeHandleKind
+- uid: FluentGpu.Foundation.NativeHandleKind.NsView
+  commentId: F:FluentGpu.Foundation.NativeHandleKind.NsView
+  id: NsView
+  parent: FluentGpu.Foundation.NativeHandleKind
+  langs:
+  - csharp
+  - vb
+  name: NsView
+  nameWithType: NativeHandleKind.NsView
+  fullName: FluentGpu.Foundation.NativeHandleKind.NsView
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Platform.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NsView
+    path: ../../src/FluentGpu.Foundation/Platform.cs
+    startLine: 2
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: NsView = 2
+    return:
+      type: FluentGpu.Foundation.NativeHandleKind
+- uid: FluentGpu.Foundation.NativeHandleKind.Headless
+  commentId: F:FluentGpu.Foundation.NativeHandleKind.Headless
+  id: Headless
+  parent: FluentGpu.Foundation.NativeHandleKind
+  langs:
+  - csharp
+  - vb
+  name: Headless
+  nameWithType: NativeHandleKind.Headless
+  fullName: FluentGpu.Foundation.NativeHandleKind.Headless
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Platform.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Headless
+    path: ../../src/FluentGpu.Foundation/Platform.cs
+    startLine: 2
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Headless = 3
+    return:
+      type: FluentGpu.Foundation.NativeHandleKind
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Foundation.NativeHandleKind
+  commentId: T:FluentGpu.Foundation.NativeHandleKind
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.NativeHandleKind.html
+  name: NativeHandleKind
+  nameWithType: NativeHandleKind
+  fullName: FluentGpu.Foundation.NativeHandleKind

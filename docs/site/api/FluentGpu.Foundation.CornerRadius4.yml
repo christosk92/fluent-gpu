@@ -1,0 +1,636 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.CornerRadius4
+  commentId: T:FluentGpu.Foundation.CornerRadius4
+  id: CornerRadius4
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.CornerRadius4.#ctor(System.Single,System.Single,System.Single,System.Single)
+  - FluentGpu.Foundation.CornerRadius4.All(System.Single)
+  - FluentGpu.Foundation.CornerRadius4.BottomLeft
+  - FluentGpu.Foundation.CornerRadius4.BottomRight
+  - FluentGpu.Foundation.CornerRadius4.IsUniform
+  - FluentGpu.Foundation.CornerRadius4.TopLeft
+  - FluentGpu.Foundation.CornerRadius4.TopRight
+  langs:
+  - csharp
+  - vb
+  name: CornerRadius4
+  nameWithType: CornerRadius4
+  fullName: FluentGpu.Foundation.CornerRadius4
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CornerRadius4
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: 'public readonly record struct CornerRadius4 : IEquatable<CornerRadius4>'
+    content.vb: Public Structure CornerRadius4 Implements IEquatable(Of CornerRadius4)
+  implements:
+  - System.IEquatable{FluentGpu.Foundation.CornerRadius4}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Foundation.CornerRadius4.#ctor(System.Single,System.Single,System.Single,System.Single)
+  commentId: M:FluentGpu.Foundation.CornerRadius4.#ctor(System.Single,System.Single,System.Single,System.Single)
+  id: '#ctor(System.Single,System.Single,System.Single,System.Single)'
+  parent: FluentGpu.Foundation.CornerRadius4
+  langs:
+  - csharp
+  - vb
+  name: CornerRadius4(float, float, float, float)
+  nameWithType: CornerRadius4.CornerRadius4(float, float, float, float)
+  fullName: FluentGpu.Foundation.CornerRadius4.CornerRadius4(float, float, float, float)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public CornerRadius4(float TopLeft, float TopRight, float BottomRight, float BottomLeft)
+    parameters:
+    - id: TopLeft
+      type: System.Single
+    - id: TopRight
+      type: System.Single
+    - id: BottomRight
+      type: System.Single
+    - id: BottomLeft
+      type: System.Single
+    content.vb: Public Sub New(TopLeft As Single, TopRight As Single, BottomRight As Single, BottomLeft As Single)
+  overload: FluentGpu.Foundation.CornerRadius4.#ctor*
+  nameWithType.vb: CornerRadius4.New(Single, Single, Single, Single)
+  fullName.vb: FluentGpu.Foundation.CornerRadius4.New(Single, Single, Single, Single)
+  name.vb: New(Single, Single, Single, Single)
+- uid: FluentGpu.Foundation.CornerRadius4.TopLeft
+  commentId: P:FluentGpu.Foundation.CornerRadius4.TopLeft
+  id: TopLeft
+  parent: FluentGpu.Foundation.CornerRadius4
+  langs:
+  - csharp
+  - vb
+  name: TopLeft
+  nameWithType: CornerRadius4.TopLeft
+  fullName: FluentGpu.Foundation.CornerRadius4.TopLeft
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TopLeft
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float TopLeft { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property TopLeft As Single
+  overload: FluentGpu.Foundation.CornerRadius4.TopLeft*
+- uid: FluentGpu.Foundation.CornerRadius4.TopRight
+  commentId: P:FluentGpu.Foundation.CornerRadius4.TopRight
+  id: TopRight
+  parent: FluentGpu.Foundation.CornerRadius4
+  langs:
+  - csharp
+  - vb
+  name: TopRight
+  nameWithType: CornerRadius4.TopRight
+  fullName: FluentGpu.Foundation.CornerRadius4.TopRight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TopRight
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float TopRight { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property TopRight As Single
+  overload: FluentGpu.Foundation.CornerRadius4.TopRight*
+- uid: FluentGpu.Foundation.CornerRadius4.BottomRight
+  commentId: P:FluentGpu.Foundation.CornerRadius4.BottomRight
+  id: BottomRight
+  parent: FluentGpu.Foundation.CornerRadius4
+  langs:
+  - csharp
+  - vb
+  name: BottomRight
+  nameWithType: CornerRadius4.BottomRight
+  fullName: FluentGpu.Foundation.CornerRadius4.BottomRight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BottomRight
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float BottomRight { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property BottomRight As Single
+  overload: FluentGpu.Foundation.CornerRadius4.BottomRight*
+- uid: FluentGpu.Foundation.CornerRadius4.BottomLeft
+  commentId: P:FluentGpu.Foundation.CornerRadius4.BottomLeft
+  id: BottomLeft
+  parent: FluentGpu.Foundation.CornerRadius4
+  langs:
+  - csharp
+  - vb
+  name: BottomLeft
+  nameWithType: CornerRadius4.BottomLeft
+  fullName: FluentGpu.Foundation.CornerRadius4.BottomLeft
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BottomLeft
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float BottomLeft { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property BottomLeft As Single
+  overload: FluentGpu.Foundation.CornerRadius4.BottomLeft*
+- uid: FluentGpu.Foundation.CornerRadius4.All(System.Single)
+  commentId: M:FluentGpu.Foundation.CornerRadius4.All(System.Single)
+  id: All(System.Single)
+  parent: FluentGpu.Foundation.CornerRadius4
+  langs:
+  - csharp
+  - vb
+  name: All(float)
+  nameWithType: CornerRadius4.All(float)
+  fullName: FluentGpu.Foundation.CornerRadius4.All(float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: All
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public static CornerRadius4 All(float v)
+    parameters:
+    - id: v
+      type: System.Single
+    return:
+      type: FluentGpu.Foundation.CornerRadius4
+    content.vb: Public Shared Function All(v As Single) As CornerRadius4
+  overload: FluentGpu.Foundation.CornerRadius4.All*
+  nameWithType.vb: CornerRadius4.All(Single)
+  fullName.vb: FluentGpu.Foundation.CornerRadius4.All(Single)
+  name.vb: All(Single)
+- uid: FluentGpu.Foundation.CornerRadius4.IsUniform
+  commentId: P:FluentGpu.Foundation.CornerRadius4.IsUniform
+  id: IsUniform
+  parent: FluentGpu.Foundation.CornerRadius4
+  langs:
+  - csharp
+  - vb
+  name: IsUniform
+  nameWithType: CornerRadius4.IsUniform
+  fullName: FluentGpu.Foundation.CornerRadius4.IsUniform
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsUniform
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public bool IsUniform { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property IsUniform As Boolean
+  overload: FluentGpu.Foundation.CornerRadius4.IsUniform*
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.IEquatable{FluentGpu.Foundation.CornerRadius4}
+  commentId: T:System.IEquatable{FluentGpu.Foundation.CornerRadius4}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<CornerRadius4>
+  nameWithType: IEquatable<CornerRadius4>
+  fullName: System.IEquatable<FluentGpu.Foundation.CornerRadius4>
+  nameWithType.vb: IEquatable(Of CornerRadius4)
+  fullName.vb: System.IEquatable(Of FluentGpu.Foundation.CornerRadius4)
+  name.vb: IEquatable(Of CornerRadius4)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Foundation.CornerRadius4
+    name: CornerRadius4
+    href: FluentGpu.Foundation.CornerRadius4.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.CornerRadius4
+    name: CornerRadius4
+    href: FluentGpu.Foundation.CornerRadius4.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Foundation.CornerRadius4.#ctor*
+  commentId: Overload:FluentGpu.Foundation.CornerRadius4.#ctor
+  href: FluentGpu.Foundation.CornerRadius4.html#FluentGpu_Foundation_CornerRadius4__ctor_System_Single_System_Single_System_Single_System_Single_
+  name: CornerRadius4
+  nameWithType: CornerRadius4.CornerRadius4
+  fullName: FluentGpu.Foundation.CornerRadius4.CornerRadius4
+  nameWithType.vb: CornerRadius4.New
+  fullName.vb: FluentGpu.Foundation.CornerRadius4.New
+  name.vb: New
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.CornerRadius4.TopLeft*
+  commentId: Overload:FluentGpu.Foundation.CornerRadius4.TopLeft
+  href: FluentGpu.Foundation.CornerRadius4.html#FluentGpu_Foundation_CornerRadius4_TopLeft
+  name: TopLeft
+  nameWithType: CornerRadius4.TopLeft
+  fullName: FluentGpu.Foundation.CornerRadius4.TopLeft
+- uid: FluentGpu.Foundation.CornerRadius4.TopRight*
+  commentId: Overload:FluentGpu.Foundation.CornerRadius4.TopRight
+  href: FluentGpu.Foundation.CornerRadius4.html#FluentGpu_Foundation_CornerRadius4_TopRight
+  name: TopRight
+  nameWithType: CornerRadius4.TopRight
+  fullName: FluentGpu.Foundation.CornerRadius4.TopRight
+- uid: FluentGpu.Foundation.CornerRadius4.BottomRight*
+  commentId: Overload:FluentGpu.Foundation.CornerRadius4.BottomRight
+  href: FluentGpu.Foundation.CornerRadius4.html#FluentGpu_Foundation_CornerRadius4_BottomRight
+  name: BottomRight
+  nameWithType: CornerRadius4.BottomRight
+  fullName: FluentGpu.Foundation.CornerRadius4.BottomRight
+- uid: FluentGpu.Foundation.CornerRadius4.BottomLeft*
+  commentId: Overload:FluentGpu.Foundation.CornerRadius4.BottomLeft
+  href: FluentGpu.Foundation.CornerRadius4.html#FluentGpu_Foundation_CornerRadius4_BottomLeft
+  name: BottomLeft
+  nameWithType: CornerRadius4.BottomLeft
+  fullName: FluentGpu.Foundation.CornerRadius4.BottomLeft
+- uid: FluentGpu.Foundation.CornerRadius4.All*
+  commentId: Overload:FluentGpu.Foundation.CornerRadius4.All
+  href: FluentGpu.Foundation.CornerRadius4.html#FluentGpu_Foundation_CornerRadius4_All_System_Single_
+  name: All
+  nameWithType: CornerRadius4.All
+  fullName: FluentGpu.Foundation.CornerRadius4.All
+- uid: FluentGpu.Foundation.CornerRadius4
+  commentId: T:FluentGpu.Foundation.CornerRadius4
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.CornerRadius4.html
+  name: CornerRadius4
+  nameWithType: CornerRadius4
+  fullName: FluentGpu.Foundation.CornerRadius4
+- uid: FluentGpu.Foundation.CornerRadius4.IsUniform*
+  commentId: Overload:FluentGpu.Foundation.CornerRadius4.IsUniform
+  href: FluentGpu.Foundation.CornerRadius4.html#FluentGpu_Foundation_CornerRadius4_IsUniform
+  name: IsUniform
+  nameWithType: CornerRadius4.IsUniform
+  fullName: FluentGpu.Foundation.CornerRadius4.IsUniform
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean

@@ -1,0 +1,141 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.CalendarViewSelectionMode
+  commentId: T:FluentGpu.Controls.CalendarViewSelectionMode
+  id: CalendarViewSelectionMode
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.CalendarViewSelectionMode.Multiple
+  - FluentGpu.Controls.CalendarViewSelectionMode.None
+  - FluentGpu.Controls.CalendarViewSelectionMode.Single
+  langs:
+  - csharp
+  - vb
+  name: CalendarViewSelectionMode
+  nameWithType: CalendarViewSelectionMode
+  fullName: FluentGpu.Controls.CalendarViewSelectionMode
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CalendarView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CalendarViewSelectionMode
+    path: ../../src/FluentGpu.Controls/CalendarView.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'WinUI <code>CalendarViewSelectionMode</code>: None / Single / Multiple (controls.idl).'
+  example: []
+  syntax:
+    content: 'public enum CalendarViewSelectionMode : byte'
+    content.vb: Public Enum CalendarViewSelectionMode As Byte
+- uid: FluentGpu.Controls.CalendarViewSelectionMode.None
+  commentId: F:FluentGpu.Controls.CalendarViewSelectionMode.None
+  id: None
+  parent: FluentGpu.Controls.CalendarViewSelectionMode
+  langs:
+  - csharp
+  - vb
+  name: None
+  nameWithType: CalendarViewSelectionMode.None
+  fullName: FluentGpu.Controls.CalendarViewSelectionMode.None
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CalendarView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: None
+    path: ../../src/FluentGpu.Controls/CalendarView.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: None = 0
+    return:
+      type: FluentGpu.Controls.CalendarViewSelectionMode
+- uid: FluentGpu.Controls.CalendarViewSelectionMode.Single
+  commentId: F:FluentGpu.Controls.CalendarViewSelectionMode.Single
+  id: Single
+  parent: FluentGpu.Controls.CalendarViewSelectionMode
+  langs:
+  - csharp
+  - vb
+  name: Single
+  nameWithType: CalendarViewSelectionMode.Single
+  fullName: FluentGpu.Controls.CalendarViewSelectionMode.Single
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CalendarView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Single
+    path: ../../src/FluentGpu.Controls/CalendarView.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Single = 1
+    return:
+      type: FluentGpu.Controls.CalendarViewSelectionMode
+- uid: FluentGpu.Controls.CalendarViewSelectionMode.Multiple
+  commentId: F:FluentGpu.Controls.CalendarViewSelectionMode.Multiple
+  id: Multiple
+  parent: FluentGpu.Controls.CalendarViewSelectionMode
+  langs:
+  - csharp
+  - vb
+  name: Multiple
+  nameWithType: CalendarViewSelectionMode.Multiple
+  fullName: FluentGpu.Controls.CalendarViewSelectionMode.Multiple
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CalendarView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Multiple
+    path: ../../src/FluentGpu.Controls/CalendarView.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Multiple = 2
+    return:
+      type: FluentGpu.Controls.CalendarViewSelectionMode
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.CalendarViewSelectionMode
+  commentId: T:FluentGpu.Controls.CalendarViewSelectionMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.CalendarViewSelectionMode.html
+  name: CalendarViewSelectionMode
+  nameWithType: CalendarViewSelectionMode
+  fullName: FluentGpu.Controls.CalendarViewSelectionMode

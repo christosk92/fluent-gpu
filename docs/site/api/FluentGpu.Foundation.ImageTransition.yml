@@ -1,0 +1,732 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.ImageTransition
+  commentId: T:FluentGpu.Foundation.ImageTransition
+  id: ImageTransition
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.ImageTransition.#ctor(System.Single,FluentGpu.Foundation.Easing)
+  - FluentGpu.Foundation.ImageTransition.Default
+  - FluentGpu.Foundation.ImageTransition.DurationMs
+  - FluentGpu.Foundation.ImageTransition.Easing
+  - FluentGpu.Foundation.ImageTransition.Enabled
+  - FluentGpu.Foundation.ImageTransition.Fade(System.Single,FluentGpu.Foundation.Easing)
+  - FluentGpu.Foundation.ImageTransition.None
+  - FluentGpu.Foundation.ImageTransition.Progress(System.Single)
+  langs:
+  - csharp
+  - vb
+  name: ImageTransition
+  nameWithType: ImageTransition
+  fullName: FluentGpu.Foundation.ImageTransition
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/ImageTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ImageTransition
+    path: ../../src/FluentGpu.Foundation/ImageTransition.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    The placeholder→image reveal transition (the cross-fade) — spec'd with the engine's shared motion vocabulary (a
+
+    duration in ms + an <xref href="FluentGpu.Foundation.ImageTransition.Easing" data-throw-if-not-resolved="false"></xref> curve) so image reveals animate exactly like every other control. Override
+
+    per-image via <code>ImageEl.Transition</code>, or change the app-wide <xref href="FluentGpu.Foundation.ImageTransition.Default" data-throw-if-not-resolved="false"></xref> once at startup. Set
+
+    <xref href="FluentGpu.Foundation.ImageTransition.DurationMs" data-throw-if-not-resolved="false"></xref> = 0 (or use <xref href="FluentGpu.Foundation.ImageTransition.None" data-throw-if-not-resolved="false"></xref>) to DISABLE the fade — the image then appears instantly.
+  example: []
+  syntax:
+    content: 'public readonly record struct ImageTransition : IEquatable<ImageTransition>'
+    content.vb: Public Structure ImageTransition Implements IEquatable(Of ImageTransition)
+  implements:
+  - System.IEquatable{FluentGpu.Foundation.ImageTransition}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Foundation.ImageTransition.#ctor(System.Single,FluentGpu.Foundation.Easing)
+  commentId: M:FluentGpu.Foundation.ImageTransition.#ctor(System.Single,FluentGpu.Foundation.Easing)
+  id: '#ctor(System.Single,FluentGpu.Foundation.Easing)'
+  parent: FluentGpu.Foundation.ImageTransition
+  langs:
+  - csharp
+  - vb
+  name: ImageTransition(float, Easing)
+  nameWithType: ImageTransition.ImageTransition(float, Easing)
+  fullName: FluentGpu.Foundation.ImageTransition.ImageTransition(float, FluentGpu.Foundation.Easing)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/ImageTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/ImageTransition.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    The placeholder→image reveal transition (the cross-fade) — spec'd with the engine's shared motion vocabulary (a
+
+    duration in ms + an <xref href="FluentGpu.Foundation.ImageTransition.Easing" data-throw-if-not-resolved="false"></xref> curve) so image reveals animate exactly like every other control. Override
+
+    per-image via <code>ImageEl.Transition</code>, or change the app-wide <xref href="FluentGpu.Foundation.ImageTransition.Default" data-throw-if-not-resolved="false"></xref> once at startup. Set
+
+    <xref href="FluentGpu.Foundation.ImageTransition.DurationMs" data-throw-if-not-resolved="false"></xref> = 0 (or use <xref href="FluentGpu.Foundation.ImageTransition.None" data-throw-if-not-resolved="false"></xref>) to DISABLE the fade — the image then appears instantly.
+  example: []
+  syntax:
+    content: public ImageTransition(float DurationMs, Easing Easing)
+    parameters:
+    - id: DurationMs
+      type: System.Single
+    - id: Easing
+      type: FluentGpu.Foundation.Easing
+    content.vb: Public Sub New(DurationMs As Single, Easing As Easing)
+  overload: FluentGpu.Foundation.ImageTransition.#ctor*
+  nameWithType.vb: ImageTransition.New(Single, Easing)
+  fullName.vb: FluentGpu.Foundation.ImageTransition.New(Single, FluentGpu.Foundation.Easing)
+  name.vb: New(Single, Easing)
+- uid: FluentGpu.Foundation.ImageTransition.DurationMs
+  commentId: P:FluentGpu.Foundation.ImageTransition.DurationMs
+  id: DurationMs
+  parent: FluentGpu.Foundation.ImageTransition
+  langs:
+  - csharp
+  - vb
+  name: DurationMs
+  nameWithType: ImageTransition.DurationMs
+  fullName: FluentGpu.Foundation.ImageTransition.DurationMs
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/ImageTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DurationMs
+    path: ../../src/FluentGpu.Foundation/ImageTransition.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float DurationMs { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property DurationMs As Single
+  overload: FluentGpu.Foundation.ImageTransition.DurationMs*
+- uid: FluentGpu.Foundation.ImageTransition.Easing
+  commentId: P:FluentGpu.Foundation.ImageTransition.Easing
+  id: Easing
+  parent: FluentGpu.Foundation.ImageTransition
+  langs:
+  - csharp
+  - vb
+  name: Easing
+  nameWithType: ImageTransition.Easing
+  fullName: FluentGpu.Foundation.ImageTransition.Easing
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/ImageTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Easing
+    path: ../../src/FluentGpu.Foundation/ImageTransition.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public Easing Easing { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Easing
+    content.vb: Public Property Easing As Easing
+  overload: FluentGpu.Foundation.ImageTransition.Easing*
+- uid: FluentGpu.Foundation.ImageTransition.Default
+  commentId: P:FluentGpu.Foundation.ImageTransition.Default
+  id: Default
+  parent: FluentGpu.Foundation.ImageTransition
+  langs:
+  - csharp
+  - vb
+  name: Default
+  nameWithType: ImageTransition.Default
+  fullName: FluentGpu.Foundation.ImageTransition.Default
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/ImageTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Default
+    path: ../../src/FluentGpu.Foundation/ImageTransition.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: App-wide default reveal (settable at startup) — a WinUI-style decelerate fade (~220ms).
+  example: []
+  syntax:
+    content: public static ImageTransition Default { get; set; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ImageTransition
+    content.vb: Public Shared Property [Default] As ImageTransition
+  overload: FluentGpu.Foundation.ImageTransition.Default*
+- uid: FluentGpu.Foundation.ImageTransition.None
+  commentId: P:FluentGpu.Foundation.ImageTransition.None
+  id: None
+  parent: FluentGpu.Foundation.ImageTransition
+  langs:
+  - csharp
+  - vb
+  name: None
+  nameWithType: ImageTransition.None
+  fullName: FluentGpu.Foundation.ImageTransition.None
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/ImageTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: None
+    path: ../../src/FluentGpu.Foundation/ImageTransition.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: 'No transition: the image snaps in the instant its texture is resident.'
+  example: []
+  syntax:
+    content: public static ImageTransition None { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ImageTransition
+    content.vb: Public Shared ReadOnly Property None As ImageTransition
+  overload: FluentGpu.Foundation.ImageTransition.None*
+- uid: FluentGpu.Foundation.ImageTransition.Fade(System.Single,FluentGpu.Foundation.Easing)
+  commentId: M:FluentGpu.Foundation.ImageTransition.Fade(System.Single,FluentGpu.Foundation.Easing)
+  id: Fade(System.Single,FluentGpu.Foundation.Easing)
+  parent: FluentGpu.Foundation.ImageTransition
+  langs:
+  - csharp
+  - vb
+  name: Fade(float, Easing)
+  nameWithType: ImageTransition.Fade(float, Easing)
+  fullName: FluentGpu.Foundation.ImageTransition.Fade(float, FluentGpu.Foundation.Easing)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/ImageTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Fade
+    path: ../../src/FluentGpu.Foundation/ImageTransition.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: 'A custom fade: <code class="paramref">durationMs</code> over <code class="paramref">easing</code>.'
+  example: []
+  syntax:
+    content: public static ImageTransition Fade(float durationMs, Easing easing = Easing.FluentDecelerate)
+    parameters:
+    - id: durationMs
+      type: System.Single
+    - id: easing
+      type: FluentGpu.Foundation.Easing
+    return:
+      type: FluentGpu.Foundation.ImageTransition
+    content.vb: Public Shared Function Fade(durationMs As Single, easing As Easing = Easing.FluentDecelerate) As ImageTransition
+  overload: FluentGpu.Foundation.ImageTransition.Fade*
+  nameWithType.vb: ImageTransition.Fade(Single, Easing)
+  fullName.vb: FluentGpu.Foundation.ImageTransition.Fade(Single, FluentGpu.Foundation.Easing)
+  name.vb: Fade(Single, Easing)
+- uid: FluentGpu.Foundation.ImageTransition.Enabled
+  commentId: P:FluentGpu.Foundation.ImageTransition.Enabled
+  id: Enabled
+  parent: FluentGpu.Foundation.ImageTransition
+  langs:
+  - csharp
+  - vb
+  name: Enabled
+  nameWithType: ImageTransition.Enabled
+  fullName: FluentGpu.Foundation.ImageTransition.Enabled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/ImageTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Enabled
+    path: ../../src/FluentGpu.Foundation/ImageTransition.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public bool Enabled { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property Enabled As Boolean
+  overload: FluentGpu.Foundation.ImageTransition.Enabled*
+- uid: FluentGpu.Foundation.ImageTransition.Progress(System.Single)
+  commentId: M:FluentGpu.Foundation.ImageTransition.Progress(System.Single)
+  id: Progress(System.Single)
+  parent: FluentGpu.Foundation.ImageTransition
+  langs:
+  - csharp
+  - vb
+  name: Progress(float)
+  nameWithType: ImageTransition.Progress(float)
+  fullName: FluentGpu.Foundation.ImageTransition.Progress(float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/ImageTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Progress
+    path: ../../src/FluentGpu.Foundation/ImageTransition.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Eased reveal progress 0..1 for an elapsed time since the texture appeared.
+  example: []
+  syntax:
+    content: public float Progress(float elapsedMs)
+    parameters:
+    - id: elapsedMs
+      type: System.Single
+    return:
+      type: System.Single
+    content.vb: Public Function Progress(elapsedMs As Single) As Single
+  overload: FluentGpu.Foundation.ImageTransition.Progress*
+  nameWithType.vb: ImageTransition.Progress(Single)
+  fullName.vb: FluentGpu.Foundation.ImageTransition.Progress(Single)
+  name.vb: Progress(Single)
+references:
+- uid: FluentGpu.Foundation.ImageTransition.Easing
+  commentId: P:FluentGpu.Foundation.ImageTransition.Easing
+  href: FluentGpu.Foundation.ImageTransition.html#FluentGpu_Foundation_ImageTransition_Easing
+  name: Easing
+  nameWithType: ImageTransition.Easing
+  fullName: FluentGpu.Foundation.ImageTransition.Easing
+- uid: FluentGpu.Foundation.ImageTransition.Default
+  commentId: P:FluentGpu.Foundation.ImageTransition.Default
+  href: FluentGpu.Foundation.ImageTransition.html#FluentGpu_Foundation_ImageTransition_Default
+  name: Default
+  nameWithType: ImageTransition.Default
+  fullName: FluentGpu.Foundation.ImageTransition.Default
+- uid: FluentGpu.Foundation.ImageTransition.DurationMs
+  commentId: P:FluentGpu.Foundation.ImageTransition.DurationMs
+  href: FluentGpu.Foundation.ImageTransition.html#FluentGpu_Foundation_ImageTransition_DurationMs
+  name: DurationMs
+  nameWithType: ImageTransition.DurationMs
+  fullName: FluentGpu.Foundation.ImageTransition.DurationMs
+- uid: FluentGpu.Foundation.ImageTransition.None
+  commentId: P:FluentGpu.Foundation.ImageTransition.None
+  href: FluentGpu.Foundation.ImageTransition.html#FluentGpu_Foundation_ImageTransition_None
+  name: None
+  nameWithType: ImageTransition.None
+  fullName: FluentGpu.Foundation.ImageTransition.None
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.IEquatable{FluentGpu.Foundation.ImageTransition}
+  commentId: T:System.IEquatable{FluentGpu.Foundation.ImageTransition}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<ImageTransition>
+  nameWithType: IEquatable<ImageTransition>
+  fullName: System.IEquatable<FluentGpu.Foundation.ImageTransition>
+  nameWithType.vb: IEquatable(Of ImageTransition)
+  fullName.vb: System.IEquatable(Of FluentGpu.Foundation.ImageTransition)
+  name.vb: IEquatable(Of ImageTransition)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Foundation.ImageTransition
+    name: ImageTransition
+    href: FluentGpu.Foundation.ImageTransition.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.ImageTransition
+    name: ImageTransition
+    href: FluentGpu.Foundation.ImageTransition.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Foundation.ImageTransition.#ctor*
+  commentId: Overload:FluentGpu.Foundation.ImageTransition.#ctor
+  href: FluentGpu.Foundation.ImageTransition.html#FluentGpu_Foundation_ImageTransition__ctor_System_Single_FluentGpu_Foundation_Easing_
+  name: ImageTransition
+  nameWithType: ImageTransition.ImageTransition
+  fullName: FluentGpu.Foundation.ImageTransition.ImageTransition
+  nameWithType.vb: ImageTransition.New
+  fullName.vb: FluentGpu.Foundation.ImageTransition.New
+  name.vb: New
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.Easing
+  commentId: T:FluentGpu.Foundation.Easing
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Easing.html
+  name: Easing
+  nameWithType: Easing
+  fullName: FluentGpu.Foundation.Easing
+- uid: FluentGpu.Foundation.ImageTransition.DurationMs*
+  commentId: Overload:FluentGpu.Foundation.ImageTransition.DurationMs
+  href: FluentGpu.Foundation.ImageTransition.html#FluentGpu_Foundation_ImageTransition_DurationMs
+  name: DurationMs
+  nameWithType: ImageTransition.DurationMs
+  fullName: FluentGpu.Foundation.ImageTransition.DurationMs
+- uid: FluentGpu.Foundation.ImageTransition.Easing*
+  commentId: Overload:FluentGpu.Foundation.ImageTransition.Easing
+  href: FluentGpu.Foundation.ImageTransition.html#FluentGpu_Foundation_ImageTransition_Easing
+  name: Easing
+  nameWithType: ImageTransition.Easing
+  fullName: FluentGpu.Foundation.ImageTransition.Easing
+- uid: FluentGpu.Foundation.ImageTransition.Default*
+  commentId: Overload:FluentGpu.Foundation.ImageTransition.Default
+  href: FluentGpu.Foundation.ImageTransition.html#FluentGpu_Foundation_ImageTransition_Default
+  name: Default
+  nameWithType: ImageTransition.Default
+  fullName: FluentGpu.Foundation.ImageTransition.Default
+- uid: FluentGpu.Foundation.ImageTransition
+  commentId: T:FluentGpu.Foundation.ImageTransition
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ImageTransition.html
+  name: ImageTransition
+  nameWithType: ImageTransition
+  fullName: FluentGpu.Foundation.ImageTransition
+- uid: FluentGpu.Foundation.ImageTransition.None*
+  commentId: Overload:FluentGpu.Foundation.ImageTransition.None
+  href: FluentGpu.Foundation.ImageTransition.html#FluentGpu_Foundation_ImageTransition_None
+  name: None
+  nameWithType: ImageTransition.None
+  fullName: FluentGpu.Foundation.ImageTransition.None
+- uid: FluentGpu.Foundation.ImageTransition.Fade*
+  commentId: Overload:FluentGpu.Foundation.ImageTransition.Fade
+  href: FluentGpu.Foundation.ImageTransition.html#FluentGpu_Foundation_ImageTransition_Fade_System_Single_FluentGpu_Foundation_Easing_
+  name: Fade
+  nameWithType: ImageTransition.Fade
+  fullName: FluentGpu.Foundation.ImageTransition.Fade
+- uid: FluentGpu.Foundation.ImageTransition.Enabled*
+  commentId: Overload:FluentGpu.Foundation.ImageTransition.Enabled
+  href: FluentGpu.Foundation.ImageTransition.html#FluentGpu_Foundation_ImageTransition_Enabled
+  name: Enabled
+  nameWithType: ImageTransition.Enabled
+  fullName: FluentGpu.Foundation.ImageTransition.Enabled
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Foundation.ImageTransition.Progress*
+  commentId: Overload:FluentGpu.Foundation.ImageTransition.Progress
+  href: FluentGpu.Foundation.ImageTransition.html#FluentGpu_Foundation_ImageTransition_Progress_System_Single_
+  name: Progress
+  nameWithType: ImageTransition.Progress
+  fullName: FluentGpu.Foundation.ImageTransition.Progress

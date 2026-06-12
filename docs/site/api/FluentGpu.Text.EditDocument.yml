@@ -1,0 +1,1547 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Text.EditDocument
+  commentId: T:FluentGpu.Text.EditDocument
+  id: EditDocument
+  parent: FluentGpu.Text
+  children:
+  - FluentGpu.Text.EditDocument.#ctor
+  - FluentGpu.Text.EditDocument.AsSpan
+  - FluentGpu.Text.EditDocument.CopyTo(System.Int32,System.Int32,System.Span{System.Char})
+  - FluentGpu.Text.EditDocument.GetText
+  - FluentGpu.Text.EditDocument.GetText(System.Int32,System.Int32)
+  - FluentGpu.Text.EditDocument.Insert(System.Int32,System.ReadOnlySpan{System.Char})
+  - FluentGpu.Text.EditDocument.Item(System.Int32)
+  - FluentGpu.Text.EditDocument.Length
+  - FluentGpu.Text.EditDocument.LineEnd(System.Int32)
+  - FluentGpu.Text.EditDocument.LineStart(System.Int32)
+  - FluentGpu.Text.EditDocument.NextGrapheme(System.Int32)
+  - FluentGpu.Text.EditDocument.NextWord(System.Int32)
+  - FluentGpu.Text.EditDocument.NormalizeNewlines(System.ReadOnlySpan{System.Char})
+  - FluentGpu.Text.EditDocument.NormalizeNewlines(System.String)
+  - FluentGpu.Text.EditDocument.PrevGrapheme(System.Int32)
+  - FluentGpu.Text.EditDocument.PrevWord(System.Int32)
+  - FluentGpu.Text.EditDocument.Remove(System.Int32,System.Int32)
+  - FluentGpu.Text.EditDocument.Reset(System.ReadOnlySpan{System.Char})
+  - FluentGpu.Text.EditDocument.SnapToGrapheme(System.Int32)
+  - FluentGpu.Text.EditDocument.Version
+  langs:
+  - csharp
+  - vb
+  name: EditDocument
+  nameWithType: EditDocument
+  fullName: FluentGpu.Text.EditDocument
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Text/EditDocument.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: EditDocument
+    path: ../../src/FluentGpu.Text/EditDocument.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: >-
+    The text-edit document: a gap buffer of UTF-16 code units (grow by doubling, minimum capacity 64). Every public
+
+    index is a UTF-16 code-unit offset — the unit WinUI exposes through <code>SelectionStart</code>/<code>MaxLength</code> — so the
+
+    control layer never converts. Grapheme safety is layered ON TOP via the boundary scanners
+
+    (<xref href="FluentGpu.Text.EditDocument.SnapToGrapheme(System.Int32)" data-throw-if-not-resolved="false"></xref>/<xref href="FluentGpu.Text.EditDocument.NextGrapheme(System.Int32)" data-throw-if-not-resolved="false"></xref>/<xref href="FluentGpu.Text.EditDocument.PrevGrapheme(System.Int32)" data-throw-if-not-resolved="false"></xref>, BCL UAX#29 segmentation —
+
+    covers surrogate pairs, combining marks, ZWJ emoji, regional indicators): callers that move a caret must land on
+
+    those boundaries, while the raw <xref href="FluentGpu.Text.EditDocument.Insert(System.Int32%2cSystem.ReadOnlySpan%7bSystem.Char%7d)" data-throw-if-not-resolved="false"></xref>/<xref href="FluentGpu.Text.EditDocument.Remove(System.Int32%2cSystem.Int32)" data-throw-if-not-resolved="false"></xref> primitives deliberately accept any
+
+    code-unit range so undo replay can restore exact historic states.
+
+
+    Hard line breaks are a single '\r' (WinUI normalizes CRLF/LF on the way in — see
+
+    <xref href="FluentGpu.Text.EditDocument.NormalizeNewlines(System.String)" data-throw-if-not-resolved="false"></xref>); '\n' must never be stored. The boundary scanners exploit that invariant:
+
+    a position right after '\r' is always a grapheme boundary (UAX#29 GB4: break after a control), so they anchor
+
+    their forward walk at the surrounding line start instead of offset 0 — O(line length), and text fields are short.
+  example: []
+  syntax:
+    content: public sealed class EditDocument
+    content.vb: Public NotInheritable Class EditDocument
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Text.EditDocument.#ctor
+  commentId: M:FluentGpu.Text.EditDocument.#ctor
+  id: '#ctor'
+  parent: FluentGpu.Text.EditDocument
+  langs:
+  - csharp
+  - vb
+  name: EditDocument()
+  nameWithType: EditDocument.EditDocument()
+  fullName: FluentGpu.Text.EditDocument.EditDocument()
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Text/EditDocument.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Text/EditDocument.cs
+    startLine: 28
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public EditDocument()
+    content.vb: Public Sub New()
+  overload: FluentGpu.Text.EditDocument.#ctor*
+  nameWithType.vb: EditDocument.New()
+  fullName.vb: FluentGpu.Text.EditDocument.New()
+  name.vb: New()
+- uid: FluentGpu.Text.EditDocument.Length
+  commentId: P:FluentGpu.Text.EditDocument.Length
+  id: Length
+  parent: FluentGpu.Text.EditDocument
+  langs:
+  - csharp
+  - vb
+  name: Length
+  nameWithType: EditDocument.Length
+  fullName: FluentGpu.Text.EditDocument.Length
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Text/EditDocument.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Length
+    path: ../../src/FluentGpu.Text/EditDocument.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: Document length in UTF-16 code units.
+  example: []
+  syntax:
+    content: public int Length { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property Length As Integer
+  overload: FluentGpu.Text.EditDocument.Length*
+- uid: FluentGpu.Text.EditDocument.Version
+  commentId: P:FluentGpu.Text.EditDocument.Version
+  id: Version
+  parent: FluentGpu.Text.EditDocument
+  langs:
+  - csharp
+  - vb
+  name: Version
+  nameWithType: EditDocument.Version
+  fullName: FluentGpu.Text.EditDocument.Version
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Text/EditDocument.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Version
+    path: ../../src/FluentGpu.Text/EditDocument.cs
+    startLine: 40
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: >-
+    Bumps on every content mutation (insert/remove/reset). Render/measure caches key off this so a stale
+        shaped layout can never be replayed against edited text.
+  example: []
+  syntax:
+    content: public int Version { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property Version As Integer
+  overload: FluentGpu.Text.EditDocument.Version*
+- uid: FluentGpu.Text.EditDocument.Item(System.Int32)
+  commentId: P:FluentGpu.Text.EditDocument.Item(System.Int32)
+  id: Item(System.Int32)
+  parent: FluentGpu.Text.EditDocument
+  langs:
+  - csharp
+  - vb
+  name: this[int]
+  nameWithType: EditDocument.this[int]
+  fullName: FluentGpu.Text.EditDocument.this[int]
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Text/EditDocument.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: this[]
+    path: ../../src/FluentGpu.Text/EditDocument.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: Random access to one code unit (logical index — the gap is invisible to callers).
+  example: []
+  syntax:
+    content: public char this[int index] { get; }
+    parameters:
+    - id: index
+      type: System.Int32
+    return:
+      type: System.Char
+    content.vb: Public ReadOnly Default Property this[](index As Integer) As Char
+  overload: FluentGpu.Text.EditDocument.Item*
+  nameWithType.vb: EditDocument.this[](Integer)
+  fullName.vb: FluentGpu.Text.EditDocument.this[](Integer)
+  name.vb: this[](Integer)
+- uid: FluentGpu.Text.EditDocument.Insert(System.Int32,System.ReadOnlySpan{System.Char})
+  commentId: M:FluentGpu.Text.EditDocument.Insert(System.Int32,System.ReadOnlySpan{System.Char})
+  id: Insert(System.Int32,System.ReadOnlySpan{System.Char})
+  parent: FluentGpu.Text.EditDocument
+  langs:
+  - csharp
+  - vb
+  name: Insert(int, ReadOnlySpan<char>)
+  nameWithType: EditDocument.Insert(int, ReadOnlySpan<char>)
+  fullName: FluentGpu.Text.EditDocument.Insert(int, System.ReadOnlySpan<char>)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text/EditDocument.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Insert
+    path: ../../src/FluentGpu.Text/EditDocument.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: >-
+    Insert <code class="paramref">text</code> at <code class="paramref">pos</code>. An empty insert is not a mutation (no
+        <xref href="FluentGpu.Text.EditDocument.Version" data-throw-if-not-resolved="false"></xref> bump). The caller owns newline normalization — '\n' must never reach the buffer.
+  example: []
+  syntax:
+    content: public void Insert(int pos, ReadOnlySpan<char> text)
+    parameters:
+    - id: pos
+      type: System.Int32
+    - id: text
+      type: System.ReadOnlySpan{System.Char}
+    content.vb: Public Sub Insert(pos As Integer, text As ReadOnlySpan(Of Char))
+  overload: FluentGpu.Text.EditDocument.Insert*
+  nameWithType.vb: EditDocument.Insert(Integer, ReadOnlySpan(Of Char))
+  fullName.vb: FluentGpu.Text.EditDocument.Insert(Integer, System.ReadOnlySpan(Of Char))
+  name.vb: Insert(Integer, ReadOnlySpan(Of Char))
+- uid: FluentGpu.Text.EditDocument.Remove(System.Int32,System.Int32)
+  commentId: M:FluentGpu.Text.EditDocument.Remove(System.Int32,System.Int32)
+  id: Remove(System.Int32,System.Int32)
+  parent: FluentGpu.Text.EditDocument
+  langs:
+  - csharp
+  - vb
+  name: Remove(int, int)
+  nameWithType: EditDocument.Remove(int, int)
+  fullName: FluentGpu.Text.EditDocument.Remove(int, int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text/EditDocument.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Remove
+    path: ../../src/FluentGpu.Text/EditDocument.cs
+    startLine: 67
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: >-
+    Remove <code class="paramref">length</code> code units at <code class="paramref">start</code> by absorbing them into the gap
+        (no copying of the removed range). A zero-length remove is not a mutation.
+  example: []
+  syntax:
+    content: public void Remove(int start, int length)
+    parameters:
+    - id: start
+      type: System.Int32
+    - id: length
+      type: System.Int32
+    content.vb: Public Sub Remove(start As Integer, length As Integer)
+  overload: FluentGpu.Text.EditDocument.Remove*
+  nameWithType.vb: EditDocument.Remove(Integer, Integer)
+  fullName.vb: FluentGpu.Text.EditDocument.Remove(Integer, Integer)
+  name.vb: Remove(Integer, Integer)
+- uid: FluentGpu.Text.EditDocument.CopyTo(System.Int32,System.Int32,System.Span{System.Char})
+  commentId: M:FluentGpu.Text.EditDocument.CopyTo(System.Int32,System.Int32,System.Span{System.Char})
+  id: CopyTo(System.Int32,System.Int32,System.Span{System.Char})
+  parent: FluentGpu.Text.EditDocument
+  langs:
+  - csharp
+  - vb
+  name: CopyTo(int, int, Span<char>)
+  nameWithType: EditDocument.CopyTo(int, int, Span<char>)
+  fullName: FluentGpu.Text.EditDocument.CopyTo(int, int, System.Span<char>)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text/EditDocument.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CopyTo
+    path: ../../src/FluentGpu.Text/EditDocument.cs
+    startLine: 77
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: Copy a range into <code class="paramref">dst</code> without disturbing the gap (alloc-free read path).
+  example: []
+  syntax:
+    content: public void CopyTo(int start, int length, Span<char> dst)
+    parameters:
+    - id: start
+      type: System.Int32
+    - id: length
+      type: System.Int32
+    - id: dst
+      type: System.Span{System.Char}
+    content.vb: Public Sub CopyTo(start As Integer, length As Integer, dst As Span(Of Char))
+  overload: FluentGpu.Text.EditDocument.CopyTo*
+  nameWithType.vb: EditDocument.CopyTo(Integer, Integer, Span(Of Char))
+  fullName.vb: FluentGpu.Text.EditDocument.CopyTo(Integer, Integer, System.Span(Of Char))
+  name.vb: CopyTo(Integer, Integer, Span(Of Char))
+- uid: FluentGpu.Text.EditDocument.GetText
+  commentId: M:FluentGpu.Text.EditDocument.GetText
+  id: GetText
+  parent: FluentGpu.Text.EditDocument
+  langs:
+  - csharp
+  - vb
+  name: GetText()
+  nameWithType: EditDocument.GetText()
+  fullName: FluentGpu.Text.EditDocument.GetText()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text/EditDocument.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GetText
+    path: ../../src/FluentGpu.Text/EditDocument.cs
+    startLine: 99
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: Materialize the whole document as a string (user-gesture edge only — copy, undo capture, GetText).
+  example: []
+  syntax:
+    content: public string GetText()
+    return:
+      type: System.String
+    content.vb: Public Function GetText() As String
+  overload: FluentGpu.Text.EditDocument.GetText*
+- uid: FluentGpu.Text.EditDocument.GetText(System.Int32,System.Int32)
+  commentId: M:FluentGpu.Text.EditDocument.GetText(System.Int32,System.Int32)
+  id: GetText(System.Int32,System.Int32)
+  parent: FluentGpu.Text.EditDocument
+  langs:
+  - csharp
+  - vb
+  name: GetText(int, int)
+  nameWithType: EditDocument.GetText(int, int)
+  fullName: FluentGpu.Text.EditDocument.GetText(int, int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text/EditDocument.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GetText
+    path: ../../src/FluentGpu.Text/EditDocument.cs
+    startLine: 102
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: Materialize a range as a string (user-gesture edge only).
+  example: []
+  syntax:
+    content: public string GetText(int start, int length)
+    parameters:
+    - id: start
+      type: System.Int32
+    - id: length
+      type: System.Int32
+    return:
+      type: System.String
+    content.vb: Public Function GetText(start As Integer, length As Integer) As String
+  overload: FluentGpu.Text.EditDocument.GetText*
+  nameWithType.vb: EditDocument.GetText(Integer, Integer)
+  fullName.vb: FluentGpu.Text.EditDocument.GetText(Integer, Integer)
+  name.vb: GetText(Integer, Integer)
+- uid: FluentGpu.Text.EditDocument.Reset(System.ReadOnlySpan{System.Char})
+  commentId: M:FluentGpu.Text.EditDocument.Reset(System.ReadOnlySpan{System.Char})
+  id: Reset(System.ReadOnlySpan{System.Char})
+  parent: FluentGpu.Text.EditDocument
+  langs:
+  - csharp
+  - vb
+  name: Reset(ReadOnlySpan<char>)
+  nameWithType: EditDocument.Reset(ReadOnlySpan<char>)
+  fullName: FluentGpu.Text.EditDocument.Reset(System.ReadOnlySpan<char>)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text/EditDocument.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Reset
+    path: ../../src/FluentGpu.Text/EditDocument.cs
+    startLine: 112
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: >-
+    Replace the entire content (programmatic <code>Text</code> set). Keeps the existing buffer when it fits;
+        grows by doubling otherwise. Bumps <xref href="FluentGpu.Text.EditDocument.Version" data-throw-if-not-resolved="false"></xref>. Caller owns newline normalization.
+  example: []
+  syntax:
+    content: public void Reset(ReadOnlySpan<char> text)
+    parameters:
+    - id: text
+      type: System.ReadOnlySpan{System.Char}
+    content.vb: Public Sub Reset(text As ReadOnlySpan(Of Char))
+  overload: FluentGpu.Text.EditDocument.Reset*
+  nameWithType.vb: EditDocument.Reset(ReadOnlySpan(Of Char))
+  fullName.vb: FluentGpu.Text.EditDocument.Reset(System.ReadOnlySpan(Of Char))
+  name.vb: Reset(ReadOnlySpan(Of Char))
+- uid: FluentGpu.Text.EditDocument.AsSpan
+  commentId: M:FluentGpu.Text.EditDocument.AsSpan
+  id: AsSpan
+  parent: FluentGpu.Text.EditDocument
+  langs:
+  - csharp
+  - vb
+  name: AsSpan()
+  nameWithType: EditDocument.AsSpan()
+  fullName: FluentGpu.Text.EditDocument.AsSpan()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text/EditDocument.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AsSpan
+    path: ../../src/FluentGpu.Text/EditDocument.cs
+    startLine: 134
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: >-
+    Contiguous view of the whole document, obtained by MOVING THE GAP TO THE END first (one memmove of the
+
+    post-gap tail). The BCL segmentation APIs need one contiguous span, and a two-segment scanner would have to
+
+    re-implement UAX#29 stitching across the seam — moving the gap is simpler and provably correct. Repeated
+
+    scans after the move are free; the next interior <xref href="FluentGpu.Text.EditDocument.Insert(System.Int32%2cSystem.ReadOnlySpan%7bSystem.Char%7d)" data-throw-if-not-resolved="false"></xref>/<xref href="FluentGpu.Text.EditDocument.Remove(System.Int32%2cSystem.Int32)" data-throw-if-not-resolved="false"></xref> pays the move
+
+    back. That trade is deliberate: every caller is a cold user-gesture path (caret nav, word jump, grapheme
+
+    snap), never the frame loop, and edit fields are short.
+  example: []
+  syntax:
+    content: public ReadOnlySpan<char> AsSpan()
+    return:
+      type: System.ReadOnlySpan{System.Char}
+    content.vb: Public Function AsSpan() As ReadOnlySpan(Of Char)
+  overload: FluentGpu.Text.EditDocument.AsSpan*
+- uid: FluentGpu.Text.EditDocument.SnapToGrapheme(System.Int32)
+  commentId: M:FluentGpu.Text.EditDocument.SnapToGrapheme(System.Int32)
+  id: SnapToGrapheme(System.Int32)
+  parent: FluentGpu.Text.EditDocument
+  langs:
+  - csharp
+  - vb
+  name: SnapToGrapheme(int)
+  nameWithType: EditDocument.SnapToGrapheme(int)
+  fullName: FluentGpu.Text.EditDocument.SnapToGrapheme(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text/EditDocument.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SnapToGrapheme
+    path: ../../src/FluentGpu.Text/EditDocument.cs
+    startLine: 146
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: >-
+    Snap <code class="paramref">pos</code> DOWN to the nearest grapheme boundary at or before it (clamped to
+        [0, <xref href="FluentGpu.Text.EditDocument.Length" data-throw-if-not-resolved="false"></xref>]). A position already on a boundary is returned unchanged.
+  example: []
+  syntax:
+    content: public int SnapToGrapheme(int pos)
+    parameters:
+    - id: pos
+      type: System.Int32
+    return:
+      type: System.Int32
+    content.vb: Public Function SnapToGrapheme(pos As Integer) As Integer
+  overload: FluentGpu.Text.EditDocument.SnapToGrapheme*
+  nameWithType.vb: EditDocument.SnapToGrapheme(Integer)
+  fullName.vb: FluentGpu.Text.EditDocument.SnapToGrapheme(Integer)
+  name.vb: SnapToGrapheme(Integer)
+- uid: FluentGpu.Text.EditDocument.NextGrapheme(System.Int32)
+  commentId: M:FluentGpu.Text.EditDocument.NextGrapheme(System.Int32)
+  id: NextGrapheme(System.Int32)
+  parent: FluentGpu.Text.EditDocument
+  langs:
+  - csharp
+  - vb
+  name: NextGrapheme(int)
+  nameWithType: EditDocument.NextGrapheme(int)
+  fullName: FluentGpu.Text.EditDocument.NextGrapheme(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text/EditDocument.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NextGrapheme
+    path: ../../src/FluentGpu.Text/EditDocument.cs
+    startLine: 156
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: >-
+    The grapheme boundary after <code class="paramref">pos</code> — the caret target for a Right arrow. From the
+        middle of a cluster this lands at the END of that cluster (never inside one).
+  example: []
+  syntax:
+    content: public int NextGrapheme(int pos)
+    parameters:
+    - id: pos
+      type: System.Int32
+    return:
+      type: System.Int32
+    content.vb: Public Function NextGrapheme(pos As Integer) As Integer
+  overload: FluentGpu.Text.EditDocument.NextGrapheme*
+  nameWithType.vb: EditDocument.NextGrapheme(Integer)
+  fullName.vb: FluentGpu.Text.EditDocument.NextGrapheme(Integer)
+  name.vb: NextGrapheme(Integer)
+- uid: FluentGpu.Text.EditDocument.PrevGrapheme(System.Int32)
+  commentId: M:FluentGpu.Text.EditDocument.PrevGrapheme(System.Int32)
+  id: PrevGrapheme(System.Int32)
+  parent: FluentGpu.Text.EditDocument
+  langs:
+  - csharp
+  - vb
+  name: PrevGrapheme(int)
+  nameWithType: EditDocument.PrevGrapheme(int)
+  fullName: FluentGpu.Text.EditDocument.PrevGrapheme(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text/EditDocument.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PrevGrapheme
+    path: ../../src/FluentGpu.Text/EditDocument.cs
+    startLine: 169
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: >-
+    The grapheme boundary before <code class="paramref">pos</code> — the caret target for a Left arrow (and the
+        range start for a Backspace). From the middle of a cluster this lands at the START of that cluster.
+  example: []
+  syntax:
+    content: public int PrevGrapheme(int pos)
+    parameters:
+    - id: pos
+      type: System.Int32
+    return:
+      type: System.Int32
+    content.vb: Public Function PrevGrapheme(pos As Integer) As Integer
+  overload: FluentGpu.Text.EditDocument.PrevGrapheme*
+  nameWithType.vb: EditDocument.PrevGrapheme(Integer)
+  fullName.vb: FluentGpu.Text.EditDocument.PrevGrapheme(Integer)
+  name.vb: PrevGrapheme(Integer)
+- uid: FluentGpu.Text.EditDocument.NextWord(System.Int32)
+  commentId: M:FluentGpu.Text.EditDocument.NextWord(System.Int32)
+  id: NextWord(System.Int32)
+  parent: FluentGpu.Text.EditDocument
+  langs:
+  - csharp
+  - vb
+  name: NextWord(int)
+  nameWithType: EditDocument.NextWord(int)
+  fullName: FluentGpu.Text.EditDocument.NextWord(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text/EditDocument.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NextWord
+    path: ../../src/FluentGpu.Text/EditDocument.cs
+    startLine: 196
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: >-
+    Ctrl+Right target: skip the run under the caret (word chars, or a punctuation run), THEN trailing
+        whitespace — landing at the START of the next word, exactly like the Windows TextBox. From inside whitespace
+        only the whitespace is skipped.
+  example: []
+  syntax:
+    content: public int NextWord(int pos)
+    parameters:
+    - id: pos
+      type: System.Int32
+    return:
+      type: System.Int32
+    content.vb: Public Function NextWord(pos As Integer) As Integer
+  overload: FluentGpu.Text.EditDocument.NextWord*
+  nameWithType.vb: EditDocument.NextWord(Integer)
+  fullName.vb: FluentGpu.Text.EditDocument.NextWord(Integer)
+  name.vb: NextWord(Integer)
+- uid: FluentGpu.Text.EditDocument.PrevWord(System.Int32)
+  commentId: M:FluentGpu.Text.EditDocument.PrevWord(System.Int32)
+  id: PrevWord(System.Int32)
+  parent: FluentGpu.Text.EditDocument
+  langs:
+  - csharp
+  - vb
+  name: PrevWord(int)
+  nameWithType: EditDocument.PrevWord(int)
+  fullName: FluentGpu.Text.EditDocument.PrevWord(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text/EditDocument.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PrevWord
+    path: ../../src/FluentGpu.Text/EditDocument.cs
+    startLine: 233
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: >-
+    Ctrl+Left target: skip whitespace backward, then the word (or punctuation) run — landing at the
+        start of the current word when mid-word, or the start of the previous word when at a word start.
+  example: []
+  syntax:
+    content: public int PrevWord(int pos)
+    parameters:
+    - id: pos
+      type: System.Int32
+    return:
+      type: System.Int32
+    content.vb: Public Function PrevWord(pos As Integer) As Integer
+  overload: FluentGpu.Text.EditDocument.PrevWord*
+  nameWithType.vb: EditDocument.PrevWord(Integer)
+  fullName.vb: FluentGpu.Text.EditDocument.PrevWord(Integer)
+  name.vb: PrevWord(Integer)
+- uid: FluentGpu.Text.EditDocument.LineStart(System.Int32)
+  commentId: M:FluentGpu.Text.EditDocument.LineStart(System.Int32)
+  id: LineStart(System.Int32)
+  parent: FluentGpu.Text.EditDocument
+  langs:
+  - csharp
+  - vb
+  name: LineStart(int)
+  nameWithType: EditDocument.LineStart(int)
+  fullName: FluentGpu.Text.EditDocument.LineStart(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text/EditDocument.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LineStart
+    path: ../../src/FluentGpu.Text/EditDocument.cs
+    startLine: 273
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: "The start of the line containing <code class=\"paramref\">pos</code>: the index after the preceding '\\r', or 0."
+  example: []
+  syntax:
+    content: public int LineStart(int pos)
+    parameters:
+    - id: pos
+      type: System.Int32
+    return:
+      type: System.Int32
+    content.vb: Public Function LineStart(pos As Integer) As Integer
+  overload: FluentGpu.Text.EditDocument.LineStart*
+  nameWithType.vb: EditDocument.LineStart(Integer)
+  fullName.vb: FluentGpu.Text.EditDocument.LineStart(Integer)
+  name.vb: LineStart(Integer)
+- uid: FluentGpu.Text.EditDocument.LineEnd(System.Int32)
+  commentId: M:FluentGpu.Text.EditDocument.LineEnd(System.Int32)
+  id: LineEnd(System.Int32)
+  parent: FluentGpu.Text.EditDocument
+  langs:
+  - csharp
+  - vb
+  name: LineEnd(int)
+  nameWithType: EditDocument.LineEnd(int)
+  fullName: FluentGpu.Text.EditDocument.LineEnd(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text/EditDocument.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LineEnd
+    path: ../../src/FluentGpu.Text/EditDocument.cs
+    startLine: 285
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: >-
+    The end of the line containing <code class="paramref">pos</code>: the index of the following '\r' (the caret
+        sits BEFORE the break, like WinUI End), or <xref href="FluentGpu.Text.EditDocument.Length" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: public int LineEnd(int pos)
+    parameters:
+    - id: pos
+      type: System.Int32
+    return:
+      type: System.Int32
+    content.vb: Public Function LineEnd(pos As Integer) As Integer
+  overload: FluentGpu.Text.EditDocument.LineEnd*
+  nameWithType.vb: EditDocument.LineEnd(Integer)
+  fullName.vb: FluentGpu.Text.EditDocument.LineEnd(Integer)
+  name.vb: LineEnd(Integer)
+- uid: FluentGpu.Text.EditDocument.NormalizeNewlines(System.String)
+  commentId: M:FluentGpu.Text.EditDocument.NormalizeNewlines(System.String)
+  id: NormalizeNewlines(System.String)
+  parent: FluentGpu.Text.EditDocument
+  langs:
+  - csharp
+  - vb
+  name: NormalizeNewlines(string)
+  nameWithType: EditDocument.NormalizeNewlines(string)
+  fullName: FluentGpu.Text.EditDocument.NormalizeNewlines(string)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text/EditDocument.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NormalizeNewlines
+    path: ../../src/FluentGpu.Text/EditDocument.cs
+    startLine: 298
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: >-
+    Map CRLF and lone LF to the document's '\r' form (WinUI's TextBox normalization). Returns the input
+        instance unchanged when it contains no '\n' — the overwhelmingly common case costs one IndexOf.
+  example: []
+  syntax:
+    content: public static string NormalizeNewlines(string text)
+    parameters:
+    - id: text
+      type: System.String
+    return:
+      type: System.String
+    content.vb: Public Shared Function NormalizeNewlines(text As String) As String
+  overload: FluentGpu.Text.EditDocument.NormalizeNewlines*
+  nameWithType.vb: EditDocument.NormalizeNewlines(String)
+  fullName.vb: FluentGpu.Text.EditDocument.NormalizeNewlines(String)
+  name.vb: NormalizeNewlines(String)
+- uid: FluentGpu.Text.EditDocument.NormalizeNewlines(System.ReadOnlySpan{System.Char})
+  commentId: M:FluentGpu.Text.EditDocument.NormalizeNewlines(System.ReadOnlySpan{System.Char})
+  id: NormalizeNewlines(System.ReadOnlySpan{System.Char})
+  parent: FluentGpu.Text.EditDocument
+  langs:
+  - csharp
+  - vb
+  name: NormalizeNewlines(ReadOnlySpan<char>)
+  nameWithType: EditDocument.NormalizeNewlines(ReadOnlySpan<char>)
+  fullName: FluentGpu.Text.EditDocument.NormalizeNewlines(System.ReadOnlySpan<char>)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text/EditDocument.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NormalizeNewlines
+    path: ../../src/FluentGpu.Text/EditDocument.cs
+    startLine: 305
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: Span form of <xref href="FluentGpu.Text.EditDocument.NormalizeNewlines(System.String)" data-throw-if-not-resolved="false"></xref> — always materializes a string (cold paste edge).
+  example: []
+  syntax:
+    content: public static string NormalizeNewlines(ReadOnlySpan<char> text)
+    parameters:
+    - id: text
+      type: System.ReadOnlySpan{System.Char}
+    return:
+      type: System.String
+    content.vb: Public Shared Function NormalizeNewlines(text As ReadOnlySpan(Of Char)) As String
+  overload: FluentGpu.Text.EditDocument.NormalizeNewlines*
+  nameWithType.vb: EditDocument.NormalizeNewlines(ReadOnlySpan(Of Char))
+  fullName.vb: FluentGpu.Text.EditDocument.NormalizeNewlines(System.ReadOnlySpan(Of Char))
+  name.vb: NormalizeNewlines(ReadOnlySpan(Of Char))
+references:
+- uid: FluentGpu.Text.EditDocument.SnapToGrapheme(System.Int32)
+  commentId: M:FluentGpu.Text.EditDocument.SnapToGrapheme(System.Int32)
+  isExternal: true
+  href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_SnapToGrapheme_System_Int32_
+  name: SnapToGrapheme(int)
+  nameWithType: EditDocument.SnapToGrapheme(int)
+  fullName: FluentGpu.Text.EditDocument.SnapToGrapheme(int)
+  nameWithType.vb: EditDocument.SnapToGrapheme(Integer)
+  fullName.vb: FluentGpu.Text.EditDocument.SnapToGrapheme(Integer)
+  name.vb: SnapToGrapheme(Integer)
+  spec.csharp:
+  - uid: FluentGpu.Text.EditDocument.SnapToGrapheme(System.Int32)
+    name: SnapToGrapheme
+    href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_SnapToGrapheme_System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Text.EditDocument.SnapToGrapheme(System.Int32)
+    name: SnapToGrapheme
+    href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_SnapToGrapheme_System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: FluentGpu.Text.EditDocument.NextGrapheme(System.Int32)
+  commentId: M:FluentGpu.Text.EditDocument.NextGrapheme(System.Int32)
+  isExternal: true
+  href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_NextGrapheme_System_Int32_
+  name: NextGrapheme(int)
+  nameWithType: EditDocument.NextGrapheme(int)
+  fullName: FluentGpu.Text.EditDocument.NextGrapheme(int)
+  nameWithType.vb: EditDocument.NextGrapheme(Integer)
+  fullName.vb: FluentGpu.Text.EditDocument.NextGrapheme(Integer)
+  name.vb: NextGrapheme(Integer)
+  spec.csharp:
+  - uid: FluentGpu.Text.EditDocument.NextGrapheme(System.Int32)
+    name: NextGrapheme
+    href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_NextGrapheme_System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Text.EditDocument.NextGrapheme(System.Int32)
+    name: NextGrapheme
+    href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_NextGrapheme_System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: FluentGpu.Text.EditDocument.PrevGrapheme(System.Int32)
+  commentId: M:FluentGpu.Text.EditDocument.PrevGrapheme(System.Int32)
+  isExternal: true
+  href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_PrevGrapheme_System_Int32_
+  name: PrevGrapheme(int)
+  nameWithType: EditDocument.PrevGrapheme(int)
+  fullName: FluentGpu.Text.EditDocument.PrevGrapheme(int)
+  nameWithType.vb: EditDocument.PrevGrapheme(Integer)
+  fullName.vb: FluentGpu.Text.EditDocument.PrevGrapheme(Integer)
+  name.vb: PrevGrapheme(Integer)
+  spec.csharp:
+  - uid: FluentGpu.Text.EditDocument.PrevGrapheme(System.Int32)
+    name: PrevGrapheme
+    href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_PrevGrapheme_System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Text.EditDocument.PrevGrapheme(System.Int32)
+    name: PrevGrapheme
+    href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_PrevGrapheme_System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: FluentGpu.Text.EditDocument.Insert(System.Int32,System.ReadOnlySpan{System.Char})
+  commentId: M:FluentGpu.Text.EditDocument.Insert(System.Int32,System.ReadOnlySpan{System.Char})
+  isExternal: true
+  href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_Insert_System_Int32_System_ReadOnlySpan_System_Char__
+  name: Insert(int, ReadOnlySpan<char>)
+  nameWithType: EditDocument.Insert(int, ReadOnlySpan<char>)
+  fullName: FluentGpu.Text.EditDocument.Insert(int, System.ReadOnlySpan<char>)
+  nameWithType.vb: EditDocument.Insert(Integer, ReadOnlySpan(Of Char))
+  fullName.vb: FluentGpu.Text.EditDocument.Insert(Integer, System.ReadOnlySpan(Of Char))
+  name.vb: Insert(Integer, ReadOnlySpan(Of Char))
+  spec.csharp:
+  - uid: FluentGpu.Text.EditDocument.Insert(System.Int32,System.ReadOnlySpan{System.Char})
+    name: Insert
+    href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_Insert_System_Int32_System_ReadOnlySpan_System_Char__
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - uid: System.Char
+    name: char
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.char
+  - name: '>'
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Text.EditDocument.Insert(System.Int32,System.ReadOnlySpan{System.Char})
+    name: Insert
+    href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_Insert_System_Int32_System_ReadOnlySpan_System_Char__
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Char
+    name: Char
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.char
+  - name: )
+  - name: )
+- uid: FluentGpu.Text.EditDocument.Remove(System.Int32,System.Int32)
+  commentId: M:FluentGpu.Text.EditDocument.Remove(System.Int32,System.Int32)
+  isExternal: true
+  href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_Remove_System_Int32_System_Int32_
+  name: Remove(int, int)
+  nameWithType: EditDocument.Remove(int, int)
+  fullName: FluentGpu.Text.EditDocument.Remove(int, int)
+  nameWithType.vb: EditDocument.Remove(Integer, Integer)
+  fullName.vb: FluentGpu.Text.EditDocument.Remove(Integer, Integer)
+  name.vb: Remove(Integer, Integer)
+  spec.csharp:
+  - uid: FluentGpu.Text.EditDocument.Remove(System.Int32,System.Int32)
+    name: Remove
+    href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_Remove_System_Int32_System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Text.EditDocument.Remove(System.Int32,System.Int32)
+    name: Remove
+    href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_Remove_System_Int32_System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: FluentGpu.Text.EditDocument.NormalizeNewlines(System.String)
+  commentId: M:FluentGpu.Text.EditDocument.NormalizeNewlines(System.String)
+  isExternal: true
+  href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_NormalizeNewlines_System_String_
+  name: NormalizeNewlines(string)
+  nameWithType: EditDocument.NormalizeNewlines(string)
+  fullName: FluentGpu.Text.EditDocument.NormalizeNewlines(string)
+  nameWithType.vb: EditDocument.NormalizeNewlines(String)
+  fullName.vb: FluentGpu.Text.EditDocument.NormalizeNewlines(String)
+  name.vb: NormalizeNewlines(String)
+  spec.csharp:
+  - uid: FluentGpu.Text.EditDocument.NormalizeNewlines(System.String)
+    name: NormalizeNewlines
+    href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_NormalizeNewlines_System_String_
+  - name: (
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Text.EditDocument.NormalizeNewlines(System.String)
+    name: NormalizeNewlines
+    href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_NormalizeNewlines_System_String_
+  - name: (
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+- uid: FluentGpu.Text
+  commentId: N:FluentGpu.Text
+  href: FluentGpu.html
+  name: FluentGpu.Text
+  nameWithType: FluentGpu.Text
+  fullName: FluentGpu.Text
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Text.EditDocument.#ctor*
+  commentId: Overload:FluentGpu.Text.EditDocument.#ctor
+  href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument__ctor
+  name: EditDocument
+  nameWithType: EditDocument.EditDocument
+  fullName: FluentGpu.Text.EditDocument.EditDocument
+  nameWithType.vb: EditDocument.New
+  fullName.vb: FluentGpu.Text.EditDocument.New
+  name.vb: New
+- uid: FluentGpu.Text.EditDocument.Length*
+  commentId: Overload:FluentGpu.Text.EditDocument.Length
+  href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_Length
+  name: Length
+  nameWithType: EditDocument.Length
+  fullName: FluentGpu.Text.EditDocument.Length
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Text.EditDocument.Version*
+  commentId: Overload:FluentGpu.Text.EditDocument.Version
+  href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_Version
+  name: Version
+  nameWithType: EditDocument.Version
+  fullName: FluentGpu.Text.EditDocument.Version
+- uid: FluentGpu.Text.EditDocument.Item*
+  commentId: Overload:FluentGpu.Text.EditDocument.Item
+  href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_Item_System_Int32_
+  name: this
+  nameWithType: EditDocument.this
+  fullName: FluentGpu.Text.EditDocument.this
+  nameWithType.vb: EditDocument.this[]
+  fullName.vb: FluentGpu.Text.EditDocument.this[]
+  name.vb: this[]
+- uid: System.Char
+  commentId: T:System.Char
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.char
+  name: char
+  nameWithType: char
+  fullName: char
+  nameWithType.vb: Char
+  fullName.vb: Char
+  name.vb: Char
+- uid: FluentGpu.Text.EditDocument.Version
+  commentId: P:FluentGpu.Text.EditDocument.Version
+  href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_Version
+  name: Version
+  nameWithType: EditDocument.Version
+  fullName: FluentGpu.Text.EditDocument.Version
+- uid: FluentGpu.Text.EditDocument.Insert*
+  commentId: Overload:FluentGpu.Text.EditDocument.Insert
+  href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_Insert_System_Int32_System_ReadOnlySpan_System_Char__
+  name: Insert
+  nameWithType: EditDocument.Insert
+  fullName: FluentGpu.Text.EditDocument.Insert
+- uid: System.ReadOnlySpan{System.Char}
+  commentId: T:System.ReadOnlySpan{System.Char}
+  parent: System
+  definition: System.ReadOnlySpan`1
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<char>
+  nameWithType: ReadOnlySpan<char>
+  fullName: System.ReadOnlySpan<char>
+  nameWithType.vb: ReadOnlySpan(Of Char)
+  fullName.vb: System.ReadOnlySpan(Of Char)
+  name.vb: ReadOnlySpan(Of Char)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - uid: System.Char
+    name: char
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.char
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Char
+    name: Char
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.char
+  - name: )
+- uid: System.ReadOnlySpan`1
+  commentId: T:System.ReadOnlySpan`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<T>
+  nameWithType: ReadOnlySpan<T>
+  fullName: System.ReadOnlySpan<T>
+  nameWithType.vb: ReadOnlySpan(Of T)
+  fullName.vb: System.ReadOnlySpan(Of T)
+  name.vb: ReadOnlySpan(Of T)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Text.EditDocument.Remove*
+  commentId: Overload:FluentGpu.Text.EditDocument.Remove
+  href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_Remove_System_Int32_System_Int32_
+  name: Remove
+  nameWithType: EditDocument.Remove
+  fullName: FluentGpu.Text.EditDocument.Remove
+- uid: FluentGpu.Text.EditDocument.CopyTo*
+  commentId: Overload:FluentGpu.Text.EditDocument.CopyTo
+  href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_CopyTo_System_Int32_System_Int32_System_Span_System_Char__
+  name: CopyTo
+  nameWithType: EditDocument.CopyTo
+  fullName: FluentGpu.Text.EditDocument.CopyTo
+- uid: System.Span{System.Char}
+  commentId: T:System.Span{System.Char}
+  parent: System
+  definition: System.Span`1
+  href: https://learn.microsoft.com/dotnet/api/system.span-1
+  name: Span<char>
+  nameWithType: Span<char>
+  fullName: System.Span<char>
+  nameWithType.vb: Span(Of Char)
+  fullName.vb: System.Span(Of Char)
+  name.vb: Span(Of Char)
+  spec.csharp:
+  - uid: System.Span`1
+    name: Span
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.span-1
+  - name: <
+  - uid: System.Char
+    name: char
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.char
+  - name: '>'
+  spec.vb:
+  - uid: System.Span`1
+    name: Span
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.span-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Char
+    name: Char
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.char
+  - name: )
+- uid: System.Span`1
+  commentId: T:System.Span`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.span-1
+  name: Span<T>
+  nameWithType: Span<T>
+  fullName: System.Span<T>
+  nameWithType.vb: Span(Of T)
+  fullName.vb: System.Span(Of T)
+  name.vb: Span(Of T)
+  spec.csharp:
+  - uid: System.Span`1
+    name: Span
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.span-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Span`1
+    name: Span
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.span-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Text.EditDocument.GetText*
+  commentId: Overload:FluentGpu.Text.EditDocument.GetText
+  href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_GetText
+  name: GetText
+  nameWithType: EditDocument.GetText
+  fullName: FluentGpu.Text.EditDocument.GetText
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Text.EditDocument.Reset*
+  commentId: Overload:FluentGpu.Text.EditDocument.Reset
+  href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_Reset_System_ReadOnlySpan_System_Char__
+  name: Reset
+  nameWithType: EditDocument.Reset
+  fullName: FluentGpu.Text.EditDocument.Reset
+- uid: FluentGpu.Text.EditDocument.AsSpan*
+  commentId: Overload:FluentGpu.Text.EditDocument.AsSpan
+  href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_AsSpan
+  name: AsSpan
+  nameWithType: EditDocument.AsSpan
+  fullName: FluentGpu.Text.EditDocument.AsSpan
+- uid: FluentGpu.Text.EditDocument.Length
+  commentId: P:FluentGpu.Text.EditDocument.Length
+  href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_Length
+  name: Length
+  nameWithType: EditDocument.Length
+  fullName: FluentGpu.Text.EditDocument.Length
+- uid: FluentGpu.Text.EditDocument.SnapToGrapheme*
+  commentId: Overload:FluentGpu.Text.EditDocument.SnapToGrapheme
+  href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_SnapToGrapheme_System_Int32_
+  name: SnapToGrapheme
+  nameWithType: EditDocument.SnapToGrapheme
+  fullName: FluentGpu.Text.EditDocument.SnapToGrapheme
+- uid: FluentGpu.Text.EditDocument.NextGrapheme*
+  commentId: Overload:FluentGpu.Text.EditDocument.NextGrapheme
+  href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_NextGrapheme_System_Int32_
+  name: NextGrapheme
+  nameWithType: EditDocument.NextGrapheme
+  fullName: FluentGpu.Text.EditDocument.NextGrapheme
+- uid: FluentGpu.Text.EditDocument.PrevGrapheme*
+  commentId: Overload:FluentGpu.Text.EditDocument.PrevGrapheme
+  href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_PrevGrapheme_System_Int32_
+  name: PrevGrapheme
+  nameWithType: EditDocument.PrevGrapheme
+  fullName: FluentGpu.Text.EditDocument.PrevGrapheme
+- uid: FluentGpu.Text.EditDocument.NextWord*
+  commentId: Overload:FluentGpu.Text.EditDocument.NextWord
+  href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_NextWord_System_Int32_
+  name: NextWord
+  nameWithType: EditDocument.NextWord
+  fullName: FluentGpu.Text.EditDocument.NextWord
+- uid: FluentGpu.Text.EditDocument.PrevWord*
+  commentId: Overload:FluentGpu.Text.EditDocument.PrevWord
+  href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_PrevWord_System_Int32_
+  name: PrevWord
+  nameWithType: EditDocument.PrevWord
+  fullName: FluentGpu.Text.EditDocument.PrevWord
+- uid: FluentGpu.Text.EditDocument.LineStart*
+  commentId: Overload:FluentGpu.Text.EditDocument.LineStart
+  href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_LineStart_System_Int32_
+  name: LineStart
+  nameWithType: EditDocument.LineStart
+  fullName: FluentGpu.Text.EditDocument.LineStart
+- uid: FluentGpu.Text.EditDocument.LineEnd*
+  commentId: Overload:FluentGpu.Text.EditDocument.LineEnd
+  href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_LineEnd_System_Int32_
+  name: LineEnd
+  nameWithType: EditDocument.LineEnd
+  fullName: FluentGpu.Text.EditDocument.LineEnd
+- uid: FluentGpu.Text.EditDocument.NormalizeNewlines*
+  commentId: Overload:FluentGpu.Text.EditDocument.NormalizeNewlines
+  href: FluentGpu.Text.EditDocument.html#FluentGpu_Text_EditDocument_NormalizeNewlines_System_String_
+  name: NormalizeNewlines
+  nameWithType: EditDocument.NormalizeNewlines
+  fullName: FluentGpu.Text.EditDocument.NormalizeNewlines

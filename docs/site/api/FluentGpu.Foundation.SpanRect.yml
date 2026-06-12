@@ -1,0 +1,545 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.SpanRect
+  commentId: T:FluentGpu.Foundation.SpanRect
+  id: SpanRect
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.SpanRect.#ctor(FluentGpu.Foundation.RectF,System.Int32,System.Byte)
+  - FluentGpu.Foundation.SpanRect.Kind
+  - FluentGpu.Foundation.SpanRect.Rect
+  - FluentGpu.Foundation.SpanRect.Span
+  langs:
+  - csharp
+  - vb
+  name: SpanRect
+  nameWithType: SpanRect
+  fullName: FluentGpu.Foundation.SpanRect
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/SpanText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpanRect
+    path: ../../src/FluentGpu.Foundation/SpanText.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    One laid-out rect artifact of a span run (paragraph-node-local DIP): the line-fragment geometry of a
+        decorated/link span. <xref href="FluentGpu.Foundation.SpanRect.Kind" data-throw-if-not-resolved="false"></xref> is the single <xref href="FluentGpu.Foundation.SpanStyle" data-throw-if-not-resolved="false"></xref> flag bit it serves — Link rects are
+        the FULL line-fragment band (hit-testing, Hand cursor); Underline/Strikethrough rects are the positioned BARS
+        (the recorder fills them verbatim, no font-seam touch at record time).
+  example: []
+  syntax:
+    content: 'public readonly record struct SpanRect : IEquatable<SpanRect>'
+    content.vb: Public Structure SpanRect Implements IEquatable(Of SpanRect)
+  implements:
+  - System.IEquatable{FluentGpu.Foundation.SpanRect}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Foundation.SpanRect.#ctor(FluentGpu.Foundation.RectF,System.Int32,System.Byte)
+  commentId: M:FluentGpu.Foundation.SpanRect.#ctor(FluentGpu.Foundation.RectF,System.Int32,System.Byte)
+  id: '#ctor(FluentGpu.Foundation.RectF,System.Int32,System.Byte)'
+  parent: FluentGpu.Foundation.SpanRect
+  langs:
+  - csharp
+  - vb
+  name: SpanRect(RectF, int, byte)
+  nameWithType: SpanRect.SpanRect(RectF, int, byte)
+  fullName: FluentGpu.Foundation.SpanRect.SpanRect(FluentGpu.Foundation.RectF, int, byte)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/SpanText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/SpanText.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    One laid-out rect artifact of a span run (paragraph-node-local DIP): the line-fragment geometry of a
+        decorated/link span. <xref href="FluentGpu.Foundation.SpanRect.Kind" data-throw-if-not-resolved="false"></xref> is the single <xref href="FluentGpu.Foundation.SpanStyle" data-throw-if-not-resolved="false"></xref> flag bit it serves — Link rects are
+        the FULL line-fragment band (hit-testing, Hand cursor); Underline/Strikethrough rects are the positioned BARS
+        (the recorder fills them verbatim, no font-seam touch at record time).
+  example: []
+  syntax:
+    content: public SpanRect(RectF Rect, int Span, byte Kind)
+    parameters:
+    - id: Rect
+      type: FluentGpu.Foundation.RectF
+    - id: Span
+      type: System.Int32
+    - id: Kind
+      type: System.Byte
+    content.vb: Public Sub New(Rect As RectF, Span As Integer, Kind As Byte)
+  overload: FluentGpu.Foundation.SpanRect.#ctor*
+  nameWithType.vb: SpanRect.New(RectF, Integer, Byte)
+  fullName.vb: FluentGpu.Foundation.SpanRect.New(FluentGpu.Foundation.RectF, Integer, Byte)
+  name.vb: New(RectF, Integer, Byte)
+- uid: FluentGpu.Foundation.SpanRect.Rect
+  commentId: P:FluentGpu.Foundation.SpanRect.Rect
+  id: Rect
+  parent: FluentGpu.Foundation.SpanRect
+  langs:
+  - csharp
+  - vb
+  name: Rect
+  nameWithType: SpanRect.Rect
+  fullName: FluentGpu.Foundation.SpanRect.Rect
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/SpanText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Rect
+    path: ../../src/FluentGpu.Foundation/SpanText.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public RectF Rect { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.RectF
+    content.vb: Public Property Rect As RectF
+  overload: FluentGpu.Foundation.SpanRect.Rect*
+- uid: FluentGpu.Foundation.SpanRect.Span
+  commentId: P:FluentGpu.Foundation.SpanRect.Span
+  id: Span
+  parent: FluentGpu.Foundation.SpanRect
+  langs:
+  - csharp
+  - vb
+  name: Span
+  nameWithType: SpanRect.Span
+  fullName: FluentGpu.Foundation.SpanRect.Span
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/SpanText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Span
+    path: ../../src/FluentGpu.Foundation/SpanText.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public int Span { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property Span As Integer
+  overload: FluentGpu.Foundation.SpanRect.Span*
+- uid: FluentGpu.Foundation.SpanRect.Kind
+  commentId: P:FluentGpu.Foundation.SpanRect.Kind
+  id: Kind
+  parent: FluentGpu.Foundation.SpanRect
+  langs:
+  - csharp
+  - vb
+  name: Kind
+  nameWithType: SpanRect.Kind
+  fullName: FluentGpu.Foundation.SpanRect.Kind
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/SpanText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Kind
+    path: ../../src/FluentGpu.Foundation/SpanText.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public byte Kind { get; init; }
+    parameters: []
+    return:
+      type: System.Byte
+    content.vb: Public Property Kind As Byte
+  overload: FluentGpu.Foundation.SpanRect.Kind*
+references:
+- uid: FluentGpu.Foundation.SpanRect.Kind
+  commentId: P:FluentGpu.Foundation.SpanRect.Kind
+  href: FluentGpu.Foundation.SpanRect.html#FluentGpu_Foundation_SpanRect_Kind
+  name: Kind
+  nameWithType: SpanRect.Kind
+  fullName: FluentGpu.Foundation.SpanRect.Kind
+- uid: FluentGpu.Foundation.SpanStyle
+  commentId: T:FluentGpu.Foundation.SpanStyle
+  href: FluentGpu.Foundation.SpanStyle.html
+  name: SpanStyle
+  nameWithType: SpanStyle
+  fullName: FluentGpu.Foundation.SpanStyle
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.IEquatable{FluentGpu.Foundation.SpanRect}
+  commentId: T:System.IEquatable{FluentGpu.Foundation.SpanRect}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<SpanRect>
+  nameWithType: IEquatable<SpanRect>
+  fullName: System.IEquatable<FluentGpu.Foundation.SpanRect>
+  nameWithType.vb: IEquatable(Of SpanRect)
+  fullName.vb: System.IEquatable(Of FluentGpu.Foundation.SpanRect)
+  name.vb: IEquatable(Of SpanRect)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Foundation.SpanRect
+    name: SpanRect
+    href: FluentGpu.Foundation.SpanRect.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.SpanRect
+    name: SpanRect
+    href: FluentGpu.Foundation.SpanRect.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Foundation.SpanRect.#ctor*
+  commentId: Overload:FluentGpu.Foundation.SpanRect.#ctor
+  href: FluentGpu.Foundation.SpanRect.html#FluentGpu_Foundation_SpanRect__ctor_FluentGpu_Foundation_RectF_System_Int32_System_Byte_
+  name: SpanRect
+  nameWithType: SpanRect.SpanRect
+  fullName: FluentGpu.Foundation.SpanRect.SpanRect
+  nameWithType.vb: SpanRect.New
+  fullName.vb: FluentGpu.Foundation.SpanRect.New
+  name.vb: New
+- uid: FluentGpu.Foundation.RectF
+  commentId: T:FluentGpu.Foundation.RectF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.RectF.html
+  name: RectF
+  nameWithType: RectF
+  fullName: FluentGpu.Foundation.RectF
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: System.Byte
+  commentId: T:System.Byte
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.byte
+  name: byte
+  nameWithType: byte
+  fullName: byte
+  nameWithType.vb: Byte
+  fullName.vb: Byte
+  name.vb: Byte
+- uid: FluentGpu.Foundation.SpanRect.Rect*
+  commentId: Overload:FluentGpu.Foundation.SpanRect.Rect
+  href: FluentGpu.Foundation.SpanRect.html#FluentGpu_Foundation_SpanRect_Rect
+  name: Rect
+  nameWithType: SpanRect.Rect
+  fullName: FluentGpu.Foundation.SpanRect.Rect
+- uid: FluentGpu.Foundation.SpanRect.Span*
+  commentId: Overload:FluentGpu.Foundation.SpanRect.Span
+  href: FluentGpu.Foundation.SpanRect.html#FluentGpu_Foundation_SpanRect_Span
+  name: Span
+  nameWithType: SpanRect.Span
+  fullName: FluentGpu.Foundation.SpanRect.Span
+- uid: FluentGpu.Foundation.SpanRect.Kind*
+  commentId: Overload:FluentGpu.Foundation.SpanRect.Kind
+  href: FluentGpu.Foundation.SpanRect.html#FluentGpu_Foundation_SpanRect_Kind
+  name: Kind
+  nameWithType: SpanRect.Kind
+  fullName: FluentGpu.Foundation.SpanRect.Kind

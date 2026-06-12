@@ -1,0 +1,114 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.DynamicsKind
+  commentId: T:FluentGpu.Foundation.DynamicsKind
+  id: DynamicsKind
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.DynamicsKind.Spring
+  - FluentGpu.Foundation.DynamicsKind.Tween
+  langs:
+  - csharp
+  - vb
+  name: DynamicsKind
+  nameWithType: DynamicsKind
+  fullName: FluentGpu.Foundation.DynamicsKind
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DynamicsKind
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 41
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Spring (velocity-carrying, interruptible — the default) or an eased fixed-duration tween.
+  example: []
+  syntax:
+    content: 'public enum DynamicsKind : byte'
+    content.vb: Public Enum DynamicsKind As Byte
+- uid: FluentGpu.Foundation.DynamicsKind.Spring
+  commentId: F:FluentGpu.Foundation.DynamicsKind.Spring
+  id: Spring
+  parent: FluentGpu.Foundation.DynamicsKind
+  langs:
+  - csharp
+  - vb
+  name: Spring
+  nameWithType: DynamicsKind.Spring
+  fullName: FluentGpu.Foundation.DynamicsKind.Spring
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Spring
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 41
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Spring = 0
+    return:
+      type: FluentGpu.Foundation.DynamicsKind
+- uid: FluentGpu.Foundation.DynamicsKind.Tween
+  commentId: F:FluentGpu.Foundation.DynamicsKind.Tween
+  id: Tween
+  parent: FluentGpu.Foundation.DynamicsKind
+  langs:
+  - csharp
+  - vb
+  name: Tween
+  nameWithType: DynamicsKind.Tween
+  fullName: FluentGpu.Foundation.DynamicsKind.Tween
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Tween
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 41
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Tween = 1
+    return:
+      type: FluentGpu.Foundation.DynamicsKind
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Foundation.DynamicsKind
+  commentId: T:FluentGpu.Foundation.DynamicsKind
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.DynamicsKind.html
+  name: DynamicsKind
+  nameWithType: DynamicsKind
+  fullName: FluentGpu.Foundation.DynamicsKind

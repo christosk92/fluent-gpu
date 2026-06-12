@@ -1,0 +1,602 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Scene.IMeasuredVirtualLayout
+  commentId: T:FluentGpu.Scene.IMeasuredVirtualLayout
+  id: IMeasuredVirtualLayout
+  parent: FluentGpu.Scene
+  children:
+  - FluentGpu.Scene.IMeasuredVirtualLayout.IndexAt(System.Single,System.Single)
+  - FluentGpu.Scene.IMeasuredVirtualLayout.OffsetOf(System.Int32,System.Single)
+  - FluentGpu.Scene.IMeasuredVirtualLayout.SetMeasured(System.Int32,System.Single,System.Single)
+  langs:
+  - csharp
+  - vb
+  name: IMeasuredVirtualLayout
+  nameWithType: IMeasuredVirtualLayout
+  fullName: FluentGpu.Scene.IMeasuredVirtualLayout
+  type: Interface
+  source:
+    remote:
+      path: src/FluentGpu.Scene/VirtualLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IMeasuredVirtualLayout
+    path: ../../src/FluentGpu.Scene/VirtualLayout.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    The variable-extent (measured) virtualization seam — E11-L0. Folds the Fenwick estimate-then-correct path behind
+
+    the SAME pluggable seam as the fixed-geometry layouts, so CUSTOM layouts can be variable/sliver-like: unmeasured
+
+    items report their estimate; at arrange time the layout engine measures each realized row and feeds the real
+
+    extent back through <xref href="FluentGpu.Scene.IMeasuredVirtualLayout.SetMeasured(System.Int32%2cSystem.Single%2cSystem.Single)" data-throw-if-not-resolved="false"></xref> (O(log n) correction), then re-pins the scroll anchor via
+
+    <xref href="FluentGpu.Scene.IMeasuredVirtualLayout.IndexAt(System.Single%2cSystem.Single)" data-throw-if-not-resolved="false"></xref>/<xref href="FluentGpu.Scene.IMeasuredVirtualLayout.OffsetOf(System.Int32%2cSystem.Single)" data-throw-if-not-resolved="false"></xref> so corrections above the viewport never jump the visible top
+
+    (virtualization.md §6.2 — estimate-then-correct + anchoring are seam behavior now, not a special case).
+
+    Built-ins: <xref href="FluentGpu.Scene.MeasuredStackVirtualLayout" data-throw-if-not-resolved="false"></xref> (the Fenwick variable list), <xref href="FluentGpu.Scene.GroupedListVirtualLayout" data-throw-if-not-resolved="false"></xref>
+
+    (group headers = a measured item kind + sticky-header hook).
+  example: []
+  syntax:
+    content: 'public interface IMeasuredVirtualLayout : IVirtualLayout'
+    content.vb: Public Interface IMeasuredVirtualLayout Inherits IVirtualLayout
+  derivedClasses:
+  - FluentGpu.Scene.GroupedListVirtualLayout
+  - FluentGpu.Scene.MeasuredStackVirtualLayout
+  inheritedMembers:
+  - FluentGpu.Scene.IVirtualLayout.ContentExtent(System.Int32,System.Single)
+  - FluentGpu.Scene.IVirtualLayout.Window(System.Int32,System.Single,System.Single,System.Single,System.Int32,System.Int32@,System.Int32@)
+  - FluentGpu.Scene.IVirtualLayout.ItemRect(System.Int32,System.Single)
+- uid: FluentGpu.Scene.IMeasuredVirtualLayout.SetMeasured(System.Int32,System.Single,System.Single)
+  commentId: M:FluentGpu.Scene.IMeasuredVirtualLayout.SetMeasured(System.Int32,System.Single,System.Single)
+  id: SetMeasured(System.Int32,System.Single,System.Single)
+  parent: FluentGpu.Scene.IMeasuredVirtualLayout
+  langs:
+  - csharp
+  - vb
+  name: SetMeasured(int, float, float)
+  nameWithType: IMeasuredVirtualLayout.SetMeasured(int, float, float)
+  fullName: FluentGpu.Scene.IMeasuredVirtualLayout.SetMeasured(int, float, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/VirtualLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SetMeasured
+    path: ../../src/FluentGpu.Scene/VirtualLayout.cs
+    startLine: 40
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    Correct item <code class="paramref">index</code>'s main-axis extent to its measured value (estimate-then-correct).
+        Called by the layout engine for every realized row at arrange time; O(log n), allocation-free.
+  example: []
+  syntax:
+    content: void SetMeasured(int index, float mainExtent, float crossSize)
+    parameters:
+    - id: index
+      type: System.Int32
+    - id: mainExtent
+      type: System.Single
+    - id: crossSize
+      type: System.Single
+    content.vb: Sub SetMeasured(index As Integer, mainExtent As Single, crossSize As Single)
+  overload: FluentGpu.Scene.IMeasuredVirtualLayout.SetMeasured*
+  nameWithType.vb: IMeasuredVirtualLayout.SetMeasured(Integer, Single, Single)
+  fullName.vb: FluentGpu.Scene.IMeasuredVirtualLayout.SetMeasured(Integer, Single, Single)
+  name.vb: SetMeasured(Integer, Single, Single)
+- uid: FluentGpu.Scene.IMeasuredVirtualLayout.OffsetOf(System.Int32,System.Single)
+  commentId: M:FluentGpu.Scene.IMeasuredVirtualLayout.OffsetOf(System.Int32,System.Single)
+  id: OffsetOf(System.Int32,System.Single)
+  parent: FluentGpu.Scene.IMeasuredVirtualLayout
+  langs:
+  - csharp
+  - vb
+  name: OffsetOf(int, float)
+  nameWithType: IMeasuredVirtualLayout.OffsetOf(int, float)
+  fullName: FluentGpu.Scene.IMeasuredVirtualLayout.OffsetOf(int, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/VirtualLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffsetOf
+    path: ../../src/FluentGpu.Scene/VirtualLayout.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: Content-space main-axis offset of item <code class="paramref">index</code> (prefix sum over corrected extents).
+  example: []
+  syntax:
+    content: float OffsetOf(int index, float crossSize)
+    parameters:
+    - id: index
+      type: System.Int32
+    - id: crossSize
+      type: System.Single
+    return:
+      type: System.Single
+    content.vb: Function OffsetOf(index As Integer, crossSize As Single) As Single
+  overload: FluentGpu.Scene.IMeasuredVirtualLayout.OffsetOf*
+  nameWithType.vb: IMeasuredVirtualLayout.OffsetOf(Integer, Single)
+  fullName.vb: FluentGpu.Scene.IMeasuredVirtualLayout.OffsetOf(Integer, Single)
+  name.vb: OffsetOf(Integer, Single)
+- uid: FluentGpu.Scene.IMeasuredVirtualLayout.IndexAt(System.Single,System.Single)
+  commentId: M:FluentGpu.Scene.IMeasuredVirtualLayout.IndexAt(System.Single,System.Single)
+  id: IndexAt(System.Single,System.Single)
+  parent: FluentGpu.Scene.IMeasuredVirtualLayout
+  langs:
+  - csharp
+  - vb
+  name: IndexAt(float, float)
+  nameWithType: IMeasuredVirtualLayout.IndexAt(float, float)
+  fullName: FluentGpu.Scene.IMeasuredVirtualLayout.IndexAt(float, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/VirtualLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IndexAt
+    path: ../../src/FluentGpu.Scene/VirtualLayout.cs
+    startLine: 46
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: The item whose extent band contains <code class="paramref">offset</code> — the scroll-anchor candidate.
+  example: []
+  syntax:
+    content: int IndexAt(float offset, float crossSize)
+    parameters:
+    - id: offset
+      type: System.Single
+    - id: crossSize
+      type: System.Single
+    return:
+      type: System.Int32
+    content.vb: Function IndexAt(offset As Single, crossSize As Single) As Integer
+  overload: FluentGpu.Scene.IMeasuredVirtualLayout.IndexAt*
+  nameWithType.vb: IMeasuredVirtualLayout.IndexAt(Single, Single)
+  fullName.vb: FluentGpu.Scene.IMeasuredVirtualLayout.IndexAt(Single, Single)
+  name.vb: IndexAt(Single, Single)
+references:
+- uid: FluentGpu.Scene.IMeasuredVirtualLayout.SetMeasured(System.Int32,System.Single,System.Single)
+  commentId: M:FluentGpu.Scene.IMeasuredVirtualLayout.SetMeasured(System.Int32,System.Single,System.Single)
+  parent: FluentGpu.Scene.IMeasuredVirtualLayout
+  isExternal: true
+  href: FluentGpu.Scene.IMeasuredVirtualLayout.html#FluentGpu_Scene_IMeasuredVirtualLayout_SetMeasured_System_Int32_System_Single_System_Single_
+  name: SetMeasured(int, float, float)
+  nameWithType: IMeasuredVirtualLayout.SetMeasured(int, float, float)
+  fullName: FluentGpu.Scene.IMeasuredVirtualLayout.SetMeasured(int, float, float)
+  nameWithType.vb: IMeasuredVirtualLayout.SetMeasured(Integer, Single, Single)
+  fullName.vb: FluentGpu.Scene.IMeasuredVirtualLayout.SetMeasured(Integer, Single, Single)
+  name.vb: SetMeasured(Integer, Single, Single)
+  spec.csharp:
+  - uid: FluentGpu.Scene.IMeasuredVirtualLayout.SetMeasured(System.Int32,System.Single,System.Single)
+    name: SetMeasured
+    href: FluentGpu.Scene.IMeasuredVirtualLayout.html#FluentGpu_Scene_IMeasuredVirtualLayout_SetMeasured_System_Int32_System_Single_System_Single_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Scene.IMeasuredVirtualLayout.SetMeasured(System.Int32,System.Single,System.Single)
+    name: SetMeasured
+    href: FluentGpu.Scene.IMeasuredVirtualLayout.html#FluentGpu_Scene_IMeasuredVirtualLayout_SetMeasured_System_Int32_System_Single_System_Single_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: FluentGpu.Scene.IMeasuredVirtualLayout.IndexAt(System.Single,System.Single)
+  commentId: M:FluentGpu.Scene.IMeasuredVirtualLayout.IndexAt(System.Single,System.Single)
+  parent: FluentGpu.Scene.IMeasuredVirtualLayout
+  isExternal: true
+  href: FluentGpu.Scene.IMeasuredVirtualLayout.html#FluentGpu_Scene_IMeasuredVirtualLayout_IndexAt_System_Single_System_Single_
+  name: IndexAt(float, float)
+  nameWithType: IMeasuredVirtualLayout.IndexAt(float, float)
+  fullName: FluentGpu.Scene.IMeasuredVirtualLayout.IndexAt(float, float)
+  nameWithType.vb: IMeasuredVirtualLayout.IndexAt(Single, Single)
+  fullName.vb: FluentGpu.Scene.IMeasuredVirtualLayout.IndexAt(Single, Single)
+  name.vb: IndexAt(Single, Single)
+  spec.csharp:
+  - uid: FluentGpu.Scene.IMeasuredVirtualLayout.IndexAt(System.Single,System.Single)
+    name: IndexAt
+    href: FluentGpu.Scene.IMeasuredVirtualLayout.html#FluentGpu_Scene_IMeasuredVirtualLayout_IndexAt_System_Single_System_Single_
+  - name: (
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Scene.IMeasuredVirtualLayout.IndexAt(System.Single,System.Single)
+    name: IndexAt
+    href: FluentGpu.Scene.IMeasuredVirtualLayout.html#FluentGpu_Scene_IMeasuredVirtualLayout_IndexAt_System_Single_System_Single_
+  - name: (
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: FluentGpu.Scene.IMeasuredVirtualLayout.OffsetOf(System.Int32,System.Single)
+  commentId: M:FluentGpu.Scene.IMeasuredVirtualLayout.OffsetOf(System.Int32,System.Single)
+  parent: FluentGpu.Scene.IMeasuredVirtualLayout
+  isExternal: true
+  href: FluentGpu.Scene.IMeasuredVirtualLayout.html#FluentGpu_Scene_IMeasuredVirtualLayout_OffsetOf_System_Int32_System_Single_
+  name: OffsetOf(int, float)
+  nameWithType: IMeasuredVirtualLayout.OffsetOf(int, float)
+  fullName: FluentGpu.Scene.IMeasuredVirtualLayout.OffsetOf(int, float)
+  nameWithType.vb: IMeasuredVirtualLayout.OffsetOf(Integer, Single)
+  fullName.vb: FluentGpu.Scene.IMeasuredVirtualLayout.OffsetOf(Integer, Single)
+  name.vb: OffsetOf(Integer, Single)
+  spec.csharp:
+  - uid: FluentGpu.Scene.IMeasuredVirtualLayout.OffsetOf(System.Int32,System.Single)
+    name: OffsetOf
+    href: FluentGpu.Scene.IMeasuredVirtualLayout.html#FluentGpu_Scene_IMeasuredVirtualLayout_OffsetOf_System_Int32_System_Single_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Scene.IMeasuredVirtualLayout.OffsetOf(System.Int32,System.Single)
+    name: OffsetOf
+    href: FluentGpu.Scene.IMeasuredVirtualLayout.html#FluentGpu_Scene_IMeasuredVirtualLayout_OffsetOf_System_Int32_System_Single_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: FluentGpu.Scene.MeasuredStackVirtualLayout
+  commentId: T:FluentGpu.Scene.MeasuredStackVirtualLayout
+  href: FluentGpu.Scene.MeasuredStackVirtualLayout.html
+  name: MeasuredStackVirtualLayout
+  nameWithType: MeasuredStackVirtualLayout
+  fullName: FluentGpu.Scene.MeasuredStackVirtualLayout
+- uid: FluentGpu.Scene.GroupedListVirtualLayout
+  commentId: T:FluentGpu.Scene.GroupedListVirtualLayout
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.GroupedListVirtualLayout.html
+  name: GroupedListVirtualLayout
+  nameWithType: GroupedListVirtualLayout
+  fullName: FluentGpu.Scene.GroupedListVirtualLayout
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: FluentGpu.Scene.IVirtualLayout.ContentExtent(System.Int32,System.Single)
+  commentId: M:FluentGpu.Scene.IVirtualLayout.ContentExtent(System.Int32,System.Single)
+  parent: FluentGpu.Scene.IVirtualLayout
+  isExternal: true
+  href: FluentGpu.Scene.IVirtualLayout.html#FluentGpu_Scene_IVirtualLayout_ContentExtent_System_Int32_System_Single_
+  name: ContentExtent(int, float)
+  nameWithType: IVirtualLayout.ContentExtent(int, float)
+  fullName: FluentGpu.Scene.IVirtualLayout.ContentExtent(int, float)
+  nameWithType.vb: IVirtualLayout.ContentExtent(Integer, Single)
+  fullName.vb: FluentGpu.Scene.IVirtualLayout.ContentExtent(Integer, Single)
+  name.vb: ContentExtent(Integer, Single)
+  spec.csharp:
+  - uid: FluentGpu.Scene.IVirtualLayout.ContentExtent(System.Int32,System.Single)
+    name: ContentExtent
+    href: FluentGpu.Scene.IVirtualLayout.html#FluentGpu_Scene_IVirtualLayout_ContentExtent_System_Int32_System_Single_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Scene.IVirtualLayout.ContentExtent(System.Int32,System.Single)
+    name: ContentExtent
+    href: FluentGpu.Scene.IVirtualLayout.html#FluentGpu_Scene_IVirtualLayout_ContentExtent_System_Int32_System_Single_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: FluentGpu.Scene.IVirtualLayout.Window(System.Int32,System.Single,System.Single,System.Single,System.Int32,System.Int32@,System.Int32@)
+  commentId: M:FluentGpu.Scene.IVirtualLayout.Window(System.Int32,System.Single,System.Single,System.Single,System.Int32,System.Int32@,System.Int32@)
+  parent: FluentGpu.Scene.IVirtualLayout
+  isExternal: true
+  href: FluentGpu.Scene.IVirtualLayout.html#FluentGpu_Scene_IVirtualLayout_Window_System_Int32_System_Single_System_Single_System_Single_System_Int32_System_Int32__System_Int32__
+  name: Window(int, float, float, float, int, out int, out int)
+  nameWithType: IVirtualLayout.Window(int, float, float, float, int, out int, out int)
+  fullName: FluentGpu.Scene.IVirtualLayout.Window(int, float, float, float, int, out int, out int)
+  nameWithType.vb: IVirtualLayout.Window(Integer, Single, Single, Single, Integer, Integer, Integer)
+  fullName.vb: FluentGpu.Scene.IVirtualLayout.Window(Integer, Single, Single, Single, Integer, Integer, Integer)
+  name.vb: Window(Integer, Single, Single, Single, Integer, Integer, Integer)
+  spec.csharp:
+  - uid: FluentGpu.Scene.IVirtualLayout.Window(System.Int32,System.Single,System.Single,System.Single,System.Int32,System.Int32@,System.Int32@)
+    name: Window
+    href: FluentGpu.Scene.IVirtualLayout.html#FluentGpu_Scene_IVirtualLayout_Window_System_Int32_System_Single_System_Single_System_Single_System_Int32_System_Int32__System_Int32__
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - name: out
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - name: out
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Scene.IVirtualLayout.Window(System.Int32,System.Single,System.Single,System.Single,System.Int32,System.Int32@,System.Int32@)
+    name: Window
+    href: FluentGpu.Scene.IVirtualLayout.html#FluentGpu_Scene_IVirtualLayout_Window_System_Int32_System_Single_System_Single_System_Single_System_Int32_System_Int32__System_Int32__
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: FluentGpu.Scene.IVirtualLayout.ItemRect(System.Int32,System.Single)
+  commentId: M:FluentGpu.Scene.IVirtualLayout.ItemRect(System.Int32,System.Single)
+  parent: FluentGpu.Scene.IVirtualLayout
+  isExternal: true
+  href: FluentGpu.Scene.IVirtualLayout.html#FluentGpu_Scene_IVirtualLayout_ItemRect_System_Int32_System_Single_
+  name: ItemRect(int, float)
+  nameWithType: IVirtualLayout.ItemRect(int, float)
+  fullName: FluentGpu.Scene.IVirtualLayout.ItemRect(int, float)
+  nameWithType.vb: IVirtualLayout.ItemRect(Integer, Single)
+  fullName.vb: FluentGpu.Scene.IVirtualLayout.ItemRect(Integer, Single)
+  name.vb: ItemRect(Integer, Single)
+  spec.csharp:
+  - uid: FluentGpu.Scene.IVirtualLayout.ItemRect(System.Int32,System.Single)
+    name: ItemRect
+    href: FluentGpu.Scene.IVirtualLayout.html#FluentGpu_Scene_IVirtualLayout_ItemRect_System_Int32_System_Single_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Scene.IVirtualLayout.ItemRect(System.Int32,System.Single)
+    name: ItemRect
+    href: FluentGpu.Scene.IVirtualLayout.html#FluentGpu_Scene_IVirtualLayout_ItemRect_System_Int32_System_Single_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: FluentGpu.Scene.IMeasuredVirtualLayout
+  commentId: T:FluentGpu.Scene.IMeasuredVirtualLayout
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.IMeasuredVirtualLayout.html
+  name: IMeasuredVirtualLayout
+  nameWithType: IMeasuredVirtualLayout
+  fullName: FluentGpu.Scene.IMeasuredVirtualLayout
+- uid: FluentGpu.Scene.IVirtualLayout
+  commentId: T:FluentGpu.Scene.IVirtualLayout
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.IVirtualLayout.html
+  name: IVirtualLayout
+  nameWithType: IVirtualLayout
+  fullName: FluentGpu.Scene.IVirtualLayout
+- uid: FluentGpu.Scene.IMeasuredVirtualLayout.SetMeasured*
+  commentId: Overload:FluentGpu.Scene.IMeasuredVirtualLayout.SetMeasured
+  href: FluentGpu.Scene.IMeasuredVirtualLayout.html#FluentGpu_Scene_IMeasuredVirtualLayout_SetMeasured_System_Int32_System_Single_System_Single_
+  name: SetMeasured
+  nameWithType: IMeasuredVirtualLayout.SetMeasured
+  fullName: FluentGpu.Scene.IMeasuredVirtualLayout.SetMeasured
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Scene.IMeasuredVirtualLayout.OffsetOf*
+  commentId: Overload:FluentGpu.Scene.IMeasuredVirtualLayout.OffsetOf
+  href: FluentGpu.Scene.IMeasuredVirtualLayout.html#FluentGpu_Scene_IMeasuredVirtualLayout_OffsetOf_System_Int32_System_Single_
+  name: OffsetOf
+  nameWithType: IMeasuredVirtualLayout.OffsetOf
+  fullName: FluentGpu.Scene.IMeasuredVirtualLayout.OffsetOf
+- uid: FluentGpu.Scene.IMeasuredVirtualLayout.IndexAt*
+  commentId: Overload:FluentGpu.Scene.IMeasuredVirtualLayout.IndexAt
+  href: FluentGpu.Scene.IMeasuredVirtualLayout.html#FluentGpu_Scene_IMeasuredVirtualLayout_IndexAt_System_Single_System_Single_
+  name: IndexAt
+  nameWithType: IMeasuredVirtualLayout.IndexAt
+  fullName: FluentGpu.Scene.IMeasuredVirtualLayout.IndexAt

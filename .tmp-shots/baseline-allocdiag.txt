@@ -1,0 +1,1 @@
+[allocdiag] total 6.9 KB/s | ui 30.0 | other -23.2 | untracked 0.0 | frames 55 | pump 0.0KB 0.33ms | dispatch 0.0KB 0.25ms | flip 0.5KB 0.07ms | flush 4.6KB 0.24ms | layout 4.7KB 2.32ms | anim 1.0KB 0.85ms | record 1.9KB 2.52ms | submit 17.3KB 35.40ms | effects 0.0KB 0.09ms

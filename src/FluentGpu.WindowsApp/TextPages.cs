@@ -62,7 +62,7 @@ sealed class TextBoxPage : Component
                 TextBox.Create("Type, then press Enter", 280f, text: text, onCommit: setCommitted)
 
                 // The live readout rides a compositor-only text binding — no page re-render per keystroke:
-                new TextEl("") { TextBind = () => text.Value }
+                new TextEl("") { Text = text }
                 """));
     }
 }

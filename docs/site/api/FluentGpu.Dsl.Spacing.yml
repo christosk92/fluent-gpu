@@ -1,0 +1,620 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Dsl.Spacing
+  commentId: T:FluentGpu.Dsl.Spacing
+  id: Spacing
+  parent: FluentGpu.Dsl
+  children:
+  - FluentGpu.Dsl.Spacing.Card
+  - FluentGpu.Dsl.Spacing.CardPad
+  - FluentGpu.Dsl.Spacing.Inner
+  - FluentGpu.Dsl.Spacing.PageNarrow
+  - FluentGpu.Dsl.Spacing.PagePadNarrow
+  - FluentGpu.Dsl.Spacing.PagePadWide
+  - FluentGpu.Dsl.Spacing.PageWide
+  - FluentGpu.Dsl.Spacing.StackL
+  - FluentGpu.Dsl.Spacing.StackM
+  - FluentGpu.Dsl.Spacing.StackS
+  langs:
+  - csharp
+  - vb
+  name: Spacing
+  nameWithType: Spacing
+  fullName: FluentGpu.Dsl.Spacing
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Spacing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Spacing
+    path: ../../src/FluentGpu.Dsl/Spacing.cs
+    startLine: 5
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: The WinUI Gallery spacing rhythm (page gutters, card spacing, internal padding, stack gaps).
+  example: []
+  syntax:
+    content: public static class Spacing
+    content.vb: Public Module Spacing
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.MemberwiseClone
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Dsl.Spacing.PageWide
+  commentId: F:FluentGpu.Dsl.Spacing.PageWide
+  id: PageWide
+  parent: FluentGpu.Dsl.Spacing
+  langs:
+  - csharp
+  - vb
+  name: PageWide
+  nameWithType: Spacing.PageWide
+  fullName: FluentGpu.Dsl.Spacing.PageWide
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Spacing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PageWide
+    path: ../../src/FluentGpu.Dsl/Spacing.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public const float PageWide = 36
+    return:
+      type: System.Single
+    content.vb: Public Const PageWide As Single = 36
+- uid: FluentGpu.Dsl.Spacing.PageNarrow
+  commentId: F:FluentGpu.Dsl.Spacing.PageNarrow
+  id: PageNarrow
+  parent: FluentGpu.Dsl.Spacing
+  langs:
+  - csharp
+  - vb
+  name: PageNarrow
+  nameWithType: Spacing.PageNarrow
+  fullName: FluentGpu.Dsl.Spacing.PageNarrow
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Spacing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PageNarrow
+    path: ../../src/FluentGpu.Dsl/Spacing.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public const float PageNarrow = 16
+    return:
+      type: System.Single
+    content.vb: Public Const PageNarrow As Single = 16
+- uid: FluentGpu.Dsl.Spacing.Card
+  commentId: F:FluentGpu.Dsl.Spacing.Card
+  id: Card
+  parent: FluentGpu.Dsl.Spacing
+  langs:
+  - csharp
+  - vb
+  name: Card
+  nameWithType: Spacing.Card
+  fullName: FluentGpu.Dsl.Spacing.Card
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Spacing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Card
+    path: ../../src/FluentGpu.Dsl/Spacing.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public const float Card = 12
+    return:
+      type: System.Single
+    content.vb: Public Const Card As Single = 12
+- uid: FluentGpu.Dsl.Spacing.Inner
+  commentId: F:FluentGpu.Dsl.Spacing.Inner
+  id: Inner
+  parent: FluentGpu.Dsl.Spacing
+  langs:
+  - csharp
+  - vb
+  name: Inner
+  nameWithType: Spacing.Inner
+  fullName: FluentGpu.Dsl.Spacing.Inner
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Spacing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Inner
+    path: ../../src/FluentGpu.Dsl/Spacing.cs
+    startLine: 10
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public const float Inner = 16
+    return:
+      type: System.Single
+    content.vb: Public Const Inner As Single = 16
+- uid: FluentGpu.Dsl.Spacing.StackS
+  commentId: F:FluentGpu.Dsl.Spacing.StackS
+  id: StackS
+  parent: FluentGpu.Dsl.Spacing
+  langs:
+  - csharp
+  - vb
+  name: StackS
+  nameWithType: Spacing.StackS
+  fullName: FluentGpu.Dsl.Spacing.StackS
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Spacing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StackS
+    path: ../../src/FluentGpu.Dsl/Spacing.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public const float StackS = 4
+    return:
+      type: System.Single
+    content.vb: Public Const StackS As Single = 4
+- uid: FluentGpu.Dsl.Spacing.StackM
+  commentId: F:FluentGpu.Dsl.Spacing.StackM
+  id: StackM
+  parent: FluentGpu.Dsl.Spacing
+  langs:
+  - csharp
+  - vb
+  name: StackM
+  nameWithType: Spacing.StackM
+  fullName: FluentGpu.Dsl.Spacing.StackM
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Spacing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StackM
+    path: ../../src/FluentGpu.Dsl/Spacing.cs
+    startLine: 12
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public const float StackM = 8
+    return:
+      type: System.Single
+    content.vb: Public Const StackM As Single = 8
+- uid: FluentGpu.Dsl.Spacing.StackL
+  commentId: F:FluentGpu.Dsl.Spacing.StackL
+  id: StackL
+  parent: FluentGpu.Dsl.Spacing
+  langs:
+  - csharp
+  - vb
+  name: StackL
+  nameWithType: Spacing.StackL
+  fullName: FluentGpu.Dsl.Spacing.StackL
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Spacing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StackL
+    path: ../../src/FluentGpu.Dsl/Spacing.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public const float StackL = 12
+    return:
+      type: System.Single
+    content.vb: Public Const StackL As Single = 12
+- uid: FluentGpu.Dsl.Spacing.PagePadWide
+  commentId: F:FluentGpu.Dsl.Spacing.PagePadWide
+  id: PagePadWide
+  parent: FluentGpu.Dsl.Spacing
+  langs:
+  - csharp
+  - vb
+  name: PagePadWide
+  nameWithType: Spacing.PagePadWide
+  fullName: FluentGpu.Dsl.Spacing.PagePadWide
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Spacing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PagePadWide
+    path: ../../src/FluentGpu.Dsl/Spacing.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static readonly Edges4 PagePadWide
+    return:
+      type: FluentGpu.Foundation.Edges4
+    content.vb: Public Shared ReadOnly PagePadWide As Edges4
+- uid: FluentGpu.Dsl.Spacing.PagePadNarrow
+  commentId: F:FluentGpu.Dsl.Spacing.PagePadNarrow
+  id: PagePadNarrow
+  parent: FluentGpu.Dsl.Spacing
+  langs:
+  - csharp
+  - vb
+  name: PagePadNarrow
+  nameWithType: Spacing.PagePadNarrow
+  fullName: FluentGpu.Dsl.Spacing.PagePadNarrow
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Spacing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PagePadNarrow
+    path: ../../src/FluentGpu.Dsl/Spacing.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static readonly Edges4 PagePadNarrow
+    return:
+      type: FluentGpu.Foundation.Edges4
+    content.vb: Public Shared ReadOnly PagePadNarrow As Edges4
+- uid: FluentGpu.Dsl.Spacing.CardPad
+  commentId: F:FluentGpu.Dsl.Spacing.CardPad
+  id: CardPad
+  parent: FluentGpu.Dsl.Spacing
+  langs:
+  - csharp
+  - vb
+  name: CardPad
+  nameWithType: Spacing.CardPad
+  fullName: FluentGpu.Dsl.Spacing.CardPad
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Spacing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CardPad
+    path: ../../src/FluentGpu.Dsl/Spacing.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static readonly Edges4 CardPad
+    return:
+      type: FluentGpu.Foundation.Edges4
+    content.vb: Public Shared ReadOnly CardPad As Edges4
+references:
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.MemberwiseClone
+  commentId: M:System.Object.MemberwiseClone
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  name: MemberwiseClone()
+  nameWithType: object.MemberwiseClone()
+  fullName: object.MemberwiseClone()
+  nameWithType.vb: Object.MemberwiseClone()
+  fullName.vb: Object.MemberwiseClone()
+  spec.csharp:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.Edges4
+  commentId: T:FluentGpu.Foundation.Edges4
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Edges4.html
+  name: Edges4
+  nameWithType: Edges4
+  fullName: FluentGpu.Foundation.Edges4
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html

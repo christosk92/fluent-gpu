@@ -1,0 +1,222 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.FlexJustify
+  commentId: T:FluentGpu.Foundation.FlexJustify
+  id: FlexJustify
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.FlexJustify.Center
+  - FluentGpu.Foundation.FlexJustify.End
+  - FluentGpu.Foundation.FlexJustify.SpaceAround
+  - FluentGpu.Foundation.FlexJustify.SpaceBetween
+  - FluentGpu.Foundation.FlexJustify.SpaceEvenly
+  - FluentGpu.Foundation.FlexJustify.Start
+  langs:
+  - csharp
+  - vb
+  name: FlexJustify
+  nameWithType: FlexJustify
+  fullName: FluentGpu.Foundation.FlexJustify
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTypes.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FlexJustify
+    path: ../../src/FluentGpu.Foundation/LayoutTypes.cs
+    startLine: 3
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Main-axis distribution of free space (flexbox justify-content).
+  example: []
+  syntax:
+    content: 'public enum FlexJustify : byte'
+    content.vb: Public Enum FlexJustify As Byte
+- uid: FluentGpu.Foundation.FlexJustify.Start
+  commentId: F:FluentGpu.Foundation.FlexJustify.Start
+  id: Start
+  parent: FluentGpu.Foundation.FlexJustify
+  langs:
+  - csharp
+  - vb
+  name: Start
+  nameWithType: FlexJustify.Start
+  fullName: FluentGpu.Foundation.FlexJustify.Start
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTypes.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Start
+    path: ../../src/FluentGpu.Foundation/LayoutTypes.cs
+    startLine: 3
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Start = 0
+    return:
+      type: FluentGpu.Foundation.FlexJustify
+- uid: FluentGpu.Foundation.FlexJustify.Center
+  commentId: F:FluentGpu.Foundation.FlexJustify.Center
+  id: Center
+  parent: FluentGpu.Foundation.FlexJustify
+  langs:
+  - csharp
+  - vb
+  name: Center
+  nameWithType: FlexJustify.Center
+  fullName: FluentGpu.Foundation.FlexJustify.Center
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTypes.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Center
+    path: ../../src/FluentGpu.Foundation/LayoutTypes.cs
+    startLine: 3
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Center = 1
+    return:
+      type: FluentGpu.Foundation.FlexJustify
+- uid: FluentGpu.Foundation.FlexJustify.End
+  commentId: F:FluentGpu.Foundation.FlexJustify.End
+  id: End
+  parent: FluentGpu.Foundation.FlexJustify
+  langs:
+  - csharp
+  - vb
+  name: End
+  nameWithType: FlexJustify.End
+  fullName: FluentGpu.Foundation.FlexJustify.End
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTypes.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: End
+    path: ../../src/FluentGpu.Foundation/LayoutTypes.cs
+    startLine: 3
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: End = 2
+    return:
+      type: FluentGpu.Foundation.FlexJustify
+- uid: FluentGpu.Foundation.FlexJustify.SpaceBetween
+  commentId: F:FluentGpu.Foundation.FlexJustify.SpaceBetween
+  id: SpaceBetween
+  parent: FluentGpu.Foundation.FlexJustify
+  langs:
+  - csharp
+  - vb
+  name: SpaceBetween
+  nameWithType: FlexJustify.SpaceBetween
+  fullName: FluentGpu.Foundation.FlexJustify.SpaceBetween
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTypes.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpaceBetween
+    path: ../../src/FluentGpu.Foundation/LayoutTypes.cs
+    startLine: 3
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: SpaceBetween = 3
+    return:
+      type: FluentGpu.Foundation.FlexJustify
+- uid: FluentGpu.Foundation.FlexJustify.SpaceAround
+  commentId: F:FluentGpu.Foundation.FlexJustify.SpaceAround
+  id: SpaceAround
+  parent: FluentGpu.Foundation.FlexJustify
+  langs:
+  - csharp
+  - vb
+  name: SpaceAround
+  nameWithType: FlexJustify.SpaceAround
+  fullName: FluentGpu.Foundation.FlexJustify.SpaceAround
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTypes.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpaceAround
+    path: ../../src/FluentGpu.Foundation/LayoutTypes.cs
+    startLine: 3
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: SpaceAround = 4
+    return:
+      type: FluentGpu.Foundation.FlexJustify
+- uid: FluentGpu.Foundation.FlexJustify.SpaceEvenly
+  commentId: F:FluentGpu.Foundation.FlexJustify.SpaceEvenly
+  id: SpaceEvenly
+  parent: FluentGpu.Foundation.FlexJustify
+  langs:
+  - csharp
+  - vb
+  name: SpaceEvenly
+  nameWithType: FlexJustify.SpaceEvenly
+  fullName: FluentGpu.Foundation.FlexJustify.SpaceEvenly
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTypes.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpaceEvenly
+    path: ../../src/FluentGpu.Foundation/LayoutTypes.cs
+    startLine: 3
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: SpaceEvenly = 5
+    return:
+      type: FluentGpu.Foundation.FlexJustify
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Foundation.FlexJustify
+  commentId: T:FluentGpu.Foundation.FlexJustify
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.FlexJustify.html
+  name: FlexJustify
+  nameWithType: FlexJustify
+  fullName: FluentGpu.Foundation.FlexJustify

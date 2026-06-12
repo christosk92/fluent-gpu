@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Reconciler and the retained scene | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Reconciler and the retained scene | FluentGpu Developer Docs ">
+      
+      
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="../toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/docs/site/engine-contributors/reconciler-and-scene.md/#L1">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+
+      <div class="content">
+        <div class="actionbar">
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="">
+<h1 id="reconciler-and-the-retained-scene">Reconciler and the retained scene</h1>
+
+<p><a href="index.html">← Contributing to the engine</a></p>
+<p>This page is for engine contributors. It explains how the <strong>reconciler</strong> (<code>src/FluentGpu.Reconciler/Reconciler.cs</code>)
+turns an immutable <code>Element</code> tree into edits on the retained <strong>struct-of-arrays</strong> scene
+(<code>src/FluentGpu.Scene/SceneStore.cs</code>), where exactly to change each behavior, and how to prove a change with the
+headless harness. It is the working view; the architecture authority is the design corpus — semantics live in
+<a href="../../../design/subsystems/reconciler-hooks.md"><code>reconciler-hooks.md</code></a>, storage lives in
+<a href="../../../design/subsystems/scene-memory.md"><code>scene-memory.md</code></a>, and the canonical contract values live in
+<a href="../../../design/SPEC-INDEX.md"><code>SPEC-INDEX.md</code></a>. Those docs own the column shapes and the seam declaration; <strong>this
+page never restates them — it links to them.</strong></p>
+<p>If you have not read <a href="../../guide/rendering-and-performance.md">rendering-and-performance.md</a> yet, read it first. It
+gives the frame loop and the three dirty axes from above; this page is the same machinery seen from inside the
+reconciler.</p>
+<h2 id="element-tree--reconciler--retained-soa-scenestore">Element tree → reconciler → retained SoA SceneStore</h2>
+<p>You author an immutable tree of <code>Element</code> records (<code>src/FluentGpu.Dsl/Element.cs</code>). The reconciler's job is to make
+the retained <code>SceneStore</code> <em>match</em> that tree with the smallest possible set of edits, and to wire the reactive plumbing
+(render-effects, bindings, control-flow boundaries, context signals) so that future changes never have to walk the
+whole tree again.</p>
+<p>The shipped reconciler is <strong>signals-first</strong> (Solid-style), not React-style re-render-from-root. There is no full-tree
+re-render and no global dirty flag. Concretely (<code>TreeReconciler</code>):</p>
+<ul>
+<li><strong>A component is a reactive render-effect.</strong> <code>MountComponent</code> wraps <code>RunComponent</code> in an <code>Effect</code>; the effect
+auto-subscribes to whatever signals/context the component reads during <code>Render()</code>. A <code>setState</code>/signal write
+schedules <strong>only that component's</strong> render-effect, and on the next <code>ReactiveRuntime.Flush</code> (frame phase 3) it
+re-renders and reconciles <strong>just its own subtree</strong> — <code>ReconcileSingleChild(node, newRendered, entry.Rendered)</code>.
+Sibling components don't run.</li>
+<li><strong>A reused component on a parent re-render is a no-op.</strong> In <code>Update</code>, when the old and new <code>ComponentEl</code> share a
+<code>ComponentType</code> and the node is already mounted, the reconciler <code>return</code>s immediately — the component is autonomous,
+carrying its props through signals/context rather than the factory closure. (This is why parent→child data flows
+via signals/context, <strong>never</strong> constructor args frozen at mount.)</li>
+<li><strong>Bindings and control-flow are effects too.</strong> A bound <code>Prop&lt;T&gt;</code> channel, a <code>ShowEl</code>, and a <code>ForEl</code> each become an
+<code>Effect</code> registered on the node and disposed when the node unmounts.</li>
+</ul>
+<p>The reconciler talks to the store through exactly one narrow seam, <code>ISceneBackend</code> — handle-in / handle-out,
+POD-only, zero COM. The store implements it directly (<code>SceneStore : ISceneBackend</code>). The interface is co-owned with
+<a href="../../../design/subsystems/reconciler-hooks.md"><code>reconciler-hooks.md</code> §2</a>; the store-side implementation is owned by
+<a href="../../../design/subsystems/scene-memory.md"><code>scene-memory.md</code></a>.</p>
+<blockquote>
+<p><strong>Note on the doc's broader algorithm.</strong> <code>reconciler-hooks.md</code> describes a 4-phase keyed-LIS child diff, a lane
+model, <code>Suspense</code>, and a richer <code>ISceneBackend</code> (with <code>MoveChild</code>/<code>WriteVisual</code>/mask diffs). Those are the <strong>design
+target</strong>; the as-built runtime (<code>§0bis</code>) is the simpler signals-first form this page documents. When you read the
+two, trust the source for what ships and the doc for where it is going.</p>
+</blockquote>
+<h2 id="the-generational-handle-u32-index-u32-gen-and-topology-columns">The generational handle <code>{u32 index, u32 gen}</code> and topology columns</h2>
+<p>Every node is a <code>NodeHandle</code> wrapping a <code>Handle = {u32 Index, u32 Gen}</code> (8 bytes). The <code>Index</code> is the slot into every
+parallel column; the <code>Gen</code> is bumped on <strong>both</strong> allocate and free, so a stale handle (a captured effect closure, an
+in-flight reference) fails <code>IsLive</code> instead of silently reading a recycled node. This is the ABA defense; the byte
+layout is canonical and owned by <a href="../../../design/SPEC-INDEX.md"><code>SPEC-INDEX.md</code> §2</a> (do not re-derive it).</p>
+<p><code>SceneStore.IsLive</code> is the one validation every effect body performs before touching the store — you will see
+<code>if (_scene.IsLive(node))</code> guarding <strong>every</strong> binding effect in <code>BindNode</code>, because a bound effect can fire after its
+node was freed (the signal outlived the node).</p>
+<p>Topology is a doubly-linked sibling list held in <code>int</code> index columns (<code>_parent</code>, <code>_firstChild</code>, <code>_lastChild</code>,
+<code>_prevSib</code>, <code>_nextSib</code>, <code>_childCount</code>; <code>0</code> = none). That makes navigation O(1) (<code>FirstChild</code>/<code>NextSibling</code>/<code>Parent</code>)
+and reorder O(1) pointer surgery (<code>Detach</code> then <code>AppendChild</code>) with the node's handle and all other columns
+untouched — the structural win over re-realizing a control. The free-list reuses freed slots (<code>_freeHead</code> /
+<code>_nextFree</code>); <code>CreateNode</code> pops a slot and stamps a fresh generation, <code>FreeSubtree</code> frees children-first then bumps
+the slot's generation and pushes it back.</p>
+<p><strong>Where to change:</strong> node lifecycle, topology, and the generation/free-list spine are all in
+<code>src/FluentGpu.Scene/SceneStore.cs</code> (<code>CreateNode</code>, <code>FreeSubtree</code>, <code>AppendChild</code>, <code>Detach</code>, <code>IsLive</code>). The handle type
+itself is in <code>FluentGpu.Foundation</code>.</p>
+<h2 id="keyed-child-diff-identity-and-state-preservation-by-key">Keyed child diff (identity and state preservation by key)</h2>
+<p>The keyed child diff is the <strong>structural engine</strong> retained underneath everything else — it runs on a component
+re-render and behind <code>Flow.For</code>/<code>Flow.Show</code>. It lives in <code>TreeReconciler.ReconcileChildren</code>. It is a positional+type
+diff with key matching, not the full LIS the design doc targets, but it preserves the two properties that matter:</p>
+<ul>
+<li><strong>Keyed children match by <code>Key</code></strong> (the <code>Element.Key</code> string), so a reorder reuses the existing node — identity and
+all attached state survive the move. For large child sets (<code>oldN &gt; 32</code>) it builds a <code>Dictionary&lt;string,int&gt;</code> key map;
+below that it scans. A matched node is <code>Update</code>d in place; an unmatched new child is <code>CreateNode</code> + <code>Mount</code>ed; an
+old node whose key disappeared is <code>Remove</code>d.</li>
+<li><strong>Unkeyed children match positionally</strong> by index (same slot, same <code>ElementTypeId</code>).</li>
+</ul>
+<p>After matching, every surviving child is <code>Detach</code>ed and re-<code>AppendChild</code>ed in the new order, so document order in the
+scene matches the element order. The diff marks the container <code>LayoutDirty</code> when the child set changed <strong>or</strong> when a
+<em>pure reorder</em> happened (same keys, different order — detected by non-monotonic match order, the <code>moved</code> flag):</p>
+<pre><code class="lang-csharp">// TreeReconciler.ReconcileChildren — the relayout trigger
+if (structural || moved || newN != oldN) _scene.Mark(node, NodeFlags.LayoutDirty);
+</code></pre>
+<p>That <code>moved</code> branch is load-bearing: a list reverse creates and removes nothing, but the rows still have to move, so a
+pure reorder must still relayout. (The harness pins this — see <code>FlowReorderChecks</code> below.)</p>
+<p><strong>Where to change:</strong> <code>TreeReconciler.ReconcileChildren</code> for the structural diff; <code>ReconcileSingleChild</code> for the
+single-optional-child case (component output, provider child, <code>Show</code> branch).</p>
+<h2 id="render-effects-forshow-boundary-effects-context-provision">Render-effects, For/Show boundary effects, context provision</h2>
+<p>These three are all effects registered against a host node and torn down on unmount. They are what make updates
+surgical.</p>
+<p><strong>Component render-effect.</strong> <code>MountComponent</code> creates the <code>Component</code> via the <code>ComponentEl.Factory</code>, injects the
+<code>RenderContext</code> (so hooks resolve the runtime, scene, anim engine, image cache, and context), and wraps <code>RunComponent</code>
+in an <code>Effect</code>. <code>RunComponent</code> bails if the node died (<code>if (!_scene.IsLive(node)) return;</code>), bumps the render count
+(the granularity metric <code>ConsumeRenderCount()</code> reads), renders, reconciles its single child, mirrors the child's
+layout participation onto the anchor (a component anchor is layout-transparent — <code>MirrorParticipation</code>), and marks the
+rendered child <code>LayoutDirty</code> so a re-render that changed subtree size is re-laid-out:</p>
+<pre><code class="lang-csharp">// TreeReconciler.RunComponent (abridged)
+if (!_scene.IsLive(node)) return;
+_renderCount++;
+Element newRendered = comp.RunsOnce ? Reactive.Untrack(comp.RenderWithHooks) : comp.RenderWithHooks();
+ReconcileSingleChild(node, newRendered, entry.Rendered);
+MirrorParticipation(node, _scene.FirstChild(node));
+entry.Rendered = newRendered;
+var child = _scene.FirstChild(node);
+if (!child.IsNull) _scene.Mark(child, NodeFlags.LayoutDirty);
+</code></pre>
+<p><code>ReactiveComponent.Setup()</code> is the run-once variant — its body is <code>Reactive.Untrack</code>ed (<code>RunsOnce</code>), so it never
+re-renders; reactivity comes purely from bindings / <code>For</code> / <code>Show</code> inside it.</p>
+<p><strong><code>Flow.Show</code> (ShowEl) and <code>Flow.For</code> (ForEl)</strong> are autonomous reactive boundaries (<code>MountShow</code> / <code>MountFor</code>). Each
+registers a boundary <code>Effect</code> via <code>AddBinding(node, eff)</code>. The <code>Show</code> effect re-evaluates <code>When()</code> and mounts
+<code>Then</code>/<code>Else</code> through <code>ReconcileSingleChild</code>; the <code>For</code> effect re-evaluates <code>Count()</code>/<code>ItemAt(i)</code>, keys each row, and
+feeds the result to <code>ReconcileChildren</code> — so add/remove/reorder go through the same keyed diff with <strong>no parent
+re-render</strong>. The <code>Update</code> path for both is a <code>return</code> (a parent re-render must not disturb them — the effect owns its
+subtree). <code>ShowEl</code>/<code>ForEl</code> are defined in <code>src/FluentGpu.Hooks/ControlFlow.cs</code> (the <code>Flow.*</code> factory); the engine
+records carry <code>ElementTypeId</code> 7 and 10.</p>
+<p><strong>Context provision</strong> (<code>ContextProviderEl</code>, <code>ElementTypeId</code> 4) stores a <code>Signal&lt;object?&gt;</code> per provider node
+(<code>MountProvider</code> writes <code>_providerSig[(int)node.Raw.Index]</code>). A consumer's <code>UseContext</code> resolves the nearest provider
+by walking ancestors and subscribing — that walk is <code>ResolveContext</code>, which climbs <code>_scene.Parent(...)</code> looking for a
+matching channel, then falls back to host-published ambient signals (<code>Viewport.Size</code>, etc.) in <code>_ambient</code>. On a
+provider re-render with the same channel, <code>Update</code> writes the signal's value (<code>e.Sig.Value = np.Value</code>), which notifies
+<strong>exactly</strong> the subscribed consumers — no context-stack reconstruction, no prop drilling. <code>Context&lt;T&gt;</code>/<code>Ctx.Provide</code>
+live in <code>src/FluentGpu.Hooks/Context.cs</code>.</p>
+<h2 id="bindings-as-mount-time-effects-the-propt-wiring">Bindings as mount-time effects (the <code>Prop&lt;T&gt;</code> wiring)</h2>
+<p>Every bindable channel is <strong>one</strong> <code>Prop&lt;T&gt;</code> taking a value, a <code>Func&lt;T&gt;</code> thunk, or a concrete signal (the canonical
+surface is owned by <a href="../../../design/SPEC-INDEX.md"><code>SPEC-INDEX.md</code> §2 &quot;Reactive element-prop surface&quot;</a>). The
+reconciler wires a <strong>bound</strong> channel into an effect exactly once, at mount, in <code>TreeReconciler.BindNode</code>. Each effect
+reads whichever payload the channel carries (thunk or signal-direct — one null test per fire), writes <strong>one</strong> scene
+column, and marks the matching dirty axis. For example, a bound <code>BoxEl.Transform</code>:</p>
+<pre><code class="lang-csharp">// TreeReconciler.BindNode — the compositor-bypass path
+if (b.Transform.IsBound)
+{
+    var tb = b.Transform.Thunk; var ts = b.Transform.Signal;
+    AddBinding(node, new Effect(Runtime, () =&gt;
+    {
+        if (_scene.IsLive(node))
+        {
+            _scene.Paint(node).LocalTransform = tb is not null ? tb() : ts!.Value;
+            _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+        }
+    }, owner: null, runNow: true));
+}
+</code></pre>
+<p>Two contracts make this correct, and you must preserve both when you add a channel:</p>
+<ol>
+<li><strong>Bind wiring is mount-only.</strong> A fresh thunk/signal supplied on a re-render is ignored — the signals-first rule is
+<em>change the signal's value, not the bind</em> (<code>bind.mount-only.stale</code>). <code>BindNode</code> runs from <code>Mount</code>, never from
+<code>Update</code>.</li>
+<li><strong>The static value is re-asserted on every reconcile only when <code>!IsBound</code>.</strong> In <code>WriteColumns</code> you will see this
+guard on every bound channel — e.g. <code>if (!b.Opacity.IsBound) paint.Opacity = b.Opacity.Value;</code> and
+<code>if (!b.Width.IsBound) li.Width = b.Width.Value;</code>. This is the single chokepoint that fixed the historical Opacity
+<code>!= 1f</code> reappear bug and prevents a re-render from clobbering a bound/animated value back to its static.</li>
+</ol>
+<p>The dirty axis the bind marks decides how cheap the frame is: <code>Transform</code>/<code>Fill</code>/<code>Opacity</code>/<code>Color</code> mark
+<code>TransformDirty</code>/<code>PaintDirty</code> (re-record only — the <strong>compositor bypass</strong>), while <code>Width</code>/<code>Height</code>/<code>Text</code> mark
+<code>LayoutDirty</code> (scoped relayout). The bound channels today are <code>BoxEl</code> <code>Transform</code>/<code>Opacity</code>/<code>Fill</code>/<code>Width</code>/<code>Height</code>,
+<code>TextEl</code> <code>Text</code>/<code>Color</code>, and <code>ImageEl</code> <code>Source</code>/<code>Placeholder</code> — all wired in <code>BindNode</code>, all guarded in
+<code>WriteColumns</code>.</p>
+<p><strong>Where to change:</strong> add the bind effect in <code>TreeReconciler.BindNode</code>, add the <code>!IsBound</code> static-value guard in the
+matching <code>WriteColumns</code> arm, and add the <code>Prop&lt;T&gt;</code> field to the element record in <code>src/FluentGpu.Dsl/</code> (the record
+shape is owned by <a href="../../../design/subsystems/dsl-aot.md"><code>dsl-aot.md</code></a>). Add a <code>Check</code> that asserts the channel
+updates one node with <code>Rendered == false</code> (compositor path) or with a scoped relayout (layout path).</p>
+<h2 id="the-scene-columns-bounds-paint-layoutinput-nodeflags-and-sparse-side-tables">The scene columns (Bounds, Paint, LayoutInput, NodeFlags) and sparse side-tables</h2>
+<p>The store is struct-of-arrays: one spine indexes parallel <code>T[]</code> columns, each touched by a <em>disjoint</em> set of phases so
+a phase streams only the cache lines it needs. The exact column shapes are owned by
+<a href="../../../design/subsystems/scene-memory.md"><code>scene-memory.md</code> §2.2</a> and defined in <code>src/FluentGpu.Scene/Columns.cs</code> —
+<strong>read them there; this page does not restate the structs.</strong> In brief, the dense per-node columns the reconciler
+writes are:</p>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Type (in <code>Columns.cs</code>)</th>
+<th>What the reconciler writes</th>
+<th>Read by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Bounds</code></td>
+<td><code>RectF</code> (LOCAL)</td>
+<td>nothing — layout owns it</td>
+<td>record, hit-test, <code>AbsoluteRect</code></td>
+</tr>
+<tr>
+<td><code>Paint</code></td>
+<td><code>NodePaint</code></td>
+<td><code>Fill</code>/<code>LocalTransform</code>/<code>Opacity</code>/<code>Corners</code>/<code>TextColor</code>/<code>Text</code>/<code>ImageId</code>/<code>VisualKind</code></td>
+<td>animation (writes transform/opacity), record</td>
+</tr>
+<tr>
+<td><code>LayoutInput</code></td>
+<td><code>LayoutInput</code></td>
+<td>flex config: <code>Width</code>/<code>Height</code>/<code>Direction</code>/<code>Gap</code>/<code>Padding</code>/<code>Margin</code>/<code>FlexGrow</code>/… and <code>TextStyle</code></td>
+<td>layout</td>
+</tr>
+<tr>
+<td><code>Interaction</code></td>
+<td><code>InteractionInfo</code></td>
+<td><code>HandlerMask</code>/<code>Role</code>/<code>Cursor</code>/<code>Focusable</code>/accelerators</td>
+<td>hit-test, focus, UIA</td>
+</tr>
+<tr>
+<td><code>Flags</code></td>
+<td><code>NodeFlags</code></td>
+<td>dirty axes + state bits (<code>ClipsToBounds</code>, <code>WantsPointer</code>, <code>Focusable</code>, …)</td>
+<td>every phase pre-filters here</td>
+</tr>
+</tbody>
+</table>
+<p>Most visual richness is <strong>sparse side-tables keyed by node index</strong> — there are O(decorated nodes) of these, not one
+per node, so a plain leaf costs nothing. The reconciler writes them through <code>Set*</code>/<code>Clear*</code> pairs in <code>WriteColumns</code>:
+scroll/virtual state (<code>_scroll</code>), grid specs (<code>_grids</code>), shadows, arcs, gradients, border brushes, acrylic, the
+eased-interaction row (<code>_interact</code>), the text measure cache (<code>_measureCache</code>), implicit brush transitions
+(<code>_brushAnims</code>), span-text runs (<code>_spanText</code>), text-edit decoration state, and the drag-source/drop-target specs.
+Every one of these is removed in <code>FreeSubtree</code>, so unmounting a node reclaims its side-table rows.</p>
+<p><code>WriteColumns</code> is the big switch (one arm per element type — <code>BoxEl</code>, <code>ScrollEl</code>, <code>VirtualListEl</code>, <code>GridEl</code>,
+<code>PolylineStrokeEl</code>, <code>ImageEl</code>, <code>TextEl</code>, <code>SpanTextEl</code>). It ends with the universal &quot;this was an update, not a mount&quot;
+tail:</p>
+<pre><code class="lang-csharp">if (!isMount) { _scene.Mark(node, NodeFlags.PaintDirty); _reconciled = true; }
+</code></pre>
+<p><strong>Where to change:</strong> column writes are <code>TreeReconciler.WriteColumns</code>; the column/side-table storage and accessors are
+<code>src/FluentGpu.Scene/SceneStore.cs</code> + <code>Columns.cs</code>. If you add a new per-node visual, prefer a sparse side-table
+(mirror an existing <code>Set/TryGet/Clear</code> trio and add its <code>Remove</code> to <code>FreeSubtree</code>) over widening a dense column — the
+dense <code>NodePaint</code> is deliberately one cache line.</p>
+<h2 id="the-mutate-epoch-chokepoint-and-clean-span-validity">The <code>Mutate()</code> epoch chokepoint and clean-span validity</h2>
+<p>The design corpus specifies a single per-realization mutation chokepoint (<code>Mutate()</code>) that bumps a content-epoch and a
+<code>CleanSpanWitness</code> (handle + gen + content-epoch + baked-geometry hash) that validates whether a recorded DrawList
+span can be reused. That rule — <em>a memcpy'd clean span is valid iff every referenced handle <code>IsLive</code> <strong>and</strong>
+content-epoch unchanged <strong>and</strong> baked geometry matches</em> — is canonical and owned by
+<a href="../../../design/SPEC-INDEX.md"><code>SPEC-INDEX.md</code> §2 &quot;Clean-span validity&quot;</a> and
+<a href="../../../design/subsystems/scene-memory.md"><code>scene-memory.md</code> §4.4</a>. It is the design-stage hardening for the
+render-thread seam.</p>
+<p>In the as-built single-thread store the same intent shows up as <strong>content-epoch-by-id discipline</strong>, which you must
+respect when you write columns:</p>
+<ul>
+<li><strong>Text/string ids carry a refcount.</strong> <code>SetPaintText</code> interns the new id, <code>AddRef</code>s it, and <code>Release</code>s the old, so a
+streamed virtual-list string is reclaimed once no live node shows it. A text column write that bypasses
+<code>SetPaintText</code> leaks the id.</li>
+<li><strong>Span runs are keyed by id, and minting a fresh id <em>is</em> the cache invalidation.</strong> <code>WriteColumns</code>' <code>SpanTextEl</code> arm
+only re-registers the shaping overlay when a shaping input actually changed (<code>SameSpanShaping</code>); an identical
+re-render keeps the run id, so the measure cache and the renderer's shaped-run cache are never churned.</li>
+<li><strong>Generation is the liveness epoch.</strong> Because freed slots bump generation, a captured <code>NodeHandle</code> that survives a
+free fails <code>IsLive</code> — which is why every binding effect re-checks it. When you add an effect that captures a node,
+guard its body with <code>IsLive</code>.</li>
+</ul>
+<p>When the parallel render-thread seam lands (build-order step 2 — see
+<a href="../../../design/SPEC-INDEX.md"><code>SPEC-INDEX.md</code> §2 &quot;Threading / frame phases&quot;</a>), the <code>Mutate()</code>/epoch/witness machinery
+becomes the formal version of this discipline. Until then, treat &quot;intern + refcount + keep the id stable when nothing
+changed&quot; as the rule.</p>
+<h2 id="the-iscenebackend-op-set">The <code>ISceneBackend</code> op set</h2>
+<p><code>ISceneBackend</code> (top of <code>src/FluentGpu.Scene/SceneStore.cs</code>) is the <strong>only</strong> surface the reconciler uses to mutate the
+retained tree — handle-in / handle-out, POD-only, no <code>ComPtr</code>, no <code>UIElement</code>, no <code>System.Object</code> across it. That
+narrowness is what keeps the reconciler platform-independent and lets the render thread own every <code>ComPtr</code> two layers
+down. The as-built interface is:</p>
+<pre><code class="lang-csharp">public interface ISceneBackend
+{
+    NodeHandle CreateNode(ushort elementTypeId);
+    void FreeSubtree(NodeHandle node);
+    void AppendChild(NodeHandle parent, NodeHandle child);
+
+    ref LayoutInput Layout(NodeHandle node);
+    ref NodePaint Paint(NodeHandle node);
+    ref InteractionInfo Interaction(NodeHandle node);
+    void SetClickHandler(NodeHandle node, Action? handler);
+    Action? GetClickHandler(NodeHandle node);
+
+    void Mark(NodeHandle node, NodeFlags flags);
+
+    NodeHandle FirstChild(NodeHandle node);
+    NodeHandle NextSibling(NodeHandle node);
+    int ChildCount(NodeHandle node);
+}
+</code></pre>
+<p><code>SceneStore</code> implements this plus the wider concrete surface the reconciler actually calls (<code>Detach</code>, <code>Parent</code>,
+<code>ScrollRef</code>, the <code>Set*</code>/<code>TryGet*</code>/<code>Clear*</code> side-table pairs, <code>Orphan</code>/<code>ReclaimOrphan</code> for exit animations). The
+<em>interface declaration</em> is co-owned with <a href="../../../design/subsystems/reconciler-hooks.md"><code>reconciler-hooks.md</code> §2</a>;
+the <em>store-side implementation</em> — the columns those ops write, the growth-safe <code>ref</code> returns, the free-list — is owned
+by <a href="../../../design/subsystems/scene-memory.md"><code>scene-memory.md</code></a>. The richer doc surface (<code>MoveChild</code>,
+<code>WriteVisual</code>/<code>WriteLayout</code> mask diffs, <code>NodeChildCollection</code>) is the design target, not yet wired.</p>
+<p><strong>Where to change:</strong> the interface and the <code>SceneStore</code> implementation are both in <code>src/FluentGpu.Scene/SceneStore.cs</code>.
+Keep it POD-only — a GC reference crossing this seam (beyond the handler-column <code>Action</code>s, which live in side arrays
+at the edge) breaks the render-thread-confinement contract.</p>
+<h2 id="verifying-the-headless-harness">Verifying: the headless harness</h2>
+<p>Verify every reconciler change with the headless harness, never by eye — <code>src/FluentGpu.VerticalSlice/Program.cs</code>:</p>
+<pre><code class="lang-bash">dotnet build src/FluentGpu.VerticalSlice                 # clean build first
+dotnet run   --project src/FluentGpu.VerticalSlice       # expect: ALL CHECKS PASSED
+</code></pre>
+<p>The reconciler/scene behavior on this page is already pinned by named check groups in <code>Program.cs</code>. Read them as
+executable spec, and add a <code>Check(&quot;…&quot;, condition, detail)</code> next to the closest one when you change behavior:</p>
+<ul>
+<li><strong><code>KeyedChecks</code></strong> — keyed reorder preserves node identity (<code>[a,b,c] → [c,a,b]</code> reuses the same handles) and removal
+drops only the vanished key. Drives <code>ReconcileRoot</code> directly with <code>BoxEl { Key = … }</code> children.</li>
+<li><strong><code>FlowChecks</code></strong> — <code>Flow.For</code>/<code>Flow.Show</code> restructure the tree with <strong>no parent re-render</strong> (asserts
+<code>FlowProbe.Renders == r0</code> across a count change and a toggle). This is the boundary-effect autonomy contract.</li>
+<li><strong><code>FlowReorderChecks</code></strong> — a <em>pure</em> <code>Flow.For</code> reverse (same keys, same count) preserves the key-matched node <strong>and</strong>
+relayouts it (the <code>moved</code> branch in <code>ReconcileChildren</code>); asserts the row's bounds actually moved while parent
+renders stayed flat.</li>
+<li><strong><code>EnterExitChecks</code></strong> — exit-animation orphaning: removing an animated child keeps it live and drawing
+(<code>scene.IsOrphan</code> + <code>IsLive</code>), then <code>ReclaimOrphan</code> deferred-frees it once the fade settles (the generation bump
+makes the handle dead). This is the <code>Remove</code> → <code>Orphan</code> path in the reconciler plus <code>SceneStore</code>'s orphan list.</li>
+<li><strong><code>NestedChecks</code></strong> — a nested component mounts, owns its own state, and a click re-renders only it (<code>child 0</code> →
+click → <code>child 1</code>) — granular re-render across a component boundary.</li>
+<li><strong><code>ContextChecks</code></strong> — a provider value reaches a nested consumer and a change propagates on re-render (<code>ctx 7</code> →
+<code>ctx 8</code>) — <code>MountProvider</code> + <code>ResolveContext</code> + the per-provider signal.</li>
+</ul>
+<p>When you touch reactivity or the scene, also assert on the <code>FrameStats</code> returned by <code>AppHost.RunFrame()</code>:</p>
+<ul>
+<li><code>Rendered == false</code> on a steady or compositor-only frame (a bound <code>Transform</code>/<code>Opacity</code>/<code>Fill</code>/<code>Color</code> write did no
+reconcile/relayout).</li>
+<li><code>ComponentsRendered</code> small (ideally 1) after a localized interaction — the granularity proof; mirrors
+<code>TreeReconciler.ConsumeRenderCount()</code>.</li>
+<li><code>HotPhaseAllocBytes == 0</code> on a steady frame — the near-zero-allocation guarantee. Structural reconcile (mount/remove)
+may use bounded Gen0; that is the reconcile edge (phases 3–5), <strong>not</strong> the paint half.</li>
+</ul>
+<p>The harness asserts <em>what was drawn</em> (the <code>HeadlessGpuDevice</code> records the DrawList) and post-layout bounds via
+<code>host.Scene</code> — it does <strong>not</strong> assert on-screen D3D12 pixels. &quot;Green harness&quot; means the logic and recorded DrawList are
+correct, not that a control looks right on screen; that is a separate manual needs-pixels pass on the Windows path.</p>
+<h2 id="real-example-the-patterns-the-reconciler-diffs">Real example: the patterns the reconciler diffs</h2>
+<p>These are mined from the gallery (<code>src/FluentGpu.WindowsApp/GalleryPages.cs</code>) — the real authoring surface the
+reconciler consumes. They are what <code>Flow.For</code>, <code>Flow.Show</code>, <code>Ctx.Provide</code>/<code>UseContext</code>, and the bound virtual-row
+recycler look like in practice.</p>
+<p>A keyed reactive list (<code>Flow.For</code>) and a reactive conditional (<code>Flow.Show</code>), neither of which re-renders the enclosing
+component when the signal changes:</p>
+<pre><code class="lang-csharp">var items = UseSignal(new List&lt;string&gt; { &quot;Alpha&quot;, &quot;Beta&quot;, &quot;Gamma&quot; });
+
+Flow.For(() =&gt; items.Value.Count,
+         i =&gt; Row(items.Value[i]),
+         keyOf: i =&gt; items.Value[i]);   // keyed: moves preserve row state
+
+// mutate by writing a NEW list instance (signal writes are value-equality gated):
+var next = new List&lt;string&gt;(items.Peek()); next.Reverse(); items.Value = next;
+</code></pre>
+<pre><code class="lang-csharp">var open = UseSignal(false);
+
+VStack(10,
+    Button.Standard(&quot;Toggle details&quot;, () =&gt; open.Value = !open.Peek()),
+    Flow.Show(() =&gt; open.Value, detailsPanel, fallback));   // boundary effect; host does not re-render
+</code></pre>
+<p>Context provision + consumption (the provider stores a signal per node; the consumer subscribes):</p>
+<pre><code class="lang-csharp">public static readonly Context&lt;int&gt; ThemeLevel = new(1);   // a channel + default
+
+Ctx.Provide(StatePage.ThemeLevel, level, Embed.Comp(() =&gt; new Consumer()));
+
+sealed class Consumer : Component
+{
+    public override Element Render()
+    {
+        var x = UseContext(StatePage.ThemeLevel);   // reads + subscribes
+        return Ui.Text($&quot;level {x}&quot;);
+    }
+}
+</code></pre>
+<p>The bound virtual-list row template — built <strong>once</strong> per visible slot with an index <em>signal</em>; scrolling rebinds the
+slot by writing the signal, so only the bound <code>Text</code>/<code>Fill</code>/<code>Source</code> thunks re-run (no element rebuild, no reconcile,
+no node churn — the recycler fast path <code>RealizeBoundWindow</code> drives):</p>
+<pre><code class="lang-csharp">static Element Row(FluentGpu.Signals.IReadSignal&lt;int&gt; idx) =&gt; new BoxEl
+{
+    Direction = 0, Height = 48f, Gap = 12f, AlignItems = FlexAlign.Center,
+    Fill = Prop.Of(() =&gt; (idx.Value % 2 == 0) ? RowEven : RowOdd),
+    Children =
+    [
+        new ImageEl
+        {
+            Width = 32f, Height = 32f, Corners = CornerRadius4.All(8f),
+            Source = Prop.Of(() =&gt; Cover(idx.Value)), Placeholder = Prop.Of(() =&gt; TileTint(idx.Value)),
+        },
+        new TextEl(&quot;&quot;) { Size = 14f, Color = Theme.WindowText, Text = Prop.Of(() =&gt; $&quot;Item {idx.Value}&quot;) },
+    ],
+};
+
+// in Render():
+Virtual.ListBound(100000, 48f, Row) with { Grow = 1f };
+</code></pre>
+<p><code>VirtualListEl</code> (<code>src/FluentGpu.Reconciler/VirtualListEl.cs</code>, <code>ElementTypeId</code> 6) is the engine primitive the reconciler
+diffs directly. Two realize paths exist in <code>TreeReconciler</code>: <code>RealizeWindow</code> (keyed/unkeyed rows, recycling
+scrolled-out nodes via <code>ReconcileWindow</code>) and <code>RealizeBoundWindow</code> (the <code>RowBind</code> slot recycler above). The
+variable-extent path uses the Fenwick <code>ExtentTable</code> (<code>src/FluentGpu.Scene/ExtentTable.cs</code>) for O(log n)
+offset↔index mapping. The user-facing <code>Virtual.*</code> factories live in <code>FluentGpu.Controls</code>; the seam is owned by
+<a href="../../../design/subsystems/virtualization.md"><code>virtualization.md</code></a> and
+<a href="../../../design/SPEC-INDEX.md"><code>SPEC-INDEX.md</code> §2 &quot;Virtualization seam&quot;</a>.</p>
+<h2 id="canon-links-semantics-vs-storage-never-restate-column-shapes">Canon links: semantics vs storage (never restate column shapes)</h2>
+<p>Keep the single-owner discipline when you edit anything here:</p>
+<ul>
+<li><strong>Reconciler + hooks semantics</strong> — render-effects, the keyed diff, effect timing, context propagation, the bind
+contracts: <a href="../../../design/subsystems/reconciler-hooks.md"><code>reconciler-hooks.md</code></a> (the as-built signals-first model
+is <code>§0bis</code>).</li>
+<li><strong>Scene storage</strong> — the SoA spine, the full column catalogue, the side-table placements, the dirty worklist, the
+<code>Mutate()</code> chokepoint, the <code>ISceneBackend</code> store-side mechanism:
+<a href="../../../design/subsystems/scene-memory.md"><code>scene-memory.md</code></a>.</li>
+<li><strong>Canonical contract values</strong> — the handle byte layout, clean-span validity, the <code>Prop&lt;T&gt;</code> surface, the threading
+model and quarantine constant, the virtualization seam: <a href="../../../design/SPEC-INDEX.md"><code>SPEC-INDEX.md</code> §2</a>, the
+precedence authority.</li>
+<li><strong>Contract-ownership map</strong> — every column, opcode, seam, and hook → its one owning doc:
+<a href="../../../design/subsystems/README.md"><code>subsystems/README.md</code></a>.</li>
+</ul>
+<p>Define an artifact in its owner; everywhere else, reference it. Restating a column struct or an enum in two places is
+exactly the drift the canon gate and reviews catch.</p>
+<hr>
+<p><strong>Next:</strong> <a href="../../guide/rendering-and-performance.md">rendering &amp; performance</a> for the frame pipeline and the three
+dirty axes · <a href="../../guide/reactivity.md">reactivity.md</a> for the signals model these internals implement ·
+the <a href="../../guide/README.md#-agent--file--ownership-map-where-to-change-what">file &amp; ownership map</a> for where to change
+what · the engine <a href="index.html">index</a> for the assembly graph and the harness golden rule.</p>
+
+</article>
+
+
+        <div class="next-article d-print-none border-top" id="nextArticle"></div>
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

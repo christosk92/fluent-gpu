@@ -1,0 +1,163 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.AppBarCommandKind
+  commentId: T:FluentGpu.Controls.AppBarCommandKind
+  id: AppBarCommandKind
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.AppBarCommandKind.Button
+  - FluentGpu.Controls.AppBarCommandKind.Separator
+  - FluentGpu.Controls.AppBarCommandKind.ToggleButton
+  langs:
+  - csharp
+  - vb
+  name: AppBarCommandKind
+  nameWithType: AppBarCommandKind
+  fullName: FluentGpu.Controls.AppBarCommandKind
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBarFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AppBarCommandKind
+    path: ../../src/FluentGpu.Controls/CommandBarFlyout.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The kind of a <xref href="FluentGpu.Controls.AppBarCommand" data-throw-if-not-resolved="false"></xref> in a <xref href="FluentGpu.Controls.CommandBarFlyout" data-throw-if-not-resolved="false"></xref>/<xref href="FluentGpu.Controls.CommandBar" data-throw-if-not-resolved="false"></xref>:
+        a plain push button, a checkable toggle (PRIMARY toggles paint the accent pill when checked; OVERFLOW toggles show
+        only the E73E check glyph — V2 OverflowChecked, CommandBarFlyout_themeresources.xaml:434-438), or a divider row.
+  example: []
+  syntax:
+    content: 'public enum AppBarCommandKind : byte'
+    content.vb: Public Enum AppBarCommandKind As Byte
+- uid: FluentGpu.Controls.AppBarCommandKind.Button
+  commentId: F:FluentGpu.Controls.AppBarCommandKind.Button
+  id: Button
+  parent: FluentGpu.Controls.AppBarCommandKind
+  langs:
+  - csharp
+  - vb
+  name: Button
+  nameWithType: AppBarCommandKind.Button
+  fullName: FluentGpu.Controls.AppBarCommandKind.Button
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBarFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Button
+    path: ../../src/FluentGpu.Controls/CommandBarFlyout.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Button = 0
+    return:
+      type: FluentGpu.Controls.AppBarCommandKind
+- uid: FluentGpu.Controls.AppBarCommandKind.ToggleButton
+  commentId: F:FluentGpu.Controls.AppBarCommandKind.ToggleButton
+  id: ToggleButton
+  parent: FluentGpu.Controls.AppBarCommandKind
+  langs:
+  - csharp
+  - vb
+  name: ToggleButton
+  nameWithType: AppBarCommandKind.ToggleButton
+  fullName: FluentGpu.Controls.AppBarCommandKind.ToggleButton
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBarFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ToggleButton
+    path: ../../src/FluentGpu.Controls/CommandBarFlyout.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: ToggleButton = 1
+    return:
+      type: FluentGpu.Controls.AppBarCommandKind
+- uid: FluentGpu.Controls.AppBarCommandKind.Separator
+  commentId: F:FluentGpu.Controls.AppBarCommandKind.Separator
+  id: Separator
+  parent: FluentGpu.Controls.AppBarCommandKind
+  langs:
+  - csharp
+  - vb
+  name: Separator
+  nameWithType: AppBarCommandKind.Separator
+  fullName: FluentGpu.Controls.AppBarCommandKind.Separator
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBarFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Separator
+    path: ../../src/FluentGpu.Controls/CommandBarFlyout.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Separator = 2
+    return:
+      type: FluentGpu.Controls.AppBarCommandKind
+references:
+- uid: FluentGpu.Controls.AppBarCommand
+  commentId: T:FluentGpu.Controls.AppBarCommand
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.AppBarCommand.html
+  name: AppBarCommand
+  nameWithType: AppBarCommand
+  fullName: FluentGpu.Controls.AppBarCommand
+- uid: FluentGpu.Controls.CommandBarFlyout
+  commentId: T:FluentGpu.Controls.CommandBarFlyout
+  href: FluentGpu.Controls.CommandBarFlyout.html
+  name: CommandBarFlyout
+  nameWithType: CommandBarFlyout
+  fullName: FluentGpu.Controls.CommandBarFlyout
+- uid: FluentGpu.Controls.CommandBar
+  commentId: T:FluentGpu.Controls.CommandBar
+  href: FluentGpu.Controls.CommandBar.html
+  name: CommandBar
+  nameWithType: CommandBar
+  fullName: FluentGpu.Controls.CommandBar
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.AppBarCommandKind
+  commentId: T:FluentGpu.Controls.AppBarCommandKind
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.AppBarCommandKind.html
+  name: AppBarCommandKind
+  nameWithType: AppBarCommandKind
+  fullName: FluentGpu.Controls.AppBarCommandKind

@@ -37,6 +37,11 @@ $rules = @(
         Name    = 'depkey-union'
         Pattern = '\[FieldOffset\(\d+\)\]\s*public\s+readonly\s+(object|string)'
         Why     = 'DepKey is pure-scalar + a side GcDepTable. A [FieldOffset] GC-ref/scalar union is illegal CLR layout (TypeLoadException).'
+    },
+    @{
+        Name    = 'bind-props'
+        Pattern = '\b(Transform|Opacity|Fill|Width|Height|Text|Color|Source|Placeholder)Bind\b'
+        Why     = 'The dual static+*Bind element surface is superseded by one Prop<T> per bindable channel (reconciler-hooks.md sec.0bis). The *Bind property spelling is gone.'
     }
 )
 

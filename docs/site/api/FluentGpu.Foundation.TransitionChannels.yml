@@ -1,0 +1,217 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.TransitionChannels
+  commentId: T:FluentGpu.Foundation.TransitionChannels
+  id: TransitionChannels
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.TransitionChannels.Bounds
+  - FluentGpu.Foundation.TransitionChannels.None
+  - FluentGpu.Foundation.TransitionChannels.Opacity
+  - FluentGpu.Foundation.TransitionChannels.Position
+  - FluentGpu.Foundation.TransitionChannels.Size
+  langs:
+  - csharp
+  - vb
+  name: TransitionChannels
+  nameWithType: TransitionChannels
+  fullName: FluentGpu.Foundation.TransitionChannels
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TransitionChannels
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 10
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    The general layout-transition spec — the entire authoring surface for "animate this node's layout changes".
+
+    A plain POD (no closures) so it is hot-path safe, and it lives in Foundation (below the AnimEngine, which reads it
+
+    and converts the dynamics to its internal spring/tween). It attaches to a node via <code>BoxEl.Animate</code> (or
+
+    <code>RenderContext.UseLayoutAnimation</code>); the host diffs the node's presented rect vs its new laid-out rect each
+
+    commit and drives the presented geometry toward target through these channels/dynamics — no relayout, no per-frame
+
+    re-render, and zero control-type knowledge.
+  example: []
+  syntax:
+    content: >-
+      [Flags]
+
+      public enum TransitionChannels : byte
+    content.vb: >-
+      <Flags>
+
+      Public Enum TransitionChannels As Byte
+  attributes:
+  - type: System.FlagsAttribute
+    ctor: System.FlagsAttribute.#ctor
+    arguments: []
+- uid: FluentGpu.Foundation.TransitionChannels.None
+  commentId: F:FluentGpu.Foundation.TransitionChannels.None
+  id: None
+  parent: FluentGpu.Foundation.TransitionChannels
+  langs:
+  - csharp
+  - vb
+  name: None
+  nameWithType: TransitionChannels.None
+  fullName: FluentGpu.Foundation.TransitionChannels.None
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: None
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: None = 0
+    return:
+      type: FluentGpu.Foundation.TransitionChannels
+- uid: FluentGpu.Foundation.TransitionChannels.Position
+  commentId: F:FluentGpu.Foundation.TransitionChannels.Position
+  id: Position
+  parent: FluentGpu.Foundation.TransitionChannels
+  langs:
+  - csharp
+  - vb
+  name: Position
+  nameWithType: TransitionChannels.Position
+  fullName: FluentGpu.Foundation.TransitionChannels.Position
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Position
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Position = 1
+    return:
+      type: FluentGpu.Foundation.TransitionChannels
+- uid: FluentGpu.Foundation.TransitionChannels.Size
+  commentId: F:FluentGpu.Foundation.TransitionChannels.Size
+  id: Size
+  parent: FluentGpu.Foundation.TransitionChannels
+  langs:
+  - csharp
+  - vb
+  name: Size
+  nameWithType: TransitionChannels.Size
+  fullName: FluentGpu.Foundation.TransitionChannels.Size
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Size
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Size = 2
+    return:
+      type: FluentGpu.Foundation.TransitionChannels
+- uid: FluentGpu.Foundation.TransitionChannels.Opacity
+  commentId: F:FluentGpu.Foundation.TransitionChannels.Opacity
+  id: Opacity
+  parent: FluentGpu.Foundation.TransitionChannels
+  langs:
+  - csharp
+  - vb
+  name: Opacity
+  nameWithType: TransitionChannels.Opacity
+  fullName: FluentGpu.Foundation.TransitionChannels.Opacity
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Opacity
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Opacity = 4
+    return:
+      type: FluentGpu.Foundation.TransitionChannels
+- uid: FluentGpu.Foundation.TransitionChannels.Bounds
+  commentId: F:FluentGpu.Foundation.TransitionChannels.Bounds
+  id: Bounds
+  parent: FluentGpu.Foundation.TransitionChannels
+  langs:
+  - csharp
+  - vb
+  name: Bounds
+  nameWithType: TransitionChannels.Bounds
+  fullName: FluentGpu.Foundation.TransitionChannels.Bounds
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Bounds
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Bounds = Position | Size
+    return:
+      type: FluentGpu.Foundation.TransitionChannels
+    content.vb: Bounds = Position Or Size
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Foundation.TransitionChannels
+  commentId: T:FluentGpu.Foundation.TransitionChannels
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.TransitionChannels.html
+  name: TransitionChannels
+  nameWithType: TransitionChannels
+  fullName: FluentGpu.Foundation.TransitionChannels

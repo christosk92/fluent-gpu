@@ -1,0 +1,774 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Render.SceneRecorder
+  commentId: T:FluentGpu.Render.SceneRecorder
+  id: SceneRecorder
+  parent: FluentGpu.Render
+  children:
+  - FluentGpu.Render.SceneRecorder.ConfigureScrollbarArrowGlyphs(FluentGpu.Foundation.StringId,FluentGpu.Foundation.StringId,FluentGpu.Foundation.StringId,FluentGpu.Foundation.StringId,FluentGpu.Foundation.StringId)
+  - FluentGpu.Render.SceneRecorder.Record(FluentGpu.Scene.SceneStore,FluentGpu.Render.DrawList,FluentGpu.Scene.ImageCache,FluentGpu.Render.FocusVisualStyle@,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Render.TextEditStyle@,System.ReadOnlySpan{FluentGpu.Foundation.NodeHandle})
+  - FluentGpu.Render.SceneRecorder.RecordSubtree(FluentGpu.Scene.SceneStore,FluentGpu.Render.DrawList,FluentGpu.Scene.ImageCache,FluentGpu.Render.FocusVisualStyle@,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Render.TextEditStyle@,FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.Point2)
+  langs:
+  - csharp
+  - vb
+  name: SceneRecorder
+  nameWithType: SceneRecorder
+  fullName: FluentGpu.Render.SceneRecorder
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Render/SceneRecorder.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SceneRecorder
+    path: ../../src/FluentGpu.Render/SceneRecorder.cs
+    startLine: 28
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  summary: >-
+    Phase 8 (record): walks the retained SceneStore and emits the DrawList. Composites like a browser — each node's
+
+    geometry is emitted in LOCAL space with a world transform (parent ∘ translate ∘ LocalTransform, scale/rotate about
+
+    the node's center) and a cumulative opacity, so transform/opacity animate without relayout or re-record of content.
+
+    Hover/press cross-fade via the eased <xref href="FluentGpu.Scene.InteractionAnim" data-throw-if-not-resolved="false"></xref> row; a focused node gets a dual-stroke focus ring.
+  example: []
+  syntax:
+    content: public static class SceneRecorder
+    content.vb: Public Module SceneRecorder
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.MemberwiseClone
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Render.SceneRecorder.ConfigureScrollbarArrowGlyphs(FluentGpu.Foundation.StringId,FluentGpu.Foundation.StringId,FluentGpu.Foundation.StringId,FluentGpu.Foundation.StringId,FluentGpu.Foundation.StringId)
+  commentId: M:FluentGpu.Render.SceneRecorder.ConfigureScrollbarArrowGlyphs(FluentGpu.Foundation.StringId,FluentGpu.Foundation.StringId,FluentGpu.Foundation.StringId,FluentGpu.Foundation.StringId,FluentGpu.Foundation.StringId)
+  id: ConfigureScrollbarArrowGlyphs(FluentGpu.Foundation.StringId,FluentGpu.Foundation.StringId,FluentGpu.Foundation.StringId,FluentGpu.Foundation.StringId,FluentGpu.Foundation.StringId)
+  parent: FluentGpu.Render.SceneRecorder
+  langs:
+  - csharp
+  - vb
+  name: ConfigureScrollbarArrowGlyphs(StringId, StringId, StringId, StringId, StringId)
+  nameWithType: SceneRecorder.ConfigureScrollbarArrowGlyphs(StringId, StringId, StringId, StringId, StringId)
+  fullName: FluentGpu.Render.SceneRecorder.ConfigureScrollbarArrowGlyphs(FluentGpu.Foundation.StringId, FluentGpu.Foundation.StringId, FluentGpu.Foundation.StringId, FluentGpu.Foundation.StringId, FluentGpu.Foundation.StringId)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Render/SceneRecorder.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ConfigureScrollbarArrowGlyphs
+    path: ../../src/FluentGpu.Render/SceneRecorder.cs
+    startLine: 42
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public static void ConfigureScrollbarArrowGlyphs(StringId up, StringId down, StringId left, StringId right, StringId iconFamily)
+    parameters:
+    - id: up
+      type: FluentGpu.Foundation.StringId
+    - id: down
+      type: FluentGpu.Foundation.StringId
+    - id: left
+      type: FluentGpu.Foundation.StringId
+    - id: right
+      type: FluentGpu.Foundation.StringId
+    - id: iconFamily
+      type: FluentGpu.Foundation.StringId
+    content.vb: Public Shared Sub ConfigureScrollbarArrowGlyphs(up As StringId, down As StringId, left As StringId, right As StringId, iconFamily As StringId)
+  overload: FluentGpu.Render.SceneRecorder.ConfigureScrollbarArrowGlyphs*
+- uid: FluentGpu.Render.SceneRecorder.Record(FluentGpu.Scene.SceneStore,FluentGpu.Render.DrawList,FluentGpu.Scene.ImageCache,FluentGpu.Render.FocusVisualStyle@,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Render.TextEditStyle@,System.ReadOnlySpan{FluentGpu.Foundation.NodeHandle})
+  commentId: M:FluentGpu.Render.SceneRecorder.Record(FluentGpu.Scene.SceneStore,FluentGpu.Render.DrawList,FluentGpu.Scene.ImageCache,FluentGpu.Render.FocusVisualStyle@,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Render.TextEditStyle@,System.ReadOnlySpan{FluentGpu.Foundation.NodeHandle})
+  id: Record(FluentGpu.Scene.SceneStore,FluentGpu.Render.DrawList,FluentGpu.Scene.ImageCache,FluentGpu.Render.FocusVisualStyle@,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Render.TextEditStyle@,System.ReadOnlySpan{FluentGpu.Foundation.NodeHandle})
+  parent: FluentGpu.Render.SceneRecorder
+  langs:
+  - csharp
+  - vb
+  name: Record(SceneStore, DrawList, ImageCache?, in FocusVisualStyle, ColorF, ColorF, in TextEditStyle, ReadOnlySpan<NodeHandle>)
+  nameWithType: SceneRecorder.Record(SceneStore, DrawList, ImageCache?, in FocusVisualStyle, ColorF, ColorF, in TextEditStyle, ReadOnlySpan<NodeHandle>)
+  fullName: FluentGpu.Render.SceneRecorder.Record(FluentGpu.Scene.SceneStore, FluentGpu.Render.DrawList, FluentGpu.Scene.ImageCache?, in FluentGpu.Render.FocusVisualStyle, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.ColorF, in FluentGpu.Render.TextEditStyle, System.ReadOnlySpan<FluentGpu.Foundation.NodeHandle>)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Render/SceneRecorder.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Record
+    path: ../../src/FluentGpu.Render/SceneRecorder.cs
+    startLine: 60
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  example: []
+  syntax:
+    content: public static SceneRecordStats Record(SceneStore scene, DrawList dl, ImageCache? images = null, in FocusVisualStyle focus = default, ColorF scrollThumb = default, ColorF scrollTrack = default, in TextEditStyle textEdit = default, ReadOnlySpan<NodeHandle> skipRoots = default)
+    parameters:
+    - id: scene
+      type: FluentGpu.Scene.SceneStore
+    - id: dl
+      type: FluentGpu.Render.DrawList
+    - id: images
+      type: FluentGpu.Scene.ImageCache
+    - id: focus
+      type: FluentGpu.Render.FocusVisualStyle
+    - id: scrollThumb
+      type: FluentGpu.Foundation.ColorF
+    - id: scrollTrack
+      type: FluentGpu.Foundation.ColorF
+    - id: textEdit
+      type: FluentGpu.Render.TextEditStyle
+    - id: skipRoots
+      type: System.ReadOnlySpan{FluentGpu.Foundation.NodeHandle}
+      description: >-
+        Subtree roots EXCLUDED from this record pass — out-of-bounds popup wrappers that render
+            into their own popup window instead (E4 windowed popups; see <xref href="FluentGpu.Render.SceneRecorder.RecordSubtree(FluentGpu.Scene.SceneStore%2cFluentGpu.Render.DrawList%2cFluentGpu.Scene.ImageCache%2cFluentGpu.Render.FocusVisualStyle%40%2cFluentGpu.Foundation.ColorF%2cFluentGpu.Foundation.ColorF%2cFluentGpu.Render.TextEditStyle%40%2cFluentGpu.Foundation.NodeHandle%2cFluentGpu.Foundation.Point2)" data-throw-if-not-resolved="false"></xref>). The subtrees stay in
+            the one SceneStore (layout/hit-test unchanged) — only their pixels move to the popup window's DrawList.
+    return:
+      type: FluentGpu.Render.SceneRecordStats
+    content.vb: Public Shared Function Record(scene As SceneStore, dl As DrawList, images As ImageCache = Nothing, focus As FocusVisualStyle = Nothing, scrollThumb As ColorF = Nothing, scrollTrack As ColorF = Nothing, textEdit As TextEditStyle = Nothing, skipRoots As ReadOnlySpan(Of NodeHandle) = Nothing) As SceneRecordStats
+  overload: FluentGpu.Render.SceneRecorder.Record*
+  nameWithType.vb: SceneRecorder.Record(SceneStore, DrawList, ImageCache, FocusVisualStyle, ColorF, ColorF, TextEditStyle, ReadOnlySpan(Of NodeHandle))
+  fullName.vb: FluentGpu.Render.SceneRecorder.Record(FluentGpu.Scene.SceneStore, FluentGpu.Render.DrawList, FluentGpu.Scene.ImageCache, FluentGpu.Render.FocusVisualStyle, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.ColorF, FluentGpu.Render.TextEditStyle, System.ReadOnlySpan(Of FluentGpu.Foundation.NodeHandle))
+  name.vb: Record(SceneStore, DrawList, ImageCache, FocusVisualStyle, ColorF, ColorF, TextEditStyle, ReadOnlySpan(Of NodeHandle))
+- uid: FluentGpu.Render.SceneRecorder.RecordSubtree(FluentGpu.Scene.SceneStore,FluentGpu.Render.DrawList,FluentGpu.Scene.ImageCache,FluentGpu.Render.FocusVisualStyle@,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Render.TextEditStyle@,FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.Point2)
+  commentId: M:FluentGpu.Render.SceneRecorder.RecordSubtree(FluentGpu.Scene.SceneStore,FluentGpu.Render.DrawList,FluentGpu.Scene.ImageCache,FluentGpu.Render.FocusVisualStyle@,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Render.TextEditStyle@,FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.Point2)
+  id: RecordSubtree(FluentGpu.Scene.SceneStore,FluentGpu.Render.DrawList,FluentGpu.Scene.ImageCache,FluentGpu.Render.FocusVisualStyle@,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Render.TextEditStyle@,FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.Point2)
+  parent: FluentGpu.Render.SceneRecorder
+  langs:
+  - csharp
+  - vb
+  name: RecordSubtree(SceneStore, DrawList, ImageCache?, in FocusVisualStyle, ColorF, ColorF, in TextEditStyle, NodeHandle, Point2)
+  nameWithType: SceneRecorder.RecordSubtree(SceneStore, DrawList, ImageCache?, in FocusVisualStyle, ColorF, ColorF, in TextEditStyle, NodeHandle, Point2)
+  fullName: FluentGpu.Render.SceneRecorder.RecordSubtree(FluentGpu.Scene.SceneStore, FluentGpu.Render.DrawList, FluentGpu.Scene.ImageCache?, in FluentGpu.Render.FocusVisualStyle, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.ColorF, in FluentGpu.Render.TextEditStyle, FluentGpu.Foundation.NodeHandle, FluentGpu.Foundation.Point2)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Render/SceneRecorder.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RecordSubtree
+    path: ../../src/FluentGpu.Render/SceneRecorder.cs
+    startLine: 116
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  summary: >-
+    Record ONE subtree into its own DrawList, re-origined so the subtree's on-screen top-left lands at the
+
+    DrawList's (0,0) — the root-override path for E4 out-of-bounds popup windows (the popup subtree stays in the
+
+    single SceneStore; the host presents this list on the popup window's own swapchain). <code class="paramref">originDip</code>
+
+    is the subtree's window-DIP top-left (= the popup's placed position): the walk starts at the subtree root with
+
+    a parent-world translation of (parentAbs − origin), so every node's own bounds/transform chain composes exactly
+
+    as in the main pass, shifted into popup-window space. No orphan pass — exit orphans belong to the main window.
+  example: []
+  syntax:
+    content: public static SceneRecordStats RecordSubtree(SceneStore scene, DrawList dl, ImageCache? images, in FocusVisualStyle focus, ColorF scrollThumb, ColorF scrollTrack, in TextEditStyle textEdit, NodeHandle root, Point2 originDip)
+    parameters:
+    - id: scene
+      type: FluentGpu.Scene.SceneStore
+    - id: dl
+      type: FluentGpu.Render.DrawList
+    - id: images
+      type: FluentGpu.Scene.ImageCache
+    - id: focus
+      type: FluentGpu.Render.FocusVisualStyle
+    - id: scrollThumb
+      type: FluentGpu.Foundation.ColorF
+    - id: scrollTrack
+      type: FluentGpu.Foundation.ColorF
+    - id: textEdit
+      type: FluentGpu.Render.TextEditStyle
+    - id: root
+      type: FluentGpu.Foundation.NodeHandle
+    - id: originDip
+      type: FluentGpu.Foundation.Point2
+    return:
+      type: FluentGpu.Render.SceneRecordStats
+    content.vb: Public Shared Function RecordSubtree(scene As SceneStore, dl As DrawList, images As ImageCache, focus As FocusVisualStyle, scrollThumb As ColorF, scrollTrack As ColorF, textEdit As TextEditStyle, root As NodeHandle, originDip As Point2) As SceneRecordStats
+  overload: FluentGpu.Render.SceneRecorder.RecordSubtree*
+  nameWithType.vb: SceneRecorder.RecordSubtree(SceneStore, DrawList, ImageCache, FocusVisualStyle, ColorF, ColorF, TextEditStyle, NodeHandle, Point2)
+  fullName.vb: FluentGpu.Render.SceneRecorder.RecordSubtree(FluentGpu.Scene.SceneStore, FluentGpu.Render.DrawList, FluentGpu.Scene.ImageCache, FluentGpu.Render.FocusVisualStyle, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.ColorF, FluentGpu.Render.TextEditStyle, FluentGpu.Foundation.NodeHandle, FluentGpu.Foundation.Point2)
+  name.vb: RecordSubtree(SceneStore, DrawList, ImageCache, FocusVisualStyle, ColorF, ColorF, TextEditStyle, NodeHandle, Point2)
+references:
+- uid: FluentGpu.Scene.InteractionAnim
+  commentId: T:FluentGpu.Scene.InteractionAnim
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.InteractionAnim.html
+  name: InteractionAnim
+  nameWithType: InteractionAnim
+  fullName: FluentGpu.Scene.InteractionAnim
+- uid: FluentGpu.Render
+  commentId: N:FluentGpu.Render
+  href: FluentGpu.html
+  name: FluentGpu.Render
+  nameWithType: FluentGpu.Render
+  fullName: FluentGpu.Render
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Render
+    name: Render
+    href: FluentGpu.Render.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Render
+    name: Render
+    href: FluentGpu.Render.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.MemberwiseClone
+  commentId: M:System.Object.MemberwiseClone
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  name: MemberwiseClone()
+  nameWithType: object.MemberwiseClone()
+  fullName: object.MemberwiseClone()
+  nameWithType.vb: Object.MemberwiseClone()
+  fullName.vb: Object.MemberwiseClone()
+  spec.csharp:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Render.SceneRecorder.ConfigureScrollbarArrowGlyphs*
+  commentId: Overload:FluentGpu.Render.SceneRecorder.ConfigureScrollbarArrowGlyphs
+  href: FluentGpu.Render.SceneRecorder.html#FluentGpu_Render_SceneRecorder_ConfigureScrollbarArrowGlyphs_FluentGpu_Foundation_StringId_FluentGpu_Foundation_StringId_FluentGpu_Foundation_StringId_FluentGpu_Foundation_StringId_FluentGpu_Foundation_StringId_
+  name: ConfigureScrollbarArrowGlyphs
+  nameWithType: SceneRecorder.ConfigureScrollbarArrowGlyphs
+  fullName: FluentGpu.Render.SceneRecorder.ConfigureScrollbarArrowGlyphs
+- uid: FluentGpu.Foundation.StringId
+  commentId: T:FluentGpu.Foundation.StringId
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.StringId.html
+  name: StringId
+  nameWithType: StringId
+  fullName: FluentGpu.Foundation.StringId
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Render.SceneRecorder.RecordSubtree(FluentGpu.Scene.SceneStore,FluentGpu.Render.DrawList,FluentGpu.Scene.ImageCache,FluentGpu.Render.FocusVisualStyle@,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Render.TextEditStyle@,FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.Point2)
+  commentId: M:FluentGpu.Render.SceneRecorder.RecordSubtree(FluentGpu.Scene.SceneStore,FluentGpu.Render.DrawList,FluentGpu.Scene.ImageCache,FluentGpu.Render.FocusVisualStyle@,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Render.TextEditStyle@,FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.Point2)
+  href: FluentGpu.Render.SceneRecorder.html#FluentGpu_Render_SceneRecorder_RecordSubtree_FluentGpu_Scene_SceneStore_FluentGpu_Render_DrawList_FluentGpu_Scene_ImageCache_FluentGpu_Render_FocusVisualStyle__FluentGpu_Foundation_ColorF_FluentGpu_Foundation_ColorF_FluentGpu_Render_TextEditStyle__FluentGpu_Foundation_NodeHandle_FluentGpu_Foundation_Point2_
+  name: RecordSubtree(SceneStore, DrawList, ImageCache, in FocusVisualStyle, ColorF, ColorF, in TextEditStyle, NodeHandle, Point2)
+  nameWithType: SceneRecorder.RecordSubtree(SceneStore, DrawList, ImageCache, in FocusVisualStyle, ColorF, ColorF, in TextEditStyle, NodeHandle, Point2)
+  fullName: FluentGpu.Render.SceneRecorder.RecordSubtree(FluentGpu.Scene.SceneStore, FluentGpu.Render.DrawList, FluentGpu.Scene.ImageCache, in FluentGpu.Render.FocusVisualStyle, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.ColorF, in FluentGpu.Render.TextEditStyle, FluentGpu.Foundation.NodeHandle, FluentGpu.Foundation.Point2)
+  nameWithType.vb: SceneRecorder.RecordSubtree(SceneStore, DrawList, ImageCache, FocusVisualStyle, ColorF, ColorF, TextEditStyle, NodeHandle, Point2)
+  fullName.vb: FluentGpu.Render.SceneRecorder.RecordSubtree(FluentGpu.Scene.SceneStore, FluentGpu.Render.DrawList, FluentGpu.Scene.ImageCache, FluentGpu.Render.FocusVisualStyle, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.ColorF, FluentGpu.Render.TextEditStyle, FluentGpu.Foundation.NodeHandle, FluentGpu.Foundation.Point2)
+  name.vb: RecordSubtree(SceneStore, DrawList, ImageCache, FocusVisualStyle, ColorF, ColorF, TextEditStyle, NodeHandle, Point2)
+  spec.csharp:
+  - uid: FluentGpu.Render.SceneRecorder.RecordSubtree(FluentGpu.Scene.SceneStore,FluentGpu.Render.DrawList,FluentGpu.Scene.ImageCache,FluentGpu.Render.FocusVisualStyle@,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Render.TextEditStyle@,FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.Point2)
+    name: RecordSubtree
+    href: FluentGpu.Render.SceneRecorder.html#FluentGpu_Render_SceneRecorder_RecordSubtree_FluentGpu_Scene_SceneStore_FluentGpu_Render_DrawList_FluentGpu_Scene_ImageCache_FluentGpu_Render_FocusVisualStyle__FluentGpu_Foundation_ColorF_FluentGpu_Foundation_ColorF_FluentGpu_Render_TextEditStyle__FluentGpu_Foundation_NodeHandle_FluentGpu_Foundation_Point2_
+  - name: (
+  - uid: FluentGpu.Scene.SceneStore
+    name: SceneStore
+    href: FluentGpu.Scene.SceneStore.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Render.DrawList
+    name: DrawList
+    href: FluentGpu.Render.DrawList.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Scene.ImageCache
+    name: ImageCache
+    href: FluentGpu.Scene.ImageCache.html
+  - name: ','
+  - name: " "
+  - name: in
+  - name: " "
+  - uid: FluentGpu.Render.FocusVisualStyle
+    name: FocusVisualStyle
+    href: FluentGpu.Render.FocusVisualStyle.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Foundation.ColorF
+    name: ColorF
+    href: FluentGpu.Foundation.ColorF.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Foundation.ColorF
+    name: ColorF
+    href: FluentGpu.Foundation.ColorF.html
+  - name: ','
+  - name: " "
+  - name: in
+  - name: " "
+  - uid: FluentGpu.Render.TextEditStyle
+    name: TextEditStyle
+    href: FluentGpu.Render.TextEditStyle.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Foundation.Point2
+    name: Point2
+    href: FluentGpu.Foundation.Point2.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Render.SceneRecorder.RecordSubtree(FluentGpu.Scene.SceneStore,FluentGpu.Render.DrawList,FluentGpu.Scene.ImageCache,FluentGpu.Render.FocusVisualStyle@,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Render.TextEditStyle@,FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.Point2)
+    name: RecordSubtree
+    href: FluentGpu.Render.SceneRecorder.html#FluentGpu_Render_SceneRecorder_RecordSubtree_FluentGpu_Scene_SceneStore_FluentGpu_Render_DrawList_FluentGpu_Scene_ImageCache_FluentGpu_Render_FocusVisualStyle__FluentGpu_Foundation_ColorF_FluentGpu_Foundation_ColorF_FluentGpu_Render_TextEditStyle__FluentGpu_Foundation_NodeHandle_FluentGpu_Foundation_Point2_
+  - name: (
+  - uid: FluentGpu.Scene.SceneStore
+    name: SceneStore
+    href: FluentGpu.Scene.SceneStore.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Render.DrawList
+    name: DrawList
+    href: FluentGpu.Render.DrawList.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Scene.ImageCache
+    name: ImageCache
+    href: FluentGpu.Scene.ImageCache.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Render.FocusVisualStyle
+    name: FocusVisualStyle
+    href: FluentGpu.Render.FocusVisualStyle.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Foundation.ColorF
+    name: ColorF
+    href: FluentGpu.Foundation.ColorF.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Foundation.ColorF
+    name: ColorF
+    href: FluentGpu.Foundation.ColorF.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Render.TextEditStyle
+    name: TextEditStyle
+    href: FluentGpu.Render.TextEditStyle.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Foundation.Point2
+    name: Point2
+    href: FluentGpu.Foundation.Point2.html
+  - name: )
+- uid: FluentGpu.Render.SceneRecorder.Record*
+  commentId: Overload:FluentGpu.Render.SceneRecorder.Record
+  href: FluentGpu.Render.SceneRecorder.html#FluentGpu_Render_SceneRecorder_Record_FluentGpu_Scene_SceneStore_FluentGpu_Render_DrawList_FluentGpu_Scene_ImageCache_FluentGpu_Render_FocusVisualStyle__FluentGpu_Foundation_ColorF_FluentGpu_Foundation_ColorF_FluentGpu_Render_TextEditStyle__System_ReadOnlySpan_FluentGpu_Foundation_NodeHandle__
+  name: Record
+  nameWithType: SceneRecorder.Record
+  fullName: FluentGpu.Render.SceneRecorder.Record
+- uid: FluentGpu.Scene.SceneStore
+  commentId: T:FluentGpu.Scene.SceneStore
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.SceneStore.html
+  name: SceneStore
+  nameWithType: SceneStore
+  fullName: FluentGpu.Scene.SceneStore
+- uid: FluentGpu.Render.DrawList
+  commentId: T:FluentGpu.Render.DrawList
+  parent: FluentGpu.Render
+  href: FluentGpu.Render.DrawList.html
+  name: DrawList
+  nameWithType: DrawList
+  fullName: FluentGpu.Render.DrawList
+- uid: FluentGpu.Scene.ImageCache
+  commentId: T:FluentGpu.Scene.ImageCache
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImageCache.html
+  name: ImageCache
+  nameWithType: ImageCache
+  fullName: FluentGpu.Scene.ImageCache
+- uid: FluentGpu.Render.FocusVisualStyle
+  commentId: T:FluentGpu.Render.FocusVisualStyle
+  parent: FluentGpu.Render
+  href: FluentGpu.Render.FocusVisualStyle.html
+  name: FocusVisualStyle
+  nameWithType: FocusVisualStyle
+  fullName: FluentGpu.Render.FocusVisualStyle
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Render.TextEditStyle
+  commentId: T:FluentGpu.Render.TextEditStyle
+  parent: FluentGpu.Render
+  href: FluentGpu.Render.TextEditStyle.html
+  name: TextEditStyle
+  nameWithType: TextEditStyle
+  fullName: FluentGpu.Render.TextEditStyle
+- uid: System.ReadOnlySpan{FluentGpu.Foundation.NodeHandle}
+  commentId: T:System.ReadOnlySpan{FluentGpu.Foundation.NodeHandle}
+  parent: System
+  definition: System.ReadOnlySpan`1
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<NodeHandle>
+  nameWithType: ReadOnlySpan<NodeHandle>
+  fullName: System.ReadOnlySpan<FluentGpu.Foundation.NodeHandle>
+  nameWithType.vb: ReadOnlySpan(Of NodeHandle)
+  fullName.vb: System.ReadOnlySpan(Of FluentGpu.Foundation.NodeHandle)
+  name.vb: ReadOnlySpan(Of NodeHandle)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: )
+- uid: FluentGpu.Render.SceneRecordStats
+  commentId: T:FluentGpu.Render.SceneRecordStats
+  parent: FluentGpu.Render
+  href: FluentGpu.Render.SceneRecordStats.html
+  name: SceneRecordStats
+  nameWithType: SceneRecordStats
+  fullName: FluentGpu.Render.SceneRecordStats
+- uid: System.ReadOnlySpan`1
+  commentId: T:System.ReadOnlySpan`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<T>
+  nameWithType: ReadOnlySpan<T>
+  fullName: System.ReadOnlySpan<T>
+  nameWithType.vb: ReadOnlySpan(Of T)
+  fullName.vb: System.ReadOnlySpan(Of T)
+  name.vb: ReadOnlySpan(Of T)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Render.SceneRecorder.RecordSubtree*
+  commentId: Overload:FluentGpu.Render.SceneRecorder.RecordSubtree
+  href: FluentGpu.Render.SceneRecorder.html#FluentGpu_Render_SceneRecorder_RecordSubtree_FluentGpu_Scene_SceneStore_FluentGpu_Render_DrawList_FluentGpu_Scene_ImageCache_FluentGpu_Render_FocusVisualStyle__FluentGpu_Foundation_ColorF_FluentGpu_Foundation_ColorF_FluentGpu_Render_TextEditStyle__FluentGpu_Foundation_NodeHandle_FluentGpu_Foundation_Point2_
+  name: RecordSubtree
+  nameWithType: SceneRecorder.RecordSubtree
+  fullName: FluentGpu.Render.SceneRecorder.RecordSubtree
+- uid: FluentGpu.Foundation.NodeHandle
+  commentId: T:FluentGpu.Foundation.NodeHandle
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.NodeHandle.html
+  name: NodeHandle
+  nameWithType: NodeHandle
+  fullName: FluentGpu.Foundation.NodeHandle
+- uid: FluentGpu.Foundation.Point2
+  commentId: T:FluentGpu.Foundation.Point2
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Point2.html
+  name: Point2
+  nameWithType: Point2
+  fullName: FluentGpu.Foundation.Point2

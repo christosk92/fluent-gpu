@@ -1,0 +1,58 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Pal.Windows
+  commentId: N:FluentGpu.Pal.Windows
+  id: FluentGpu.Pal.Windows
+  children:
+  - FluentGpu.Pal.Windows.Win32App
+  - FluentGpu.Pal.Windows.Win32Clipboard
+  - FluentGpu.Pal.Windows.Win32PopupWindow
+  - FluentGpu.Pal.Windows.Win32TextInput
+  - FluentGpu.Pal.Windows.Win32Theme
+  - FluentGpu.Pal.Windows.Win32Window
+  langs:
+  - csharp
+  - vb
+  name: FluentGpu.Pal.Windows
+  nameWithType: FluentGpu.Pal.Windows
+  fullName: FluentGpu.Pal.Windows
+  type: Namespace
+  assemblies:
+  - FluentGpu.Pal.Windows
+references:
+- uid: FluentGpu.Pal.Windows.Win32App
+  commentId: T:FluentGpu.Pal.Windows.Win32App
+  href: FluentGpu.Pal.Windows.Win32App.html
+  name: Win32App
+  nameWithType: Win32App
+  fullName: FluentGpu.Pal.Windows.Win32App
+- uid: FluentGpu.Pal.Windows.Win32Window
+  commentId: T:FluentGpu.Pal.Windows.Win32Window
+  href: FluentGpu.Pal.Windows.Win32Window.html
+  name: Win32Window
+  nameWithType: Win32Window
+  fullName: FluentGpu.Pal.Windows.Win32Window
+- uid: FluentGpu.Pal.Windows.Win32PopupWindow
+  commentId: T:FluentGpu.Pal.Windows.Win32PopupWindow
+  href: FluentGpu.Pal.Windows.Win32PopupWindow.html
+  name: Win32PopupWindow
+  nameWithType: Win32PopupWindow
+  fullName: FluentGpu.Pal.Windows.Win32PopupWindow
+- uid: FluentGpu.Pal.Windows.Win32Clipboard
+  commentId: T:FluentGpu.Pal.Windows.Win32Clipboard
+  href: FluentGpu.Pal.Windows.Win32Clipboard.html
+  name: Win32Clipboard
+  nameWithType: Win32Clipboard
+  fullName: FluentGpu.Pal.Windows.Win32Clipboard
+- uid: FluentGpu.Pal.Windows.Win32TextInput
+  commentId: T:FluentGpu.Pal.Windows.Win32TextInput
+  href: FluentGpu.Pal.Windows.Win32TextInput.html
+  name: Win32TextInput
+  nameWithType: Win32TextInput
+  fullName: FluentGpu.Pal.Windows.Win32TextInput
+- uid: FluentGpu.Pal.Windows.Win32Theme
+  commentId: T:FluentGpu.Pal.Windows.Win32Theme
+  href: FluentGpu.Pal.Windows.Win32Theme.html
+  name: Win32Theme
+  nameWithType: Win32Theme
+  fullName: FluentGpu.Pal.Windows.Win32Theme

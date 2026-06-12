@@ -1,0 +1,141 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.CheckState
+  commentId: T:FluentGpu.Controls.CheckState
+  id: CheckState
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.CheckState.Checked
+  - FluentGpu.Controls.CheckState.Indeterminate
+  - FluentGpu.Controls.CheckState.Unchecked
+  langs:
+  - csharp
+  - vb
+  name: CheckState
+  nameWithType: CheckState
+  fullName: FluentGpu.Controls.CheckState
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CheckState
+    path: ../../src/FluentGpu.Controls/MenuFlyout.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'The tri-state of a CheckBox / ToggleButton: cleared, set, or mixed (indeterminate).'
+  example: []
+  syntax:
+    content: 'public enum CheckState : byte'
+    content.vb: Public Enum CheckState As Byte
+- uid: FluentGpu.Controls.CheckState.Unchecked
+  commentId: F:FluentGpu.Controls.CheckState.Unchecked
+  id: Unchecked
+  parent: FluentGpu.Controls.CheckState
+  langs:
+  - csharp
+  - vb
+  name: Unchecked
+  nameWithType: CheckState.Unchecked
+  fullName: FluentGpu.Controls.CheckState.Unchecked
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Unchecked
+    path: ../../src/FluentGpu.Controls/MenuFlyout.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Unchecked = 0
+    return:
+      type: FluentGpu.Controls.CheckState
+- uid: FluentGpu.Controls.CheckState.Checked
+  commentId: F:FluentGpu.Controls.CheckState.Checked
+  id: Checked
+  parent: FluentGpu.Controls.CheckState
+  langs:
+  - csharp
+  - vb
+  name: Checked
+  nameWithType: CheckState.Checked
+  fullName: FluentGpu.Controls.CheckState.Checked
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Checked
+    path: ../../src/FluentGpu.Controls/MenuFlyout.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Checked = 1
+    return:
+      type: FluentGpu.Controls.CheckState
+- uid: FluentGpu.Controls.CheckState.Indeterminate
+  commentId: F:FluentGpu.Controls.CheckState.Indeterminate
+  id: Indeterminate
+  parent: FluentGpu.Controls.CheckState
+  langs:
+  - csharp
+  - vb
+  name: Indeterminate
+  nameWithType: CheckState.Indeterminate
+  fullName: FluentGpu.Controls.CheckState.Indeterminate
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuFlyout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Indeterminate
+    path: ../../src/FluentGpu.Controls/MenuFlyout.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Indeterminate = 2
+    return:
+      type: FluentGpu.Controls.CheckState
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.CheckState
+  commentId: T:FluentGpu.Controls.CheckState
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.CheckState.html
+  name: CheckState
+  nameWithType: CheckState
+  fullName: FluentGpu.Controls.CheckState

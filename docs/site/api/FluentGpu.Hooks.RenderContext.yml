@@ -1,0 +1,2763 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Hooks.RenderContext
+  commentId: T:FluentGpu.Hooks.RenderContext
+  id: RenderContext
+  parent: FluentGpu.Hooks
+  children:
+  - FluentGpu.Hooks.RenderContext.AnchorNode
+  - FluentGpu.Hooks.RenderContext.Anim
+  - FluentGpu.Hooks.RenderContext.HostNode
+  - FluentGpu.Hooks.RenderContext.ImageEpoch
+  - FluentGpu.Hooks.RenderContext.Images
+  - FluentGpu.Hooks.RenderContext.PendingEffects
+  - FluentGpu.Hooks.RenderContext.PendingLayoutEffects
+  - FluentGpu.Hooks.RenderContext.PrefetchImage(System.String,System.Int32)
+  - FluentGpu.Hooks.RenderContext.RequestRerender
+  - FluentGpu.Hooks.RenderContext.ResolveContextSignal
+  - FluentGpu.Hooks.RenderContext.RunAllCleanups
+  - FluentGpu.Hooks.RenderContext.Runtime
+  - FluentGpu.Hooks.RenderContext.Scene
+  - FluentGpu.Hooks.RenderContext.UseAnimatedValue(System.Single,System.Single,FluentGpu.Foundation.Easing)
+  - FluentGpu.Hooks.RenderContext.UseComputed``1(System.Func{``0})
+  - FluentGpu.Hooks.RenderContext.UseContext``1(FluentGpu.Hooks.Context{``0})
+  - FluentGpu.Hooks.RenderContext.UseDrivenAnimation(FluentGpu.Animation.AnimChannel,FluentGpu.Animation.Keyframe[],System.Func{System.Single},System.Single,System.Single,System.Object[])
+  - FluentGpu.Hooks.RenderContext.UseEffect(System.Action,System.Object[])
+  - FluentGpu.Hooks.RenderContext.UseFloatSignal(System.Single)
+  - FluentGpu.Hooks.RenderContext.UseImage(System.String,System.Int32,FluentGpu.Scene.ImagePriority,System.String)
+  - FluentGpu.Hooks.RenderContext.UseKeyframes(FluentGpu.Animation.AnimChannel,FluentGpu.Animation.Keyframe[],System.Single,System.Boolean,System.Object[])
+  - FluentGpu.Hooks.RenderContext.UseLayoutEffect(System.Action,System.Object[])
+  - FluentGpu.Hooks.RenderContext.UseMemo``1(System.Func{``0},System.Object[])
+  - FluentGpu.Hooks.RenderContext.UseReducer``2(System.Func{``0,``1,``0},``0)
+  - FluentGpu.Hooks.RenderContext.UseRef``1(``0)
+  - FluentGpu.Hooks.RenderContext.UseSignal``1(``0)
+  - FluentGpu.Hooks.RenderContext.UseSpring(FluentGpu.Animation.AnimChannel,System.Single,FluentGpu.Animation.SpringParams,System.Object[])
+  - FluentGpu.Hooks.RenderContext.UseState``1(``0)
+  - FluentGpu.Hooks.RenderContext.UseTransition(FluentGpu.Animation.AnimChannel,System.Single,System.Single,System.Single,FluentGpu.Foundation.Easing,System.Object[])
+  langs:
+  - csharp
+  - vb
+  name: RenderContext
+  nameWithType: RenderContext
+  fullName: FluentGpu.Hooks.RenderContext
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RenderContext
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 70
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  summary: >-
+    Per-component hook storage (ordered; rules-of-hooks = stable call order). In the signals-first model a component
+
+    is a reactive computation (its render-effect); <xref href="FluentGpu.Hooks.RenderContext.UseState%60%601(%60%600)" data-throw-if-not-resolved="false"></xref> is a <xref href="FluentGpu.Signals.Signal%601" data-throw-if-not-resolved="false"></xref> whose only
+
+    subscriber is that render-effect, so a setState re-renders ONLY this component's subtree (granular), and
+
+    <xref href="FluentGpu.Hooks.RenderContext.UseContext%60%601(FluentGpu.Hooks.Context%7b%60%600%7d)" data-throw-if-not-resolved="false"></xref> subscribes the render-effect to the provider's signal so a context change propagates to
+
+    exactly the consumers that read it. High-frequency scalars get <xref href="FluentGpu.Hooks.RenderContext.UseSignal%60%601(%60%600)" data-throw-if-not-resolved="false"></xref> bound straight to a node
+
+    channel — no re-render at all.
+  example: []
+  syntax:
+    content: public sealed class RenderContext
+    content.vb: Public NotInheritable Class RenderContext
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Hooks.RenderContext.PendingEffects
+  commentId: F:FluentGpu.Hooks.RenderContext.PendingEffects
+  id: PendingEffects
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: PendingEffects
+  nameWithType: RenderContext.PendingEffects
+  fullName: FluentGpu.Hooks.RenderContext.PendingEffects
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PendingEffects
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 76
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  syntax:
+    content: public readonly List<Action> PendingEffects
+    return:
+      type: System.Collections.Generic.List{System.Action}
+    content.vb: Public ReadOnly PendingEffects As List(Of Action)
+- uid: FluentGpu.Hooks.RenderContext.PendingLayoutEffects
+  commentId: F:FluentGpu.Hooks.RenderContext.PendingLayoutEffects
+  id: PendingLayoutEffects
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: PendingLayoutEffects
+  nameWithType: RenderContext.PendingLayoutEffects
+  fullName: FluentGpu.Hooks.RenderContext.PendingLayoutEffects
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PendingLayoutEffects
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 77
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  syntax:
+    content: public readonly List<Action> PendingLayoutEffects
+    return:
+      type: System.Collections.Generic.List{System.Action}
+    content.vb: Public ReadOnly PendingLayoutEffects As List(Of Action)
+- uid: FluentGpu.Hooks.RenderContext.Runtime
+  commentId: F:FluentGpu.Hooks.RenderContext.Runtime
+  id: Runtime
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: Runtime
+  nameWithType: RenderContext.Runtime
+  fullName: FluentGpu.Hooks.RenderContext.Runtime
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Runtime
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 80
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  syntax:
+    content: public ReactiveRuntime? Runtime
+    return:
+      type: FluentGpu.Signals.ReactiveRuntime
+    content.vb: Public Runtime As ReactiveRuntime
+- uid: FluentGpu.Hooks.RenderContext.RequestRerender
+  commentId: F:FluentGpu.Hooks.RenderContext.RequestRerender
+  id: RequestRerender
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: RequestRerender
+  nameWithType: RenderContext.RequestRerender
+  fullName: FluentGpu.Hooks.RenderContext.RequestRerender
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RequestRerender
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 83
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  summary: >-
+    Imperatively re-render THIS component (granular — schedules only this component's render-effect). Wired
+        by the reconciler at mount. For escape-hatch callers (e.g. a Navigator's OnChange); state/context use signals.
+  example: []
+  syntax:
+    content: public Action RequestRerender
+    return:
+      type: System.Action
+    content.vb: Public RequestRerender As Action
+- uid: FluentGpu.Hooks.RenderContext.Anim
+  commentId: F:FluentGpu.Hooks.RenderContext.Anim
+  id: Anim
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: Anim
+  nameWithType: RenderContext.Anim
+  fullName: FluentGpu.Hooks.RenderContext.Anim
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Anim
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 84
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  syntax:
+    content: public AnimEngine? Anim
+    return:
+      type: FluentGpu.Animation.AnimEngine
+    content.vb: Public Anim As AnimEngine
+- uid: FluentGpu.Hooks.RenderContext.Images
+  commentId: F:FluentGpu.Hooks.RenderContext.Images
+  id: Images
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: Images
+  nameWithType: RenderContext.Images
+  fullName: FluentGpu.Hooks.RenderContext.Images
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Images
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 85
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  syntax:
+    content: public ImageCache? Images
+    return:
+      type: FluentGpu.Scene.ImageCache
+    content.vb: Public Images As ImageCache
+- uid: FluentGpu.Hooks.RenderContext.Scene
+  commentId: F:FluentGpu.Hooks.RenderContext.Scene
+  id: Scene
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: Scene
+  nameWithType: RenderContext.Scene
+  fullName: FluentGpu.Hooks.RenderContext.Scene
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Scene
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 86
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  syntax:
+    content: public SceneStore? Scene
+    return:
+      type: FluentGpu.Scene.SceneStore
+    content.vb: Public Scene As SceneStore
+- uid: FluentGpu.Hooks.RenderContext.HostNode
+  commentId: F:FluentGpu.Hooks.RenderContext.HostNode
+  id: HostNode
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: HostNode
+  nameWithType: RenderContext.HostNode
+  fullName: FluentGpu.Hooks.RenderContext.HostNode
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HostNode
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 87
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  syntax:
+    content: public NodeHandle HostNode
+    return:
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Public HostNode As NodeHandle
+- uid: FluentGpu.Hooks.RenderContext.AnchorNode
+  commentId: F:FluentGpu.Hooks.RenderContext.AnchorNode
+  id: AnchorNode
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: AnchorNode
+  nameWithType: RenderContext.AnchorNode
+  fullName: FluentGpu.Hooks.RenderContext.AnchorNode
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AnchorNode
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 88
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  syntax:
+    content: public NodeHandle AnchorNode
+    return:
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Public AnchorNode As NodeHandle
+- uid: FluentGpu.Hooks.RenderContext.ResolveContextSignal
+  commentId: F:FluentGpu.Hooks.RenderContext.ResolveContextSignal
+  id: ResolveContextSignal
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: ResolveContextSignal
+  nameWithType: RenderContext.ResolveContextSignal
+  fullName: FluentGpu.Hooks.RenderContext.ResolveContextSignal
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ResolveContextSignal
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 89
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  syntax:
+    content: public Func<NodeHandle, object, Signal<object?>?>? ResolveContextSignal
+    return:
+      type: System.Func{FluentGpu.Foundation.NodeHandle,System.Object,FluentGpu.Signals.Signal{System.Object}}
+    content.vb: Public ResolveContextSignal As Func(Of NodeHandle, Object, Signal(Of Object))
+- uid: FluentGpu.Hooks.RenderContext.ImageEpoch
+  commentId: F:FluentGpu.Hooks.RenderContext.ImageEpoch
+  id: ImageEpoch
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: ImageEpoch
+  nameWithType: RenderContext.ImageEpoch
+  fullName: FluentGpu.Hooks.RenderContext.ImageEpoch
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ImageEpoch
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 90
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  syntax:
+    content: public IReadSignal<int>? ImageEpoch
+    return:
+      type: FluentGpu.Signals.IReadSignal{System.Int32}
+    content.vb: Public ImageEpoch As IReadSignal(Of Integer)
+- uid: FluentGpu.Hooks.RenderContext.RunAllCleanups
+  commentId: M:FluentGpu.Hooks.RenderContext.RunAllCleanups
+  id: RunAllCleanups
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: RunAllCleanups()
+  nameWithType: RenderContext.RunAllCleanups()
+  fullName: FluentGpu.Hooks.RenderContext.RunAllCleanups()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RunAllCleanups
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 96
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  summary: Run every pending effect cleanup + dispose owned reactive primitives (component unmount).
+  example: []
+  syntax:
+    content: public void RunAllCleanups()
+    content.vb: Public Sub RunAllCleanups()
+  overload: FluentGpu.Hooks.RenderContext.RunAllCleanups*
+- uid: FluentGpu.Hooks.RenderContext.UseState``1(``0)
+  commentId: M:FluentGpu.Hooks.RenderContext.UseState``1(``0)
+  id: UseState``1(``0)
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: UseState<T>(T)
+  nameWithType: RenderContext.UseState<T>(T)
+  fullName: FluentGpu.Hooks.RenderContext.UseState<T>(T)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UseState
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 107
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  syntax:
+    content: public (T Value, Action<T> Set) UseState<T>(T initial)
+    parameters:
+    - id: initial
+      type: '{T}'
+    typeParameters:
+    - id: T
+    return:
+      type: System.ValueTuple{{T},System.Action{{T}}}
+    content.vb: Public Function UseState(Of T)(initial As T) As (Value As T, [Set] As Action(Of T))
+  overload: FluentGpu.Hooks.RenderContext.UseState*
+  nameWithType.vb: RenderContext.UseState(Of T)(T)
+  fullName.vb: FluentGpu.Hooks.RenderContext.UseState(Of T)(T)
+  name.vb: UseState(Of T)(T)
+- uid: FluentGpu.Hooks.RenderContext.UseSignal``1(``0)
+  commentId: M:FluentGpu.Hooks.RenderContext.UseSignal``1(``0)
+  id: UseSignal``1(``0)
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: UseSignal<T>(T)
+  nameWithType: RenderContext.UseSignal<T>(T)
+  fullName: FluentGpu.Hooks.RenderContext.UseSignal<T>(T)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UseSignal
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 122
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  summary: >-
+    A persistent reactive cell you own (the Solid/Preact <code>signal</code>): read <code>.Value</code> in render to
+        subscribe, or bind it to a node channel for a render-free update. Survives re-renders.
+  example: []
+  syntax:
+    content: public Signal<T> UseSignal<T>(T initial)
+    parameters:
+    - id: initial
+      type: '{T}'
+    typeParameters:
+    - id: T
+    return:
+      type: FluentGpu.Signals.Signal{{T}}
+    content.vb: Public Function UseSignal(Of T)(initial As T) As Signal(Of T)
+  overload: FluentGpu.Hooks.RenderContext.UseSignal*
+  nameWithType.vb: RenderContext.UseSignal(Of T)(T)
+  fullName.vb: FluentGpu.Hooks.RenderContext.UseSignal(Of T)(T)
+  name.vb: UseSignal(Of T)(T)
+- uid: FluentGpu.Hooks.RenderContext.UseFloatSignal(System.Single)
+  commentId: M:FluentGpu.Hooks.RenderContext.UseFloatSignal(System.Single)
+  id: UseFloatSignal(System.Single)
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: UseFloatSignal(float)
+  nameWithType: RenderContext.UseFloatSignal(float)
+  fullName: FluentGpu.Hooks.RenderContext.UseFloatSignal(float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UseFloatSignal
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 133
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  summary: >-
+    A persistent scalar signal for the hot path (slider/scroll/progress). Bind it to a node transform/paint
+        channel (<code>TransformBind</code>/<code>OpacityBind</code>) for a value→pixels update that skips render/reconcile/layout.
+  example: []
+  syntax:
+    content: public FloatSignal UseFloatSignal(float initial = 0)
+    parameters:
+    - id: initial
+      type: System.Single
+    return:
+      type: FluentGpu.Signals.FloatSignal
+    content.vb: Public Function UseFloatSignal(initial As Single = 0) As FloatSignal
+  overload: FluentGpu.Hooks.RenderContext.UseFloatSignal*
+  nameWithType.vb: RenderContext.UseFloatSignal(Single)
+  fullName.vb: FluentGpu.Hooks.RenderContext.UseFloatSignal(Single)
+  name.vb: UseFloatSignal(Single)
+- uid: FluentGpu.Hooks.RenderContext.UseComputed``1(System.Func{``0})
+  commentId: M:FluentGpu.Hooks.RenderContext.UseComputed``1(System.Func{``0})
+  id: UseComputed``1(System.Func{``0})
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: UseComputed<T>(Func<T>)
+  nameWithType: RenderContext.UseComputed<T>(Func<T>)
+  fullName: FluentGpu.Hooks.RenderContext.UseComputed<T>(System.Func<T>)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UseComputed
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 143
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  summary: 'A derived reactive value (the Solid <code>createMemo</code>): recomputes from the signals it reads, cached.'
+  example: []
+  syntax:
+    content: public Memo<T> UseComputed<T>(Func<T> compute)
+    parameters:
+    - id: compute
+      type: System.Func{{T}}
+    typeParameters:
+    - id: T
+    return:
+      type: FluentGpu.Signals.Memo{{T}}
+    content.vb: Public Function UseComputed(Of T)(compute As Func(Of T)) As Memo(Of T)
+  overload: FluentGpu.Hooks.RenderContext.UseComputed*
+  nameWithType.vb: RenderContext.UseComputed(Of T)(Func(Of T))
+  fullName.vb: FluentGpu.Hooks.RenderContext.UseComputed(Of T)(System.Func(Of T))
+  name.vb: UseComputed(Of T)(Func(Of T))
+- uid: FluentGpu.Hooks.RenderContext.UseEffect(System.Action,System.Object[])
+  commentId: M:FluentGpu.Hooks.RenderContext.UseEffect(System.Action,System.Object[])
+  id: UseEffect(System.Action,System.Object[])
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: UseEffect(Action, params object[])
+  nameWithType: RenderContext.UseEffect(Action, params object[])
+  fullName: FluentGpu.Hooks.RenderContext.UseEffect(System.Action, params object[])
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UseEffect
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 152
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  syntax:
+    content: public void UseEffect(Action effect, params object[] deps)
+    parameters:
+    - id: effect
+      type: System.Action
+    - id: deps
+      type: System.Object[]
+    content.vb: Public Sub UseEffect(effect As Action, ParamArray deps As Object())
+  overload: FluentGpu.Hooks.RenderContext.UseEffect*
+  nameWithType.vb: RenderContext.UseEffect(Action, ParamArray Object())
+  fullName.vb: FluentGpu.Hooks.RenderContext.UseEffect(System.Action, ParamArray Object())
+  name.vb: UseEffect(Action, ParamArray Object())
+- uid: FluentGpu.Hooks.RenderContext.UseLayoutEffect(System.Action,System.Object[])
+  commentId: M:FluentGpu.Hooks.RenderContext.UseLayoutEffect(System.Action,System.Object[])
+  id: UseLayoutEffect(System.Action,System.Object[])
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: UseLayoutEffect(Action, params object[])
+  nameWithType: RenderContext.UseLayoutEffect(Action, params object[])
+  fullName: FluentGpu.Hooks.RenderContext.UseLayoutEffect(System.Action, params object[])
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UseLayoutEffect
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 155
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  summary: Like <xref href="FluentGpu.Hooks.RenderContext.UseEffect(System.Action%2cSystem.Object%5b%5d)" data-throw-if-not-resolved="false"></xref> but runs after layout, before paint (Bounds are valid). Phase 6.5.
+  example: []
+  syntax:
+    content: public void UseLayoutEffect(Action effect, params object[] deps)
+    parameters:
+    - id: effect
+      type: System.Action
+    - id: deps
+      type: System.Object[]
+    content.vb: Public Sub UseLayoutEffect(effect As Action, ParamArray deps As Object())
+  overload: FluentGpu.Hooks.RenderContext.UseLayoutEffect*
+  nameWithType.vb: RenderContext.UseLayoutEffect(Action, ParamArray Object())
+  fullName.vb: FluentGpu.Hooks.RenderContext.UseLayoutEffect(System.Action, ParamArray Object())
+  name.vb: UseLayoutEffect(Action, ParamArray Object())
+- uid: FluentGpu.Hooks.RenderContext.UseReducer``2(System.Func{``0,``1,``0},``0)
+  commentId: M:FluentGpu.Hooks.RenderContext.UseReducer``2(System.Func{``0,``1,``0},``0)
+  id: UseReducer``2(System.Func{``0,``1,``0},``0)
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: UseReducer<TState, TAction>(Func<TState, TAction, TState>, TState)
+  nameWithType: RenderContext.UseReducer<TState, TAction>(Func<TState, TAction, TState>, TState)
+  fullName: FluentGpu.Hooks.RenderContext.UseReducer<TState, TAction>(System.Func<TState, TAction, TState>, TState)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UseReducer
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 173
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  summary: State driven by a reducer (the React <code>useReducer</code>); dispatches fold over the latest committed state.
+  example: []
+  syntax:
+    content: public (TState State, Action<TAction> Dispatch) UseReducer<TState, TAction>(Func<TState, TAction, TState> reducer, TState initial)
+    parameters:
+    - id: reducer
+      type: System.Func{{TState},{TAction},{TState}}
+    - id: initial
+      type: '{TState}'
+    typeParameters:
+    - id: TState
+    - id: TAction
+    return:
+      type: System.ValueTuple{{TState},System.Action{{TAction}}}
+    content.vb: Public Function UseReducer(Of TState, TAction)(reducer As Func(Of TState, TAction, TState), initial As TState) As (State As TState, Dispatch As Action(Of TAction))
+  overload: FluentGpu.Hooks.RenderContext.UseReducer*
+  nameWithType.vb: RenderContext.UseReducer(Of TState, TAction)(Func(Of TState, TAction, TState), TState)
+  fullName.vb: FluentGpu.Hooks.RenderContext.UseReducer(Of TState, TAction)(System.Func(Of TState, TAction, TState), TState)
+  name.vb: UseReducer(Of TState, TAction)(Func(Of TState, TAction, TState), TState)
+- uid: FluentGpu.Hooks.RenderContext.UseMemo``1(System.Func{``0},System.Object[])
+  commentId: M:FluentGpu.Hooks.RenderContext.UseMemo``1(System.Func{``0},System.Object[])
+  id: UseMemo``1(System.Func{``0},System.Object[])
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: UseMemo<T>(Func<T>, params object[])
+  nameWithType: RenderContext.UseMemo<T>(Func<T>, params object[])
+  fullName: FluentGpu.Hooks.RenderContext.UseMemo<T>(System.Func<T>, params object[])
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UseMemo
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 186
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  summary: Memoize an expensive value; recomputes only when <code class="paramref">deps</code> change (dep-array memo).
+  example: []
+  syntax:
+    content: public T UseMemo<T>(Func<T> factory, params object[] deps)
+    parameters:
+    - id: factory
+      type: System.Func{{T}}
+    - id: deps
+      type: System.Object[]
+    typeParameters:
+    - id: T
+    return:
+      type: '{T}'
+    content.vb: Public Function UseMemo(Of T)(factory As Func(Of T), ParamArray deps As Object()) As T
+  overload: FluentGpu.Hooks.RenderContext.UseMemo*
+  nameWithType.vb: RenderContext.UseMemo(Of T)(Func(Of T), ParamArray Object())
+  fullName.vb: FluentGpu.Hooks.RenderContext.UseMemo(Of T)(System.Func(Of T), ParamArray Object())
+  name.vb: UseMemo(Of T)(Func(Of T), ParamArray Object())
+- uid: FluentGpu.Hooks.RenderContext.UseContext``1(FluentGpu.Hooks.Context{``0})
+  commentId: M:FluentGpu.Hooks.RenderContext.UseContext``1(FluentGpu.Hooks.Context{``0})
+  id: UseContext``1(FluentGpu.Hooks.Context{``0})
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: UseContext<T>(Context<T>)
+  nameWithType: RenderContext.UseContext<T>(Context<T>)
+  fullName: FluentGpu.Hooks.RenderContext.UseContext<T>(FluentGpu.Hooks.Context<T>)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UseContext
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 205
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  summary: >-
+    Read the nearest provided value of <code class="paramref">context</code> (or its default), subscribing this
+        component to that provider's signal so a change re-renders exactly here (no prop drilling, no full-tree walk).
+  example: []
+  syntax:
+    content: public T UseContext<T>(Context<T> context)
+    parameters:
+    - id: context
+      type: FluentGpu.Hooks.Context{{T}}
+    typeParameters:
+    - id: T
+    return:
+      type: '{T}'
+    content.vb: Public Function UseContext(Of T)(context As Context(Of T)) As T
+  overload: FluentGpu.Hooks.RenderContext.UseContext*
+  nameWithType.vb: RenderContext.UseContext(Of T)(Context(Of T))
+  fullName.vb: FluentGpu.Hooks.RenderContext.UseContext(Of T)(FluentGpu.Hooks.Context(Of T))
+  name.vb: UseContext(Of T)(Context(Of T))
+- uid: FluentGpu.Hooks.RenderContext.UseAnimatedValue(System.Single,System.Single,FluentGpu.Foundation.Easing)
+  commentId: M:FluentGpu.Hooks.RenderContext.UseAnimatedValue(System.Single,System.Single,FluentGpu.Foundation.Easing)
+  id: UseAnimatedValue(System.Single,System.Single,FluentGpu.Foundation.Easing)
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: UseAnimatedValue(float, float, Easing)
+  nameWithType: RenderContext.UseAnimatedValue(float, float, Easing)
+  fullName: FluentGpu.Hooks.RenderContext.UseAnimatedValue(float, float, FluentGpu.Foundation.Easing)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UseAnimatedValue
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 217
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  summary: >-
+    A value that eases toward <code class="paramref">target</code> one step per render whenever the target changes. It steps ONLY
+
+    when this component re-renders for some other reason — for motion prefer the retained engine path
+
+    (<xref href="FluentGpu.Hooks.RenderContext.UseSpring(FluentGpu.Animation.AnimChannel%2cSystem.Single%2cFluentGpu.Animation.SpringParams%2cSystem.Object%5b%5d)" data-throw-if-not-resolved="false"></xref>/<xref href="FluentGpu.Hooks.RenderContext.UseTransition(FluentGpu.Animation.AnimChannel%2cSystem.Single%2cSystem.Single%2cSystem.Single%2cFluentGpu.Foundation.Easing%2cSystem.Object%5b%5d)" data-throw-if-not-resolved="false"></xref>), which rides the compositor frame with no re-render.
+  example: []
+  syntax:
+    content: public float UseAnimatedValue(float target, float durationMs = 180, Easing easing = Easing.EaseInOut)
+    parameters:
+    - id: target
+      type: System.Single
+    - id: durationMs
+      type: System.Single
+    - id: easing
+      type: FluentGpu.Foundation.Easing
+    return:
+      type: System.Single
+    content.vb: Public Function UseAnimatedValue(target As Single, durationMs As Single = 180, easing As Easing = Easing.EaseInOut) As Single
+  overload: FluentGpu.Hooks.RenderContext.UseAnimatedValue*
+  nameWithType.vb: RenderContext.UseAnimatedValue(Single, Single, Easing)
+  fullName.vb: FluentGpu.Hooks.RenderContext.UseAnimatedValue(Single, Single, FluentGpu.Foundation.Easing)
+  name.vb: UseAnimatedValue(Single, Single, Easing)
+- uid: FluentGpu.Hooks.RenderContext.UseSpring(FluentGpu.Animation.AnimChannel,System.Single,FluentGpu.Animation.SpringParams,System.Object[])
+  commentId: M:FluentGpu.Hooks.RenderContext.UseSpring(FluentGpu.Animation.AnimChannel,System.Single,FluentGpu.Animation.SpringParams,System.Object[])
+  id: UseSpring(FluentGpu.Animation.AnimChannel,System.Single,FluentGpu.Animation.SpringParams,System.Object[])
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: UseSpring(AnimChannel, float, SpringParams, params object[])
+  nameWithType: RenderContext.UseSpring(AnimChannel, float, SpringParams, params object[])
+  fullName: FluentGpu.Hooks.RenderContext.UseSpring(FluentGpu.Animation.AnimChannel, float, FluentGpu.Animation.SpringParams, params object[])
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UseSpring
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 238
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  syntax:
+    content: public void UseSpring(AnimChannel channel, float to, SpringParams spring, params object[] deps)
+    parameters:
+    - id: channel
+      type: FluentGpu.Animation.AnimChannel
+    - id: to
+      type: System.Single
+    - id: spring
+      type: FluentGpu.Animation.SpringParams
+    - id: deps
+      type: System.Object[]
+    content.vb: Public Sub UseSpring(channel As AnimChannel, [to] As Single, spring As SpringParams, ParamArray deps As Object())
+  overload: FluentGpu.Hooks.RenderContext.UseSpring*
+  nameWithType.vb: RenderContext.UseSpring(AnimChannel, Single, SpringParams, ParamArray Object())
+  fullName.vb: FluentGpu.Hooks.RenderContext.UseSpring(FluentGpu.Animation.AnimChannel, Single, FluentGpu.Animation.SpringParams, ParamArray Object())
+  name.vb: UseSpring(AnimChannel, Single, SpringParams, ParamArray Object())
+- uid: FluentGpu.Hooks.RenderContext.UseTransition(FluentGpu.Animation.AnimChannel,System.Single,System.Single,System.Single,FluentGpu.Foundation.Easing,System.Object[])
+  commentId: M:FluentGpu.Hooks.RenderContext.UseTransition(FluentGpu.Animation.AnimChannel,System.Single,System.Single,System.Single,FluentGpu.Foundation.Easing,System.Object[])
+  id: UseTransition(FluentGpu.Animation.AnimChannel,System.Single,System.Single,System.Single,FluentGpu.Foundation.Easing,System.Object[])
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: UseTransition(AnimChannel, float, float, float, Easing, params object[])
+  nameWithType: RenderContext.UseTransition(AnimChannel, float, float, float, Easing, params object[])
+  fullName: FluentGpu.Hooks.RenderContext.UseTransition(FluentGpu.Animation.AnimChannel, float, float, float, FluentGpu.Foundation.Easing, params object[])
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UseTransition
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 241
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  syntax:
+    content: public void UseTransition(AnimChannel channel, float from, float to, float durationMs, Easing easing = Easing.EaseInOut, params object[] deps)
+    parameters:
+    - id: channel
+      type: FluentGpu.Animation.AnimChannel
+    - id: from
+      type: System.Single
+    - id: to
+      type: System.Single
+    - id: durationMs
+      type: System.Single
+    - id: easing
+      type: FluentGpu.Foundation.Easing
+    - id: deps
+      type: System.Object[]
+    content.vb: Public Sub UseTransition(channel As AnimChannel, from As Single, [to] As Single, durationMs As Single, easing As Easing = Easing.EaseInOut, ParamArray deps As Object())
+  overload: FluentGpu.Hooks.RenderContext.UseTransition*
+  nameWithType.vb: RenderContext.UseTransition(AnimChannel, Single, Single, Single, Easing, ParamArray Object())
+  fullName.vb: FluentGpu.Hooks.RenderContext.UseTransition(FluentGpu.Animation.AnimChannel, Single, Single, Single, FluentGpu.Foundation.Easing, ParamArray Object())
+  name.vb: UseTransition(AnimChannel, Single, Single, Single, Easing, ParamArray Object())
+- uid: FluentGpu.Hooks.RenderContext.UseKeyframes(FluentGpu.Animation.AnimChannel,FluentGpu.Animation.Keyframe[],System.Single,System.Boolean,System.Object[])
+  commentId: M:FluentGpu.Hooks.RenderContext.UseKeyframes(FluentGpu.Animation.AnimChannel,FluentGpu.Animation.Keyframe[],System.Single,System.Boolean,System.Object[])
+  id: UseKeyframes(FluentGpu.Animation.AnimChannel,FluentGpu.Animation.Keyframe[],System.Single,System.Boolean,System.Object[])
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: UseKeyframes(AnimChannel, Keyframe[], float, bool, params object[])
+  nameWithType: RenderContext.UseKeyframes(AnimChannel, Keyframe[], float, bool, params object[])
+  fullName: FluentGpu.Hooks.RenderContext.UseKeyframes(FluentGpu.Animation.AnimChannel, FluentGpu.Animation.Keyframe[], float, bool, params object[])
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UseKeyframes
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 244
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  syntax:
+    content: public void UseKeyframes(AnimChannel channel, Keyframe[] keys, float durationMs, bool loop = false, params object[] deps)
+    parameters:
+    - id: channel
+      type: FluentGpu.Animation.AnimChannel
+    - id: keys
+      type: FluentGpu.Animation.Keyframe[]
+    - id: durationMs
+      type: System.Single
+    - id: loop
+      type: System.Boolean
+    - id: deps
+      type: System.Object[]
+    content.vb: Public Sub UseKeyframes(channel As AnimChannel, keys As Keyframe(), durationMs As Single, [loop] As Boolean = False, ParamArray deps As Object())
+  overload: FluentGpu.Hooks.RenderContext.UseKeyframes*
+  nameWithType.vb: RenderContext.UseKeyframes(AnimChannel, Keyframe(), Single, Boolean, ParamArray Object())
+  fullName.vb: FluentGpu.Hooks.RenderContext.UseKeyframes(FluentGpu.Animation.AnimChannel, FluentGpu.Animation.Keyframe(), Single, Boolean, ParamArray Object())
+  name.vb: UseKeyframes(AnimChannel, Keyframe(), Single, Boolean, ParamArray Object())
+- uid: FluentGpu.Hooks.RenderContext.UseDrivenAnimation(FluentGpu.Animation.AnimChannel,FluentGpu.Animation.Keyframe[],System.Func{System.Single},System.Single,System.Single,System.Object[])
+  commentId: M:FluentGpu.Hooks.RenderContext.UseDrivenAnimation(FluentGpu.Animation.AnimChannel,FluentGpu.Animation.Keyframe[],System.Func{System.Single},System.Single,System.Single,System.Object[])
+  id: UseDrivenAnimation(FluentGpu.Animation.AnimChannel,FluentGpu.Animation.Keyframe[],System.Func{System.Single},System.Single,System.Single,System.Object[])
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: UseDrivenAnimation(AnimChannel, Keyframe[], Func<float>, float, float, params object[])
+  nameWithType: RenderContext.UseDrivenAnimation(AnimChannel, Keyframe[], Func<float>, float, float, params object[])
+  fullName: FluentGpu.Hooks.RenderContext.UseDrivenAnimation(FluentGpu.Animation.AnimChannel, FluentGpu.Animation.Keyframe[], System.Func<float>, float, float, params object[])
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UseDrivenAnimation
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 247
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  syntax:
+    content: public void UseDrivenAnimation(AnimChannel channel, Keyframe[] keys, Func<float> source, float min, float max, params object[] deps)
+    parameters:
+    - id: channel
+      type: FluentGpu.Animation.AnimChannel
+    - id: keys
+      type: FluentGpu.Animation.Keyframe[]
+    - id: source
+      type: System.Func{System.Single}
+    - id: min
+      type: System.Single
+    - id: max
+      type: System.Single
+    - id: deps
+      type: System.Object[]
+    content.vb: Public Sub UseDrivenAnimation(channel As AnimChannel, keys As Keyframe(), source As Func(Of Single), min As Single, max As Single, ParamArray deps As Object())
+  overload: FluentGpu.Hooks.RenderContext.UseDrivenAnimation*
+  nameWithType.vb: RenderContext.UseDrivenAnimation(AnimChannel, Keyframe(), Func(Of Single), Single, Single, ParamArray Object())
+  fullName.vb: FluentGpu.Hooks.RenderContext.UseDrivenAnimation(FluentGpu.Animation.AnimChannel, FluentGpu.Animation.Keyframe(), System.Func(Of Single), Single, Single, ParamArray Object())
+  name.vb: UseDrivenAnimation(AnimChannel, Keyframe(), Func(Of Single), Single, Single, ParamArray Object())
+- uid: FluentGpu.Hooks.RenderContext.UseImage(System.String,System.Int32,FluentGpu.Scene.ImagePriority,System.String)
+  commentId: M:FluentGpu.Hooks.RenderContext.UseImage(System.String,System.Int32,FluentGpu.Scene.ImagePriority,System.String)
+  id: UseImage(System.String,System.Int32,FluentGpu.Scene.ImagePriority,System.String)
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: UseImage(string, int, ImagePriority, string?)
+  nameWithType: RenderContext.UseImage(string, int, ImagePriority, string?)
+  fullName: FluentGpu.Hooks.RenderContext.UseImage(string, int, FluentGpu.Scene.ImagePriority, string?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UseImage
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 252
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  summary: >-
+    Bind an async image and observe its load state (media-pipeline.md §5). Subscribes this component to the
+        host's image-status epoch so a ready/failed transition re-renders just this component.
+  example: []
+  syntax:
+    content: public ImageBinding UseImage(string src, int decodePx, ImagePriority priority = ImagePriority.Visible, string? blurHash = null)
+    parameters:
+    - id: src
+      type: System.String
+    - id: decodePx
+      type: System.Int32
+    - id: priority
+      type: FluentGpu.Scene.ImagePriority
+    - id: blurHash
+      type: System.String
+    return:
+      type: FluentGpu.Scene.ImageBinding
+    content.vb: Public Function UseImage(src As String, decodePx As Integer, priority As ImagePriority = ImagePriority.Visible, blurHash As String = Nothing) As ImageBinding
+  overload: FluentGpu.Hooks.RenderContext.UseImage*
+  nameWithType.vb: RenderContext.UseImage(String, Integer, ImagePriority, String)
+  fullName.vb: FluentGpu.Hooks.RenderContext.UseImage(String, Integer, FluentGpu.Scene.ImagePriority, String)
+  name.vb: UseImage(String, Integer, ImagePriority, String)
+- uid: FluentGpu.Hooks.RenderContext.PrefetchImage(System.String,System.Int32)
+  commentId: M:FluentGpu.Hooks.RenderContext.PrefetchImage(System.String,System.Int32)
+  id: PrefetchImage(System.String,System.Int32)
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: PrefetchImage(string, int)
+  nameWithType: RenderContext.PrefetchImage(string, int)
+  fullName: FluentGpu.Hooks.RenderContext.PrefetchImage(string, int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PrefetchImage
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 260
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  syntax:
+    content: public void PrefetchImage(string src, int decodePx)
+    parameters:
+    - id: src
+      type: System.String
+    - id: decodePx
+      type: System.Int32
+    content.vb: Public Sub PrefetchImage(src As String, decodePx As Integer)
+  overload: FluentGpu.Hooks.RenderContext.PrefetchImage*
+  nameWithType.vb: RenderContext.PrefetchImage(String, Integer)
+  fullName.vb: FluentGpu.Hooks.RenderContext.PrefetchImage(String, Integer)
+  name.vb: PrefetchImage(String, Integer)
+- uid: FluentGpu.Hooks.RenderContext.UseRef``1(``0)
+  commentId: M:FluentGpu.Hooks.RenderContext.UseRef``1(``0)
+  id: UseRef``1(``0)
+  parent: FluentGpu.Hooks.RenderContext
+  langs:
+  - csharp
+  - vb
+  name: UseRef<T>(T)
+  nameWithType: RenderContext.UseRef<T>(T)
+  fullName: FluentGpu.Hooks.RenderContext.UseRef<T>(T)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/RenderContext.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UseRef
+    path: ../../src/FluentGpu.Hooks/RenderContext.cs
+    startLine: 266
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  summary: A stable mutable box that survives re-renders without triggering them.
+  example: []
+  syntax:
+    content: public Ref<T> UseRef<T>(T initial)
+    parameters:
+    - id: initial
+      type: '{T}'
+    typeParameters:
+    - id: T
+    return:
+      type: FluentGpu.Hooks.Ref{{T}}
+    content.vb: Public Function UseRef(Of T)(initial As T) As Ref(Of T)
+  overload: FluentGpu.Hooks.RenderContext.UseRef*
+  nameWithType.vb: RenderContext.UseRef(Of T)(T)
+  fullName.vb: FluentGpu.Hooks.RenderContext.UseRef(Of T)(T)
+  name.vb: UseRef(Of T)(T)
+references:
+- uid: FluentGpu.Hooks.RenderContext.UseState``1(``0)
+  commentId: M:FluentGpu.Hooks.RenderContext.UseState``1(``0)
+  href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseState__1___0_
+  name: UseState<T>(T)
+  nameWithType: RenderContext.UseState<T>(T)
+  fullName: FluentGpu.Hooks.RenderContext.UseState<T>(T)
+  nameWithType.vb: RenderContext.UseState(Of T)(T)
+  fullName.vb: FluentGpu.Hooks.RenderContext.UseState(Of T)(T)
+  name.vb: UseState(Of T)(T)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.RenderContext.UseState``1(``0)
+    name: UseState
+    href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseState__1___0_
+  - name: <
+  - name: T
+  - name: '>'
+  - name: (
+  - name: T
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.RenderContext.UseState``1(``0)
+    name: UseState
+    href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseState__1___0_
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+  - name: (
+  - name: T
+  - name: )
+- uid: FluentGpu.Signals.Signal`1
+  commentId: T:FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<T>
+  nameWithType: Signal<T>
+  fullName: FluentGpu.Signals.Signal<T>
+  nameWithType.vb: Signal(Of T)
+  fullName.vb: FluentGpu.Signals.Signal(Of T)
+  name.vb: Signal(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Hooks.RenderContext.UseContext``1(FluentGpu.Hooks.Context{``0})
+  commentId: M:FluentGpu.Hooks.RenderContext.UseContext``1(FluentGpu.Hooks.Context{``0})
+  href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseContext__1_FluentGpu_Hooks_Context___0__
+  name: UseContext<T>(Context<T>)
+  nameWithType: RenderContext.UseContext<T>(Context<T>)
+  fullName: FluentGpu.Hooks.RenderContext.UseContext<T>(FluentGpu.Hooks.Context<T>)
+  nameWithType.vb: RenderContext.UseContext(Of T)(Context(Of T))
+  fullName.vb: FluentGpu.Hooks.RenderContext.UseContext(Of T)(FluentGpu.Hooks.Context(Of T))
+  name.vb: UseContext(Of T)(Context(Of T))
+  spec.csharp:
+  - uid: FluentGpu.Hooks.RenderContext.UseContext``1(FluentGpu.Hooks.Context{``0})
+    name: UseContext
+    href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseContext__1_FluentGpu_Hooks_Context___0__
+  - name: <
+  - name: T
+  - name: '>'
+  - name: (
+  - uid: FluentGpu.Hooks.Context`1
+    name: Context
+    href: FluentGpu.Hooks.Context-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.RenderContext.UseContext``1(FluentGpu.Hooks.Context{``0})
+    name: UseContext
+    href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseContext__1_FluentGpu_Hooks_Context___0__
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+  - name: (
+  - uid: FluentGpu.Hooks.Context`1
+    name: Context
+    href: FluentGpu.Hooks.Context-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+  - name: )
+- uid: FluentGpu.Hooks.RenderContext.UseSignal``1(``0)
+  commentId: M:FluentGpu.Hooks.RenderContext.UseSignal``1(``0)
+  href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseSignal__1___0_
+  name: UseSignal<T>(T)
+  nameWithType: RenderContext.UseSignal<T>(T)
+  fullName: FluentGpu.Hooks.RenderContext.UseSignal<T>(T)
+  nameWithType.vb: RenderContext.UseSignal(Of T)(T)
+  fullName.vb: FluentGpu.Hooks.RenderContext.UseSignal(Of T)(T)
+  name.vb: UseSignal(Of T)(T)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.RenderContext.UseSignal``1(``0)
+    name: UseSignal
+    href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseSignal__1___0_
+  - name: <
+  - name: T
+  - name: '>'
+  - name: (
+  - name: T
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.RenderContext.UseSignal``1(``0)
+    name: UseSignal
+    href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseSignal__1___0_
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+  - name: (
+  - name: T
+  - name: )
+- uid: FluentGpu.Hooks
+  commentId: N:FluentGpu.Hooks
+  href: FluentGpu.html
+  name: FluentGpu.Hooks
+  nameWithType: FluentGpu.Hooks
+  fullName: FluentGpu.Hooks
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.Collections.Generic.List{System.Action}
+  commentId: T:System.Collections.Generic.List{System.Action}
+  parent: System.Collections.Generic
+  definition: System.Collections.Generic.List`1
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  name: List<Action>
+  nameWithType: List<Action>
+  fullName: System.Collections.Generic.List<System.Action>
+  nameWithType.vb: List(Of Action)
+  fullName.vb: System.Collections.Generic.List(Of System.Action)
+  name.vb: List(Of Action)
+  spec.csharp:
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: <
+  - uid: System.Action
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Action
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action
+  - name: )
+- uid: System.Collections.Generic.List`1
+  commentId: T:System.Collections.Generic.List`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  name: List<T>
+  nameWithType: List<T>
+  fullName: System.Collections.Generic.List<T>
+  nameWithType.vb: List(Of T)
+  fullName.vb: System.Collections.Generic.List(Of T)
+  name.vb: List(Of T)
+  spec.csharp:
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Collections.Generic
+  commentId: N:System.Collections.Generic
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System.Collections.Generic
+  nameWithType: System.Collections.Generic
+  fullName: System.Collections.Generic
+  spec.csharp:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+  spec.vb:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+- uid: FluentGpu.Signals.ReactiveRuntime
+  commentId: T:FluentGpu.Signals.ReactiveRuntime
+  parent: FluentGpu.Signals
+  href: FluentGpu.Signals.ReactiveRuntime.html
+  name: ReactiveRuntime
+  nameWithType: ReactiveRuntime
+  fullName: FluentGpu.Signals.ReactiveRuntime
+- uid: FluentGpu.Signals
+  commentId: N:FluentGpu.Signals
+  href: FluentGpu.html
+  name: FluentGpu.Signals
+  nameWithType: FluentGpu.Signals
+  fullName: FluentGpu.Signals
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+- uid: System.Action
+  commentId: T:System.Action
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action
+  name: Action
+  nameWithType: Action
+  fullName: System.Action
+- uid: FluentGpu.Animation.AnimEngine
+  commentId: T:FluentGpu.Animation.AnimEngine
+  parent: FluentGpu.Animation
+  href: FluentGpu.Animation.AnimEngine.html
+  name: AnimEngine
+  nameWithType: AnimEngine
+  fullName: FluentGpu.Animation.AnimEngine
+- uid: FluentGpu.Animation
+  commentId: N:FluentGpu.Animation
+  href: FluentGpu.html
+  name: FluentGpu.Animation
+  nameWithType: FluentGpu.Animation
+  fullName: FluentGpu.Animation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Animation
+    name: Animation
+    href: FluentGpu.Animation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Animation
+    name: Animation
+    href: FluentGpu.Animation.html
+- uid: FluentGpu.Scene.ImageCache
+  commentId: T:FluentGpu.Scene.ImageCache
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImageCache.html
+  name: ImageCache
+  nameWithType: ImageCache
+  fullName: FluentGpu.Scene.ImageCache
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: FluentGpu.Scene.SceneStore
+  commentId: T:FluentGpu.Scene.SceneStore
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.SceneStore.html
+  name: SceneStore
+  nameWithType: SceneStore
+  fullName: FluentGpu.Scene.SceneStore
+- uid: FluentGpu.Foundation.NodeHandle
+  commentId: T:FluentGpu.Foundation.NodeHandle
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.NodeHandle.html
+  name: NodeHandle
+  nameWithType: NodeHandle
+  fullName: FluentGpu.Foundation.NodeHandle
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.Func{FluentGpu.Foundation.NodeHandle,System.Object,FluentGpu.Signals.Signal{System.Object}}
+  commentId: T:System.Func{FluentGpu.Foundation.NodeHandle,System.Object,FluentGpu.Signals.Signal{System.Object}}
+  parent: System
+  definition: System.Func`3
+  href: https://learn.microsoft.com/dotnet/api/system.func-3
+  name: Func<NodeHandle, object, Signal<object>>
+  nameWithType: Func<NodeHandle, object, Signal<object>>
+  fullName: System.Func<FluentGpu.Foundation.NodeHandle, object, FluentGpu.Signals.Signal<object>>
+  nameWithType.vb: Func(Of NodeHandle, Object, Signal(Of Object))
+  fullName.vb: System.Func(Of FluentGpu.Foundation.NodeHandle, Object, FluentGpu.Signals.Signal(Of Object))
+  name.vb: Func(Of NodeHandle, Object, Signal(Of Object))
+  spec.csharp:
+  - uid: System.Func`3
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-3
+  - name: <
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: '>'
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`3
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-3
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  - name: )
+- uid: System.Func`3
+  commentId: T:System.Func`3
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.func-3
+  name: Func<T1, T2, TResult>
+  nameWithType: Func<T1, T2, TResult>
+  fullName: System.Func<T1, T2, TResult>
+  nameWithType.vb: Func(Of T1, T2, TResult)
+  fullName.vb: System.Func(Of T1, T2, TResult)
+  name.vb: Func(Of T1, T2, TResult)
+  spec.csharp:
+  - uid: System.Func`3
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-3
+  - name: <
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: ','
+  - name: " "
+  - name: TResult
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`3
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-3
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: ','
+  - name: " "
+  - name: TResult
+  - name: )
+- uid: FluentGpu.Signals.IReadSignal{System.Int32}
+  commentId: T:FluentGpu.Signals.IReadSignal{System.Int32}
+  parent: FluentGpu.Signals
+  definition: FluentGpu.Signals.IReadSignal`1
+  href: FluentGpu.Signals.IReadSignal-1.html
+  name: IReadSignal<int>
+  nameWithType: IReadSignal<int>
+  fullName: FluentGpu.Signals.IReadSignal<int>
+  nameWithType.vb: IReadSignal(Of Integer)
+  fullName.vb: FluentGpu.Signals.IReadSignal(Of Integer)
+  name.vb: IReadSignal(Of Integer)
+  spec.csharp:
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: FluentGpu.Signals.IReadSignal`1
+  commentId: T:FluentGpu.Signals.IReadSignal`1
+  href: FluentGpu.Signals.IReadSignal-1.html
+  name: IReadSignal<T>
+  nameWithType: IReadSignal<T>
+  fullName: FluentGpu.Signals.IReadSignal<T>
+  nameWithType.vb: IReadSignal(Of T)
+  fullName.vb: FluentGpu.Signals.IReadSignal(Of T)
+  name.vb: IReadSignal(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Hooks.RenderContext.RunAllCleanups*
+  commentId: Overload:FluentGpu.Hooks.RenderContext.RunAllCleanups
+  href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_RunAllCleanups
+  name: RunAllCleanups
+  nameWithType: RenderContext.RunAllCleanups
+  fullName: FluentGpu.Hooks.RenderContext.RunAllCleanups
+- uid: FluentGpu.Hooks.RenderContext.UseState*
+  commentId: Overload:FluentGpu.Hooks.RenderContext.UseState
+  href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseState__1___0_
+  name: UseState
+  nameWithType: RenderContext.UseState
+  fullName: FluentGpu.Hooks.RenderContext.UseState
+- uid: '{T}'
+  commentId: '!:T'
+  definition: T
+  name: T
+  nameWithType: T
+  fullName: T
+- uid: System.ValueTuple{{T},System.Action{{T}}}
+  commentId: T:System.ValueTuple{``0,System.Action{``0}}
+  parent: System
+  definition: System.ValueTuple`2
+  href: https://learn.microsoft.com/dotnet/api/system.valuetuple---0,system.action---0--.value
+  name: (T Value, Action<T> Set)
+  nameWithType: (T Value, Action<T> Set)
+  fullName: (T Value, System.Action<T> Set)
+  nameWithType.vb: (Value As T, Set As Action(Of T))
+  fullName.vb: (Value As T, Set As System.Action(Of T))
+  name.vb: (Value As T, Set As Action(Of T))
+  spec.csharp:
+  - name: (
+  - name: T
+  - name: " "
+  - uid: System.ValueTuple{``0,System.Action{``0}}.Value
+    name: Value
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple---0,system.action---0--.value
+  - name: ','
+  - name: " "
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - name: T
+  - name: '>'
+  - name: " "
+  - uid: System.ValueTuple{``0,System.Action{``0}}.Set
+    name: Set
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple---0,system.action---0--.set
+  - name: )
+  spec.vb:
+  - name: (
+  - uid: System.ValueTuple{``0,System.Action{``0}}.Value
+    name: Value
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple---0,system.action---0--.value
+  - name: " "
+  - name: As
+  - name: " "
+  - name: T
+  - name: ','
+  - name: " "
+  - uid: System.ValueTuple{``0,System.Action{``0}}.Set
+    name: Set
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple---0,system.action---0--.set
+  - name: " "
+  - name: As
+  - name: " "
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+  - name: )
+- uid: T
+  name: T
+  nameWithType: T
+  fullName: T
+- uid: System.ValueTuple`2
+  commentId: T:System.ValueTuple`2
+  name: (T1, T2)
+  nameWithType: (T1, T2)
+  fullName: (T1, T2)
+  spec.csharp:
+  - name: (
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: )
+  spec.vb:
+  - name: (
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: )
+- uid: FluentGpu.Hooks.RenderContext.UseSignal*
+  commentId: Overload:FluentGpu.Hooks.RenderContext.UseSignal
+  href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseSignal__1___0_
+  name: UseSignal
+  nameWithType: RenderContext.UseSignal
+  fullName: FluentGpu.Hooks.RenderContext.UseSignal
+- uid: FluentGpu.Signals.Signal{{T}}
+  commentId: T:FluentGpu.Signals.Signal{`0}
+  parent: FluentGpu.Signals
+  definition: FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<T>
+  nameWithType: Signal<T>
+  fullName: FluentGpu.Signals.Signal<T>
+  nameWithType.vb: Signal(Of T)
+  fullName.vb: FluentGpu.Signals.Signal(Of T)
+  name.vb: Signal(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Hooks.RenderContext.UseFloatSignal*
+  commentId: Overload:FluentGpu.Hooks.RenderContext.UseFloatSignal
+  href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseFloatSignal_System_Single_
+  name: UseFloatSignal
+  nameWithType: RenderContext.UseFloatSignal
+  fullName: FluentGpu.Hooks.RenderContext.UseFloatSignal
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Signals.FloatSignal
+  commentId: T:FluentGpu.Signals.FloatSignal
+  parent: FluentGpu.Signals
+  href: FluentGpu.Signals.FloatSignal.html
+  name: FloatSignal
+  nameWithType: FloatSignal
+  fullName: FluentGpu.Signals.FloatSignal
+- uid: FluentGpu.Hooks.RenderContext.UseComputed*
+  commentId: Overload:FluentGpu.Hooks.RenderContext.UseComputed
+  href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseComputed__1_System_Func___0__
+  name: UseComputed
+  nameWithType: RenderContext.UseComputed
+  fullName: FluentGpu.Hooks.RenderContext.UseComputed
+- uid: System.Func{{T}}
+  commentId: T:System.Func{`0}
+  parent: System
+  definition: System.Func`1
+  href: https://learn.microsoft.com/dotnet/api/system.func-1
+  name: Func<T>
+  nameWithType: Func<T>
+  fullName: System.Func<T>
+  nameWithType.vb: Func(Of T)
+  fullName.vb: System.Func(Of T)
+  name.vb: Func(Of T)
+  spec.csharp:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Signals.Memo{{T}}
+  commentId: T:FluentGpu.Signals.Memo{`0}
+  parent: FluentGpu.Signals
+  definition: FluentGpu.Signals.Memo`1
+  href: FluentGpu.Signals.Memo-1.html
+  name: Memo<T>
+  nameWithType: Memo<T>
+  fullName: FluentGpu.Signals.Memo<T>
+  nameWithType.vb: Memo(Of T)
+  fullName.vb: FluentGpu.Signals.Memo(Of T)
+  name.vb: Memo(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Memo`1
+    name: Memo
+    href: FluentGpu.Signals.Memo-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Memo`1
+    name: Memo
+    href: FluentGpu.Signals.Memo-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Func`1
+  commentId: T:System.Func`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.func-1
+  name: Func<TResult>
+  nameWithType: Func<TResult>
+  fullName: System.Func<TResult>
+  nameWithType.vb: Func(Of TResult)
+  fullName.vb: System.Func(Of TResult)
+  name.vb: Func(Of TResult)
+  spec.csharp:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: <
+  - name: TResult
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: TResult
+  - name: )
+- uid: FluentGpu.Signals.Memo`1
+  commentId: T:FluentGpu.Signals.Memo`1
+  href: FluentGpu.Signals.Memo-1.html
+  name: Memo<T>
+  nameWithType: Memo<T>
+  fullName: FluentGpu.Signals.Memo<T>
+  nameWithType.vb: Memo(Of T)
+  fullName.vb: FluentGpu.Signals.Memo(Of T)
+  name.vb: Memo(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Memo`1
+    name: Memo
+    href: FluentGpu.Signals.Memo-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Memo`1
+    name: Memo
+    href: FluentGpu.Signals.Memo-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Hooks.RenderContext.UseEffect*
+  commentId: Overload:FluentGpu.Hooks.RenderContext.UseEffect
+  href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseEffect_System_Action_System_Object___
+  name: UseEffect
+  nameWithType: RenderContext.UseEffect
+  fullName: FluentGpu.Hooks.RenderContext.UseEffect
+- uid: System.Object[]
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object[]
+  nameWithType: object[]
+  fullName: object[]
+  nameWithType.vb: Object()
+  fullName.vb: Object()
+  name.vb: Object()
+  spec.csharp:
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: '['
+  - name: ']'
+  spec.vb:
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: (
+  - name: )
+- uid: FluentGpu.Hooks.RenderContext.UseEffect(System.Action,System.Object[])
+  commentId: M:FluentGpu.Hooks.RenderContext.UseEffect(System.Action,System.Object[])
+  isExternal: true
+  href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseEffect_System_Action_System_Object___
+  name: UseEffect(Action, params object[])
+  nameWithType: RenderContext.UseEffect(Action, params object[])
+  fullName: FluentGpu.Hooks.RenderContext.UseEffect(System.Action, params object[])
+  nameWithType.vb: RenderContext.UseEffect(Action, ParamArray Object())
+  fullName.vb: FluentGpu.Hooks.RenderContext.UseEffect(System.Action, ParamArray Object())
+  name.vb: UseEffect(Action, ParamArray Object())
+  spec.csharp:
+  - uid: FluentGpu.Hooks.RenderContext.UseEffect(System.Action,System.Object[])
+    name: UseEffect
+    href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseEffect_System_Action_System_Object___
+  - name: (
+  - uid: System.Action
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action
+  - name: ','
+  - name: " "
+  - name: params
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: '['
+  - name: ']'
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.RenderContext.UseEffect(System.Action,System.Object[])
+    name: UseEffect
+    href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseEffect_System_Action_System_Object___
+  - name: (
+  - uid: System.Action
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action
+  - name: ','
+  - name: " "
+  - name: ParamArray
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: (
+  - name: )
+  - name: )
+- uid: FluentGpu.Hooks.RenderContext.UseLayoutEffect*
+  commentId: Overload:FluentGpu.Hooks.RenderContext.UseLayoutEffect
+  href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseLayoutEffect_System_Action_System_Object___
+  name: UseLayoutEffect
+  nameWithType: RenderContext.UseLayoutEffect
+  fullName: FluentGpu.Hooks.RenderContext.UseLayoutEffect
+- uid: FluentGpu.Hooks.RenderContext.UseReducer*
+  commentId: Overload:FluentGpu.Hooks.RenderContext.UseReducer
+  href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseReducer__2_System_Func___0___1___0____0_
+  name: UseReducer
+  nameWithType: RenderContext.UseReducer
+  fullName: FluentGpu.Hooks.RenderContext.UseReducer
+- uid: System.Func{{TState},{TAction},{TState}}
+  commentId: T:System.Func{``0,``1,``0}
+  parent: System
+  definition: System.Func`3
+  href: https://learn.microsoft.com/dotnet/api/system.func-3
+  name: Func<TState, TAction, TState>
+  nameWithType: Func<TState, TAction, TState>
+  fullName: System.Func<TState, TAction, TState>
+  nameWithType.vb: Func(Of TState, TAction, TState)
+  fullName.vb: System.Func(Of TState, TAction, TState)
+  name.vb: Func(Of TState, TAction, TState)
+  spec.csharp:
+  - uid: System.Func`3
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-3
+  - name: <
+  - name: TState
+  - name: ','
+  - name: " "
+  - name: TAction
+  - name: ','
+  - name: " "
+  - name: TState
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`3
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-3
+  - name: (
+  - name: Of
+  - name: " "
+  - name: TState
+  - name: ','
+  - name: " "
+  - name: TAction
+  - name: ','
+  - name: " "
+  - name: TState
+  - name: )
+- uid: '{TState}'
+  commentId: '!:TState'
+  definition: TState
+  name: TState
+  nameWithType: TState
+  fullName: TState
+- uid: System.ValueTuple{{TState},System.Action{{TAction}}}
+  commentId: T:System.ValueTuple{``0,System.Action{``1}}
+  parent: System
+  definition: System.ValueTuple`2
+  href: https://learn.microsoft.com/dotnet/api/system.valuetuple---0,system.action---1--.state
+  name: (TState State, Action<TAction> Dispatch)
+  nameWithType: (TState State, Action<TAction> Dispatch)
+  fullName: (TState State, System.Action<TAction> Dispatch)
+  nameWithType.vb: (State As TState, Dispatch As Action(Of TAction))
+  fullName.vb: (State As TState, Dispatch As System.Action(Of TAction))
+  name.vb: (State As TState, Dispatch As Action(Of TAction))
+  spec.csharp:
+  - name: (
+  - name: TState
+  - name: " "
+  - uid: System.ValueTuple{``0,System.Action{``1}}.State
+    name: State
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple---0,system.action---1--.state
+  - name: ','
+  - name: " "
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - name: TAction
+  - name: '>'
+  - name: " "
+  - uid: System.ValueTuple{``0,System.Action{``1}}.Dispatch
+    name: Dispatch
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple---0,system.action---1--.dispatch
+  - name: )
+  spec.vb:
+  - name: (
+  - uid: System.ValueTuple{``0,System.Action{``1}}.State
+    name: State
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple---0,system.action---1--.state
+  - name: " "
+  - name: As
+  - name: " "
+  - name: TState
+  - name: ','
+  - name: " "
+  - uid: System.ValueTuple{``0,System.Action{``1}}.Dispatch
+    name: Dispatch
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple---0,system.action---1--.dispatch
+  - name: " "
+  - name: As
+  - name: " "
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: TAction
+  - name: )
+  - name: )
+- uid: TState
+  name: TState
+  nameWithType: TState
+  fullName: TState
+- uid: FluentGpu.Hooks.RenderContext.UseMemo*
+  commentId: Overload:FluentGpu.Hooks.RenderContext.UseMemo
+  href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseMemo__1_System_Func___0__System_Object___
+  name: UseMemo
+  nameWithType: RenderContext.UseMemo
+  fullName: FluentGpu.Hooks.RenderContext.UseMemo
+- uid: FluentGpu.Hooks.RenderContext.UseContext*
+  commentId: Overload:FluentGpu.Hooks.RenderContext.UseContext
+  href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseContext__1_FluentGpu_Hooks_Context___0__
+  name: UseContext
+  nameWithType: RenderContext.UseContext
+  fullName: FluentGpu.Hooks.RenderContext.UseContext
+- uid: FluentGpu.Hooks.Context{{T}}
+  commentId: T:FluentGpu.Hooks.Context{``0}
+  parent: FluentGpu.Hooks
+  definition: FluentGpu.Hooks.Context`1
+  href: FluentGpu.Hooks.Context-1.html
+  name: Context<T>
+  nameWithType: Context<T>
+  fullName: FluentGpu.Hooks.Context<T>
+  nameWithType.vb: Context(Of T)
+  fullName.vb: FluentGpu.Hooks.Context(Of T)
+  name.vb: Context(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Context`1
+    name: Context
+    href: FluentGpu.Hooks.Context-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Hooks.Context`1
+    name: Context
+    href: FluentGpu.Hooks.Context-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Hooks.Context`1
+  commentId: T:FluentGpu.Hooks.Context`1
+  href: FluentGpu.Hooks.Context-1.html
+  name: Context<T>
+  nameWithType: Context<T>
+  fullName: FluentGpu.Hooks.Context<T>
+  nameWithType.vb: Context(Of T)
+  fullName.vb: FluentGpu.Hooks.Context(Of T)
+  name.vb: Context(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Context`1
+    name: Context
+    href: FluentGpu.Hooks.Context-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Hooks.Context`1
+    name: Context
+    href: FluentGpu.Hooks.Context-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Hooks.RenderContext.UseSpring(FluentGpu.Animation.AnimChannel,System.Single,FluentGpu.Animation.SpringParams,System.Object[])
+  commentId: M:FluentGpu.Hooks.RenderContext.UseSpring(FluentGpu.Animation.AnimChannel,System.Single,FluentGpu.Animation.SpringParams,System.Object[])
+  isExternal: true
+  href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseSpring_FluentGpu_Animation_AnimChannel_System_Single_FluentGpu_Animation_SpringParams_System_Object___
+  name: UseSpring(AnimChannel, float, SpringParams, params object[])
+  nameWithType: RenderContext.UseSpring(AnimChannel, float, SpringParams, params object[])
+  fullName: FluentGpu.Hooks.RenderContext.UseSpring(FluentGpu.Animation.AnimChannel, float, FluentGpu.Animation.SpringParams, params object[])
+  nameWithType.vb: RenderContext.UseSpring(AnimChannel, Single, SpringParams, ParamArray Object())
+  fullName.vb: FluentGpu.Hooks.RenderContext.UseSpring(FluentGpu.Animation.AnimChannel, Single, FluentGpu.Animation.SpringParams, ParamArray Object())
+  name.vb: UseSpring(AnimChannel, Single, SpringParams, ParamArray Object())
+  spec.csharp:
+  - uid: FluentGpu.Hooks.RenderContext.UseSpring(FluentGpu.Animation.AnimChannel,System.Single,FluentGpu.Animation.SpringParams,System.Object[])
+    name: UseSpring
+    href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseSpring_FluentGpu_Animation_AnimChannel_System_Single_FluentGpu_Animation_SpringParams_System_Object___
+  - name: (
+  - uid: FluentGpu.Animation.AnimChannel
+    name: AnimChannel
+    href: FluentGpu.Animation.AnimChannel.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Animation.SpringParams
+    name: SpringParams
+    href: FluentGpu.Animation.SpringParams.html
+  - name: ','
+  - name: " "
+  - name: params
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: '['
+  - name: ']'
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.RenderContext.UseSpring(FluentGpu.Animation.AnimChannel,System.Single,FluentGpu.Animation.SpringParams,System.Object[])
+    name: UseSpring
+    href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseSpring_FluentGpu_Animation_AnimChannel_System_Single_FluentGpu_Animation_SpringParams_System_Object___
+  - name: (
+  - uid: FluentGpu.Animation.AnimChannel
+    name: AnimChannel
+    href: FluentGpu.Animation.AnimChannel.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Animation.SpringParams
+    name: SpringParams
+    href: FluentGpu.Animation.SpringParams.html
+  - name: ','
+  - name: " "
+  - name: ParamArray
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: (
+  - name: )
+  - name: )
+- uid: FluentGpu.Hooks.RenderContext.UseTransition(FluentGpu.Animation.AnimChannel,System.Single,System.Single,System.Single,FluentGpu.Foundation.Easing,System.Object[])
+  commentId: M:FluentGpu.Hooks.RenderContext.UseTransition(FluentGpu.Animation.AnimChannel,System.Single,System.Single,System.Single,FluentGpu.Foundation.Easing,System.Object[])
+  isExternal: true
+  href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseTransition_FluentGpu_Animation_AnimChannel_System_Single_System_Single_System_Single_FluentGpu_Foundation_Easing_System_Object___
+  name: UseTransition(AnimChannel, float, float, float, Easing, params object[])
+  nameWithType: RenderContext.UseTransition(AnimChannel, float, float, float, Easing, params object[])
+  fullName: FluentGpu.Hooks.RenderContext.UseTransition(FluentGpu.Animation.AnimChannel, float, float, float, FluentGpu.Foundation.Easing, params object[])
+  nameWithType.vb: RenderContext.UseTransition(AnimChannel, Single, Single, Single, Easing, ParamArray Object())
+  fullName.vb: FluentGpu.Hooks.RenderContext.UseTransition(FluentGpu.Animation.AnimChannel, Single, Single, Single, FluentGpu.Foundation.Easing, ParamArray Object())
+  name.vb: UseTransition(AnimChannel, Single, Single, Single, Easing, ParamArray Object())
+  spec.csharp:
+  - uid: FluentGpu.Hooks.RenderContext.UseTransition(FluentGpu.Animation.AnimChannel,System.Single,System.Single,System.Single,FluentGpu.Foundation.Easing,System.Object[])
+    name: UseTransition
+    href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseTransition_FluentGpu_Animation_AnimChannel_System_Single_System_Single_System_Single_FluentGpu_Foundation_Easing_System_Object___
+  - name: (
+  - uid: FluentGpu.Animation.AnimChannel
+    name: AnimChannel
+    href: FluentGpu.Animation.AnimChannel.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Foundation.Easing
+    name: Easing
+    href: FluentGpu.Foundation.Easing.html
+  - name: ','
+  - name: " "
+  - name: params
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: '['
+  - name: ']'
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.RenderContext.UseTransition(FluentGpu.Animation.AnimChannel,System.Single,System.Single,System.Single,FluentGpu.Foundation.Easing,System.Object[])
+    name: UseTransition
+    href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseTransition_FluentGpu_Animation_AnimChannel_System_Single_System_Single_System_Single_FluentGpu_Foundation_Easing_System_Object___
+  - name: (
+  - uid: FluentGpu.Animation.AnimChannel
+    name: AnimChannel
+    href: FluentGpu.Animation.AnimChannel.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Foundation.Easing
+    name: Easing
+    href: FluentGpu.Foundation.Easing.html
+  - name: ','
+  - name: " "
+  - name: ParamArray
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: (
+  - name: )
+  - name: )
+- uid: FluentGpu.Hooks.RenderContext.UseAnimatedValue*
+  commentId: Overload:FluentGpu.Hooks.RenderContext.UseAnimatedValue
+  href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseAnimatedValue_System_Single_System_Single_FluentGpu_Foundation_Easing_
+  name: UseAnimatedValue
+  nameWithType: RenderContext.UseAnimatedValue
+  fullName: FluentGpu.Hooks.RenderContext.UseAnimatedValue
+- uid: FluentGpu.Foundation.Easing
+  commentId: T:FluentGpu.Foundation.Easing
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Easing.html
+  name: Easing
+  nameWithType: Easing
+  fullName: FluentGpu.Foundation.Easing
+- uid: FluentGpu.Hooks.RenderContext.UseSpring*
+  commentId: Overload:FluentGpu.Hooks.RenderContext.UseSpring
+  href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseSpring_FluentGpu_Animation_AnimChannel_System_Single_FluentGpu_Animation_SpringParams_System_Object___
+  name: UseSpring
+  nameWithType: RenderContext.UseSpring
+  fullName: FluentGpu.Hooks.RenderContext.UseSpring
+- uid: FluentGpu.Animation.AnimChannel
+  commentId: T:FluentGpu.Animation.AnimChannel
+  parent: FluentGpu.Animation
+  href: FluentGpu.Animation.AnimChannel.html
+  name: AnimChannel
+  nameWithType: AnimChannel
+  fullName: FluentGpu.Animation.AnimChannel
+- uid: FluentGpu.Animation.SpringParams
+  commentId: T:FluentGpu.Animation.SpringParams
+  parent: FluentGpu.Animation
+  href: FluentGpu.Animation.SpringParams.html
+  name: SpringParams
+  nameWithType: SpringParams
+  fullName: FluentGpu.Animation.SpringParams
+- uid: FluentGpu.Hooks.RenderContext.UseTransition*
+  commentId: Overload:FluentGpu.Hooks.RenderContext.UseTransition
+  href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseTransition_FluentGpu_Animation_AnimChannel_System_Single_System_Single_System_Single_FluentGpu_Foundation_Easing_System_Object___
+  name: UseTransition
+  nameWithType: RenderContext.UseTransition
+  fullName: FluentGpu.Hooks.RenderContext.UseTransition
+- uid: FluentGpu.Hooks.RenderContext.UseKeyframes*
+  commentId: Overload:FluentGpu.Hooks.RenderContext.UseKeyframes
+  href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseKeyframes_FluentGpu_Animation_AnimChannel_FluentGpu_Animation_Keyframe___System_Single_System_Boolean_System_Object___
+  name: UseKeyframes
+  nameWithType: RenderContext.UseKeyframes
+  fullName: FluentGpu.Hooks.RenderContext.UseKeyframes
+- uid: FluentGpu.Animation.Keyframe[]
+  isExternal: true
+  href: FluentGpu.Animation.Keyframe.html
+  name: Keyframe[]
+  nameWithType: Keyframe[]
+  fullName: FluentGpu.Animation.Keyframe[]
+  nameWithType.vb: Keyframe()
+  fullName.vb: FluentGpu.Animation.Keyframe()
+  name.vb: Keyframe()
+  spec.csharp:
+  - uid: FluentGpu.Animation.Keyframe
+    name: Keyframe
+    href: FluentGpu.Animation.Keyframe.html
+  - name: '['
+  - name: ']'
+  spec.vb:
+  - uid: FluentGpu.Animation.Keyframe
+    name: Keyframe
+    href: FluentGpu.Animation.Keyframe.html
+  - name: (
+  - name: )
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Hooks.RenderContext.UseDrivenAnimation*
+  commentId: Overload:FluentGpu.Hooks.RenderContext.UseDrivenAnimation
+  href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseDrivenAnimation_FluentGpu_Animation_AnimChannel_FluentGpu_Animation_Keyframe___System_Func_System_Single__System_Single_System_Single_System_Object___
+  name: UseDrivenAnimation
+  nameWithType: RenderContext.UseDrivenAnimation
+  fullName: FluentGpu.Hooks.RenderContext.UseDrivenAnimation
+- uid: System.Func{System.Single}
+  commentId: T:System.Func{System.Single}
+  parent: System
+  definition: System.Func`1
+  href: https://learn.microsoft.com/dotnet/api/system.func-1
+  name: Func<float>
+  nameWithType: Func<float>
+  fullName: System.Func<float>
+  nameWithType.vb: Func(Of Single)
+  fullName.vb: System.Func(Of Single)
+  name.vb: Func(Of Single)
+  spec.csharp:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: <
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: FluentGpu.Hooks.RenderContext.UseImage*
+  commentId: Overload:FluentGpu.Hooks.RenderContext.UseImage
+  href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseImage_System_String_System_Int32_FluentGpu_Scene_ImagePriority_System_String_
+  name: UseImage
+  nameWithType: RenderContext.UseImage
+  fullName: FluentGpu.Hooks.RenderContext.UseImage
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Scene.ImagePriority
+  commentId: T:FluentGpu.Scene.ImagePriority
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImagePriority.html
+  name: ImagePriority
+  nameWithType: ImagePriority
+  fullName: FluentGpu.Scene.ImagePriority
+- uid: FluentGpu.Scene.ImageBinding
+  commentId: T:FluentGpu.Scene.ImageBinding
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImageBinding.html
+  name: ImageBinding
+  nameWithType: ImageBinding
+  fullName: FluentGpu.Scene.ImageBinding
+- uid: FluentGpu.Hooks.RenderContext.PrefetchImage*
+  commentId: Overload:FluentGpu.Hooks.RenderContext.PrefetchImage
+  href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_PrefetchImage_System_String_System_Int32_
+  name: PrefetchImage
+  nameWithType: RenderContext.PrefetchImage
+  fullName: FluentGpu.Hooks.RenderContext.PrefetchImage
+- uid: FluentGpu.Hooks.RenderContext.UseRef*
+  commentId: Overload:FluentGpu.Hooks.RenderContext.UseRef
+  href: FluentGpu.Hooks.RenderContext.html#FluentGpu_Hooks_RenderContext_UseRef__1___0_
+  name: UseRef
+  nameWithType: RenderContext.UseRef
+  fullName: FluentGpu.Hooks.RenderContext.UseRef
+- uid: FluentGpu.Hooks.Ref{{T}}
+  commentId: T:FluentGpu.Hooks.Ref{``0}
+  parent: FluentGpu.Hooks
+  definition: FluentGpu.Hooks.Ref`1
+  href: FluentGpu.Hooks.Ref-1.html
+  name: Ref<T>
+  nameWithType: Ref<T>
+  fullName: FluentGpu.Hooks.Ref<T>
+  nameWithType.vb: Ref(Of T)
+  fullName.vb: FluentGpu.Hooks.Ref(Of T)
+  name.vb: Ref(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Ref`1
+    name: Ref
+    href: FluentGpu.Hooks.Ref-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Hooks.Ref`1
+    name: Ref
+    href: FluentGpu.Hooks.Ref-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Hooks.Ref`1
+  commentId: T:FluentGpu.Hooks.Ref`1
+  href: FluentGpu.Hooks.Ref-1.html
+  name: Ref<T>
+  nameWithType: Ref<T>
+  fullName: FluentGpu.Hooks.Ref<T>
+  nameWithType.vb: Ref(Of T)
+  fullName.vb: FluentGpu.Hooks.Ref(Of T)
+  name.vb: Ref(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Ref`1
+    name: Ref
+    href: FluentGpu.Hooks.Ref-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Hooks.Ref`1
+    name: Ref
+    href: FluentGpu.Hooks.Ref-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )

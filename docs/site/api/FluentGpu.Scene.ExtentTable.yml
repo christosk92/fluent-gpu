@@ -1,0 +1,797 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Scene.ExtentTable
+  commentId: T:FluentGpu.Scene.ExtentTable
+  id: ExtentTable
+  parent: FluentGpu.Scene
+  children:
+  - FluentGpu.Scene.ExtentTable.#ctor(System.Int32,System.Single)
+  - FluentGpu.Scene.ExtentTable.Count
+  - FluentGpu.Scene.ExtentTable.Estimate
+  - FluentGpu.Scene.ExtentTable.ExtentAt(System.Int32)
+  - FluentGpu.Scene.ExtentTable.IndexAt(System.Single)
+  - FluentGpu.Scene.ExtentTable.OffsetOf(System.Int32)
+  - FluentGpu.Scene.ExtentTable.Reset(System.Int32,System.Single)
+  - FluentGpu.Scene.ExtentTable.SetExtent(System.Int32,System.Single)
+  - FluentGpu.Scene.ExtentTable.Total
+  langs:
+  - csharp
+  - vb
+  name: ExtentTable
+  nameWithType: ExtentTable
+  fullName: FluentGpu.Scene.ExtentTable
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ExtentTable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ExtentTable
+    path: ../../src/FluentGpu.Scene/ExtentTable.cs
+    startLine: 12
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    Per-item extent table for variable-height virtualization: a Fenwick tree / Binary Indexed Tree giving O(log n)
+
+    <xref href="FluentGpu.Scene.ExtentTable.OffsetOf(System.Int32)" data-throw-if-not-resolved="false"></xref> (prefix-sum → position a row) and <xref href="FluentGpu.Scene.ExtentTable.IndexAt(System.Single)" data-throw-if-not-resolved="false"></xref> (binary-lift → which item is at a
+
+    scroll offset), with estimate-then-correct extents (an unmeasured item uses the estimate; on realize+measure
+
+    <xref href="FluentGpu.Scene.ExtentTable.SetExtent(System.Int32%2cSystem.Single)" data-throw-if-not-resolved="false"></xref> corrects it, O(log n)). It persists across frames (only deltas update) and survives a
+
+    fling because corrections are O(measured-rows). 100k items × 8B ≈ 800KB — within budget.
+
+
+    (virtualization.md §6.2 / layout.md §8.4 — the table MATH. It lives here in <code>FluentGpu.Scene</code> because both
+
+    Layout and the Reconciler depend on Scene; double-precision prefix sums keep it exact at 100k×100px.)
+  example: []
+  syntax:
+    content: public sealed class ExtentTable
+    content.vb: Public NotInheritable Class ExtentTable
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Scene.ExtentTable.#ctor(System.Int32,System.Single)
+  commentId: M:FluentGpu.Scene.ExtentTable.#ctor(System.Int32,System.Single)
+  id: '#ctor(System.Int32,System.Single)'
+  parent: FluentGpu.Scene.ExtentTable
+  langs:
+  - csharp
+  - vb
+  name: ExtentTable(int, float)
+  nameWithType: ExtentTable.ExtentTable(int, float)
+  fullName: FluentGpu.Scene.ExtentTable.ExtentTable(int, float)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ExtentTable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Scene/ExtentTable.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public ExtentTable(int n, float estimate)
+    parameters:
+    - id: n
+      type: System.Int32
+    - id: estimate
+      type: System.Single
+    content.vb: Public Sub New(n As Integer, estimate As Single)
+  overload: FluentGpu.Scene.ExtentTable.#ctor*
+  nameWithType.vb: ExtentTable.New(Integer, Single)
+  fullName.vb: FluentGpu.Scene.ExtentTable.New(Integer, Single)
+  name.vb: New(Integer, Single)
+- uid: FluentGpu.Scene.ExtentTable.Count
+  commentId: P:FluentGpu.Scene.ExtentTable.Count
+  id: Count
+  parent: FluentGpu.Scene.ExtentTable
+  langs:
+  - csharp
+  - vb
+  name: Count
+  nameWithType: ExtentTable.Count
+  fullName: FluentGpu.Scene.ExtentTable.Count
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ExtentTable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Count
+    path: ../../src/FluentGpu.Scene/ExtentTable.cs
+    startLine: 21
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public int Count { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property Count As Integer
+  overload: FluentGpu.Scene.ExtentTable.Count*
+- uid: FluentGpu.Scene.ExtentTable.Total
+  commentId: P:FluentGpu.Scene.ExtentTable.Total
+  id: Total
+  parent: FluentGpu.Scene.ExtentTable
+  langs:
+  - csharp
+  - vb
+  name: Total
+  nameWithType: ExtentTable.Total
+  fullName: FluentGpu.Scene.ExtentTable.Total
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ExtentTable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Total
+    path: ../../src/FluentGpu.Scene/ExtentTable.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: Total content extent (sum of all item extents) — the published ContentSize.
+  example: []
+  syntax:
+    content: public double Total { get; }
+    parameters: []
+    return:
+      type: System.Double
+    content.vb: Public Property Total As Double
+  overload: FluentGpu.Scene.ExtentTable.Total*
+- uid: FluentGpu.Scene.ExtentTable.Estimate
+  commentId: P:FluentGpu.Scene.ExtentTable.Estimate
+  id: Estimate
+  parent: FluentGpu.Scene.ExtentTable
+  langs:
+  - csharp
+  - vb
+  name: Estimate
+  nameWithType: ExtentTable.Estimate
+  fullName: FluentGpu.Scene.ExtentTable.Estimate
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ExtentTable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Estimate
+    path: ../../src/FluentGpu.Scene/ExtentTable.cs
+    startLine: 24
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float Estimate { get; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public ReadOnly Property Estimate As Single
+  overload: FluentGpu.Scene.ExtentTable.Estimate*
+- uid: FluentGpu.Scene.ExtentTable.Reset(System.Int32,System.Single)
+  commentId: M:FluentGpu.Scene.ExtentTable.Reset(System.Int32,System.Single)
+  id: Reset(System.Int32,System.Single)
+  parent: FluentGpu.Scene.ExtentTable
+  langs:
+  - csharp
+  - vb
+  name: Reset(int, float)
+  nameWithType: ExtentTable.Reset(int, float)
+  fullName: FluentGpu.Scene.ExtentTable.Reset(int, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ExtentTable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Reset
+    path: ../../src/FluentGpu.Scene/ExtentTable.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: (Re)build the table for <code class="paramref">n</code> items, all seeded to <code class="paramref">estimate</code> (regroup / count change).
+  example: []
+  syntax:
+    content: public void Reset(int n, float estimate)
+    parameters:
+    - id: n
+      type: System.Int32
+    - id: estimate
+      type: System.Single
+    content.vb: Public Sub Reset(n As Integer, estimate As Single)
+  overload: FluentGpu.Scene.ExtentTable.Reset*
+  nameWithType.vb: ExtentTable.Reset(Integer, Single)
+  fullName.vb: FluentGpu.Scene.ExtentTable.Reset(Integer, Single)
+  name.vb: Reset(Integer, Single)
+- uid: FluentGpu.Scene.ExtentTable.OffsetOf(System.Int32)
+  commentId: M:FluentGpu.Scene.ExtentTable.OffsetOf(System.Int32)
+  id: OffsetOf(System.Int32)
+  parent: FluentGpu.Scene.ExtentTable
+  langs:
+  - csharp
+  - vb
+  name: OffsetOf(int)
+  nameWithType: ExtentTable.OffsetOf(int)
+  fullName: FluentGpu.Scene.ExtentTable.OffsetOf(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ExtentTable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffsetOf
+    path: ../../src/FluentGpu.Scene/ExtentTable.cs
+    startLine: 45
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: Prefix sum of extents for items [0, index) — the content-space offset of item <code class="paramref">index</code>.
+  example: []
+  syntax:
+    content: public float OffsetOf(int index)
+    parameters:
+    - id: index
+      type: System.Int32
+    return:
+      type: System.Single
+    content.vb: Public Function OffsetOf(index As Integer) As Single
+  overload: FluentGpu.Scene.ExtentTable.OffsetOf*
+  nameWithType.vb: ExtentTable.OffsetOf(Integer)
+  fullName.vb: FluentGpu.Scene.ExtentTable.OffsetOf(Integer)
+  name.vb: OffsetOf(Integer)
+- uid: FluentGpu.Scene.ExtentTable.IndexAt(System.Single)
+  commentId: M:FluentGpu.Scene.ExtentTable.IndexAt(System.Single)
+  id: IndexAt(System.Single)
+  parent: FluentGpu.Scene.ExtentTable
+  langs:
+  - csharp
+  - vb
+  name: IndexAt(float)
+  nameWithType: ExtentTable.IndexAt(float)
+  fullName: FluentGpu.Scene.ExtentTable.IndexAt(float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ExtentTable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IndexAt
+    path: ../../src/FluentGpu.Scene/ExtentTable.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: The item index whose extent band contains <code class="paramref">offset</code> (count of items fully above it).
+  example: []
+  syntax:
+    content: public int IndexAt(float offset)
+    parameters:
+    - id: offset
+      type: System.Single
+    return:
+      type: System.Int32
+    content.vb: Public Function IndexAt(offset As Single) As Integer
+  overload: FluentGpu.Scene.ExtentTable.IndexAt*
+  nameWithType.vb: ExtentTable.IndexAt(Single)
+  fullName.vb: FluentGpu.Scene.ExtentTable.IndexAt(Single)
+  name.vb: IndexAt(Single)
+- uid: FluentGpu.Scene.ExtentTable.SetExtent(System.Int32,System.Single)
+  commentId: M:FluentGpu.Scene.ExtentTable.SetExtent(System.Int32,System.Single)
+  id: SetExtent(System.Int32,System.Single)
+  parent: FluentGpu.Scene.ExtentTable
+  langs:
+  - csharp
+  - vb
+  name: SetExtent(int, float)
+  nameWithType: ExtentTable.SetExtent(int, float)
+  fullName: FluentGpu.Scene.ExtentTable.SetExtent(int, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ExtentTable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SetExtent
+    path: ../../src/FluentGpu.Scene/ExtentTable.cs
+    startLine: 68
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: Correct item <code class="paramref">index</code>'s extent to its measured value (O(log n)); updates <xref href="FluentGpu.Scene.ExtentTable.Total" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: public void SetExtent(int index, float extent)
+    parameters:
+    - id: index
+      type: System.Int32
+    - id: extent
+      type: System.Single
+    content.vb: Public Sub SetExtent(index As Integer, extent As Single)
+  overload: FluentGpu.Scene.ExtentTable.SetExtent*
+  nameWithType.vb: ExtentTable.SetExtent(Integer, Single)
+  fullName.vb: FluentGpu.Scene.ExtentTable.SetExtent(Integer, Single)
+  name.vb: SetExtent(Integer, Single)
+- uid: FluentGpu.Scene.ExtentTable.ExtentAt(System.Int32)
+  commentId: M:FluentGpu.Scene.ExtentTable.ExtentAt(System.Int32)
+  id: ExtentAt(System.Int32)
+  parent: FluentGpu.Scene.ExtentTable
+  langs:
+  - csharp
+  - vb
+  name: ExtentAt(int)
+  nameWithType: ExtentTable.ExtentAt(int)
+  fullName: FluentGpu.Scene.ExtentTable.ExtentAt(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ExtentTable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ExtentAt
+    path: ../../src/FluentGpu.Scene/ExtentTable.cs
+    startLine: 78
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float ExtentAt(int index)
+    parameters:
+    - id: index
+      type: System.Int32
+    return:
+      type: System.Single
+    content.vb: Public Function ExtentAt(index As Integer) As Single
+  overload: FluentGpu.Scene.ExtentTable.ExtentAt*
+  nameWithType.vb: ExtentTable.ExtentAt(Integer)
+  fullName.vb: FluentGpu.Scene.ExtentTable.ExtentAt(Integer)
+  name.vb: ExtentAt(Integer)
+references:
+- uid: FluentGpu.Scene.ExtentTable.OffsetOf(System.Int32)
+  commentId: M:FluentGpu.Scene.ExtentTable.OffsetOf(System.Int32)
+  isExternal: true
+  href: FluentGpu.Scene.ExtentTable.html#FluentGpu_Scene_ExtentTable_OffsetOf_System_Int32_
+  name: OffsetOf(int)
+  nameWithType: ExtentTable.OffsetOf(int)
+  fullName: FluentGpu.Scene.ExtentTable.OffsetOf(int)
+  nameWithType.vb: ExtentTable.OffsetOf(Integer)
+  fullName.vb: FluentGpu.Scene.ExtentTable.OffsetOf(Integer)
+  name.vb: OffsetOf(Integer)
+  spec.csharp:
+  - uid: FluentGpu.Scene.ExtentTable.OffsetOf(System.Int32)
+    name: OffsetOf
+    href: FluentGpu.Scene.ExtentTable.html#FluentGpu_Scene_ExtentTable_OffsetOf_System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Scene.ExtentTable.OffsetOf(System.Int32)
+    name: OffsetOf
+    href: FluentGpu.Scene.ExtentTable.html#FluentGpu_Scene_ExtentTable_OffsetOf_System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: FluentGpu.Scene.ExtentTable.IndexAt(System.Single)
+  commentId: M:FluentGpu.Scene.ExtentTable.IndexAt(System.Single)
+  isExternal: true
+  href: FluentGpu.Scene.ExtentTable.html#FluentGpu_Scene_ExtentTable_IndexAt_System_Single_
+  name: IndexAt(float)
+  nameWithType: ExtentTable.IndexAt(float)
+  fullName: FluentGpu.Scene.ExtentTable.IndexAt(float)
+  nameWithType.vb: ExtentTable.IndexAt(Single)
+  fullName.vb: FluentGpu.Scene.ExtentTable.IndexAt(Single)
+  name.vb: IndexAt(Single)
+  spec.csharp:
+  - uid: FluentGpu.Scene.ExtentTable.IndexAt(System.Single)
+    name: IndexAt
+    href: FluentGpu.Scene.ExtentTable.html#FluentGpu_Scene_ExtentTable_IndexAt_System_Single_
+  - name: (
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Scene.ExtentTable.IndexAt(System.Single)
+    name: IndexAt
+    href: FluentGpu.Scene.ExtentTable.html#FluentGpu_Scene_ExtentTable_IndexAt_System_Single_
+  - name: (
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: FluentGpu.Scene.ExtentTable.SetExtent(System.Int32,System.Single)
+  commentId: M:FluentGpu.Scene.ExtentTable.SetExtent(System.Int32,System.Single)
+  isExternal: true
+  href: FluentGpu.Scene.ExtentTable.html#FluentGpu_Scene_ExtentTable_SetExtent_System_Int32_System_Single_
+  name: SetExtent(int, float)
+  nameWithType: ExtentTable.SetExtent(int, float)
+  fullName: FluentGpu.Scene.ExtentTable.SetExtent(int, float)
+  nameWithType.vb: ExtentTable.SetExtent(Integer, Single)
+  fullName.vb: FluentGpu.Scene.ExtentTable.SetExtent(Integer, Single)
+  name.vb: SetExtent(Integer, Single)
+  spec.csharp:
+  - uid: FluentGpu.Scene.ExtentTable.SetExtent(System.Int32,System.Single)
+    name: SetExtent
+    href: FluentGpu.Scene.ExtentTable.html#FluentGpu_Scene_ExtentTable_SetExtent_System_Int32_System_Single_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Scene.ExtentTable.SetExtent(System.Int32,System.Single)
+    name: SetExtent
+    href: FluentGpu.Scene.ExtentTable.html#FluentGpu_Scene_ExtentTable_SetExtent_System_Int32_System_Single_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Scene.ExtentTable.#ctor*
+  commentId: Overload:FluentGpu.Scene.ExtentTable.#ctor
+  href: FluentGpu.Scene.ExtentTable.html#FluentGpu_Scene_ExtentTable__ctor_System_Int32_System_Single_
+  name: ExtentTable
+  nameWithType: ExtentTable.ExtentTable
+  fullName: FluentGpu.Scene.ExtentTable.ExtentTable
+  nameWithType.vb: ExtentTable.New
+  fullName.vb: FluentGpu.Scene.ExtentTable.New
+  name.vb: New
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Scene.ExtentTable.Count*
+  commentId: Overload:FluentGpu.Scene.ExtentTable.Count
+  href: FluentGpu.Scene.ExtentTable.html#FluentGpu_Scene_ExtentTable_Count
+  name: Count
+  nameWithType: ExtentTable.Count
+  fullName: FluentGpu.Scene.ExtentTable.Count
+- uid: FluentGpu.Scene.ExtentTable.Total*
+  commentId: Overload:FluentGpu.Scene.ExtentTable.Total
+  href: FluentGpu.Scene.ExtentTable.html#FluentGpu_Scene_ExtentTable_Total
+  name: Total
+  nameWithType: ExtentTable.Total
+  fullName: FluentGpu.Scene.ExtentTable.Total
+- uid: System.Double
+  commentId: T:System.Double
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.double
+  name: double
+  nameWithType: double
+  fullName: double
+  nameWithType.vb: Double
+  fullName.vb: Double
+  name.vb: Double
+- uid: FluentGpu.Scene.ExtentTable.Estimate*
+  commentId: Overload:FluentGpu.Scene.ExtentTable.Estimate
+  href: FluentGpu.Scene.ExtentTable.html#FluentGpu_Scene_ExtentTable_Estimate
+  name: Estimate
+  nameWithType: ExtentTable.Estimate
+  fullName: FluentGpu.Scene.ExtentTable.Estimate
+- uid: FluentGpu.Scene.ExtentTable.Reset*
+  commentId: Overload:FluentGpu.Scene.ExtentTable.Reset
+  href: FluentGpu.Scene.ExtentTable.html#FluentGpu_Scene_ExtentTable_Reset_System_Int32_System_Single_
+  name: Reset
+  nameWithType: ExtentTable.Reset
+  fullName: FluentGpu.Scene.ExtentTable.Reset
+- uid: FluentGpu.Scene.ExtentTable.OffsetOf*
+  commentId: Overload:FluentGpu.Scene.ExtentTable.OffsetOf
+  href: FluentGpu.Scene.ExtentTable.html#FluentGpu_Scene_ExtentTable_OffsetOf_System_Int32_
+  name: OffsetOf
+  nameWithType: ExtentTable.OffsetOf
+  fullName: FluentGpu.Scene.ExtentTable.OffsetOf
+- uid: FluentGpu.Scene.ExtentTable.IndexAt*
+  commentId: Overload:FluentGpu.Scene.ExtentTable.IndexAt
+  href: FluentGpu.Scene.ExtentTable.html#FluentGpu_Scene_ExtentTable_IndexAt_System_Single_
+  name: IndexAt
+  nameWithType: ExtentTable.IndexAt
+  fullName: FluentGpu.Scene.ExtentTable.IndexAt
+- uid: FluentGpu.Scene.ExtentTable.Total
+  commentId: P:FluentGpu.Scene.ExtentTable.Total
+  href: FluentGpu.Scene.ExtentTable.html#FluentGpu_Scene_ExtentTable_Total
+  name: Total
+  nameWithType: ExtentTable.Total
+  fullName: FluentGpu.Scene.ExtentTable.Total
+- uid: FluentGpu.Scene.ExtentTable.SetExtent*
+  commentId: Overload:FluentGpu.Scene.ExtentTable.SetExtent
+  href: FluentGpu.Scene.ExtentTable.html#FluentGpu_Scene_ExtentTable_SetExtent_System_Int32_System_Single_
+  name: SetExtent
+  nameWithType: ExtentTable.SetExtent
+  fullName: FluentGpu.Scene.ExtentTable.SetExtent
+- uid: FluentGpu.Scene.ExtentTable.ExtentAt*
+  commentId: Overload:FluentGpu.Scene.ExtentTable.ExtentAt
+  href: FluentGpu.Scene.ExtentTable.html#FluentGpu_Scene_ExtentTable_ExtentAt_System_Int32_
+  name: ExtentAt
+  nameWithType: ExtentTable.ExtentAt
+  fullName: FluentGpu.Scene.ExtentTable.ExtentAt

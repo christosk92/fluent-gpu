@@ -1,0 +1,1181 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Dsl.ImageEl
+  commentId: T:FluentGpu.Dsl.ImageEl
+  id: ImageEl
+  parent: FluentGpu.Dsl
+  children:
+  - FluentGpu.Dsl.ImageEl.AlignSelf
+  - FluentGpu.Dsl.ImageEl.AspectRatio
+  - FluentGpu.Dsl.ImageEl.BlurHash
+  - FluentGpu.Dsl.ImageEl.Corners
+  - FluentGpu.Dsl.ImageEl.DecodePx
+  - FluentGpu.Dsl.ImageEl.ElementTypeId
+  - FluentGpu.Dsl.ImageEl.Fit
+  - FluentGpu.Dsl.ImageEl.Height
+  - FluentGpu.Dsl.ImageEl.Margin
+  - FluentGpu.Dsl.ImageEl.Placeholder
+  - FluentGpu.Dsl.ImageEl.Source
+  - FluentGpu.Dsl.ImageEl.Transition
+  - FluentGpu.Dsl.ImageEl.Width
+  langs:
+  - csharp
+  - vb
+  name: ImageEl
+  nameWithType: ImageEl
+  fullName: FluentGpu.Dsl.ImageEl
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ImageEl
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 464
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: >-
+    An async image (album art): shows <xref href="FluentGpu.Dsl.ImageEl.Placeholder" data-throw-if-not-resolved="false"></xref> until the decode lands, then the bitmap. Decode is
+
+    off-thread + cached + residency-pinned while on screen (see <code>ImageCache</code>).
+  example: []
+  syntax:
+    content: 'public sealed record ImageEl : Element, IEquatable<Element>, IEquatable<ImageEl>'
+    content.vb: Public NotInheritable Class ImageEl Inherits Element Implements IEquatable(Of Element), IEquatable(Of ImageEl)
+  inheritance:
+  - System.Object
+  - FluentGpu.Dsl.Element
+  implements:
+  - System.IEquatable{FluentGpu.Dsl.Element}
+  - System.IEquatable{FluentGpu.Dsl.ImageEl}
+  inheritedMembers:
+  - FluentGpu.Dsl.Element.Key
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Dsl.ImageEl.ElementTypeId
+  commentId: P:FluentGpu.Dsl.ImageEl.ElementTypeId
+  id: ElementTypeId
+  parent: FluentGpu.Dsl.ImageEl
+  langs:
+  - csharp
+  - vb
+  name: ElementTypeId
+  nameWithType: ImageEl.ElementTypeId
+  fullName: FluentGpu.Dsl.ImageEl.ElementTypeId
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ElementTypeId
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 466
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: Stable per-record-type id for integer type-dispatch in the reconciler (the source-gen'd ElementTypeId).
+  example: []
+  syntax:
+    content: public override ushort ElementTypeId { get; }
+    parameters: []
+    return:
+      type: System.UInt16
+    content.vb: Public Overrides ReadOnly Property ElementTypeId As UShort
+  overridden: FluentGpu.Dsl.Element.ElementTypeId
+  overload: FluentGpu.Dsl.ImageEl.ElementTypeId*
+- uid: FluentGpu.Dsl.ImageEl.Source
+  commentId: P:FluentGpu.Dsl.ImageEl.Source
+  id: Source
+  parent: FluentGpu.Dsl.ImageEl
+  langs:
+  - csharp
+  - vb
+  name: Source
+  nameWithType: ImageEl.Source
+  fullName: FluentGpu.Dsl.ImageEl.Source
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Source
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 470
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: >-
+    Unified channel: a static path/URL, a thunk (bound virtual rows re-request art when the thunk's
+        signals change — the recycled slot swaps without an element rebuild), or a concrete signal.
+  example: []
+  syntax:
+    content: public Prop<string> Source { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Signals.Prop{System.String}
+    content.vb: Public Property Source As Prop(Of String)
+  overload: FluentGpu.Dsl.ImageEl.Source*
+- uid: FluentGpu.Dsl.ImageEl.Width
+  commentId: P:FluentGpu.Dsl.ImageEl.Width
+  id: Width
+  parent: FluentGpu.Dsl.ImageEl
+  langs:
+  - csharp
+  - vb
+  name: Width
+  nameWithType: ImageEl.Width
+  fullName: FluentGpu.Dsl.ImageEl.Width
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Width
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 471
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public float Width { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Width As Single
+  overload: FluentGpu.Dsl.ImageEl.Width*
+- uid: FluentGpu.Dsl.ImageEl.Height
+  commentId: P:FluentGpu.Dsl.ImageEl.Height
+  id: Height
+  parent: FluentGpu.Dsl.ImageEl
+  langs:
+  - csharp
+  - vb
+  name: Height
+  nameWithType: ImageEl.Height
+  fullName: FluentGpu.Dsl.ImageEl.Height
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Height
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 472
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public float Height { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Height As Single
+  overload: FluentGpu.Dsl.ImageEl.Height*
+- uid: FluentGpu.Dsl.ImageEl.AspectRatio
+  commentId: P:FluentGpu.Dsl.ImageEl.AspectRatio
+  id: AspectRatio
+  parent: FluentGpu.Dsl.ImageEl
+  langs:
+  - csharp
+  - vb
+  name: AspectRatio
+  nameWithType: ImageEl.AspectRatio
+  fullName: FluentGpu.Dsl.ImageEl.AspectRatio
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AspectRatio
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 477
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: >-
+    Width÷height ratio (CSS <code>aspect-ratio</code>). When set, a fluid image (one or both of
+        <xref href="FluentGpu.Dsl.ImageEl.Width" data-throw-if-not-resolved="false"></xref>/<xref href="FluentGpu.Dsl.ImageEl.Height" data-throw-if-not-resolved="false"></xref> left <code>NaN</code>) <i>derives</i> the missing dimension — e.g. a tile that
+        fills its column width and stays square (<code>1f</code>). The thing WinUI lacks (no SizeChanged/Viewbox hacks).
+        <code>NaN</code> = off (use explicit <xref href="FluentGpu.Dsl.ImageEl.Width" data-throw-if-not-resolved="false"></xref>/<xref href="FluentGpu.Dsl.ImageEl.Height" data-throw-if-not-resolved="false"></xref>).
+  example: []
+  syntax:
+    content: public float AspectRatio { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property AspectRatio As Single
+  overload: FluentGpu.Dsl.ImageEl.AspectRatio*
+- uid: FluentGpu.Dsl.ImageEl.Fit
+  commentId: P:FluentGpu.Dsl.ImageEl.Fit
+  id: Fit
+  parent: FluentGpu.Dsl.ImageEl
+  langs:
+  - csharp
+  - vb
+  name: Fit
+  nameWithType: ImageEl.Fit
+  fullName: FluentGpu.Dsl.ImageEl.Fit
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Fit
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 480
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: >-
+    How the decoded pixels map into the layout box — see <xref href="FluentGpu.Foundation.ImageFit" data-throw-if-not-resolved="false"></xref>. Default
+        <xref href="FluentGpu.Foundation.ImageFit.Cover" data-throw-if-not-resolved="false"></xref> (aspect-preserving crop), what most grids want; harmless for square-source/square-box.
+  example: []
+  syntax:
+    content: public ImageFit Fit { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ImageFit
+    content.vb: Public Property Fit As ImageFit
+  overload: FluentGpu.Dsl.ImageEl.Fit*
+- uid: FluentGpu.Dsl.ImageEl.DecodePx
+  commentId: P:FluentGpu.Dsl.ImageEl.DecodePx
+  id: DecodePx
+  parent: FluentGpu.Dsl.ImageEl
+  langs:
+  - csharp
+  - vb
+  name: DecodePx
+  nameWithType: ImageEl.DecodePx
+  fullName: FluentGpu.Dsl.ImageEl.DecodePx
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DecodePx
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 484
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: >-
+    Decode-size hint (target px) used when the layout extent is fluid (<xref href="FluentGpu.Dsl.ImageEl.Width" data-throw-if-not-resolved="false"></xref> is <code>NaN</code>, so the
+        real box size isn't known at request time). Ignored when <xref href="FluentGpu.Dsl.ImageEl.Width" data-throw-if-not-resolved="false"></xref> is explicit (that drives the decode).
+        <code>NaN</code> ⇒ decode at source resolution.
+  example: []
+  syntax:
+    content: public float DecodePx { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property DecodePx As Single
+  overload: FluentGpu.Dsl.ImageEl.DecodePx*
+- uid: FluentGpu.Dsl.ImageEl.Corners
+  commentId: P:FluentGpu.Dsl.ImageEl.Corners
+  id: Corners
+  parent: FluentGpu.Dsl.ImageEl
+  langs:
+  - csharp
+  - vb
+  name: Corners
+  nameWithType: ImageEl.Corners
+  fullName: FluentGpu.Dsl.ImageEl.Corners
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Corners
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 485
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public CornerRadius4 Corners { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.CornerRadius4
+    content.vb: Public Property Corners As CornerRadius4
+  overload: FluentGpu.Dsl.ImageEl.Corners*
+- uid: FluentGpu.Dsl.ImageEl.Placeholder
+  commentId: P:FluentGpu.Dsl.ImageEl.Placeholder
+  id: Placeholder
+  parent: FluentGpu.Dsl.ImageEl
+  langs:
+  - csharp
+  - vb
+  name: Placeholder
+  nameWithType: ImageEl.Placeholder
+  fullName: FluentGpu.Dsl.ImageEl.Placeholder
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Placeholder
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 487
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: 'Unified channel: static tint, thunk, or signal (pairs with a bound <xref href="FluentGpu.Dsl.ImageEl.Source" data-throw-if-not-resolved="false"></xref>).'
+  example: []
+  syntax:
+    content: public Prop<ColorF> Placeholder { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Signals.Prop{FluentGpu.Foundation.ColorF}
+    content.vb: Public Property Placeholder As Prop(Of ColorF)
+  overload: FluentGpu.Dsl.ImageEl.Placeholder*
+- uid: FluentGpu.Dsl.ImageEl.BlurHash
+  commentId: P:FluentGpu.Dsl.ImageEl.BlurHash
+  id: BlurHash
+  parent: FluentGpu.Dsl.ImageEl
+  langs:
+  - csharp
+  - vb
+  name: BlurHash
+  nameWithType: ImageEl.BlurHash
+  fullName: FluentGpu.Dsl.ImageEl.BlurHash
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BlurHash
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 490
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: >-
+    Optional BlurHash string — a tiny blurred LQIP preview shown instantly (decoded to a small texture)
+        until the full-res art lands. Falls back to the flat <xref href="FluentGpu.Dsl.ImageEl.Placeholder" data-throw-if-not-resolved="false"></xref> tint when null.
+  example: []
+  syntax:
+    content: public string? BlurHash { get; init; }
+    parameters: []
+    return:
+      type: System.String
+    content.vb: Public Property BlurHash As String
+  overload: FluentGpu.Dsl.ImageEl.BlurHash*
+- uid: FluentGpu.Dsl.ImageEl.Transition
+  commentId: P:FluentGpu.Dsl.ImageEl.Transition
+  id: Transition
+  parent: FluentGpu.Dsl.ImageEl
+  langs:
+  - csharp
+  - vb
+  name: Transition
+  nameWithType: ImageEl.Transition
+  fullName: FluentGpu.Dsl.ImageEl.Transition
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Transition
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 493
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: >-
+    Override the placeholder→image reveal transition (duration + easing). Null ⇒ <xref href="FluentGpu.Foundation.ImageTransition.Default" data-throw-if-not-resolved="false"></xref>;
+        pass <xref href="FluentGpu.Foundation.ImageTransition.None" data-throw-if-not-resolved="false"></xref> to disable the fade (instant).
+  example: []
+  syntax:
+    content: public ImageTransition? Transition { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.ImageTransition}
+    content.vb: Public Property Transition As ImageTransition?
+  overload: FluentGpu.Dsl.ImageEl.Transition*
+- uid: FluentGpu.Dsl.ImageEl.Margin
+  commentId: P:FluentGpu.Dsl.ImageEl.Margin
+  id: Margin
+  parent: FluentGpu.Dsl.ImageEl
+  langs:
+  - csharp
+  - vb
+  name: Margin
+  nameWithType: ImageEl.Margin
+  fullName: FluentGpu.Dsl.ImageEl.Margin
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Margin
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 494
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public Edges4 Margin { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Edges4
+    content.vb: Public Property Margin As Edges4
+  overload: FluentGpu.Dsl.ImageEl.Margin*
+- uid: FluentGpu.Dsl.ImageEl.AlignSelf
+  commentId: P:FluentGpu.Dsl.ImageEl.AlignSelf
+  id: AlignSelf
+  parent: FluentGpu.Dsl.ImageEl
+  langs:
+  - csharp
+  - vb
+  name: AlignSelf
+  nameWithType: ImageEl.AlignSelf
+  fullName: FluentGpu.Dsl.ImageEl.AlignSelf
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AlignSelf
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 495
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public FlexAlign AlignSelf { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.FlexAlign
+    content.vb: Public Property AlignSelf As FlexAlign
+  overload: FluentGpu.Dsl.ImageEl.AlignSelf*
+references:
+- uid: FluentGpu.Dsl.ImageEl.Placeholder
+  commentId: P:FluentGpu.Dsl.ImageEl.Placeholder
+  href: FluentGpu.Dsl.ImageEl.html#FluentGpu_Dsl_ImageEl_Placeholder
+  name: Placeholder
+  nameWithType: ImageEl.Placeholder
+  fullName: FluentGpu.Dsl.ImageEl.Placeholder
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: System.IEquatable{FluentGpu.Dsl.Element}
+  commentId: T:System.IEquatable{FluentGpu.Dsl.Element}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<Element>
+  nameWithType: IEquatable<Element>
+  fullName: System.IEquatable<FluentGpu.Dsl.Element>
+  nameWithType.vb: IEquatable(Of Element)
+  fullName.vb: System.IEquatable(Of FluentGpu.Dsl.Element)
+  name.vb: IEquatable(Of Element)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: )
+- uid: System.IEquatable{FluentGpu.Dsl.ImageEl}
+  commentId: T:System.IEquatable{FluentGpu.Dsl.ImageEl}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<ImageEl>
+  nameWithType: IEquatable<ImageEl>
+  fullName: System.IEquatable<FluentGpu.Dsl.ImageEl>
+  nameWithType.vb: IEquatable(Of ImageEl)
+  fullName.vb: System.IEquatable(Of FluentGpu.Dsl.ImageEl)
+  name.vb: IEquatable(Of ImageEl)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Dsl.ImageEl
+    name: ImageEl
+    href: FluentGpu.Dsl.ImageEl.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Dsl.ImageEl
+    name: ImageEl
+    href: FluentGpu.Dsl.ImageEl.html
+  - name: )
+- uid: FluentGpu.Dsl.Element.Key
+  commentId: P:FluentGpu.Dsl.Element.Key
+  parent: FluentGpu.Dsl.Element
+  href: FluentGpu.Dsl.Element.html#FluentGpu_Dsl_Element_Key
+  name: Key
+  nameWithType: Element.Key
+  fullName: FluentGpu.Dsl.Element.Key
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Dsl.Element.ElementTypeId
+  commentId: P:FluentGpu.Dsl.Element.ElementTypeId
+  parent: FluentGpu.Dsl.Element
+  href: FluentGpu.Dsl.Element.html#FluentGpu_Dsl_Element_ElementTypeId
+  name: ElementTypeId
+  nameWithType: Element.ElementTypeId
+  fullName: FluentGpu.Dsl.Element.ElementTypeId
+- uid: FluentGpu.Dsl.ImageEl.ElementTypeId*
+  commentId: Overload:FluentGpu.Dsl.ImageEl.ElementTypeId
+  href: FluentGpu.Dsl.ImageEl.html#FluentGpu_Dsl_ImageEl_ElementTypeId
+  name: ElementTypeId
+  nameWithType: ImageEl.ElementTypeId
+  fullName: FluentGpu.Dsl.ImageEl.ElementTypeId
+- uid: System.UInt16
+  commentId: T:System.UInt16
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.uint16
+  name: ushort
+  nameWithType: ushort
+  fullName: ushort
+  nameWithType.vb: UShort
+  fullName.vb: UShort
+  name.vb: UShort
+- uid: FluentGpu.Dsl.ImageEl.Source*
+  commentId: Overload:FluentGpu.Dsl.ImageEl.Source
+  href: FluentGpu.Dsl.ImageEl.html#FluentGpu_Dsl_ImageEl_Source
+  name: Source
+  nameWithType: ImageEl.Source
+  fullName: FluentGpu.Dsl.ImageEl.Source
+- uid: FluentGpu.Signals.Prop{System.String}
+  commentId: T:FluentGpu.Signals.Prop{System.String}
+  parent: FluentGpu.Signals
+  definition: FluentGpu.Signals.Prop`1
+  href: FluentGpu.Signals.Prop-1.html
+  name: Prop<string>
+  nameWithType: Prop<string>
+  fullName: FluentGpu.Signals.Prop<string>
+  nameWithType.vb: Prop(Of String)
+  fullName.vb: FluentGpu.Signals.Prop(Of String)
+  name.vb: Prop(Of String)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Prop`1
+    name: Prop
+    href: FluentGpu.Signals.Prop-1.html
+  - name: <
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Prop`1
+    name: Prop
+    href: FluentGpu.Signals.Prop-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+- uid: FluentGpu.Signals.Prop`1
+  commentId: T:FluentGpu.Signals.Prop`1
+  parent: FluentGpu.Signals
+  href: FluentGpu.Signals.Prop-1.html
+  name: Prop<T>
+  nameWithType: Prop<T>
+  fullName: FluentGpu.Signals.Prop<T>
+  nameWithType.vb: Prop(Of T)
+  fullName.vb: FluentGpu.Signals.Prop(Of T)
+  name.vb: Prop(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Prop`1
+    name: Prop
+    href: FluentGpu.Signals.Prop-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Prop`1
+    name: Prop
+    href: FluentGpu.Signals.Prop-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Signals
+  commentId: N:FluentGpu.Signals
+  href: FluentGpu.html
+  name: FluentGpu.Signals
+  nameWithType: FluentGpu.Signals
+  fullName: FluentGpu.Signals
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+- uid: FluentGpu.Dsl.ImageEl.Width*
+  commentId: Overload:FluentGpu.Dsl.ImageEl.Width
+  href: FluentGpu.Dsl.ImageEl.html#FluentGpu_Dsl_ImageEl_Width
+  name: Width
+  nameWithType: ImageEl.Width
+  fullName: FluentGpu.Dsl.ImageEl.Width
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Dsl.ImageEl.Height*
+  commentId: Overload:FluentGpu.Dsl.ImageEl.Height
+  href: FluentGpu.Dsl.ImageEl.html#FluentGpu_Dsl_ImageEl_Height
+  name: Height
+  nameWithType: ImageEl.Height
+  fullName: FluentGpu.Dsl.ImageEl.Height
+- uid: FluentGpu.Dsl.ImageEl.Width
+  commentId: P:FluentGpu.Dsl.ImageEl.Width
+  href: FluentGpu.Dsl.ImageEl.html#FluentGpu_Dsl_ImageEl_Width
+  name: Width
+  nameWithType: ImageEl.Width
+  fullName: FluentGpu.Dsl.ImageEl.Width
+- uid: FluentGpu.Dsl.ImageEl.Height
+  commentId: P:FluentGpu.Dsl.ImageEl.Height
+  href: FluentGpu.Dsl.ImageEl.html#FluentGpu_Dsl_ImageEl_Height
+  name: Height
+  nameWithType: ImageEl.Height
+  fullName: FluentGpu.Dsl.ImageEl.Height
+- uid: FluentGpu.Dsl.ImageEl.AspectRatio*
+  commentId: Overload:FluentGpu.Dsl.ImageEl.AspectRatio
+  href: FluentGpu.Dsl.ImageEl.html#FluentGpu_Dsl_ImageEl_AspectRatio
+  name: AspectRatio
+  nameWithType: ImageEl.AspectRatio
+  fullName: FluentGpu.Dsl.ImageEl.AspectRatio
+- uid: FluentGpu.Foundation.ImageFit
+  commentId: T:FluentGpu.Foundation.ImageFit
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ImageFit.html
+  name: ImageFit
+  nameWithType: ImageFit
+  fullName: FluentGpu.Foundation.ImageFit
+- uid: FluentGpu.Foundation.ImageFit.Cover
+  commentId: F:FluentGpu.Foundation.ImageFit.Cover
+  href: FluentGpu.Foundation.ImageFit.html#FluentGpu_Foundation_ImageFit_Cover
+  name: Cover
+  nameWithType: ImageFit.Cover
+  fullName: FluentGpu.Foundation.ImageFit.Cover
+- uid: FluentGpu.Dsl.ImageEl.Fit*
+  commentId: Overload:FluentGpu.Dsl.ImageEl.Fit
+  href: FluentGpu.Dsl.ImageEl.html#FluentGpu_Dsl_ImageEl_Fit
+  name: Fit
+  nameWithType: ImageEl.Fit
+  fullName: FluentGpu.Dsl.ImageEl.Fit
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Dsl.ImageEl.DecodePx*
+  commentId: Overload:FluentGpu.Dsl.ImageEl.DecodePx
+  href: FluentGpu.Dsl.ImageEl.html#FluentGpu_Dsl_ImageEl_DecodePx
+  name: DecodePx
+  nameWithType: ImageEl.DecodePx
+  fullName: FluentGpu.Dsl.ImageEl.DecodePx
+- uid: FluentGpu.Dsl.ImageEl.Corners*
+  commentId: Overload:FluentGpu.Dsl.ImageEl.Corners
+  href: FluentGpu.Dsl.ImageEl.html#FluentGpu_Dsl_ImageEl_Corners
+  name: Corners
+  nameWithType: ImageEl.Corners
+  fullName: FluentGpu.Dsl.ImageEl.Corners
+- uid: FluentGpu.Foundation.CornerRadius4
+  commentId: T:FluentGpu.Foundation.CornerRadius4
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.CornerRadius4.html
+  name: CornerRadius4
+  nameWithType: CornerRadius4
+  fullName: FluentGpu.Foundation.CornerRadius4
+- uid: FluentGpu.Dsl.ImageEl.Source
+  commentId: P:FluentGpu.Dsl.ImageEl.Source
+  href: FluentGpu.Dsl.ImageEl.html#FluentGpu_Dsl_ImageEl_Source
+  name: Source
+  nameWithType: ImageEl.Source
+  fullName: FluentGpu.Dsl.ImageEl.Source
+- uid: FluentGpu.Dsl.ImageEl.Placeholder*
+  commentId: Overload:FluentGpu.Dsl.ImageEl.Placeholder
+  href: FluentGpu.Dsl.ImageEl.html#FluentGpu_Dsl_ImageEl_Placeholder
+  name: Placeholder
+  nameWithType: ImageEl.Placeholder
+  fullName: FluentGpu.Dsl.ImageEl.Placeholder
+- uid: FluentGpu.Signals.Prop{FluentGpu.Foundation.ColorF}
+  commentId: T:FluentGpu.Signals.Prop{FluentGpu.Foundation.ColorF}
+  parent: FluentGpu.Signals
+  definition: FluentGpu.Signals.Prop`1
+  href: FluentGpu.Signals.Prop-1.html
+  name: Prop<ColorF>
+  nameWithType: Prop<ColorF>
+  fullName: FluentGpu.Signals.Prop<FluentGpu.Foundation.ColorF>
+  nameWithType.vb: Prop(Of ColorF)
+  fullName.vb: FluentGpu.Signals.Prop(Of FluentGpu.Foundation.ColorF)
+  name.vb: Prop(Of ColorF)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Prop`1
+    name: Prop
+    href: FluentGpu.Signals.Prop-1.html
+  - name: <
+  - uid: FluentGpu.Foundation.ColorF
+    name: ColorF
+    href: FluentGpu.Foundation.ColorF.html
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Prop`1
+    name: Prop
+    href: FluentGpu.Signals.Prop-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.ColorF
+    name: ColorF
+    href: FluentGpu.Foundation.ColorF.html
+  - name: )
+- uid: FluentGpu.Dsl.ImageEl.BlurHash*
+  commentId: Overload:FluentGpu.Dsl.ImageEl.BlurHash
+  href: FluentGpu.Dsl.ImageEl.html#FluentGpu_Dsl_ImageEl_BlurHash
+  name: BlurHash
+  nameWithType: ImageEl.BlurHash
+  fullName: FluentGpu.Dsl.ImageEl.BlurHash
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Foundation.ImageTransition.Default
+  commentId: P:FluentGpu.Foundation.ImageTransition.Default
+  href: FluentGpu.Foundation.ImageTransition.html#FluentGpu_Foundation_ImageTransition_Default
+  name: Default
+  nameWithType: ImageTransition.Default
+  fullName: FluentGpu.Foundation.ImageTransition.Default
+- uid: FluentGpu.Foundation.ImageTransition.None
+  commentId: P:FluentGpu.Foundation.ImageTransition.None
+  href: FluentGpu.Foundation.ImageTransition.html#FluentGpu_Foundation_ImageTransition_None
+  name: None
+  nameWithType: ImageTransition.None
+  fullName: FluentGpu.Foundation.ImageTransition.None
+- uid: FluentGpu.Dsl.ImageEl.Transition*
+  commentId: Overload:FluentGpu.Dsl.ImageEl.Transition
+  href: FluentGpu.Dsl.ImageEl.html#FluentGpu_Dsl_ImageEl_Transition
+  name: Transition
+  nameWithType: ImageEl.Transition
+  fullName: FluentGpu.Dsl.ImageEl.Transition
+- uid: System.Nullable{FluentGpu.Foundation.ImageTransition}
+  commentId: T:System.Nullable{FluentGpu.Foundation.ImageTransition}
+  parent: System
+  definition: System.Nullable`1
+  href: FluentGpu.Foundation.ImageTransition.html
+  name: ImageTransition?
+  nameWithType: ImageTransition?
+  fullName: FluentGpu.Foundation.ImageTransition?
+  spec.csharp:
+  - uid: FluentGpu.Foundation.ImageTransition
+    name: ImageTransition
+    href: FluentGpu.Foundation.ImageTransition.html
+  - name: '?'
+  spec.vb:
+  - uid: FluentGpu.Foundation.ImageTransition
+    name: ImageTransition
+    href: FluentGpu.Foundation.ImageTransition.html
+  - name: '?'
+- uid: System.Nullable`1
+  commentId: T:System.Nullable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  name: Nullable<T>
+  nameWithType: Nullable<T>
+  fullName: System.Nullable<T>
+  nameWithType.vb: Nullable(Of T)
+  fullName.vb: System.Nullable(Of T)
+  name.vb: Nullable(Of T)
+  spec.csharp:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Dsl.ImageEl.Margin*
+  commentId: Overload:FluentGpu.Dsl.ImageEl.Margin
+  href: FluentGpu.Dsl.ImageEl.html#FluentGpu_Dsl_ImageEl_Margin
+  name: Margin
+  nameWithType: ImageEl.Margin
+  fullName: FluentGpu.Dsl.ImageEl.Margin
+- uid: FluentGpu.Foundation.Edges4
+  commentId: T:FluentGpu.Foundation.Edges4
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Edges4.html
+  name: Edges4
+  nameWithType: Edges4
+  fullName: FluentGpu.Foundation.Edges4
+- uid: FluentGpu.Dsl.ImageEl.AlignSelf*
+  commentId: Overload:FluentGpu.Dsl.ImageEl.AlignSelf
+  href: FluentGpu.Dsl.ImageEl.html#FluentGpu_Dsl_ImageEl_AlignSelf
+  name: AlignSelf
+  nameWithType: ImageEl.AlignSelf
+  fullName: FluentGpu.Dsl.ImageEl.AlignSelf
+- uid: FluentGpu.Foundation.FlexAlign
+  commentId: T:FluentGpu.Foundation.FlexAlign
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.FlexAlign.html
+  name: FlexAlign
+  nameWithType: FlexAlign
+  fullName: FluentGpu.Foundation.FlexAlign

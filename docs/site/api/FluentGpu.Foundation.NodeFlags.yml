@@ -1,0 +1,745 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.NodeFlags
+  commentId: T:FluentGpu.Foundation.NodeFlags
+  id: NodeFlags
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.NodeFlags.BoundsAnimated
+  - FluentGpu.Foundation.NodeFlags.ClipsToBounds
+  - FluentGpu.Foundation.NodeFlags.CounterScaled
+  - FluentGpu.Foundation.NodeFlags.Detached
+  - FluentGpu.Foundation.NodeFlags.Disabled
+  - FluentGpu.Foundation.NodeFlags.DragGhost
+  - FluentGpu.Foundation.NodeFlags.Exiting
+  - FluentGpu.Foundation.NodeFlags.FocusVisual
+  - FluentGpu.Foundation.NodeFlags.Focusable
+  - FluentGpu.Foundation.NodeFlags.Focused
+  - FluentGpu.Foundation.NodeFlags.HitTestVisible
+  - FluentGpu.Foundation.NodeFlags.Hovered
+  - FluentGpu.Foundation.NodeFlags.LayoutDirty
+  - FluentGpu.Foundation.NodeFlags.NewThisFrame
+  - FluentGpu.Foundation.NodeFlags.None
+  - FluentGpu.Foundation.NodeFlags.PaintDirty
+  - FluentGpu.Foundation.NodeFlags.Pressed
+  - FluentGpu.Foundation.NodeFlags.Relayouting
+  - FluentGpu.Foundation.NodeFlags.Scrollable
+  - FluentGpu.Foundation.NodeFlags.StickyPinned
+  - FluentGpu.Foundation.NodeFlags.TransformDirty
+  - FluentGpu.Foundation.NodeFlags.VirtualRangeDirty
+  - FluentGpu.Foundation.NodeFlags.Visible
+  - FluentGpu.Foundation.NodeFlags.WantsPointer
+  - FluentGpu.Foundation.NodeFlags.ZStack
+  langs:
+  - csharp
+  - vb
+  name: NodeFlags
+  nameWithType: NodeFlags
+  fullName: FluentGpu.Foundation.NodeFlags
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/NodeFlags.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NodeFlags
+    path: ../../src/FluentGpu.Foundation/NodeFlags.cs
+    startLine: 3
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Per-node dirty + state bits (a single 32-bit SceneStore column). Three orthogonal dirty axes.
+  example: []
+  syntax:
+    content: >-
+      [Flags]
+
+      public enum NodeFlags : uint
+    content.vb: >-
+      <Flags>
+
+      Public Enum NodeFlags As UInteger
+  attributes:
+  - type: System.FlagsAttribute
+    ctor: System.FlagsAttribute.#ctor
+    arguments: []
+- uid: FluentGpu.Foundation.NodeFlags.None
+  commentId: F:FluentGpu.Foundation.NodeFlags.None
+  id: None
+  parent: FluentGpu.Foundation.NodeFlags
+  langs:
+  - csharp
+  - vb
+  name: None
+  nameWithType: NodeFlags.None
+  fullName: FluentGpu.Foundation.NodeFlags.None
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/NodeFlags.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: None
+    path: ../../src/FluentGpu.Foundation/NodeFlags.cs
+    startLine: 6
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: None = 0
+    return:
+      type: FluentGpu.Foundation.NodeFlags
+- uid: FluentGpu.Foundation.NodeFlags.LayoutDirty
+  commentId: F:FluentGpu.Foundation.NodeFlags.LayoutDirty
+  id: LayoutDirty
+  parent: FluentGpu.Foundation.NodeFlags
+  langs:
+  - csharp
+  - vb
+  name: LayoutDirty
+  nameWithType: NodeFlags.LayoutDirty
+  fullName: FluentGpu.Foundation.NodeFlags.LayoutDirty
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/NodeFlags.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LayoutDirty
+    path: ../../src/FluentGpu.Foundation/NodeFlags.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: LayoutDirty = 1
+    return:
+      type: FluentGpu.Foundation.NodeFlags
+- uid: FluentGpu.Foundation.NodeFlags.PaintDirty
+  commentId: F:FluentGpu.Foundation.NodeFlags.PaintDirty
+  id: PaintDirty
+  parent: FluentGpu.Foundation.NodeFlags
+  langs:
+  - csharp
+  - vb
+  name: PaintDirty
+  nameWithType: NodeFlags.PaintDirty
+  fullName: FluentGpu.Foundation.NodeFlags.PaintDirty
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/NodeFlags.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PaintDirty
+    path: ../../src/FluentGpu.Foundation/NodeFlags.cs
+    startLine: 10
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: PaintDirty = 2
+    return:
+      type: FluentGpu.Foundation.NodeFlags
+- uid: FluentGpu.Foundation.NodeFlags.TransformDirty
+  commentId: F:FluentGpu.Foundation.NodeFlags.TransformDirty
+  id: TransformDirty
+  parent: FluentGpu.Foundation.NodeFlags
+  langs:
+  - csharp
+  - vb
+  name: TransformDirty
+  nameWithType: NodeFlags.TransformDirty
+  fullName: FluentGpu.Foundation.NodeFlags.TransformDirty
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/NodeFlags.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TransformDirty
+    path: ../../src/FluentGpu.Foundation/NodeFlags.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: TransformDirty = 4
+    return:
+      type: FluentGpu.Foundation.NodeFlags
+- uid: FluentGpu.Foundation.NodeFlags.Visible
+  commentId: F:FluentGpu.Foundation.NodeFlags.Visible
+  id: Visible
+  parent: FluentGpu.Foundation.NodeFlags
+  langs:
+  - csharp
+  - vb
+  name: Visible
+  nameWithType: NodeFlags.Visible
+  fullName: FluentGpu.Foundation.NodeFlags.Visible
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/NodeFlags.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Visible
+    path: ../../src/FluentGpu.Foundation/NodeFlags.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Visible = 256
+    return:
+      type: FluentGpu.Foundation.NodeFlags
+- uid: FluentGpu.Foundation.NodeFlags.HitTestVisible
+  commentId: F:FluentGpu.Foundation.NodeFlags.HitTestVisible
+  id: HitTestVisible
+  parent: FluentGpu.Foundation.NodeFlags
+  langs:
+  - csharp
+  - vb
+  name: HitTestVisible
+  nameWithType: NodeFlags.HitTestVisible
+  fullName: FluentGpu.Foundation.NodeFlags.HitTestVisible
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/NodeFlags.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HitTestVisible
+    path: ../../src/FluentGpu.Foundation/NodeFlags.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: HitTestVisible = 512
+    return:
+      type: FluentGpu.Foundation.NodeFlags
+- uid: FluentGpu.Foundation.NodeFlags.ClipsToBounds
+  commentId: F:FluentGpu.Foundation.NodeFlags.ClipsToBounds
+  id: ClipsToBounds
+  parent: FluentGpu.Foundation.NodeFlags
+  langs:
+  - csharp
+  - vb
+  name: ClipsToBounds
+  nameWithType: NodeFlags.ClipsToBounds
+  fullName: FluentGpu.Foundation.NodeFlags.ClipsToBounds
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/NodeFlags.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ClipsToBounds
+    path: ../../src/FluentGpu.Foundation/NodeFlags.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: ClipsToBounds = 1024
+    return:
+      type: FluentGpu.Foundation.NodeFlags
+- uid: FluentGpu.Foundation.NodeFlags.Disabled
+  commentId: F:FluentGpu.Foundation.NodeFlags.Disabled
+  id: Disabled
+  parent: FluentGpu.Foundation.NodeFlags
+  langs:
+  - csharp
+  - vb
+  name: Disabled
+  nameWithType: NodeFlags.Disabled
+  fullName: FluentGpu.Foundation.NodeFlags.Disabled
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/NodeFlags.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Disabled
+    path: ../../src/FluentGpu.Foundation/NodeFlags.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Disabled = 2048
+    return:
+      type: FluentGpu.Foundation.NodeFlags
+- uid: FluentGpu.Foundation.NodeFlags.WantsPointer
+  commentId: F:FluentGpu.Foundation.NodeFlags.WantsPointer
+  id: WantsPointer
+  parent: FluentGpu.Foundation.NodeFlags
+  langs:
+  - csharp
+  - vb
+  name: WantsPointer
+  nameWithType: NodeFlags.WantsPointer
+  fullName: FluentGpu.Foundation.NodeFlags.WantsPointer
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/NodeFlags.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: WantsPointer
+    path: ../../src/FluentGpu.Foundation/NodeFlags.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: WantsPointer = 4096
+    return:
+      type: FluentGpu.Foundation.NodeFlags
+- uid: FluentGpu.Foundation.NodeFlags.Focusable
+  commentId: F:FluentGpu.Foundation.NodeFlags.Focusable
+  id: Focusable
+  parent: FluentGpu.Foundation.NodeFlags
+  langs:
+  - csharp
+  - vb
+  name: Focusable
+  nameWithType: NodeFlags.Focusable
+  fullName: FluentGpu.Foundation.NodeFlags.Focusable
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/NodeFlags.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Focusable
+    path: ../../src/FluentGpu.Foundation/NodeFlags.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Focusable = 8192
+    return:
+      type: FluentGpu.Foundation.NodeFlags
+- uid: FluentGpu.Foundation.NodeFlags.Focused
+  commentId: F:FluentGpu.Foundation.NodeFlags.Focused
+  id: Focused
+  parent: FluentGpu.Foundation.NodeFlags
+  langs:
+  - csharp
+  - vb
+  name: Focused
+  nameWithType: NodeFlags.Focused
+  fullName: FluentGpu.Foundation.NodeFlags.Focused
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/NodeFlags.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Focused
+    path: ../../src/FluentGpu.Foundation/NodeFlags.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Focused = 16384
+    return:
+      type: FluentGpu.Foundation.NodeFlags
+- uid: FluentGpu.Foundation.NodeFlags.Hovered
+  commentId: F:FluentGpu.Foundation.NodeFlags.Hovered
+  id: Hovered
+  parent: FluentGpu.Foundation.NodeFlags
+  langs:
+  - csharp
+  - vb
+  name: Hovered
+  nameWithType: NodeFlags.Hovered
+  fullName: FluentGpu.Foundation.NodeFlags.Hovered
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/NodeFlags.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Hovered
+    path: ../../src/FluentGpu.Foundation/NodeFlags.cs
+    startLine: 21
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Hovered = 32768
+    return:
+      type: FluentGpu.Foundation.NodeFlags
+- uid: FluentGpu.Foundation.NodeFlags.Pressed
+  commentId: F:FluentGpu.Foundation.NodeFlags.Pressed
+  id: Pressed
+  parent: FluentGpu.Foundation.NodeFlags
+  langs:
+  - csharp
+  - vb
+  name: Pressed
+  nameWithType: NodeFlags.Pressed
+  fullName: FluentGpu.Foundation.NodeFlags.Pressed
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/NodeFlags.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Pressed
+    path: ../../src/FluentGpu.Foundation/NodeFlags.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Pressed = 65536
+    return:
+      type: FluentGpu.Foundation.NodeFlags
+- uid: FluentGpu.Foundation.NodeFlags.FocusVisual
+  commentId: F:FluentGpu.Foundation.NodeFlags.FocusVisual
+  id: FocusVisual
+  parent: FluentGpu.Foundation.NodeFlags
+  langs:
+  - csharp
+  - vb
+  name: FocusVisual
+  nameWithType: NodeFlags.FocusVisual
+  fullName: FluentGpu.Foundation.NodeFlags.FocusVisual
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/NodeFlags.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FocusVisual
+    path: ../../src/FluentGpu.Foundation/NodeFlags.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: FocusVisual = 4194304
+    return:
+      type: FluentGpu.Foundation.NodeFlags
+- uid: FluentGpu.Foundation.NodeFlags.Scrollable
+  commentId: F:FluentGpu.Foundation.NodeFlags.Scrollable
+  id: Scrollable
+  parent: FluentGpu.Foundation.NodeFlags
+  langs:
+  - csharp
+  - vb
+  name: Scrollable
+  nameWithType: NodeFlags.Scrollable
+  fullName: FluentGpu.Foundation.NodeFlags.Scrollable
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/NodeFlags.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Scrollable
+    path: ../../src/FluentGpu.Foundation/NodeFlags.cs
+    startLine: 29
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Scrollable = 131072
+    return:
+      type: FluentGpu.Foundation.NodeFlags
+- uid: FluentGpu.Foundation.NodeFlags.VirtualRangeDirty
+  commentId: F:FluentGpu.Foundation.NodeFlags.VirtualRangeDirty
+  id: VirtualRangeDirty
+  parent: FluentGpu.Foundation.NodeFlags
+  langs:
+  - csharp
+  - vb
+  name: VirtualRangeDirty
+  nameWithType: NodeFlags.VirtualRangeDirty
+  fullName: FluentGpu.Foundation.NodeFlags.VirtualRangeDirty
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/NodeFlags.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: VirtualRangeDirty
+    path: ../../src/FluentGpu.Foundation/NodeFlags.cs
+    startLine: 30
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: VirtualRangeDirty = 262144
+    return:
+      type: FluentGpu.Foundation.NodeFlags
+- uid: FluentGpu.Foundation.NodeFlags.StickyPinned
+  commentId: F:FluentGpu.Foundation.NodeFlags.StickyPinned
+  id: StickyPinned
+  parent: FluentGpu.Foundation.NodeFlags
+  langs:
+  - csharp
+  - vb
+  name: StickyPinned
+  nameWithType: NodeFlags.StickyPinned
+  fullName: FluentGpu.Foundation.NodeFlags.StickyPinned
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/NodeFlags.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StickyPinned
+    path: ../../src/FluentGpu.Foundation/NodeFlags.cs
+    startLine: 31
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: StickyPinned = 524288
+    return:
+      type: FluentGpu.Foundation.NodeFlags
+- uid: FluentGpu.Foundation.NodeFlags.ZStack
+  commentId: F:FluentGpu.Foundation.NodeFlags.ZStack
+  id: ZStack
+  parent: FluentGpu.Foundation.NodeFlags
+  langs:
+  - csharp
+  - vb
+  name: ZStack
+  nameWithType: NodeFlags.ZStack
+  fullName: FluentGpu.Foundation.NodeFlags.ZStack
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/NodeFlags.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ZStack
+    path: ../../src/FluentGpu.Foundation/NodeFlags.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: ZStack = 1048576
+    return:
+      type: FluentGpu.Foundation.NodeFlags
+- uid: FluentGpu.Foundation.NodeFlags.BoundsAnimated
+  commentId: F:FluentGpu.Foundation.NodeFlags.BoundsAnimated
+  id: BoundsAnimated
+  parent: FluentGpu.Foundation.NodeFlags
+  langs:
+  - csharp
+  - vb
+  name: BoundsAnimated
+  nameWithType: NodeFlags.BoundsAnimated
+  fullName: FluentGpu.Foundation.NodeFlags.BoundsAnimated
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/NodeFlags.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BoundsAnimated
+    path: ../../src/FluentGpu.Foundation/NodeFlags.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: BoundsAnimated = 2097152
+    return:
+      type: FluentGpu.Foundation.NodeFlags
+- uid: FluentGpu.Foundation.NodeFlags.CounterScaled
+  commentId: F:FluentGpu.Foundation.NodeFlags.CounterScaled
+  id: CounterScaled
+  parent: FluentGpu.Foundation.NodeFlags
+  langs:
+  - csharp
+  - vb
+  name: CounterScaled
+  nameWithType: NodeFlags.CounterScaled
+  fullName: FluentGpu.Foundation.NodeFlags.CounterScaled
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/NodeFlags.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CounterScaled
+    path: ../../src/FluentGpu.Foundation/NodeFlags.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: CounterScaled = 8388608
+    return:
+      type: FluentGpu.Foundation.NodeFlags
+- uid: FluentGpu.Foundation.NodeFlags.Exiting
+  commentId: F:FluentGpu.Foundation.NodeFlags.Exiting
+  id: Exiting
+  parent: FluentGpu.Foundation.NodeFlags
+  langs:
+  - csharp
+  - vb
+  name: Exiting
+  nameWithType: NodeFlags.Exiting
+  fullName: FluentGpu.Foundation.NodeFlags.Exiting
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/NodeFlags.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Exiting
+    path: ../../src/FluentGpu.Foundation/NodeFlags.cs
+    startLine: 37
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Exiting = 16777216
+    return:
+      type: FluentGpu.Foundation.NodeFlags
+- uid: FluentGpu.Foundation.NodeFlags.Relayouting
+  commentId: F:FluentGpu.Foundation.NodeFlags.Relayouting
+  id: Relayouting
+  parent: FluentGpu.Foundation.NodeFlags
+  langs:
+  - csharp
+  - vb
+  name: Relayouting
+  nameWithType: NodeFlags.Relayouting
+  fullName: FluentGpu.Foundation.NodeFlags.Relayouting
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/NodeFlags.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Relayouting
+    path: ../../src/FluentGpu.Foundation/NodeFlags.cs
+    startLine: 38
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Relayouting = 33554432
+    return:
+      type: FluentGpu.Foundation.NodeFlags
+- uid: FluentGpu.Foundation.NodeFlags.DragGhost
+  commentId: F:FluentGpu.Foundation.NodeFlags.DragGhost
+  id: DragGhost
+  parent: FluentGpu.Foundation.NodeFlags
+  langs:
+  - csharp
+  - vb
+  name: DragGhost
+  nameWithType: NodeFlags.DragGhost
+  fullName: FluentGpu.Foundation.NodeFlags.DragGhost
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/NodeFlags.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DragGhost
+    path: ../../src/FluentGpu.Foundation/NodeFlags.cs
+    startLine: 39
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: DragGhost = 67108864
+    return:
+      type: FluentGpu.Foundation.NodeFlags
+- uid: FluentGpu.Foundation.NodeFlags.NewThisFrame
+  commentId: F:FluentGpu.Foundation.NodeFlags.NewThisFrame
+  id: NewThisFrame
+  parent: FluentGpu.Foundation.NodeFlags
+  langs:
+  - csharp
+  - vb
+  name: NewThisFrame
+  nameWithType: NodeFlags.NewThisFrame
+  fullName: FluentGpu.Foundation.NodeFlags.NewThisFrame
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/NodeFlags.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NewThisFrame
+    path: ../../src/FluentGpu.Foundation/NodeFlags.cs
+    startLine: 44
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: NewThisFrame = 536870912
+    return:
+      type: FluentGpu.Foundation.NodeFlags
+- uid: FluentGpu.Foundation.NodeFlags.Detached
+  commentId: F:FluentGpu.Foundation.NodeFlags.Detached
+  id: Detached
+  parent: FluentGpu.Foundation.NodeFlags
+  langs:
+  - csharp
+  - vb
+  name: Detached
+  nameWithType: NodeFlags.Detached
+  fullName: FluentGpu.Foundation.NodeFlags.Detached
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/NodeFlags.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Detached
+    path: ../../src/FluentGpu.Foundation/NodeFlags.cs
+    startLine: 45
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Detached = 268435456
+    return:
+      type: FluentGpu.Foundation.NodeFlags
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Foundation.NodeFlags
+  commentId: T:FluentGpu.Foundation.NodeFlags
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.NodeFlags.html
+  name: NodeFlags
+  nameWithType: NodeFlags
+  fullName: FluentGpu.Foundation.NodeFlags

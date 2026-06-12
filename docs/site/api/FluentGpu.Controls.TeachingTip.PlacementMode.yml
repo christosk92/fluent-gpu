@@ -1,0 +1,454 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.TeachingTip.PlacementMode
+  commentId: T:FluentGpu.Controls.TeachingTip.PlacementMode
+  id: TeachingTip.PlacementMode
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.TeachingTip.PlacementMode.Auto
+  - FluentGpu.Controls.TeachingTip.PlacementMode.Bottom
+  - FluentGpu.Controls.TeachingTip.PlacementMode.BottomLeft
+  - FluentGpu.Controls.TeachingTip.PlacementMode.BottomRight
+  - FluentGpu.Controls.TeachingTip.PlacementMode.Center
+  - FluentGpu.Controls.TeachingTip.PlacementMode.Left
+  - FluentGpu.Controls.TeachingTip.PlacementMode.LeftBottom
+  - FluentGpu.Controls.TeachingTip.PlacementMode.LeftTop
+  - FluentGpu.Controls.TeachingTip.PlacementMode.Right
+  - FluentGpu.Controls.TeachingTip.PlacementMode.RightBottom
+  - FluentGpu.Controls.TeachingTip.PlacementMode.RightTop
+  - FluentGpu.Controls.TeachingTip.PlacementMode.Top
+  - FluentGpu.Controls.TeachingTip.PlacementMode.TopLeft
+  - FluentGpu.Controls.TeachingTip.PlacementMode.TopRight
+  langs:
+  - csharp
+  - vb
+  name: TeachingTip.PlacementMode
+  nameWithType: TeachingTip.PlacementMode
+  fullName: FluentGpu.Controls.TeachingTip.PlacementMode
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PlacementMode
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI <code>TeachingTipPlacementMode</code> — all 13 modes are positioned (TeachingTip.xaml PlacementStates).
+  example: []
+  syntax:
+    content: 'public enum TeachingTip.PlacementMode : byte'
+    content.vb: Public Enum TeachingTip.PlacementMode As Byte
+- uid: FluentGpu.Controls.TeachingTip.PlacementMode.Auto
+  commentId: F:FluentGpu.Controls.TeachingTip.PlacementMode.Auto
+  id: Auto
+  parent: FluentGpu.Controls.TeachingTip.PlacementMode
+  langs:
+  - csharp
+  - vb
+  name: Auto
+  nameWithType: TeachingTip.PlacementMode.Auto
+  fullName: FluentGpu.Controls.TeachingTip.PlacementMode.Auto
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Auto
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Auto = 0
+    return:
+      type: FluentGpu.Controls.TeachingTip.PlacementMode
+- uid: FluentGpu.Controls.TeachingTip.PlacementMode.Top
+  commentId: F:FluentGpu.Controls.TeachingTip.PlacementMode.Top
+  id: Top
+  parent: FluentGpu.Controls.TeachingTip.PlacementMode
+  langs:
+  - csharp
+  - vb
+  name: Top
+  nameWithType: TeachingTip.PlacementMode.Top
+  fullName: FluentGpu.Controls.TeachingTip.PlacementMode.Top
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Top
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Top = 1
+    return:
+      type: FluentGpu.Controls.TeachingTip.PlacementMode
+- uid: FluentGpu.Controls.TeachingTip.PlacementMode.Bottom
+  commentId: F:FluentGpu.Controls.TeachingTip.PlacementMode.Bottom
+  id: Bottom
+  parent: FluentGpu.Controls.TeachingTip.PlacementMode
+  langs:
+  - csharp
+  - vb
+  name: Bottom
+  nameWithType: TeachingTip.PlacementMode.Bottom
+  fullName: FluentGpu.Controls.TeachingTip.PlacementMode.Bottom
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Bottom
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Bottom = 2
+    return:
+      type: FluentGpu.Controls.TeachingTip.PlacementMode
+- uid: FluentGpu.Controls.TeachingTip.PlacementMode.Left
+  commentId: F:FluentGpu.Controls.TeachingTip.PlacementMode.Left
+  id: Left
+  parent: FluentGpu.Controls.TeachingTip.PlacementMode
+  langs:
+  - csharp
+  - vb
+  name: Left
+  nameWithType: TeachingTip.PlacementMode.Left
+  fullName: FluentGpu.Controls.TeachingTip.PlacementMode.Left
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Left
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Left = 3
+    return:
+      type: FluentGpu.Controls.TeachingTip.PlacementMode
+- uid: FluentGpu.Controls.TeachingTip.PlacementMode.Right
+  commentId: F:FluentGpu.Controls.TeachingTip.PlacementMode.Right
+  id: Right
+  parent: FluentGpu.Controls.TeachingTip.PlacementMode
+  langs:
+  - csharp
+  - vb
+  name: Right
+  nameWithType: TeachingTip.PlacementMode.Right
+  fullName: FluentGpu.Controls.TeachingTip.PlacementMode.Right
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Right
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Right = 4
+    return:
+      type: FluentGpu.Controls.TeachingTip.PlacementMode
+- uid: FluentGpu.Controls.TeachingTip.PlacementMode.TopRight
+  commentId: F:FluentGpu.Controls.TeachingTip.PlacementMode.TopRight
+  id: TopRight
+  parent: FluentGpu.Controls.TeachingTip.PlacementMode
+  langs:
+  - csharp
+  - vb
+  name: TopRight
+  nameWithType: TeachingTip.PlacementMode.TopRight
+  fullName: FluentGpu.Controls.TeachingTip.PlacementMode.TopRight
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TopRight
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: TopRight = 5
+    return:
+      type: FluentGpu.Controls.TeachingTip.PlacementMode
+- uid: FluentGpu.Controls.TeachingTip.PlacementMode.TopLeft
+  commentId: F:FluentGpu.Controls.TeachingTip.PlacementMode.TopLeft
+  id: TopLeft
+  parent: FluentGpu.Controls.TeachingTip.PlacementMode
+  langs:
+  - csharp
+  - vb
+  name: TopLeft
+  nameWithType: TeachingTip.PlacementMode.TopLeft
+  fullName: FluentGpu.Controls.TeachingTip.PlacementMode.TopLeft
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TopLeft
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: TopLeft = 6
+    return:
+      type: FluentGpu.Controls.TeachingTip.PlacementMode
+- uid: FluentGpu.Controls.TeachingTip.PlacementMode.BottomRight
+  commentId: F:FluentGpu.Controls.TeachingTip.PlacementMode.BottomRight
+  id: BottomRight
+  parent: FluentGpu.Controls.TeachingTip.PlacementMode
+  langs:
+  - csharp
+  - vb
+  name: BottomRight
+  nameWithType: TeachingTip.PlacementMode.BottomRight
+  fullName: FluentGpu.Controls.TeachingTip.PlacementMode.BottomRight
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BottomRight
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: BottomRight = 7
+    return:
+      type: FluentGpu.Controls.TeachingTip.PlacementMode
+- uid: FluentGpu.Controls.TeachingTip.PlacementMode.BottomLeft
+  commentId: F:FluentGpu.Controls.TeachingTip.PlacementMode.BottomLeft
+  id: BottomLeft
+  parent: FluentGpu.Controls.TeachingTip.PlacementMode
+  langs:
+  - csharp
+  - vb
+  name: BottomLeft
+  nameWithType: TeachingTip.PlacementMode.BottomLeft
+  fullName: FluentGpu.Controls.TeachingTip.PlacementMode.BottomLeft
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BottomLeft
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: BottomLeft = 8
+    return:
+      type: FluentGpu.Controls.TeachingTip.PlacementMode
+- uid: FluentGpu.Controls.TeachingTip.PlacementMode.LeftTop
+  commentId: F:FluentGpu.Controls.TeachingTip.PlacementMode.LeftTop
+  id: LeftTop
+  parent: FluentGpu.Controls.TeachingTip.PlacementMode
+  langs:
+  - csharp
+  - vb
+  name: LeftTop
+  nameWithType: TeachingTip.PlacementMode.LeftTop
+  fullName: FluentGpu.Controls.TeachingTip.PlacementMode.LeftTop
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LeftTop
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: LeftTop = 9
+    return:
+      type: FluentGpu.Controls.TeachingTip.PlacementMode
+- uid: FluentGpu.Controls.TeachingTip.PlacementMode.LeftBottom
+  commentId: F:FluentGpu.Controls.TeachingTip.PlacementMode.LeftBottom
+  id: LeftBottom
+  parent: FluentGpu.Controls.TeachingTip.PlacementMode
+  langs:
+  - csharp
+  - vb
+  name: LeftBottom
+  nameWithType: TeachingTip.PlacementMode.LeftBottom
+  fullName: FluentGpu.Controls.TeachingTip.PlacementMode.LeftBottom
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LeftBottom
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: LeftBottom = 10
+    return:
+      type: FluentGpu.Controls.TeachingTip.PlacementMode
+- uid: FluentGpu.Controls.TeachingTip.PlacementMode.RightTop
+  commentId: F:FluentGpu.Controls.TeachingTip.PlacementMode.RightTop
+  id: RightTop
+  parent: FluentGpu.Controls.TeachingTip.PlacementMode
+  langs:
+  - csharp
+  - vb
+  name: RightTop
+  nameWithType: TeachingTip.PlacementMode.RightTop
+  fullName: FluentGpu.Controls.TeachingTip.PlacementMode.RightTop
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RightTop
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: RightTop = 11
+    return:
+      type: FluentGpu.Controls.TeachingTip.PlacementMode
+- uid: FluentGpu.Controls.TeachingTip.PlacementMode.RightBottom
+  commentId: F:FluentGpu.Controls.TeachingTip.PlacementMode.RightBottom
+  id: RightBottom
+  parent: FluentGpu.Controls.TeachingTip.PlacementMode
+  langs:
+  - csharp
+  - vb
+  name: RightBottom
+  nameWithType: TeachingTip.PlacementMode.RightBottom
+  fullName: FluentGpu.Controls.TeachingTip.PlacementMode.RightBottom
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RightBottom
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: RightBottom = 12
+    return:
+      type: FluentGpu.Controls.TeachingTip.PlacementMode
+- uid: FluentGpu.Controls.TeachingTip.PlacementMode.Center
+  commentId: F:FluentGpu.Controls.TeachingTip.PlacementMode.Center
+  id: Center
+  parent: FluentGpu.Controls.TeachingTip.PlacementMode
+  langs:
+  - csharp
+  - vb
+  name: Center
+  nameWithType: TeachingTip.PlacementMode.Center
+  fullName: FluentGpu.Controls.TeachingTip.PlacementMode.Center
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Center
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Center = 13
+    return:
+      type: FluentGpu.Controls.TeachingTip.PlacementMode
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.TeachingTip.PlacementMode
+  commentId: T:FluentGpu.Controls.TeachingTip.PlacementMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.TeachingTip.html
+  name: TeachingTip.PlacementMode
+  nameWithType: TeachingTip.PlacementMode
+  fullName: FluentGpu.Controls.TeachingTip.PlacementMode
+  spec.csharp:
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.PlacementMode
+    name: PlacementMode
+    href: FluentGpu.Controls.TeachingTip.PlacementMode.html
+  spec.vb:
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.PlacementMode
+    name: PlacementMode
+    href: FluentGpu.Controls.TeachingTip.PlacementMode.html

@@ -1,0 +1,784 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.GradientSpec
+  commentId: T:FluentGpu.Foundation.GradientSpec
+  id: GradientSpec
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.GradientSpec.#ctor(FluentGpu.Foundation.GradientShape,System.Single,FluentGpu.Foundation.GradientStop[])
+  - FluentGpu.Foundation.GradientSpec.AnchorEnd
+  - FluentGpu.Foundation.GradientSpec.AngleDeg
+  - FluentGpu.Foundation.GradientSpec.AxisLengthPx
+  - FluentGpu.Foundation.GradientSpec.MaxStops
+  - FluentGpu.Foundation.GradientSpec.Shape
+  - FluentGpu.Foundation.GradientSpec.Solid(FluentGpu.Foundation.ColorF)
+  - FluentGpu.Foundation.GradientSpec.Stops
+  - FluentGpu.Foundation.GradientSpec.Vertical(FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF)
+  langs:
+  - csharp
+  - vb
+  name: GradientSpec
+  nameWithType: GradientSpec
+  fullName: FluentGpu.Foundation.GradientSpec
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GradientSpec
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 42
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    A gradient fill. <xref href="FluentGpu.Foundation.GradientSpec.AngleDeg" data-throw-if-not-resolved="false"></xref> is the linear axis (0 = left-to-right, 90 = top-to-bottom). Up to 4 stops are
+
+    carried into the POD draw command; extras are ignored. When set on a node it supersedes the solid fill at record time.
+  example: []
+  syntax:
+    content: 'public readonly record struct GradientSpec : IEquatable<GradientSpec>'
+    content.vb: Public Structure GradientSpec Implements IEquatable(Of GradientSpec)
+  implements:
+  - System.IEquatable{FluentGpu.Foundation.GradientSpec}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Foundation.GradientSpec.#ctor(FluentGpu.Foundation.GradientShape,System.Single,FluentGpu.Foundation.GradientStop[])
+  commentId: M:FluentGpu.Foundation.GradientSpec.#ctor(FluentGpu.Foundation.GradientShape,System.Single,FluentGpu.Foundation.GradientStop[])
+  id: '#ctor(FluentGpu.Foundation.GradientShape,System.Single,FluentGpu.Foundation.GradientStop[])'
+  parent: FluentGpu.Foundation.GradientSpec
+  langs:
+  - csharp
+  - vb
+  name: GradientSpec(GradientShape, float, GradientStop[])
+  nameWithType: GradientSpec.GradientSpec(GradientShape, float, GradientStop[])
+  fullName: FluentGpu.Foundation.GradientSpec.GradientSpec(FluentGpu.Foundation.GradientShape, float, FluentGpu.Foundation.GradientStop[])
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 42
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    A gradient fill. <xref href="FluentGpu.Foundation.GradientSpec.AngleDeg" data-throw-if-not-resolved="false"></xref> is the linear axis (0 = left-to-right, 90 = top-to-bottom). Up to 4 stops are
+
+    carried into the POD draw command; extras are ignored. When set on a node it supersedes the solid fill at record time.
+  example: []
+  syntax:
+    content: public GradientSpec(GradientShape Shape, float AngleDeg, GradientStop[] Stops)
+    parameters:
+    - id: Shape
+      type: FluentGpu.Foundation.GradientShape
+    - id: AngleDeg
+      type: System.Single
+    - id: Stops
+      type: FluentGpu.Foundation.GradientStop[]
+    content.vb: Public Sub New(Shape As GradientShape, AngleDeg As Single, Stops As GradientStop())
+  overload: FluentGpu.Foundation.GradientSpec.#ctor*
+  nameWithType.vb: GradientSpec.New(GradientShape, Single, GradientStop())
+  fullName.vb: FluentGpu.Foundation.GradientSpec.New(FluentGpu.Foundation.GradientShape, Single, FluentGpu.Foundation.GradientStop())
+  name.vb: New(GradientShape, Single, GradientStop())
+- uid: FluentGpu.Foundation.GradientSpec.Shape
+  commentId: P:FluentGpu.Foundation.GradientSpec.Shape
+  id: Shape
+  parent: FluentGpu.Foundation.GradientSpec
+  langs:
+  - csharp
+  - vb
+  name: Shape
+  nameWithType: GradientSpec.Shape
+  fullName: FluentGpu.Foundation.GradientSpec.Shape
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Shape
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 42
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public GradientShape Shape { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.GradientShape
+    content.vb: Public Property Shape As GradientShape
+  overload: FluentGpu.Foundation.GradientSpec.Shape*
+- uid: FluentGpu.Foundation.GradientSpec.AngleDeg
+  commentId: P:FluentGpu.Foundation.GradientSpec.AngleDeg
+  id: AngleDeg
+  parent: FluentGpu.Foundation.GradientSpec
+  langs:
+  - csharp
+  - vb
+  name: AngleDeg
+  nameWithType: GradientSpec.AngleDeg
+  fullName: FluentGpu.Foundation.GradientSpec.AngleDeg
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AngleDeg
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 42
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float AngleDeg { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property AngleDeg As Single
+  overload: FluentGpu.Foundation.GradientSpec.AngleDeg*
+- uid: FluentGpu.Foundation.GradientSpec.Stops
+  commentId: P:FluentGpu.Foundation.GradientSpec.Stops
+  id: Stops
+  parent: FluentGpu.Foundation.GradientSpec
+  langs:
+  - csharp
+  - vb
+  name: Stops
+  nameWithType: GradientSpec.Stops
+  fullName: FluentGpu.Foundation.GradientSpec.Stops
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Stops
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 42
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public GradientStop[] Stops { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.GradientStop[]
+    content.vb: Public Property Stops As GradientStop()
+  overload: FluentGpu.Foundation.GradientSpec.Stops*
+- uid: FluentGpu.Foundation.GradientSpec.MaxStops
+  commentId: F:FluentGpu.Foundation.GradientSpec.MaxStops
+  id: MaxStops
+  parent: FluentGpu.Foundation.GradientSpec
+  langs:
+  - csharp
+  - vb
+  name: MaxStops
+  nameWithType: GradientSpec.MaxStops
+  fullName: FluentGpu.Foundation.GradientSpec.MaxStops
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MaxStops
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 44
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const int MaxStops = 4
+    return:
+      type: System.Int32
+    content.vb: Public Const MaxStops As Integer = 4
+- uid: FluentGpu.Foundation.GradientSpec.AxisLengthPx
+  commentId: P:FluentGpu.Foundation.GradientSpec.AxisLengthPx
+  id: AxisLengthPx
+  parent: FluentGpu.Foundation.GradientSpec
+  langs:
+  - csharp
+  - vb
+  name: AxisLengthPx
+  nameWithType: GradientSpec.AxisLengthPx
+  fullName: FluentGpu.Foundation.GradientSpec.AxisLengthPx
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AxisLengthPx
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    WinUI <code>MappingMode="Absolute"</code> (StartPoint 0,0 EndPoint 0,N): the stop ramp occupies this many
+        PHYSICAL px along the axis — outside the band the edge stop's color holds — instead of stretching over the
+        node's full extent. The ControlElevationBorder confines its blend to a 3px band
+        (Common_themeresources_any.xaml:186). 0 (default) = relative-to-bounds. Applied as a record-time stop-offset
+        remap, so the POD command and the gradient shader are unchanged.
+  example: []
+  syntax:
+    content: public float AxisLengthPx { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property AxisLengthPx As Single
+  overload: FluentGpu.Foundation.GradientSpec.AxisLengthPx*
+- uid: FluentGpu.Foundation.GradientSpec.AnchorEnd
+  commentId: P:FluentGpu.Foundation.GradientSpec.AnchorEnd
+  id: AnchorEnd
+  parent: FluentGpu.Foundation.GradientSpec
+  langs:
+  - csharp
+  - vb
+  name: AnchorEnd
+  nameWithType: GradientSpec.AnchorEnd
+  fullName: FluentGpu.Foundation.GradientSpec.AnchorEnd
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AnchorEnd
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 57
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    Anchor the absolute band at the END of the axis instead of the start — the engine encoding of WinUI's
+        <code>RelativeTransform ScaleTransform ScaleY="-1"</code> mirror on elevation brushes (light ControlElevationBorder,
+        Common_themeresources_any.xaml:382-390; AccentControlElevationBorder both themes :198-205/:397-404): the
+        darker secondary edge sits at the BOTTOM. Only meaningful with <xref href="FluentGpu.Foundation.GradientSpec.AxisLengthPx" data-throw-if-not-resolved="false"></xref> &gt; 0.
+  example: []
+  syntax:
+    content: public bool AnchorEnd { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property AnchorEnd As Boolean
+  overload: FluentGpu.Foundation.GradientSpec.AnchorEnd*
+- uid: FluentGpu.Foundation.GradientSpec.Solid(FluentGpu.Foundation.ColorF)
+  commentId: M:FluentGpu.Foundation.GradientSpec.Solid(FluentGpu.Foundation.ColorF)
+  id: Solid(FluentGpu.Foundation.ColorF)
+  parent: FluentGpu.Foundation.GradientSpec
+  langs:
+  - csharp
+  - vb
+  name: Solid(ColorF)
+  nameWithType: GradientSpec.Solid(ColorF)
+  fullName: FluentGpu.Foundation.GradientSpec.Solid(FluentGpu.Foundation.ColorF)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Solid
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 60
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: A solid "gradient" (one stop) - so a flat border and a gradient border are the SAME knob (BorderBrush).
+  example: []
+  syntax:
+    content: public static GradientSpec Solid(ColorF color)
+    parameters:
+    - id: color
+      type: FluentGpu.Foundation.ColorF
+    return:
+      type: FluentGpu.Foundation.GradientSpec
+    content.vb: Public Shared Function Solid(color As ColorF) As GradientSpec
+  overload: FluentGpu.Foundation.GradientSpec.Solid*
+- uid: FluentGpu.Foundation.GradientSpec.Vertical(FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF)
+  commentId: M:FluentGpu.Foundation.GradientSpec.Vertical(FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF)
+  id: Vertical(FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF)
+  parent: FluentGpu.Foundation.GradientSpec
+  langs:
+  - csharp
+  - vb
+  name: Vertical(ColorF, ColorF)
+  nameWithType: GradientSpec.Vertical(ColorF, ColorF)
+  fullName: FluentGpu.Foundation.GradientSpec.Vertical(FluentGpu.Foundation.ColorF, FluentGpu.Foundation.ColorF)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Vertical
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 63
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: A vertical 2-stop linear gradient (top to bottom).
+  example: []
+  syntax:
+    content: public static GradientSpec Vertical(ColorF top, ColorF bottom)
+    parameters:
+    - id: top
+      type: FluentGpu.Foundation.ColorF
+    - id: bottom
+      type: FluentGpu.Foundation.ColorF
+    return:
+      type: FluentGpu.Foundation.GradientSpec
+    content.vb: Public Shared Function Vertical(top As ColorF, bottom As ColorF) As GradientSpec
+  overload: FluentGpu.Foundation.GradientSpec.Vertical*
+references:
+- uid: FluentGpu.Foundation.GradientSpec.AngleDeg
+  commentId: P:FluentGpu.Foundation.GradientSpec.AngleDeg
+  href: FluentGpu.Foundation.GradientSpec.html#FluentGpu_Foundation_GradientSpec_AngleDeg
+  name: AngleDeg
+  nameWithType: GradientSpec.AngleDeg
+  fullName: FluentGpu.Foundation.GradientSpec.AngleDeg
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.IEquatable{FluentGpu.Foundation.GradientSpec}
+  commentId: T:System.IEquatable{FluentGpu.Foundation.GradientSpec}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<GradientSpec>
+  nameWithType: IEquatable<GradientSpec>
+  fullName: System.IEquatable<FluentGpu.Foundation.GradientSpec>
+  nameWithType.vb: IEquatable(Of GradientSpec)
+  fullName.vb: System.IEquatable(Of FluentGpu.Foundation.GradientSpec)
+  name.vb: IEquatable(Of GradientSpec)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Foundation.GradientSpec
+    name: GradientSpec
+    href: FluentGpu.Foundation.GradientSpec.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.GradientSpec
+    name: GradientSpec
+    href: FluentGpu.Foundation.GradientSpec.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Foundation.GradientSpec.#ctor*
+  commentId: Overload:FluentGpu.Foundation.GradientSpec.#ctor
+  href: FluentGpu.Foundation.GradientSpec.html#FluentGpu_Foundation_GradientSpec__ctor_FluentGpu_Foundation_GradientShape_System_Single_FluentGpu_Foundation_GradientStop___
+  name: GradientSpec
+  nameWithType: GradientSpec.GradientSpec
+  fullName: FluentGpu.Foundation.GradientSpec.GradientSpec
+  nameWithType.vb: GradientSpec.New
+  fullName.vb: FluentGpu.Foundation.GradientSpec.New
+  name.vb: New
+- uid: FluentGpu.Foundation.GradientShape
+  commentId: T:FluentGpu.Foundation.GradientShape
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.GradientShape.html
+  name: GradientShape
+  nameWithType: GradientShape
+  fullName: FluentGpu.Foundation.GradientShape
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.GradientStop[]
+  isExternal: true
+  href: FluentGpu.Foundation.GradientStop.html
+  name: GradientStop[]
+  nameWithType: GradientStop[]
+  fullName: FluentGpu.Foundation.GradientStop[]
+  nameWithType.vb: GradientStop()
+  fullName.vb: FluentGpu.Foundation.GradientStop()
+  name.vb: GradientStop()
+  spec.csharp:
+  - uid: FluentGpu.Foundation.GradientStop
+    name: GradientStop
+    href: FluentGpu.Foundation.GradientStop.html
+  - name: '['
+  - name: ']'
+  spec.vb:
+  - uid: FluentGpu.Foundation.GradientStop
+    name: GradientStop
+    href: FluentGpu.Foundation.GradientStop.html
+  - name: (
+  - name: )
+- uid: FluentGpu.Foundation.GradientSpec.Shape*
+  commentId: Overload:FluentGpu.Foundation.GradientSpec.Shape
+  href: FluentGpu.Foundation.GradientSpec.html#FluentGpu_Foundation_GradientSpec_Shape
+  name: Shape
+  nameWithType: GradientSpec.Shape
+  fullName: FluentGpu.Foundation.GradientSpec.Shape
+- uid: FluentGpu.Foundation.GradientSpec.AngleDeg*
+  commentId: Overload:FluentGpu.Foundation.GradientSpec.AngleDeg
+  href: FluentGpu.Foundation.GradientSpec.html#FluentGpu_Foundation_GradientSpec_AngleDeg
+  name: AngleDeg
+  nameWithType: GradientSpec.AngleDeg
+  fullName: FluentGpu.Foundation.GradientSpec.AngleDeg
+- uid: FluentGpu.Foundation.GradientSpec.Stops*
+  commentId: Overload:FluentGpu.Foundation.GradientSpec.Stops
+  href: FluentGpu.Foundation.GradientSpec.html#FluentGpu_Foundation_GradientSpec_Stops
+  name: Stops
+  nameWithType: GradientSpec.Stops
+  fullName: FluentGpu.Foundation.GradientSpec.Stops
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Foundation.GradientSpec.AxisLengthPx*
+  commentId: Overload:FluentGpu.Foundation.GradientSpec.AxisLengthPx
+  href: FluentGpu.Foundation.GradientSpec.html#FluentGpu_Foundation_GradientSpec_AxisLengthPx
+  name: AxisLengthPx
+  nameWithType: GradientSpec.AxisLengthPx
+  fullName: FluentGpu.Foundation.GradientSpec.AxisLengthPx
+- uid: FluentGpu.Foundation.GradientSpec.AxisLengthPx
+  commentId: P:FluentGpu.Foundation.GradientSpec.AxisLengthPx
+  href: FluentGpu.Foundation.GradientSpec.html#FluentGpu_Foundation_GradientSpec_AxisLengthPx
+  name: AxisLengthPx
+  nameWithType: GradientSpec.AxisLengthPx
+  fullName: FluentGpu.Foundation.GradientSpec.AxisLengthPx
+- uid: FluentGpu.Foundation.GradientSpec.AnchorEnd*
+  commentId: Overload:FluentGpu.Foundation.GradientSpec.AnchorEnd
+  href: FluentGpu.Foundation.GradientSpec.html#FluentGpu_Foundation_GradientSpec_AnchorEnd
+  name: AnchorEnd
+  nameWithType: GradientSpec.AnchorEnd
+  fullName: FluentGpu.Foundation.GradientSpec.AnchorEnd
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Foundation.GradientSpec.Solid*
+  commentId: Overload:FluentGpu.Foundation.GradientSpec.Solid
+  href: FluentGpu.Foundation.GradientSpec.html#FluentGpu_Foundation_GradientSpec_Solid_FluentGpu_Foundation_ColorF_
+  name: Solid
+  nameWithType: GradientSpec.Solid
+  fullName: FluentGpu.Foundation.GradientSpec.Solid
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Foundation.GradientSpec
+  commentId: T:FluentGpu.Foundation.GradientSpec
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.GradientSpec.html
+  name: GradientSpec
+  nameWithType: GradientSpec
+  fullName: FluentGpu.Foundation.GradientSpec
+- uid: FluentGpu.Foundation.GradientSpec.Vertical*
+  commentId: Overload:FluentGpu.Foundation.GradientSpec.Vertical
+  href: FluentGpu.Foundation.GradientSpec.html#FluentGpu_Foundation_GradientSpec_Vertical_FluentGpu_Foundation_ColorF_FluentGpu_Foundation_ColorF_
+  name: Vertical
+  nameWithType: GradientSpec.Vertical
+  fullName: FluentGpu.Foundation.GradientSpec.Vertical

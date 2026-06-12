@@ -1,0 +1,540 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.ExpanderTemplateSettings
+  commentId: T:FluentGpu.Controls.ExpanderTemplateSettings
+  id: ExpanderTemplateSettings
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.ExpanderTemplateSettings.#ctor(System.Single,System.Boolean)
+  - FluentGpu.Controls.ExpanderTemplateSettings.ChevronRotationDeg
+  - FluentGpu.Controls.ExpanderTemplateSettings.ContentVisible
+  - FluentGpu.Controls.ExpanderTemplateSettings.For(System.Boolean)
+  langs:
+  - csharp
+  - vb
+  name: ExpanderTemplateSettings
+  nameWithType: ExpanderTemplateSettings
+  fullName: FluentGpu.Controls.ExpanderTemplateSettings
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Expander.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ExpanderTemplateSettings
+    path: ../../src/FluentGpu.Controls/Expander.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Computed template settings for the Expander (the typed-record convention — see <xref href="FluentGpu.Controls.Tween" data-throw-if-not-resolved="false"></xref>): the
+        chevron rotation and whether the content panel participates, derived once from the open state. Mirrors the geometry
+        WinUI's generated <code>ExpanderTemplateSettings</code> binds into its chevron storyboard.
+  example: []
+  syntax:
+    content: 'public readonly record struct ExpanderTemplateSettings : IEquatable<ExpanderTemplateSettings>'
+    content.vb: Public Structure ExpanderTemplateSettings Implements IEquatable(Of ExpanderTemplateSettings)
+  implements:
+  - System.IEquatable{FluentGpu.Controls.ExpanderTemplateSettings}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Controls.ExpanderTemplateSettings.#ctor(System.Single,System.Boolean)
+  commentId: M:FluentGpu.Controls.ExpanderTemplateSettings.#ctor(System.Single,System.Boolean)
+  id: '#ctor(System.Single,System.Boolean)'
+  parent: FluentGpu.Controls.ExpanderTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: ExpanderTemplateSettings(float, bool)
+  nameWithType: ExpanderTemplateSettings.ExpanderTemplateSettings(float, bool)
+  fullName: FluentGpu.Controls.ExpanderTemplateSettings.ExpanderTemplateSettings(float, bool)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Expander.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Controls/Expander.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Computed template settings for the Expander (the typed-record convention — see <xref href="FluentGpu.Controls.Tween" data-throw-if-not-resolved="false"></xref>): the
+        chevron rotation and whether the content panel participates, derived once from the open state. Mirrors the geometry
+        WinUI's generated <code>ExpanderTemplateSettings</code> binds into its chevron storyboard.
+  example: []
+  syntax:
+    content: public ExpanderTemplateSettings(float ChevronRotationDeg, bool ContentVisible)
+    parameters:
+    - id: ChevronRotationDeg
+      type: System.Single
+    - id: ContentVisible
+      type: System.Boolean
+    content.vb: Public Sub New(ChevronRotationDeg As Single, ContentVisible As Boolean)
+  overload: FluentGpu.Controls.ExpanderTemplateSettings.#ctor*
+  nameWithType.vb: ExpanderTemplateSettings.New(Single, Boolean)
+  fullName.vb: FluentGpu.Controls.ExpanderTemplateSettings.New(Single, Boolean)
+  name.vb: New(Single, Boolean)
+- uid: FluentGpu.Controls.ExpanderTemplateSettings.ChevronRotationDeg
+  commentId: P:FluentGpu.Controls.ExpanderTemplateSettings.ChevronRotationDeg
+  id: ChevronRotationDeg
+  parent: FluentGpu.Controls.ExpanderTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: ChevronRotationDeg
+  nameWithType: ExpanderTemplateSettings.ChevronRotationDeg
+  fullName: FluentGpu.Controls.ExpanderTemplateSettings.ChevronRotationDeg
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Expander.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ChevronRotationDeg
+    path: ../../src/FluentGpu.Controls/Expander.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float ChevronRotationDeg { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property ChevronRotationDeg As Single
+  overload: FluentGpu.Controls.ExpanderTemplateSettings.ChevronRotationDeg*
+- uid: FluentGpu.Controls.ExpanderTemplateSettings.ContentVisible
+  commentId: P:FluentGpu.Controls.ExpanderTemplateSettings.ContentVisible
+  id: ContentVisible
+  parent: FluentGpu.Controls.ExpanderTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: ContentVisible
+  nameWithType: ExpanderTemplateSettings.ContentVisible
+  fullName: FluentGpu.Controls.ExpanderTemplateSettings.ContentVisible
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Expander.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ContentVisible
+    path: ../../src/FluentGpu.Controls/Expander.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool ContentVisible { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property ContentVisible As Boolean
+  overload: FluentGpu.Controls.ExpanderTemplateSettings.ContentVisible*
+- uid: FluentGpu.Controls.ExpanderTemplateSettings.For(System.Boolean)
+  commentId: M:FluentGpu.Controls.ExpanderTemplateSettings.For(System.Boolean)
+  id: For(System.Boolean)
+  parent: FluentGpu.Controls.ExpanderTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: For(bool)
+  nameWithType: ExpanderTemplateSettings.For(bool)
+  fullName: FluentGpu.Controls.ExpanderTemplateSettings.For(bool)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Expander.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: For
+    path: ../../src/FluentGpu.Controls/Expander.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static ExpanderTemplateSettings For(bool open)
+    parameters:
+    - id: open
+      type: System.Boolean
+    return:
+      type: FluentGpu.Controls.ExpanderTemplateSettings
+    content.vb: Public Shared Function [For](open As Boolean) As ExpanderTemplateSettings
+  overload: FluentGpu.Controls.ExpanderTemplateSettings.For*
+  nameWithType.vb: ExpanderTemplateSettings.For(Boolean)
+  fullName.vb: FluentGpu.Controls.ExpanderTemplateSettings.For(Boolean)
+  name.vb: For(Boolean)
+references:
+- uid: FluentGpu.Controls.Tween
+  commentId: T:FluentGpu.Controls.Tween
+  href: FluentGpu.Controls.Tween.html
+  name: Tween
+  nameWithType: Tween
+  fullName: FluentGpu.Controls.Tween
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.IEquatable{FluentGpu.Controls.ExpanderTemplateSettings}
+  commentId: T:System.IEquatable{FluentGpu.Controls.ExpanderTemplateSettings}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<ExpanderTemplateSettings>
+  nameWithType: IEquatable<ExpanderTemplateSettings>
+  fullName: System.IEquatable<FluentGpu.Controls.ExpanderTemplateSettings>
+  nameWithType.vb: IEquatable(Of ExpanderTemplateSettings)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.ExpanderTemplateSettings)
+  name.vb: IEquatable(Of ExpanderTemplateSettings)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.ExpanderTemplateSettings
+    name: ExpanderTemplateSettings
+    href: FluentGpu.Controls.ExpanderTemplateSettings.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.ExpanderTemplateSettings
+    name: ExpanderTemplateSettings
+    href: FluentGpu.Controls.ExpanderTemplateSettings.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Controls.ExpanderTemplateSettings.#ctor*
+  commentId: Overload:FluentGpu.Controls.ExpanderTemplateSettings.#ctor
+  href: FluentGpu.Controls.ExpanderTemplateSettings.html#FluentGpu_Controls_ExpanderTemplateSettings__ctor_System_Single_System_Boolean_
+  name: ExpanderTemplateSettings
+  nameWithType: ExpanderTemplateSettings.ExpanderTemplateSettings
+  fullName: FluentGpu.Controls.ExpanderTemplateSettings.ExpanderTemplateSettings
+  nameWithType.vb: ExpanderTemplateSettings.New
+  fullName.vb: FluentGpu.Controls.ExpanderTemplateSettings.New
+  name.vb: New
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Controls.ExpanderTemplateSettings.ChevronRotationDeg*
+  commentId: Overload:FluentGpu.Controls.ExpanderTemplateSettings.ChevronRotationDeg
+  href: FluentGpu.Controls.ExpanderTemplateSettings.html#FluentGpu_Controls_ExpanderTemplateSettings_ChevronRotationDeg
+  name: ChevronRotationDeg
+  nameWithType: ExpanderTemplateSettings.ChevronRotationDeg
+  fullName: FluentGpu.Controls.ExpanderTemplateSettings.ChevronRotationDeg
+- uid: FluentGpu.Controls.ExpanderTemplateSettings.ContentVisible*
+  commentId: Overload:FluentGpu.Controls.ExpanderTemplateSettings.ContentVisible
+  href: FluentGpu.Controls.ExpanderTemplateSettings.html#FluentGpu_Controls_ExpanderTemplateSettings_ContentVisible
+  name: ContentVisible
+  nameWithType: ExpanderTemplateSettings.ContentVisible
+  fullName: FluentGpu.Controls.ExpanderTemplateSettings.ContentVisible
+- uid: FluentGpu.Controls.ExpanderTemplateSettings.For*
+  commentId: Overload:FluentGpu.Controls.ExpanderTemplateSettings.For
+  href: FluentGpu.Controls.ExpanderTemplateSettings.html#FluentGpu_Controls_ExpanderTemplateSettings_For_System_Boolean_
+  name: For
+  nameWithType: ExpanderTemplateSettings.For
+  fullName: FluentGpu.Controls.ExpanderTemplateSettings.For
+- uid: FluentGpu.Controls.ExpanderTemplateSettings
+  commentId: T:FluentGpu.Controls.ExpanderTemplateSettings
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ExpanderTemplateSettings.html
+  name: ExpanderTemplateSettings
+  nameWithType: ExpanderTemplateSettings
+  fullName: FluentGpu.Controls.ExpanderTemplateSettings

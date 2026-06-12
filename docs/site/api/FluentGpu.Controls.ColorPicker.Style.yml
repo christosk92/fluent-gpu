@@ -1,0 +1,890 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.ColorPicker.Style
+  commentId: T:FluentGpu.Controls.ColorPicker.Style
+  id: ColorPicker.Style
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.ColorPicker.Style.AlphaRailFill
+  - FluentGpu.Controls.ColorPicker.Style.BorderWidth
+  - FluentGpu.Controls.ColorPicker.Style.RailBoxH
+  - FluentGpu.Controls.ColorPicker.Style.RailH
+  - FluentGpu.Controls.ColorPicker.Style.SliderThumbBg
+  - FluentGpu.Controls.ColorPicker.Style.SliderThumbCornerRadius
+  - FluentGpu.Controls.ColorPicker.Style.SliderThumbW
+  - FluentGpu.Controls.ColorPicker.Style.SpectrumMaxH
+  - FluentGpu.Controls.ColorPicker.Style.SpectrumMaxW
+  - FluentGpu.Controls.ColorPicker.Style.SpectrumThumbRadius
+  - FluentGpu.Controls.ColorPicker.Style.SpectrumThumbStroke
+  - FluentGpu.Controls.ColorPicker.Style.SwatchBorder
+  - FluentGpu.Controls.ColorPicker.Style.SwatchH
+  - FluentGpu.Controls.ColorPicker.Style.SwatchW
+  langs:
+  - csharp
+  - vb
+  name: ColorPicker.Style
+  nameWithType: ColorPicker.Style
+  fullName: FluentGpu.Controls.ColorPicker.Style
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ColorPicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Style
+    path: ../../src/FluentGpu.Controls/ColorPicker.cs
+    startLine: 46
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI-aligned dimensions and brushes (ColorPicker.xaml / ColorPicker_themeresources.xaml).
+  example: []
+  syntax:
+    content: 'public sealed record ColorPicker.Style : IEquatable<ColorPicker.Style>'
+    content.vb: Public NotInheritable Class ColorPicker.Style Implements IEquatable(Of ColorPicker.Style)
+  inheritance:
+  - System.Object
+  implements:
+  - System.IEquatable{FluentGpu.Controls.ColorPicker.Style}
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.ColorPicker.Style.SpectrumMaxW
+  commentId: P:FluentGpu.Controls.ColorPicker.Style.SpectrumMaxW
+  id: SpectrumMaxW
+  parent: FluentGpu.Controls.ColorPicker.Style
+  langs:
+  - csharp
+  - vb
+  name: SpectrumMaxW
+  nameWithType: ColorPicker.Style.SpectrumMaxW
+  fullName: FluentGpu.Controls.ColorPicker.Style.SpectrumMaxW
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ColorPicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpectrumMaxW
+    path: ../../src/FluentGpu.Controls/ColorPicker.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float SpectrumMaxW { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property SpectrumMaxW As Single
+  overload: FluentGpu.Controls.ColorPicker.Style.SpectrumMaxW*
+- uid: FluentGpu.Controls.ColorPicker.Style.SpectrumMaxH
+  commentId: P:FluentGpu.Controls.ColorPicker.Style.SpectrumMaxH
+  id: SpectrumMaxH
+  parent: FluentGpu.Controls.ColorPicker.Style
+  langs:
+  - csharp
+  - vb
+  name: SpectrumMaxH
+  nameWithType: ColorPicker.Style.SpectrumMaxH
+  fullName: FluentGpu.Controls.ColorPicker.Style.SpectrumMaxH
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ColorPicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpectrumMaxH
+    path: ../../src/FluentGpu.Controls/ColorPicker.cs
+    startLine: 49
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float SpectrumMaxH { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property SpectrumMaxH As Single
+  overload: FluentGpu.Controls.ColorPicker.Style.SpectrumMaxH*
+- uid: FluentGpu.Controls.ColorPicker.Style.SpectrumThumbRadius
+  commentId: P:FluentGpu.Controls.ColorPicker.Style.SpectrumThumbRadius
+  id: SpectrumThumbRadius
+  parent: FluentGpu.Controls.ColorPicker.Style
+  langs:
+  - csharp
+  - vb
+  name: SpectrumThumbRadius
+  nameWithType: ColorPicker.Style.SpectrumThumbRadius
+  fullName: FluentGpu.Controls.ColorPicker.Style.SpectrumThumbRadius
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ColorPicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpectrumThumbRadius
+    path: ../../src/FluentGpu.Controls/ColorPicker.cs
+    startLine: 50
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float SpectrumThumbRadius { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property SpectrumThumbRadius As Single
+  overload: FluentGpu.Controls.ColorPicker.Style.SpectrumThumbRadius*
+- uid: FluentGpu.Controls.ColorPicker.Style.RailH
+  commentId: P:FluentGpu.Controls.ColorPicker.Style.RailH
+  id: RailH
+  parent: FluentGpu.Controls.ColorPicker.Style
+  langs:
+  - csharp
+  - vb
+  name: RailH
+  nameWithType: ColorPicker.Style.RailH
+  fullName: FluentGpu.Controls.ColorPicker.Style.RailH
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ColorPicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RailH
+    path: ../../src/FluentGpu.Controls/ColorPicker.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float RailH { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property RailH As Single
+  overload: FluentGpu.Controls.ColorPicker.Style.RailH*
+- uid: FluentGpu.Controls.ColorPicker.Style.RailBoxH
+  commentId: P:FluentGpu.Controls.ColorPicker.Style.RailBoxH
+  id: RailBoxH
+  parent: FluentGpu.Controls.ColorPicker.Style
+  langs:
+  - csharp
+  - vb
+  name: RailBoxH
+  nameWithType: ColorPicker.Style.RailBoxH
+  fullName: FluentGpu.Controls.ColorPicker.Style.RailBoxH
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ColorPicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RailBoxH
+    path: ../../src/FluentGpu.Controls/ColorPicker.cs
+    startLine: 52
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float RailBoxH { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property RailBoxH As Single
+  overload: FluentGpu.Controls.ColorPicker.Style.RailBoxH*
+- uid: FluentGpu.Controls.ColorPicker.Style.SliderThumbW
+  commentId: P:FluentGpu.Controls.ColorPicker.Style.SliderThumbW
+  id: SliderThumbW
+  parent: FluentGpu.Controls.ColorPicker.Style
+  langs:
+  - csharp
+  - vb
+  name: SliderThumbW
+  nameWithType: ColorPicker.Style.SliderThumbW
+  fullName: FluentGpu.Controls.ColorPicker.Style.SliderThumbW
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ColorPicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SliderThumbW
+    path: ../../src/FluentGpu.Controls/ColorPicker.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float SliderThumbW { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property SliderThumbW As Single
+  overload: FluentGpu.Controls.ColorPicker.Style.SliderThumbW*
+- uid: FluentGpu.Controls.ColorPicker.Style.SliderThumbCornerRadius
+  commentId: P:FluentGpu.Controls.ColorPicker.Style.SliderThumbCornerRadius
+  id: SliderThumbCornerRadius
+  parent: FluentGpu.Controls.ColorPicker.Style
+  langs:
+  - csharp
+  - vb
+  name: SliderThumbCornerRadius
+  nameWithType: ColorPicker.Style.SliderThumbCornerRadius
+  fullName: FluentGpu.Controls.ColorPicker.Style.SliderThumbCornerRadius
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ColorPicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SliderThumbCornerRadius
+    path: ../../src/FluentGpu.Controls/ColorPicker.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float SliderThumbCornerRadius { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property SliderThumbCornerRadius As Single
+  overload: FluentGpu.Controls.ColorPicker.Style.SliderThumbCornerRadius*
+- uid: FluentGpu.Controls.ColorPicker.Style.SwatchW
+  commentId: P:FluentGpu.Controls.ColorPicker.Style.SwatchW
+  id: SwatchW
+  parent: FluentGpu.Controls.ColorPicker.Style
+  langs:
+  - csharp
+  - vb
+  name: SwatchW
+  nameWithType: ColorPicker.Style.SwatchW
+  fullName: FluentGpu.Controls.ColorPicker.Style.SwatchW
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ColorPicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SwatchW
+    path: ../../src/FluentGpu.Controls/ColorPicker.cs
+    startLine: 55
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float SwatchW { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property SwatchW As Single
+  overload: FluentGpu.Controls.ColorPicker.Style.SwatchW*
+- uid: FluentGpu.Controls.ColorPicker.Style.SwatchH
+  commentId: P:FluentGpu.Controls.ColorPicker.Style.SwatchH
+  id: SwatchH
+  parent: FluentGpu.Controls.ColorPicker.Style
+  langs:
+  - csharp
+  - vb
+  name: SwatchH
+  nameWithType: ColorPicker.Style.SwatchH
+  fullName: FluentGpu.Controls.ColorPicker.Style.SwatchH
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ColorPicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SwatchH
+    path: ../../src/FluentGpu.Controls/ColorPicker.cs
+    startLine: 56
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float SwatchH { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property SwatchH As Single
+  overload: FluentGpu.Controls.ColorPicker.Style.SwatchH*
+- uid: FluentGpu.Controls.ColorPicker.Style.BorderWidth
+  commentId: P:FluentGpu.Controls.ColorPicker.Style.BorderWidth
+  id: BorderWidth
+  parent: FluentGpu.Controls.ColorPicker.Style
+  langs:
+  - csharp
+  - vb
+  name: BorderWidth
+  nameWithType: ColorPicker.Style.BorderWidth
+  fullName: FluentGpu.Controls.ColorPicker.Style.BorderWidth
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ColorPicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BorderWidth
+    path: ../../src/FluentGpu.Controls/ColorPicker.cs
+    startLine: 57
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float BorderWidth { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property BorderWidth As Single
+  overload: FluentGpu.Controls.ColorPicker.Style.BorderWidth*
+- uid: FluentGpu.Controls.ColorPicker.Style.SwatchBorder
+  commentId: P:FluentGpu.Controls.ColorPicker.Style.SwatchBorder
+  id: SwatchBorder
+  parent: FluentGpu.Controls.ColorPicker.Style
+  langs:
+  - csharp
+  - vb
+  name: SwatchBorder
+  nameWithType: ColorPicker.Style.SwatchBorder
+  fullName: FluentGpu.Controls.ColorPicker.Style.SwatchBorder
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ColorPicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SwatchBorder
+    path: ../../src/FluentGpu.Controls/ColorPicker.cs
+    startLine: 58
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF SwatchBorder { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property SwatchBorder As ColorF
+  overload: FluentGpu.Controls.ColorPicker.Style.SwatchBorder*
+- uid: FluentGpu.Controls.ColorPicker.Style.AlphaRailFill
+  commentId: P:FluentGpu.Controls.ColorPicker.Style.AlphaRailFill
+  id: AlphaRailFill
+  parent: FluentGpu.Controls.ColorPicker.Style
+  langs:
+  - csharp
+  - vb
+  name: AlphaRailFill
+  nameWithType: ColorPicker.Style.AlphaRailFill
+  fullName: FluentGpu.Controls.ColorPicker.Style.AlphaRailFill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ColorPicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AlphaRailFill
+    path: ../../src/FluentGpu.Controls/ColorPicker.cs
+    startLine: 59
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF AlphaRailFill { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property AlphaRailFill As ColorF
+  overload: FluentGpu.Controls.ColorPicker.Style.AlphaRailFill*
+- uid: FluentGpu.Controls.ColorPicker.Style.SliderThumbBg
+  commentId: P:FluentGpu.Controls.ColorPicker.Style.SliderThumbBg
+  id: SliderThumbBg
+  parent: FluentGpu.Controls.ColorPicker.Style
+  langs:
+  - csharp
+  - vb
+  name: SliderThumbBg
+  nameWithType: ColorPicker.Style.SliderThumbBg
+  fullName: FluentGpu.Controls.ColorPicker.Style.SliderThumbBg
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ColorPicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SliderThumbBg
+    path: ../../src/FluentGpu.Controls/ColorPicker.cs
+    startLine: 60
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF SliderThumbBg { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property SliderThumbBg As ColorF
+  overload: FluentGpu.Controls.ColorPicker.Style.SliderThumbBg*
+- uid: FluentGpu.Controls.ColorPicker.Style.SpectrumThumbStroke
+  commentId: P:FluentGpu.Controls.ColorPicker.Style.SpectrumThumbStroke
+  id: SpectrumThumbStroke
+  parent: FluentGpu.Controls.ColorPicker.Style
+  langs:
+  - csharp
+  - vb
+  name: SpectrumThumbStroke
+  nameWithType: ColorPicker.Style.SpectrumThumbStroke
+  fullName: FluentGpu.Controls.ColorPicker.Style.SpectrumThumbStroke
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ColorPicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpectrumThumbStroke
+    path: ../../src/FluentGpu.Controls/ColorPicker.cs
+    startLine: 61
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF SpectrumThumbStroke { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property SpectrumThumbStroke As ColorF
+  overload: FluentGpu.Controls.ColorPicker.Style.SpectrumThumbStroke*
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.IEquatable{FluentGpu.Controls.ColorPicker.Style}
+  commentId: T:System.IEquatable{FluentGpu.Controls.ColorPicker.Style}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<ColorPicker.Style>
+  nameWithType: IEquatable<ColorPicker.Style>
+  fullName: System.IEquatable<FluentGpu.Controls.ColorPicker.Style>
+  nameWithType.vb: IEquatable(Of ColorPicker.Style)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.ColorPicker.Style)
+  name.vb: IEquatable(Of ColorPicker.Style)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.ColorPicker
+    name: ColorPicker
+    href: FluentGpu.Controls.ColorPicker.html
+  - name: .
+  - uid: FluentGpu.Controls.ColorPicker.Style
+    name: Style
+    href: FluentGpu.Controls.ColorPicker.Style.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.ColorPicker
+    name: ColorPicker
+    href: FluentGpu.Controls.ColorPicker.html
+  - name: .
+  - uid: FluentGpu.Controls.ColorPicker.Style
+    name: Style
+    href: FluentGpu.Controls.ColorPicker.Style.html
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.ColorPicker.Style.SpectrumMaxW*
+  commentId: Overload:FluentGpu.Controls.ColorPicker.Style.SpectrumMaxW
+  href: FluentGpu.Controls.ColorPicker.Style.html#FluentGpu_Controls_ColorPicker_Style_SpectrumMaxW
+  name: SpectrumMaxW
+  nameWithType: ColorPicker.Style.SpectrumMaxW
+  fullName: FluentGpu.Controls.ColorPicker.Style.SpectrumMaxW
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Controls.ColorPicker.Style.SpectrumMaxH*
+  commentId: Overload:FluentGpu.Controls.ColorPicker.Style.SpectrumMaxH
+  href: FluentGpu.Controls.ColorPicker.Style.html#FluentGpu_Controls_ColorPicker_Style_SpectrumMaxH
+  name: SpectrumMaxH
+  nameWithType: ColorPicker.Style.SpectrumMaxH
+  fullName: FluentGpu.Controls.ColorPicker.Style.SpectrumMaxH
+- uid: FluentGpu.Controls.ColorPicker.Style.SpectrumThumbRadius*
+  commentId: Overload:FluentGpu.Controls.ColorPicker.Style.SpectrumThumbRadius
+  href: FluentGpu.Controls.ColorPicker.Style.html#FluentGpu_Controls_ColorPicker_Style_SpectrumThumbRadius
+  name: SpectrumThumbRadius
+  nameWithType: ColorPicker.Style.SpectrumThumbRadius
+  fullName: FluentGpu.Controls.ColorPicker.Style.SpectrumThumbRadius
+- uid: FluentGpu.Controls.ColorPicker.Style.RailH*
+  commentId: Overload:FluentGpu.Controls.ColorPicker.Style.RailH
+  href: FluentGpu.Controls.ColorPicker.Style.html#FluentGpu_Controls_ColorPicker_Style_RailH
+  name: RailH
+  nameWithType: ColorPicker.Style.RailH
+  fullName: FluentGpu.Controls.ColorPicker.Style.RailH
+- uid: FluentGpu.Controls.ColorPicker.Style.RailBoxH*
+  commentId: Overload:FluentGpu.Controls.ColorPicker.Style.RailBoxH
+  href: FluentGpu.Controls.ColorPicker.Style.html#FluentGpu_Controls_ColorPicker_Style_RailBoxH
+  name: RailBoxH
+  nameWithType: ColorPicker.Style.RailBoxH
+  fullName: FluentGpu.Controls.ColorPicker.Style.RailBoxH
+- uid: FluentGpu.Controls.ColorPicker.Style.SliderThumbW*
+  commentId: Overload:FluentGpu.Controls.ColorPicker.Style.SliderThumbW
+  href: FluentGpu.Controls.ColorPicker.Style.html#FluentGpu_Controls_ColorPicker_Style_SliderThumbW
+  name: SliderThumbW
+  nameWithType: ColorPicker.Style.SliderThumbW
+  fullName: FluentGpu.Controls.ColorPicker.Style.SliderThumbW
+- uid: FluentGpu.Controls.ColorPicker.Style.SliderThumbCornerRadius*
+  commentId: Overload:FluentGpu.Controls.ColorPicker.Style.SliderThumbCornerRadius
+  href: FluentGpu.Controls.ColorPicker.Style.html#FluentGpu_Controls_ColorPicker_Style_SliderThumbCornerRadius
+  name: SliderThumbCornerRadius
+  nameWithType: ColorPicker.Style.SliderThumbCornerRadius
+  fullName: FluentGpu.Controls.ColorPicker.Style.SliderThumbCornerRadius
+- uid: FluentGpu.Controls.ColorPicker.Style.SwatchW*
+  commentId: Overload:FluentGpu.Controls.ColorPicker.Style.SwatchW
+  href: FluentGpu.Controls.ColorPicker.Style.html#FluentGpu_Controls_ColorPicker_Style_SwatchW
+  name: SwatchW
+  nameWithType: ColorPicker.Style.SwatchW
+  fullName: FluentGpu.Controls.ColorPicker.Style.SwatchW
+- uid: FluentGpu.Controls.ColorPicker.Style.SwatchH*
+  commentId: Overload:FluentGpu.Controls.ColorPicker.Style.SwatchH
+  href: FluentGpu.Controls.ColorPicker.Style.html#FluentGpu_Controls_ColorPicker_Style_SwatchH
+  name: SwatchH
+  nameWithType: ColorPicker.Style.SwatchH
+  fullName: FluentGpu.Controls.ColorPicker.Style.SwatchH
+- uid: FluentGpu.Controls.ColorPicker.Style.BorderWidth*
+  commentId: Overload:FluentGpu.Controls.ColorPicker.Style.BorderWidth
+  href: FluentGpu.Controls.ColorPicker.Style.html#FluentGpu_Controls_ColorPicker_Style_BorderWidth
+  name: BorderWidth
+  nameWithType: ColorPicker.Style.BorderWidth
+  fullName: FluentGpu.Controls.ColorPicker.Style.BorderWidth
+- uid: FluentGpu.Controls.ColorPicker.Style.SwatchBorder*
+  commentId: Overload:FluentGpu.Controls.ColorPicker.Style.SwatchBorder
+  href: FluentGpu.Controls.ColorPicker.Style.html#FluentGpu_Controls_ColorPicker_Style_SwatchBorder
+  name: SwatchBorder
+  nameWithType: ColorPicker.Style.SwatchBorder
+  fullName: FluentGpu.Controls.ColorPicker.Style.SwatchBorder
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Controls.ColorPicker.Style.AlphaRailFill*
+  commentId: Overload:FluentGpu.Controls.ColorPicker.Style.AlphaRailFill
+  href: FluentGpu.Controls.ColorPicker.Style.html#FluentGpu_Controls_ColorPicker_Style_AlphaRailFill
+  name: AlphaRailFill
+  nameWithType: ColorPicker.Style.AlphaRailFill
+  fullName: FluentGpu.Controls.ColorPicker.Style.AlphaRailFill
+- uid: FluentGpu.Controls.ColorPicker.Style.SliderThumbBg*
+  commentId: Overload:FluentGpu.Controls.ColorPicker.Style.SliderThumbBg
+  href: FluentGpu.Controls.ColorPicker.Style.html#FluentGpu_Controls_ColorPicker_Style_SliderThumbBg
+  name: SliderThumbBg
+  nameWithType: ColorPicker.Style.SliderThumbBg
+  fullName: FluentGpu.Controls.ColorPicker.Style.SliderThumbBg
+- uid: FluentGpu.Controls.ColorPicker.Style.SpectrumThumbStroke*
+  commentId: Overload:FluentGpu.Controls.ColorPicker.Style.SpectrumThumbStroke
+  href: FluentGpu.Controls.ColorPicker.Style.html#FluentGpu_Controls_ColorPicker_Style_SpectrumThumbStroke
+  name: SpectrumThumbStroke
+  nameWithType: ColorPicker.Style.SpectrumThumbStroke
+  fullName: FluentGpu.Controls.ColorPicker.Style.SpectrumThumbStroke

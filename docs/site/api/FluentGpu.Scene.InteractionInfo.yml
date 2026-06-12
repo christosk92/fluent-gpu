@@ -1,0 +1,1142 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Scene.InteractionInfo
+  commentId: T:FluentGpu.Scene.InteractionInfo
+  id: InteractionInfo
+  parent: FluentGpu.Scene
+  children:
+  - FluentGpu.Scene.InteractionInfo.AccelKey
+  - FluentGpu.Scene.InteractionInfo.AccelMods
+  - FluentGpu.Scene.InteractionInfo.AccessKey
+  - FluentGpu.Scene.InteractionInfo.CharBit
+  - FluentGpu.Scene.InteractionInfo.ClickBit
+  - FluentGpu.Scene.InteractionInfo.ContextBit
+  - FluentGpu.Scene.InteractionInfo.Cursor
+  - FluentGpu.Scene.InteractionInfo.CursorBit
+  - FluentGpu.Scene.InteractionInfo.DragBit
+  - FluentGpu.Scene.InteractionInfo.FocusBit
+  - FluentGpu.Scene.InteractionInfo.FocusVisualMargin
+  - FluentGpu.Scene.InteractionInfo.Focusable
+  - FluentGpu.Scene.InteractionInfo.HandlerMask
+  - FluentGpu.Scene.InteractionInfo.KeyBit
+  - FluentGpu.Scene.InteractionInfo.NoEnterActivateBit
+  - FluentGpu.Scene.InteractionInfo.NoPointerFocusBit
+  - FluentGpu.Scene.InteractionInfo.PointerBit
+  - FluentGpu.Scene.InteractionInfo.PressedBit
+  - FluentGpu.Scene.InteractionInfo.RepeatBit
+  - FluentGpu.Scene.InteractionInfo.RepeatDelayMs
+  - FluentGpu.Scene.InteractionInfo.RepeatIntervalMs
+  - FluentGpu.Scene.InteractionInfo.Role
+  - FluentGpu.Scene.InteractionInfo.SelectableTextBit
+  - FluentGpu.Scene.InteractionInfo.SpanLinksBit
+  - FluentGpu.Scene.InteractionInfo.TabIndex
+  - FluentGpu.Scene.InteractionInfo.WheelBit
+  langs:
+  - csharp
+  - vb
+  name: InteractionInfo
+  nameWithType: InteractionInfo
+  fullName: FluentGpu.Scene.InteractionInfo
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InteractionInfo
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 264
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: Hit-test / input column.
+  example: []
+  syntax:
+    content: public struct InteractionInfo
+    content.vb: Public Structure InteractionInfo
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Scene.InteractionInfo.HandlerMask
+  commentId: F:FluentGpu.Scene.InteractionInfo.HandlerMask
+  id: HandlerMask
+  parent: FluentGpu.Scene.InteractionInfo
+  langs:
+  - csharp
+  - vb
+  name: HandlerMask
+  nameWithType: InteractionInfo.HandlerMask
+  fullName: FluentGpu.Scene.InteractionInfo.HandlerMask
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HandlerMask
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 266
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public ushort HandlerMask
+    return:
+      type: System.UInt16
+    content.vb: Public HandlerMask As UShort
+- uid: FluentGpu.Scene.InteractionInfo.Cursor
+  commentId: F:FluentGpu.Scene.InteractionInfo.Cursor
+  id: Cursor
+  parent: FluentGpu.Scene.InteractionInfo
+  langs:
+  - csharp
+  - vb
+  name: Cursor
+  nameWithType: InteractionInfo.Cursor
+  fullName: FluentGpu.Scene.InteractionInfo.Cursor
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Cursor
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 271
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    Meaningful only while <xref href="FluentGpu.Scene.InteractionInfo.CursorBit" data-throw-if-not-resolved="false"></xref> is set (an element-declared cursor); without the bit the
+        dispatcher's hover walk skips this node and falls through to the system arrow — there is no clickable⇒hand default.
+  example: []
+  syntax:
+    content: public CursorId Cursor
+    return:
+      type: FluentGpu.Foundation.CursorId
+    content.vb: Public Cursor As CursorId
+- uid: FluentGpu.Scene.InteractionInfo.Role
+  commentId: F:FluentGpu.Scene.InteractionInfo.Role
+  id: Role
+  parent: FluentGpu.Scene.InteractionInfo
+  langs:
+  - csharp
+  - vb
+  name: Role
+  nameWithType: InteractionInfo.Role
+  fullName: FluentGpu.Scene.InteractionInfo.Role
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Role
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 272
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public AutomationRole Role
+    return:
+      type: FluentGpu.Foundation.AutomationRole
+    content.vb: Public Role As AutomationRole
+- uid: FluentGpu.Scene.InteractionInfo.Focusable
+  commentId: F:FluentGpu.Scene.InteractionInfo.Focusable
+  id: Focusable
+  parent: FluentGpu.Scene.InteractionInfo
+  langs:
+  - csharp
+  - vb
+  name: Focusable
+  nameWithType: InteractionInfo.Focusable
+  fullName: FluentGpu.Scene.InteractionInfo.Focusable
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Focusable
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 273
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public bool Focusable
+    return:
+      type: System.Boolean
+    content.vb: Public Focusable As Boolean
+- uid: FluentGpu.Scene.InteractionInfo.TabIndex
+  commentId: F:FluentGpu.Scene.InteractionInfo.TabIndex
+  id: TabIndex
+  parent: FluentGpu.Scene.InteractionInfo
+  langs:
+  - csharp
+  - vb
+  name: TabIndex
+  nameWithType: InteractionInfo.TabIndex
+  fullName: FluentGpu.Scene.InteractionInfo.TabIndex
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TabIndex
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 274
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public int TabIndex
+    return:
+      type: System.Int32
+    content.vb: Public TabIndex As Integer
+- uid: FluentGpu.Scene.InteractionInfo.AccessKey
+  commentId: F:FluentGpu.Scene.InteractionInfo.AccessKey
+  id: AccessKey
+  parent: FluentGpu.Scene.InteractionInfo
+  langs:
+  - csharp
+  - vb
+  name: AccessKey
+  nameWithType: InteractionInfo.AccessKey
+  fullName: FluentGpu.Scene.InteractionInfo.AccessKey
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AccessKey
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 276
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: Access-key mnemonic (Alt+letter; uppercase VK 'A'..'Z' / '0'..'9'). 0 = none.
+  example: []
+  syntax:
+    content: public char AccessKey
+    return:
+      type: System.Char
+    content.vb: Public AccessKey As Char
+- uid: FluentGpu.Scene.InteractionInfo.FocusVisualMargin
+  commentId: F:FluentGpu.Scene.InteractionInfo.FocusVisualMargin
+  id: FocusVisualMargin
+  parent: FluentGpu.Scene.InteractionInfo
+  langs:
+  - csharp
+  - vb
+  name: FocusVisualMargin
+  nameWithType: InteractionInfo.FocusVisualMargin
+  fullName: FluentGpu.Scene.InteractionInfo.FocusVisualMargin
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FocusVisualMargin
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 279
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    WinUI FocusVisualMargin (negative = the focus ring expands OUTSIDE the bounds; WinUI templates use −3,
+        Slider −7,0,−7,0). Written resolved by the reconciler (default −3 all around).
+  example: []
+  syntax:
+    content: public Edges4 FocusVisualMargin
+    return:
+      type: FluentGpu.Foundation.Edges4
+    content.vb: Public FocusVisualMargin As Edges4
+- uid: FluentGpu.Scene.InteractionInfo.AccelKey
+  commentId: F:FluentGpu.Scene.InteractionInfo.AccelKey
+  id: AccelKey
+  parent: FluentGpu.Scene.InteractionInfo
+  langs:
+  - csharp
+  - vb
+  name: AccelKey
+  nameWithType: InteractionInfo.AccelKey
+  fullName: FluentGpu.Scene.InteractionInfo.AccelKey
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AccelKey
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 281
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: 'Keyboard-accelerator chord: invoked from anywhere once focused routing leaves the key unhandled. 0 = none.'
+  example: []
+  syntax:
+    content: public int AccelKey
+    return:
+      type: System.Int32
+    content.vb: Public AccelKey As Integer
+- uid: FluentGpu.Scene.InteractionInfo.AccelMods
+  commentId: F:FluentGpu.Scene.InteractionInfo.AccelMods
+  id: AccelMods
+  parent: FluentGpu.Scene.InteractionInfo
+  langs:
+  - csharp
+  - vb
+  name: AccelMods
+  nameWithType: InteractionInfo.AccelMods
+  fullName: FluentGpu.Scene.InteractionInfo.AccelMods
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AccelMods
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 282
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public KeyModifiers AccelMods
+    return:
+      type: FluentGpu.Foundation.KeyModifiers
+    content.vb: Public AccelMods As KeyModifiers
+- uid: FluentGpu.Scene.InteractionInfo.ClickBit
+  commentId: F:FluentGpu.Scene.InteractionInfo.ClickBit
+  id: ClickBit
+  parent: FluentGpu.Scene.InteractionInfo
+  langs:
+  - csharp
+  - vb
+  name: ClickBit
+  nameWithType: InteractionInfo.ClickBit
+  fullName: FluentGpu.Scene.InteractionInfo.ClickBit
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ClickBit
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 283
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public const ushort ClickBit = 1
+    return:
+      type: System.UInt16
+    content.vb: Public Const ClickBit As UShort = 1
+- uid: FluentGpu.Scene.InteractionInfo.KeyBit
+  commentId: F:FluentGpu.Scene.InteractionInfo.KeyBit
+  id: KeyBit
+  parent: FluentGpu.Scene.InteractionInfo
+  langs:
+  - csharp
+  - vb
+  name: KeyBit
+  nameWithType: InteractionInfo.KeyBit
+  fullName: FluentGpu.Scene.InteractionInfo.KeyBit
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: KeyBit
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 284
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public const ushort KeyBit = 2
+    return:
+      type: System.UInt16
+    content.vb: Public Const KeyBit As UShort = 2
+- uid: FluentGpu.Scene.InteractionInfo.PointerBit
+  commentId: F:FluentGpu.Scene.InteractionInfo.PointerBit
+  id: PointerBit
+  parent: FluentGpu.Scene.InteractionInfo
+  langs:
+  - csharp
+  - vb
+  name: PointerBit
+  nameWithType: InteractionInfo.PointerBit
+  fullName: FluentGpu.Scene.InteractionInfo.PointerBit
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PointerBit
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 285
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public const ushort PointerBit = 4
+    return:
+      type: System.UInt16
+    content.vb: Public Const PointerBit As UShort = 4
+- uid: FluentGpu.Scene.InteractionInfo.CharBit
+  commentId: F:FluentGpu.Scene.InteractionInfo.CharBit
+  id: CharBit
+  parent: FluentGpu.Scene.InteractionInfo
+  langs:
+  - csharp
+  - vb
+  name: CharBit
+  nameWithType: InteractionInfo.CharBit
+  fullName: FluentGpu.Scene.InteractionInfo.CharBit
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CharBit
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 286
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public const ushort CharBit = 8
+    return:
+      type: System.UInt16
+    content.vb: Public Const CharBit As UShort = 8
+- uid: FluentGpu.Scene.InteractionInfo.RepeatBit
+  commentId: F:FluentGpu.Scene.InteractionInfo.RepeatBit
+  id: RepeatBit
+  parent: FluentGpu.Scene.InteractionInfo
+  langs:
+  - csharp
+  - vb
+  name: RepeatBit
+  nameWithType: InteractionInfo.RepeatBit
+  fullName: FluentGpu.Scene.InteractionInfo.RepeatBit
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RepeatBit
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 287
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public const ushort RepeatBit = 16
+    return:
+      type: System.UInt16
+    content.vb: Public Const RepeatBit As UShort = 16
+- uid: FluentGpu.Scene.InteractionInfo.PressedBit
+  commentId: F:FluentGpu.Scene.InteractionInfo.PressedBit
+  id: PressedBit
+  parent: FluentGpu.Scene.InteractionInfo
+  langs:
+  - csharp
+  - vb
+  name: PressedBit
+  nameWithType: InteractionInfo.PressedBit
+  fullName: FluentGpu.Scene.InteractionInfo.PressedBit
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PressedBit
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 288
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public const ushort PressedBit = 32
+    return:
+      type: System.UInt16
+    content.vb: Public Const PressedBit As UShort = 32
+- uid: FluentGpu.Scene.InteractionInfo.ContextBit
+  commentId: F:FluentGpu.Scene.InteractionInfo.ContextBit
+  id: ContextBit
+  parent: FluentGpu.Scene.InteractionInfo
+  langs:
+  - csharp
+  - vb
+  name: ContextBit
+  nameWithType: InteractionInfo.ContextBit
+  fullName: FluentGpu.Scene.InteractionInfo.ContextBit
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ContextBit
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 289
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public const ushort ContextBit = 64
+    return:
+      type: System.UInt16
+    content.vb: Public Const ContextBit As UShort = 64
+- uid: FluentGpu.Scene.InteractionInfo.FocusBit
+  commentId: F:FluentGpu.Scene.InteractionInfo.FocusBit
+  id: FocusBit
+  parent: FluentGpu.Scene.InteractionInfo
+  langs:
+  - csharp
+  - vb
+  name: FocusBit
+  nameWithType: InteractionInfo.FocusBit
+  fullName: FluentGpu.Scene.InteractionInfo.FocusBit
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FocusBit
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 290
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public const ushort FocusBit = 128
+    return:
+      type: System.UInt16
+    content.vb: Public Const FocusBit As UShort = 128
+- uid: FluentGpu.Scene.InteractionInfo.DragBit
+  commentId: F:FluentGpu.Scene.InteractionInfo.DragBit
+  id: DragBit
+  parent: FluentGpu.Scene.InteractionInfo
+  langs:
+  - csharp
+  - vb
+  name: DragBit
+  nameWithType: InteractionInfo.DragBit
+  fullName: FluentGpu.Scene.InteractionInfo.DragBit
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DragBit
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 293
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public const ushort DragBit = 256
+    return:
+      type: System.UInt16
+    content.vb: Public Const DragBit As UShort = 256
+- uid: FluentGpu.Scene.InteractionInfo.CursorBit
+  commentId: F:FluentGpu.Scene.InteractionInfo.CursorBit
+  id: CursorBit
+  parent: FluentGpu.Scene.InteractionInfo
+  langs:
+  - csharp
+  - vb
+  name: CursorBit
+  nameWithType: InteractionInfo.CursorBit
+  fullName: FluentGpu.Scene.InteractionInfo.CursorBit
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CursorBit
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 295
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public const ushort CursorBit = 512
+    return:
+      type: System.UInt16
+    content.vb: Public Const CursorBit As UShort = 512
+- uid: FluentGpu.Scene.InteractionInfo.NoEnterActivateBit
+  commentId: F:FluentGpu.Scene.InteractionInfo.NoEnterActivateBit
+  id: NoEnterActivateBit
+  parent: FluentGpu.Scene.InteractionInfo
+  langs:
+  - csharp
+  - vb
+  name: NoEnterActivateBit
+  nameWithType: InteractionInfo.NoEnterActivateBit
+  fullName: FluentGpu.Scene.InteractionInfo.NoEnterActivateBit
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NoEnterActivateBit
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 298
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public const ushort NoEnterActivateBit = 1024
+    return:
+      type: System.UInt16
+    content.vb: Public Const NoEnterActivateBit As UShort = 1024
+- uid: FluentGpu.Scene.InteractionInfo.NoPointerFocusBit
+  commentId: F:FluentGpu.Scene.InteractionInfo.NoPointerFocusBit
+  id: NoPointerFocusBit
+  parent: FluentGpu.Scene.InteractionInfo
+  langs:
+  - csharp
+  - vb
+  name: NoPointerFocusBit
+  nameWithType: InteractionInfo.NoPointerFocusBit
+  fullName: FluentGpu.Scene.InteractionInfo.NoPointerFocusBit
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NoPointerFocusBit
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 301
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public const ushort NoPointerFocusBit = 2048
+    return:
+      type: System.UInt16
+    content.vb: Public Const NoPointerFocusBit As UShort = 2048
+- uid: FluentGpu.Scene.InteractionInfo.WheelBit
+  commentId: F:FluentGpu.Scene.InteractionInfo.WheelBit
+  id: WheelBit
+  parent: FluentGpu.Scene.InteractionInfo
+  langs:
+  - csharp
+  - vb
+  name: WheelBit
+  nameWithType: InteractionInfo.WheelBit
+  fullName: FluentGpu.Scene.InteractionInfo.WheelBit
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: WheelBit
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 303
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public const ushort WheelBit = 4096
+    return:
+      type: System.UInt16
+    content.vb: Public Const WheelBit As UShort = 4096
+- uid: FluentGpu.Scene.InteractionInfo.SelectableTextBit
+  commentId: F:FluentGpu.Scene.InteractionInfo.SelectableTextBit
+  id: SelectableTextBit
+  parent: FluentGpu.Scene.InteractionInfo
+  langs:
+  - csharp
+  - vb
+  name: SelectableTextBit
+  nameWithType: InteractionInfo.SelectableTextBit
+  fullName: FluentGpu.Scene.InteractionInfo.SelectableTextBit
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SelectableTextBit
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 305
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public const ushort SelectableTextBit = 8192
+    return:
+      type: System.UInt16
+    content.vb: Public Const SelectableTextBit As UShort = 8192
+- uid: FluentGpu.Scene.InteractionInfo.SpanLinksBit
+  commentId: F:FluentGpu.Scene.InteractionInfo.SpanLinksBit
+  id: SpanLinksBit
+  parent: FluentGpu.Scene.InteractionInfo
+  langs:
+  - csharp
+  - vb
+  name: SpanLinksBit
+  nameWithType: InteractionInfo.SpanLinksBit
+  fullName: FluentGpu.Scene.InteractionInfo.SpanLinksBit
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpanLinksBit
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 309
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public const ushort SpanLinksBit = 16384
+    return:
+      type: System.UInt16
+    content.vb: Public Const SpanLinksBit As UShort = 16384
+- uid: FluentGpu.Scene.InteractionInfo.RepeatDelayMs
+  commentId: F:FluentGpu.Scene.InteractionInfo.RepeatDelayMs
+  id: RepeatDelayMs
+  parent: FluentGpu.Scene.InteractionInfo
+  langs:
+  - csharp
+  - vb
+  name: RepeatDelayMs
+  nameWithType: InteractionInfo.RepeatDelayMs
+  fullName: FluentGpu.Scene.InteractionInfo.RepeatDelayMs
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RepeatDelayMs
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 315
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    WinUI RepeatButton Delay/Interval (ms) for <xref href="FluentGpu.Scene.InteractionInfo.RepeatBit" data-throw-if-not-resolved="false"></xref> nodes. NaN (or non-positive) = the
+        WinUI DP defaults (500/33, DependencyProperty.cpp:714-720); ScrollBar template arrows use Interval=50.
+  example: []
+  syntax:
+    content: public float RepeatDelayMs
+    return:
+      type: System.Single
+    content.vb: Public RepeatDelayMs As Single
+- uid: FluentGpu.Scene.InteractionInfo.RepeatIntervalMs
+  commentId: F:FluentGpu.Scene.InteractionInfo.RepeatIntervalMs
+  id: RepeatIntervalMs
+  parent: FluentGpu.Scene.InteractionInfo
+  langs:
+  - csharp
+  - vb
+  name: RepeatIntervalMs
+  nameWithType: InteractionInfo.RepeatIntervalMs
+  fullName: FluentGpu.Scene.InteractionInfo.RepeatIntervalMs
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RepeatIntervalMs
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 315
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    WinUI RepeatButton Delay/Interval (ms) for <xref href="FluentGpu.Scene.InteractionInfo.RepeatBit" data-throw-if-not-resolved="false"></xref> nodes. NaN (or non-positive) = the
+        WinUI DP defaults (500/33, DependencyProperty.cpp:714-720); ScrollBar template arrows use Interval=50.
+  example: []
+  syntax:
+    content: public float RepeatIntervalMs
+    return:
+      type: System.Single
+    content.vb: Public RepeatIntervalMs As Single
+references:
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.UInt16
+  commentId: T:System.UInt16
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.uint16
+  name: ushort
+  nameWithType: ushort
+  fullName: ushort
+  nameWithType.vb: UShort
+  fullName.vb: UShort
+  name.vb: UShort
+- uid: FluentGpu.Scene.InteractionInfo.CursorBit
+  commentId: F:FluentGpu.Scene.InteractionInfo.CursorBit
+  href: FluentGpu.Scene.InteractionInfo.html#FluentGpu_Scene_InteractionInfo_CursorBit
+  name: CursorBit
+  nameWithType: InteractionInfo.CursorBit
+  fullName: FluentGpu.Scene.InteractionInfo.CursorBit
+- uid: FluentGpu.Foundation.CursorId
+  commentId: T:FluentGpu.Foundation.CursorId
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.CursorId.html
+  name: CursorId
+  nameWithType: CursorId
+  fullName: FluentGpu.Foundation.CursorId
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Foundation.AutomationRole
+  commentId: T:FluentGpu.Foundation.AutomationRole
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.AutomationRole.html
+  name: AutomationRole
+  nameWithType: AutomationRole
+  fullName: FluentGpu.Foundation.AutomationRole
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: System.Char
+  commentId: T:System.Char
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.char
+  name: char
+  nameWithType: char
+  fullName: char
+  nameWithType.vb: Char
+  fullName.vb: Char
+  name.vb: Char
+- uid: FluentGpu.Foundation.Edges4
+  commentId: T:FluentGpu.Foundation.Edges4
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Edges4.html
+  name: Edges4
+  nameWithType: Edges4
+  fullName: FluentGpu.Foundation.Edges4
+- uid: FluentGpu.Foundation.KeyModifiers
+  commentId: T:FluentGpu.Foundation.KeyModifiers
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.KeyModifiers.html
+  name: KeyModifiers
+  nameWithType: KeyModifiers
+  fullName: FluentGpu.Foundation.KeyModifiers
+- uid: FluentGpu.Scene.InteractionInfo.RepeatBit
+  commentId: F:FluentGpu.Scene.InteractionInfo.RepeatBit
+  href: FluentGpu.Scene.InteractionInfo.html#FluentGpu_Scene_InteractionInfo_RepeatBit
+  name: RepeatBit
+  nameWithType: InteractionInfo.RepeatBit
+  fullName: FluentGpu.Scene.InteractionInfo.RepeatBit
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single

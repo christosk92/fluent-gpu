@@ -1,0 +1,53 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Layout
+  commentId: N:FluentGpu.Layout
+  id: FluentGpu.Layout
+  children:
+  - FluentGpu.Layout.FlexLayout
+  - FluentGpu.Layout.LayoutInvalidator
+  langs:
+  - csharp
+  - vb
+  name: FluentGpu.Layout
+  nameWithType: FluentGpu.Layout
+  fullName: FluentGpu.Layout
+  type: Namespace
+  assemblies:
+  - FluentGpu.Layout
+references:
+- uid: FluentGpu.Layout.FlexLayout
+  commentId: T:FluentGpu.Layout.FlexLayout
+  parent: FluentGpu.Layout
+  href: FluentGpu.Layout.FlexLayout.html
+  name: FlexLayout
+  nameWithType: FlexLayout
+  fullName: FluentGpu.Layout.FlexLayout
+- uid: FluentGpu.Layout.LayoutInvalidator
+  commentId: T:FluentGpu.Layout.LayoutInvalidator
+  href: FluentGpu.Layout.LayoutInvalidator.html
+  name: LayoutInvalidator
+  nameWithType: LayoutInvalidator
+  fullName: FluentGpu.Layout.LayoutInvalidator
+- uid: FluentGpu.Layout
+  commentId: N:FluentGpu.Layout
+  href: FluentGpu.html
+  name: FluentGpu.Layout
+  nameWithType: FluentGpu.Layout
+  fullName: FluentGpu.Layout
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Layout
+    name: Layout
+    href: FluentGpu.Layout.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Layout
+    name: Layout
+    href: FluentGpu.Layout.html

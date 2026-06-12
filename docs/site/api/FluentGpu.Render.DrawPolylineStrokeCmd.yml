@@ -1,0 +1,944 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd
+  commentId: T:FluentGpu.Render.DrawPolylineStrokeCmd
+  id: DrawPolylineStrokeCmd
+  parent: FluentGpu.Render
+  children:
+  - FluentGpu.Render.DrawPolylineStrokeCmd.#ctor(FluentGpu.Foundation.RectF,FluentGpu.Foundation.ColorF,System.Single,FluentGpu.Foundation.Point2,FluentGpu.Foundation.Point2,FluentGpu.Foundation.Point2,FluentGpu.Foundation.Point2,System.Int32,System.Single,System.Single,System.Int32,FluentGpu.Foundation.Affine2D,System.Single)
+  - FluentGpu.Render.DrawPolylineStrokeCmd.Color
+  - FluentGpu.Render.DrawPolylineStrokeCmd.Opacity
+  - FluentGpu.Render.DrawPolylineStrokeCmd.P0
+  - FluentGpu.Render.DrawPolylineStrokeCmd.P1
+  - FluentGpu.Render.DrawPolylineStrokeCmd.P2
+  - FluentGpu.Render.DrawPolylineStrokeCmd.P3
+  - FluentGpu.Render.DrawPolylineStrokeCmd.PointCount
+  - FluentGpu.Render.DrawPolylineStrokeCmd.Rect
+  - FluentGpu.Render.DrawPolylineStrokeCmd.RoundCaps
+  - FluentGpu.Render.DrawPolylineStrokeCmd.Thickness
+  - FluentGpu.Render.DrawPolylineStrokeCmd.Transform
+  - FluentGpu.Render.DrawPolylineStrokeCmd.TrimEnd
+  - FluentGpu.Render.DrawPolylineStrokeCmd.TrimStart
+  langs:
+  - csharp
+  - vb
+  name: DrawPolylineStrokeCmd
+  nameWithType: DrawPolylineStrokeCmd
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DrawPolylineStrokeCmd
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 106
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: 'public readonly record struct DrawPolylineStrokeCmd : IEquatable<DrawPolylineStrokeCmd>'
+    content.vb: Public Structure DrawPolylineStrokeCmd Implements IEquatable(Of DrawPolylineStrokeCmd)
+  implements:
+  - System.IEquatable{FluentGpu.Render.DrawPolylineStrokeCmd}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.#ctor(FluentGpu.Foundation.RectF,FluentGpu.Foundation.ColorF,System.Single,FluentGpu.Foundation.Point2,FluentGpu.Foundation.Point2,FluentGpu.Foundation.Point2,FluentGpu.Foundation.Point2,System.Int32,System.Single,System.Single,System.Int32,FluentGpu.Foundation.Affine2D,System.Single)
+  commentId: M:FluentGpu.Render.DrawPolylineStrokeCmd.#ctor(FluentGpu.Foundation.RectF,FluentGpu.Foundation.ColorF,System.Single,FluentGpu.Foundation.Point2,FluentGpu.Foundation.Point2,FluentGpu.Foundation.Point2,FluentGpu.Foundation.Point2,System.Int32,System.Single,System.Single,System.Int32,FluentGpu.Foundation.Affine2D,System.Single)
+  id: '#ctor(FluentGpu.Foundation.RectF,FluentGpu.Foundation.ColorF,System.Single,FluentGpu.Foundation.Point2,FluentGpu.Foundation.Point2,FluentGpu.Foundation.Point2,FluentGpu.Foundation.Point2,System.Int32,System.Single,System.Single,System.Int32,FluentGpu.Foundation.Affine2D,System.Single)'
+  parent: FluentGpu.Render.DrawPolylineStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: DrawPolylineStrokeCmd(RectF, ColorF, float, Point2, Point2, Point2, Point2, int, float, float, int, Affine2D, float)
+  nameWithType: DrawPolylineStrokeCmd.DrawPolylineStrokeCmd(RectF, ColorF, float, Point2, Point2, Point2, Point2, int, float, float, int, Affine2D, float)
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.DrawPolylineStrokeCmd(FluentGpu.Foundation.RectF, FluentGpu.Foundation.ColorF, float, FluentGpu.Foundation.Point2, FluentGpu.Foundation.Point2, FluentGpu.Foundation.Point2, FluentGpu.Foundation.Point2, int, float, float, int, FluentGpu.Foundation.Affine2D, float)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 106
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public DrawPolylineStrokeCmd(RectF Rect, ColorF Color, float Thickness, Point2 P0, Point2 P1, Point2 P2, Point2 P3, int PointCount, float TrimStart, float TrimEnd, int RoundCaps, Affine2D Transform, float Opacity)
+    parameters:
+    - id: Rect
+      type: FluentGpu.Foundation.RectF
+    - id: Color
+      type: FluentGpu.Foundation.ColorF
+    - id: Thickness
+      type: System.Single
+    - id: P0
+      type: FluentGpu.Foundation.Point2
+    - id: P1
+      type: FluentGpu.Foundation.Point2
+    - id: P2
+      type: FluentGpu.Foundation.Point2
+    - id: P3
+      type: FluentGpu.Foundation.Point2
+    - id: PointCount
+      type: System.Int32
+    - id: TrimStart
+      type: System.Single
+    - id: TrimEnd
+      type: System.Single
+    - id: RoundCaps
+      type: System.Int32
+    - id: Transform
+      type: FluentGpu.Foundation.Affine2D
+    - id: Opacity
+      type: System.Single
+    content.vb: Public Sub New(Rect As RectF, Color As ColorF, Thickness As Single, P0 As Point2, P1 As Point2, P2 As Point2, P3 As Point2, PointCount As Integer, TrimStart As Single, TrimEnd As Single, RoundCaps As Integer, Transform As Affine2D, Opacity As Single)
+  overload: FluentGpu.Render.DrawPolylineStrokeCmd.#ctor*
+  nameWithType.vb: DrawPolylineStrokeCmd.New(RectF, ColorF, Single, Point2, Point2, Point2, Point2, Integer, Single, Single, Integer, Affine2D, Single)
+  fullName.vb: FluentGpu.Render.DrawPolylineStrokeCmd.New(FluentGpu.Foundation.RectF, FluentGpu.Foundation.ColorF, Single, FluentGpu.Foundation.Point2, FluentGpu.Foundation.Point2, FluentGpu.Foundation.Point2, FluentGpu.Foundation.Point2, Integer, Single, Single, Integer, FluentGpu.Foundation.Affine2D, Single)
+  name.vb: New(RectF, ColorF, Single, Point2, Point2, Point2, Point2, Integer, Single, Single, Integer, Affine2D, Single)
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.Rect
+  commentId: P:FluentGpu.Render.DrawPolylineStrokeCmd.Rect
+  id: Rect
+  parent: FluentGpu.Render.DrawPolylineStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: Rect
+  nameWithType: DrawPolylineStrokeCmd.Rect
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.Rect
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Rect
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 106
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public RectF Rect { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.RectF
+    content.vb: Public Property Rect As RectF
+  overload: FluentGpu.Render.DrawPolylineStrokeCmd.Rect*
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.Color
+  commentId: P:FluentGpu.Render.DrawPolylineStrokeCmd.Color
+  id: Color
+  parent: FluentGpu.Render.DrawPolylineStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: Color
+  nameWithType: DrawPolylineStrokeCmd.Color
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.Color
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Color
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 106
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public ColorF Color { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property Color As ColorF
+  overload: FluentGpu.Render.DrawPolylineStrokeCmd.Color*
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.Thickness
+  commentId: P:FluentGpu.Render.DrawPolylineStrokeCmd.Thickness
+  id: Thickness
+  parent: FluentGpu.Render.DrawPolylineStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: Thickness
+  nameWithType: DrawPolylineStrokeCmd.Thickness
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.Thickness
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Thickness
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 106
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public float Thickness { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Thickness As Single
+  overload: FluentGpu.Render.DrawPolylineStrokeCmd.Thickness*
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.P0
+  commentId: P:FluentGpu.Render.DrawPolylineStrokeCmd.P0
+  id: P0
+  parent: FluentGpu.Render.DrawPolylineStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: P0
+  nameWithType: DrawPolylineStrokeCmd.P0
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.P0
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: P0
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 107
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public Point2 P0 { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Point2
+    content.vb: Public Property P0 As Point2
+  overload: FluentGpu.Render.DrawPolylineStrokeCmd.P0*
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.P1
+  commentId: P:FluentGpu.Render.DrawPolylineStrokeCmd.P1
+  id: P1
+  parent: FluentGpu.Render.DrawPolylineStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: P1
+  nameWithType: DrawPolylineStrokeCmd.P1
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.P1
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: P1
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 107
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public Point2 P1 { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Point2
+    content.vb: Public Property P1 As Point2
+  overload: FluentGpu.Render.DrawPolylineStrokeCmd.P1*
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.P2
+  commentId: P:FluentGpu.Render.DrawPolylineStrokeCmd.P2
+  id: P2
+  parent: FluentGpu.Render.DrawPolylineStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: P2
+  nameWithType: DrawPolylineStrokeCmd.P2
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.P2
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: P2
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 107
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public Point2 P2 { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Point2
+    content.vb: Public Property P2 As Point2
+  overload: FluentGpu.Render.DrawPolylineStrokeCmd.P2*
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.P3
+  commentId: P:FluentGpu.Render.DrawPolylineStrokeCmd.P3
+  id: P3
+  parent: FluentGpu.Render.DrawPolylineStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: P3
+  nameWithType: DrawPolylineStrokeCmd.P3
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.P3
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: P3
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 107
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public Point2 P3 { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Point2
+    content.vb: Public Property P3 As Point2
+  overload: FluentGpu.Render.DrawPolylineStrokeCmd.P3*
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.PointCount
+  commentId: P:FluentGpu.Render.DrawPolylineStrokeCmd.PointCount
+  id: PointCount
+  parent: FluentGpu.Render.DrawPolylineStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: PointCount
+  nameWithType: DrawPolylineStrokeCmd.PointCount
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.PointCount
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PointCount
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 107
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public int PointCount { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property PointCount As Integer
+  overload: FluentGpu.Render.DrawPolylineStrokeCmd.PointCount*
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.TrimStart
+  commentId: P:FluentGpu.Render.DrawPolylineStrokeCmd.TrimStart
+  id: TrimStart
+  parent: FluentGpu.Render.DrawPolylineStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: TrimStart
+  nameWithType: DrawPolylineStrokeCmd.TrimStart
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.TrimStart
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TrimStart
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 107
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public float TrimStart { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property TrimStart As Single
+  overload: FluentGpu.Render.DrawPolylineStrokeCmd.TrimStart*
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.TrimEnd
+  commentId: P:FluentGpu.Render.DrawPolylineStrokeCmd.TrimEnd
+  id: TrimEnd
+  parent: FluentGpu.Render.DrawPolylineStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: TrimEnd
+  nameWithType: DrawPolylineStrokeCmd.TrimEnd
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.TrimEnd
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TrimEnd
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 107
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public float TrimEnd { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property TrimEnd As Single
+  overload: FluentGpu.Render.DrawPolylineStrokeCmd.TrimEnd*
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.RoundCaps
+  commentId: P:FluentGpu.Render.DrawPolylineStrokeCmd.RoundCaps
+  id: RoundCaps
+  parent: FluentGpu.Render.DrawPolylineStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: RoundCaps
+  nameWithType: DrawPolylineStrokeCmd.RoundCaps
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.RoundCaps
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RoundCaps
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 107
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public int RoundCaps { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property RoundCaps As Integer
+  overload: FluentGpu.Render.DrawPolylineStrokeCmd.RoundCaps*
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.Transform
+  commentId: P:FluentGpu.Render.DrawPolylineStrokeCmd.Transform
+  id: Transform
+  parent: FluentGpu.Render.DrawPolylineStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: Transform
+  nameWithType: DrawPolylineStrokeCmd.Transform
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.Transform
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Transform
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 108
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public Affine2D Transform { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Affine2D
+    content.vb: Public Property Transform As Affine2D
+  overload: FluentGpu.Render.DrawPolylineStrokeCmd.Transform*
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.Opacity
+  commentId: P:FluentGpu.Render.DrawPolylineStrokeCmd.Opacity
+  id: Opacity
+  parent: FluentGpu.Render.DrawPolylineStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: Opacity
+  nameWithType: DrawPolylineStrokeCmd.Opacity
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.Opacity
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Opacity
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 108
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public float Opacity { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Opacity As Single
+  overload: FluentGpu.Render.DrawPolylineStrokeCmd.Opacity*
+references:
+- uid: FluentGpu.Render
+  commentId: N:FluentGpu.Render
+  href: FluentGpu.html
+  name: FluentGpu.Render
+  nameWithType: FluentGpu.Render
+  fullName: FluentGpu.Render
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Render
+    name: Render
+    href: FluentGpu.Render.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Render
+    name: Render
+    href: FluentGpu.Render.html
+- uid: System.IEquatable{FluentGpu.Render.DrawPolylineStrokeCmd}
+  commentId: T:System.IEquatable{FluentGpu.Render.DrawPolylineStrokeCmd}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<DrawPolylineStrokeCmd>
+  nameWithType: IEquatable<DrawPolylineStrokeCmd>
+  fullName: System.IEquatable<FluentGpu.Render.DrawPolylineStrokeCmd>
+  nameWithType.vb: IEquatable(Of DrawPolylineStrokeCmd)
+  fullName.vb: System.IEquatable(Of FluentGpu.Render.DrawPolylineStrokeCmd)
+  name.vb: IEquatable(Of DrawPolylineStrokeCmd)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Render.DrawPolylineStrokeCmd
+    name: DrawPolylineStrokeCmd
+    href: FluentGpu.Render.DrawPolylineStrokeCmd.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Render.DrawPolylineStrokeCmd
+    name: DrawPolylineStrokeCmd
+    href: FluentGpu.Render.DrawPolylineStrokeCmd.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.#ctor*
+  commentId: Overload:FluentGpu.Render.DrawPolylineStrokeCmd.#ctor
+  href: FluentGpu.Render.DrawPolylineStrokeCmd.html#FluentGpu_Render_DrawPolylineStrokeCmd__ctor_FluentGpu_Foundation_RectF_FluentGpu_Foundation_ColorF_System_Single_FluentGpu_Foundation_Point2_FluentGpu_Foundation_Point2_FluentGpu_Foundation_Point2_FluentGpu_Foundation_Point2_System_Int32_System_Single_System_Single_System_Int32_FluentGpu_Foundation_Affine2D_System_Single_
+  name: DrawPolylineStrokeCmd
+  nameWithType: DrawPolylineStrokeCmd.DrawPolylineStrokeCmd
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.DrawPolylineStrokeCmd
+  nameWithType.vb: DrawPolylineStrokeCmd.New
+  fullName.vb: FluentGpu.Render.DrawPolylineStrokeCmd.New
+  name.vb: New
+- uid: FluentGpu.Foundation.RectF
+  commentId: T:FluentGpu.Foundation.RectF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.RectF.html
+  name: RectF
+  nameWithType: RectF
+  fullName: FluentGpu.Foundation.RectF
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.Point2
+  commentId: T:FluentGpu.Foundation.Point2
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Point2.html
+  name: Point2
+  nameWithType: Point2
+  fullName: FluentGpu.Foundation.Point2
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Foundation.Affine2D
+  commentId: T:FluentGpu.Foundation.Affine2D
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Affine2D.html
+  name: Affine2D
+  nameWithType: Affine2D
+  fullName: FluentGpu.Foundation.Affine2D
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.Rect*
+  commentId: Overload:FluentGpu.Render.DrawPolylineStrokeCmd.Rect
+  href: FluentGpu.Render.DrawPolylineStrokeCmd.html#FluentGpu_Render_DrawPolylineStrokeCmd_Rect
+  name: Rect
+  nameWithType: DrawPolylineStrokeCmd.Rect
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.Rect
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.Color*
+  commentId: Overload:FluentGpu.Render.DrawPolylineStrokeCmd.Color
+  href: FluentGpu.Render.DrawPolylineStrokeCmd.html#FluentGpu_Render_DrawPolylineStrokeCmd_Color
+  name: Color
+  nameWithType: DrawPolylineStrokeCmd.Color
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.Color
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.Thickness*
+  commentId: Overload:FluentGpu.Render.DrawPolylineStrokeCmd.Thickness
+  href: FluentGpu.Render.DrawPolylineStrokeCmd.html#FluentGpu_Render_DrawPolylineStrokeCmd_Thickness
+  name: Thickness
+  nameWithType: DrawPolylineStrokeCmd.Thickness
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.Thickness
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.P0*
+  commentId: Overload:FluentGpu.Render.DrawPolylineStrokeCmd.P0
+  href: FluentGpu.Render.DrawPolylineStrokeCmd.html#FluentGpu_Render_DrawPolylineStrokeCmd_P0
+  name: P0
+  nameWithType: DrawPolylineStrokeCmd.P0
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.P0
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.P1*
+  commentId: Overload:FluentGpu.Render.DrawPolylineStrokeCmd.P1
+  href: FluentGpu.Render.DrawPolylineStrokeCmd.html#FluentGpu_Render_DrawPolylineStrokeCmd_P1
+  name: P1
+  nameWithType: DrawPolylineStrokeCmd.P1
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.P1
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.P2*
+  commentId: Overload:FluentGpu.Render.DrawPolylineStrokeCmd.P2
+  href: FluentGpu.Render.DrawPolylineStrokeCmd.html#FluentGpu_Render_DrawPolylineStrokeCmd_P2
+  name: P2
+  nameWithType: DrawPolylineStrokeCmd.P2
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.P2
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.P3*
+  commentId: Overload:FluentGpu.Render.DrawPolylineStrokeCmd.P3
+  href: FluentGpu.Render.DrawPolylineStrokeCmd.html#FluentGpu_Render_DrawPolylineStrokeCmd_P3
+  name: P3
+  nameWithType: DrawPolylineStrokeCmd.P3
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.P3
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.PointCount*
+  commentId: Overload:FluentGpu.Render.DrawPolylineStrokeCmd.PointCount
+  href: FluentGpu.Render.DrawPolylineStrokeCmd.html#FluentGpu_Render_DrawPolylineStrokeCmd_PointCount
+  name: PointCount
+  nameWithType: DrawPolylineStrokeCmd.PointCount
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.PointCount
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.TrimStart*
+  commentId: Overload:FluentGpu.Render.DrawPolylineStrokeCmd.TrimStart
+  href: FluentGpu.Render.DrawPolylineStrokeCmd.html#FluentGpu_Render_DrawPolylineStrokeCmd_TrimStart
+  name: TrimStart
+  nameWithType: DrawPolylineStrokeCmd.TrimStart
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.TrimStart
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.TrimEnd*
+  commentId: Overload:FluentGpu.Render.DrawPolylineStrokeCmd.TrimEnd
+  href: FluentGpu.Render.DrawPolylineStrokeCmd.html#FluentGpu_Render_DrawPolylineStrokeCmd_TrimEnd
+  name: TrimEnd
+  nameWithType: DrawPolylineStrokeCmd.TrimEnd
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.TrimEnd
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.RoundCaps*
+  commentId: Overload:FluentGpu.Render.DrawPolylineStrokeCmd.RoundCaps
+  href: FluentGpu.Render.DrawPolylineStrokeCmd.html#FluentGpu_Render_DrawPolylineStrokeCmd_RoundCaps
+  name: RoundCaps
+  nameWithType: DrawPolylineStrokeCmd.RoundCaps
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.RoundCaps
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.Transform*
+  commentId: Overload:FluentGpu.Render.DrawPolylineStrokeCmd.Transform
+  href: FluentGpu.Render.DrawPolylineStrokeCmd.html#FluentGpu_Render_DrawPolylineStrokeCmd_Transform
+  name: Transform
+  nameWithType: DrawPolylineStrokeCmd.Transform
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.Transform
+- uid: FluentGpu.Render.DrawPolylineStrokeCmd.Opacity*
+  commentId: Overload:FluentGpu.Render.DrawPolylineStrokeCmd.Opacity
+  href: FluentGpu.Render.DrawPolylineStrokeCmd.html#FluentGpu_Render_DrawPolylineStrokeCmd_Opacity
+  name: Opacity
+  nameWithType: DrawPolylineStrokeCmd.Opacity
+  fullName: FluentGpu.Render.DrawPolylineStrokeCmd.Opacity

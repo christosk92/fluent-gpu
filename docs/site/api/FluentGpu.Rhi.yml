@@ -1,0 +1,70 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Rhi
+  commentId: N:FluentGpu.Rhi
+  id: FluentGpu.Rhi
+  children:
+  - FluentGpu.Rhi.FrameInfo
+  - FluentGpu.Rhi.IGpuDevice
+  - FluentGpu.Rhi.ISwapchain
+  - FluentGpu.Rhi.SwapchainDesc
+  langs:
+  - csharp
+  - vb
+  name: FluentGpu.Rhi
+  nameWithType: FluentGpu.Rhi
+  fullName: FluentGpu.Rhi
+  type: Namespace
+  assemblies:
+  - FluentGpu.Rhi
+references:
+- uid: FluentGpu.Rhi.FrameInfo
+  commentId: T:FluentGpu.Rhi.FrameInfo
+  parent: FluentGpu.Rhi
+  href: FluentGpu.Rhi.FrameInfo.html
+  name: FrameInfo
+  nameWithType: FrameInfo
+  fullName: FluentGpu.Rhi.FrameInfo
+- uid: FluentGpu.Rhi.SwapchainDesc
+  commentId: T:FluentGpu.Rhi.SwapchainDesc
+  parent: FluentGpu.Rhi
+  href: FluentGpu.Rhi.SwapchainDesc.html
+  name: SwapchainDesc
+  nameWithType: SwapchainDesc
+  fullName: FluentGpu.Rhi.SwapchainDesc
+- uid: FluentGpu.Rhi.IGpuDevice
+  commentId: T:FluentGpu.Rhi.IGpuDevice
+  parent: FluentGpu.Rhi
+  href: FluentGpu.Rhi.IGpuDevice.html
+  name: IGpuDevice
+  nameWithType: IGpuDevice
+  fullName: FluentGpu.Rhi.IGpuDevice
+- uid: FluentGpu.Rhi.ISwapchain
+  commentId: T:FluentGpu.Rhi.ISwapchain
+  parent: FluentGpu.Rhi
+  href: FluentGpu.Rhi.ISwapchain.html
+  name: ISwapchain
+  nameWithType: ISwapchain
+  fullName: FluentGpu.Rhi.ISwapchain
+- uid: FluentGpu.Rhi
+  commentId: N:FluentGpu.Rhi
+  href: FluentGpu.html
+  name: FluentGpu.Rhi
+  nameWithType: FluentGpu.Rhi
+  fullName: FluentGpu.Rhi
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Rhi
+    name: Rhi
+    href: FluentGpu.Rhi.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Rhi
+    name: Rhi
+    href: FluentGpu.Rhi.html

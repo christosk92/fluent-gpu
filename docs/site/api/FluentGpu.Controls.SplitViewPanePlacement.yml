@@ -1,0 +1,114 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.SplitViewPanePlacement
+  commentId: T:FluentGpu.Controls.SplitViewPanePlacement
+  id: SplitViewPanePlacement
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.SplitViewPanePlacement.Left
+  - FluentGpu.Controls.SplitViewPanePlacement.Right
+  langs:
+  - csharp
+  - vb
+  name: SplitViewPanePlacement
+  nameWithType: SplitViewPanePlacement
+  fullName: FluentGpu.Controls.SplitViewPanePlacement
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SplitViewPanePlacement
+    path: ../../src/FluentGpu.Controls/SplitView.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI <code>SplitViewPanePlacement</code> (XCPTypesAutoGen SplitView.cs:11-15).
+  example: []
+  syntax:
+    content: 'public enum SplitViewPanePlacement : byte'
+    content.vb: Public Enum SplitViewPanePlacement As Byte
+- uid: FluentGpu.Controls.SplitViewPanePlacement.Left
+  commentId: F:FluentGpu.Controls.SplitViewPanePlacement.Left
+  id: Left
+  parent: FluentGpu.Controls.SplitViewPanePlacement
+  langs:
+  - csharp
+  - vb
+  name: Left
+  nameWithType: SplitViewPanePlacement.Left
+  fullName: FluentGpu.Controls.SplitViewPanePlacement.Left
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Left
+    path: ../../src/FluentGpu.Controls/SplitView.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Left = 0
+    return:
+      type: FluentGpu.Controls.SplitViewPanePlacement
+- uid: FluentGpu.Controls.SplitViewPanePlacement.Right
+  commentId: F:FluentGpu.Controls.SplitViewPanePlacement.Right
+  id: Right
+  parent: FluentGpu.Controls.SplitViewPanePlacement
+  langs:
+  - csharp
+  - vb
+  name: Right
+  nameWithType: SplitViewPanePlacement.Right
+  fullName: FluentGpu.Controls.SplitViewPanePlacement.Right
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Right
+    path: ../../src/FluentGpu.Controls/SplitView.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Right = 1
+    return:
+      type: FluentGpu.Controls.SplitViewPanePlacement
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.SplitViewPanePlacement
+  commentId: T:FluentGpu.Controls.SplitViewPanePlacement
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.SplitViewPanePlacement.html
+  name: SplitViewPanePlacement
+  nameWithType: SplitViewPanePlacement
+  fullName: FluentGpu.Controls.SplitViewPanePlacement

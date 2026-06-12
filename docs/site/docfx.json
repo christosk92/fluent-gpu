@@ -1,0 +1,63 @@
+{
+  "$schema": "https://raw.githubusercontent.com/dotnet/docfx/main/schemas/docfx.schema.json",
+  "metadata": [
+    {
+      "src": [
+        {
+          "src": "../../src",
+          "files": [
+            "FluentGpu.Engine/FluentGpu.Engine.csproj",
+            "FluentGpu.Controls/FluentGpu.Controls.csproj",
+            "FluentGpu.Windows/FluentGpu.Windows.csproj",
+            "FluentGpu.WindowsApi/FluentGpu.WindowsApi.csproj"
+          ]
+        }
+      ],
+      "dest": "api",
+      "outputFormat": "mref",
+      "properties": {
+        "TargetFramework": "net10.0"
+      }
+    }
+  ],
+  "build": {
+    "content": [
+      {
+        "files": [
+          "api/**.yml",
+          "api/index.md"
+        ]
+      },
+      {
+        "files": [
+          "**/*.md",
+          "**/toc.yml"
+        ],
+        "exclude": [
+          "api/**",
+          "obj/**",
+          "_site/**"
+        ]
+      }
+    ],
+    "resource": [
+      {
+        "files": [
+          "images/**"
+        ]
+      }
+    ],
+    "output": "_site",
+    "template": [
+      "default",
+      "modern"
+    ],
+    "globalMetadata": {
+      "_appName": "FluentGpu",
+      "_appTitle": "FluentGpu Developer Docs",
+      "_appFooter": "FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).",
+      "_enableSearch": true,
+      "_disableContribution": true
+    }
+  }
+}

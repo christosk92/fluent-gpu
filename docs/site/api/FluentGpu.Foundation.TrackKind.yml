@@ -1,0 +1,141 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.TrackKind
+  commentId: T:FluentGpu.Foundation.TrackKind
+  id: TrackKind
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.TrackKind.Auto
+  - FluentGpu.Foundation.TrackKind.Pixel
+  - FluentGpu.Foundation.TrackKind.Star
+  langs:
+  - csharp
+  - vb
+  name: TrackKind
+  nameWithType: TrackKind
+  fullName: FluentGpu.Foundation.TrackKind
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/TrackSize.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TrackKind
+    path: ../../src/FluentGpu.Foundation/TrackSize.cs
+    startLine: 3
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: A CSS-Grid track sizing function. (Lives in Foundation so both the DSL and the layout/scene see it.)
+  example: []
+  syntax:
+    content: 'public enum TrackKind : byte'
+    content.vb: Public Enum TrackKind As Byte
+- uid: FluentGpu.Foundation.TrackKind.Pixel
+  commentId: F:FluentGpu.Foundation.TrackKind.Pixel
+  id: Pixel
+  parent: FluentGpu.Foundation.TrackKind
+  langs:
+  - csharp
+  - vb
+  name: Pixel
+  nameWithType: TrackKind.Pixel
+  fullName: FluentGpu.Foundation.TrackKind.Pixel
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/TrackSize.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Pixel
+    path: ../../src/FluentGpu.Foundation/TrackSize.cs
+    startLine: 3
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Pixel = 0
+    return:
+      type: FluentGpu.Foundation.TrackKind
+- uid: FluentGpu.Foundation.TrackKind.Star
+  commentId: F:FluentGpu.Foundation.TrackKind.Star
+  id: Star
+  parent: FluentGpu.Foundation.TrackKind
+  langs:
+  - csharp
+  - vb
+  name: Star
+  nameWithType: TrackKind.Star
+  fullName: FluentGpu.Foundation.TrackKind.Star
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/TrackSize.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Star
+    path: ../../src/FluentGpu.Foundation/TrackSize.cs
+    startLine: 3
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Star = 1
+    return:
+      type: FluentGpu.Foundation.TrackKind
+- uid: FluentGpu.Foundation.TrackKind.Auto
+  commentId: F:FluentGpu.Foundation.TrackKind.Auto
+  id: Auto
+  parent: FluentGpu.Foundation.TrackKind
+  langs:
+  - csharp
+  - vb
+  name: Auto
+  nameWithType: TrackKind.Auto
+  fullName: FluentGpu.Foundation.TrackKind.Auto
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/TrackSize.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Auto
+    path: ../../src/FluentGpu.Foundation/TrackSize.cs
+    startLine: 3
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Auto = 2
+    return:
+      type: FluentGpu.Foundation.TrackKind
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Foundation.TrackKind
+  commentId: T:FluentGpu.Foundation.TrackKind
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.TrackKind.html
+  name: TrackKind
+  nameWithType: TrackKind
+  fullName: FluentGpu.Foundation.TrackKind

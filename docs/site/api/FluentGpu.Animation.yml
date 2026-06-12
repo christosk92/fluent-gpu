@@ -1,0 +1,129 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Animation
+  commentId: N:FluentGpu.Animation
+  id: FluentGpu.Animation
+  children:
+  - FluentGpu.Animation.AnimChannel
+  - FluentGpu.Animation.AnimEngine
+  - FluentGpu.Animation.CaretBlinker
+  - FluentGpu.Animation.CompositeOp
+  - FluentGpu.Animation.DrivenClockTable
+  - FluentGpu.Animation.IntegrationMode
+  - FluentGpu.Animation.InteractionAnimator
+  - FluentGpu.Animation.Keyframe
+  - FluentGpu.Animation.MotionSprings
+  - FluentGpu.Animation.RepeatTicker
+  - FluentGpu.Animation.ScrollAnimator
+  - FluentGpu.Animation.SpringParams
+  langs:
+  - csharp
+  - vb
+  name: FluentGpu.Animation
+  nameWithType: FluentGpu.Animation
+  fullName: FluentGpu.Animation
+  type: Namespace
+  assemblies:
+  - FluentGpu.Animation
+references:
+- uid: FluentGpu.Animation.AnimChannel
+  commentId: T:FluentGpu.Animation.AnimChannel
+  parent: FluentGpu.Animation
+  href: FluentGpu.Animation.AnimChannel.html
+  name: AnimChannel
+  nameWithType: AnimChannel
+  fullName: FluentGpu.Animation.AnimChannel
+- uid: FluentGpu.Animation.IntegrationMode
+  commentId: T:FluentGpu.Animation.IntegrationMode
+  parent: FluentGpu.Animation
+  href: FluentGpu.Animation.IntegrationMode.html
+  name: IntegrationMode
+  nameWithType: IntegrationMode
+  fullName: FluentGpu.Animation.IntegrationMode
+- uid: FluentGpu.Animation.CompositeOp
+  commentId: T:FluentGpu.Animation.CompositeOp
+  parent: FluentGpu.Animation
+  href: FluentGpu.Animation.CompositeOp.html
+  name: CompositeOp
+  nameWithType: CompositeOp
+  fullName: FluentGpu.Animation.CompositeOp
+- uid: FluentGpu.Animation.SpringParams
+  commentId: T:FluentGpu.Animation.SpringParams
+  parent: FluentGpu.Animation
+  href: FluentGpu.Animation.SpringParams.html
+  name: SpringParams
+  nameWithType: SpringParams
+  fullName: FluentGpu.Animation.SpringParams
+- uid: FluentGpu.Animation.Keyframe
+  commentId: T:FluentGpu.Animation.Keyframe
+  href: FluentGpu.Animation.Keyframe.html
+  name: Keyframe
+  nameWithType: Keyframe
+  fullName: FluentGpu.Animation.Keyframe
+- uid: FluentGpu.Animation.DrivenClockTable
+  commentId: T:FluentGpu.Animation.DrivenClockTable
+  parent: FluentGpu.Animation
+  href: FluentGpu.Animation.DrivenClockTable.html
+  name: DrivenClockTable
+  nameWithType: DrivenClockTable
+  fullName: FluentGpu.Animation.DrivenClockTable
+- uid: FluentGpu.Animation.AnimEngine
+  commentId: T:FluentGpu.Animation.AnimEngine
+  parent: FluentGpu.Animation
+  href: FluentGpu.Animation.AnimEngine.html
+  name: AnimEngine
+  nameWithType: AnimEngine
+  fullName: FluentGpu.Animation.AnimEngine
+- uid: FluentGpu.Animation.CaretBlinker
+  commentId: T:FluentGpu.Animation.CaretBlinker
+  parent: FluentGpu.Animation
+  href: FluentGpu.Animation.CaretBlinker.html
+  name: CaretBlinker
+  nameWithType: CaretBlinker
+  fullName: FluentGpu.Animation.CaretBlinker
+- uid: FluentGpu.Animation.InteractionAnimator
+  commentId: T:FluentGpu.Animation.InteractionAnimator
+  href: FluentGpu.Animation.InteractionAnimator.html
+  name: InteractionAnimator
+  nameWithType: InteractionAnimator
+  fullName: FluentGpu.Animation.InteractionAnimator
+- uid: FluentGpu.Animation.MotionSprings
+  commentId: T:FluentGpu.Animation.MotionSprings
+  href: FluentGpu.Animation.MotionSprings.html
+  name: MotionSprings
+  nameWithType: MotionSprings
+  fullName: FluentGpu.Animation.MotionSprings
+- uid: FluentGpu.Animation.RepeatTicker
+  commentId: T:FluentGpu.Animation.RepeatTicker
+  href: FluentGpu.Animation.RepeatTicker.html
+  name: RepeatTicker
+  nameWithType: RepeatTicker
+  fullName: FluentGpu.Animation.RepeatTicker
+- uid: FluentGpu.Animation.ScrollAnimator
+  commentId: T:FluentGpu.Animation.ScrollAnimator
+  href: FluentGpu.Animation.ScrollAnimator.html
+  name: ScrollAnimator
+  nameWithType: ScrollAnimator
+  fullName: FluentGpu.Animation.ScrollAnimator
+- uid: FluentGpu.Animation
+  commentId: N:FluentGpu.Animation
+  href: FluentGpu.html
+  name: FluentGpu.Animation
+  nameWithType: FluentGpu.Animation
+  fullName: FluentGpu.Animation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Animation
+    name: Animation
+    href: FluentGpu.Animation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Animation
+    name: Animation
+    href: FluentGpu.Animation.html

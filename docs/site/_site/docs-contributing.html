@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Contributing to the docs | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Contributing to the docs | FluentGpu Developer Docs ">
+      
+      
+      <link rel="icon" href="favicon.ico">
+      <link rel="stylesheet" href="public/docfx.min.css">
+      <link rel="stylesheet" href="public/main.css">
+      <meta name="docfx:navrel" content="toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/docs/site/docs-contributing.md/#L1">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="index.html">
+            <img id="logo" class="svg" src="logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+
+      <div class="content">
+        <div class="actionbar">
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="">
+<h1 id="contributing-to-the-docs">Contributing to the docs</h1>
+
+<p>This page is the rulebook for editing <strong>these</strong> docs — the DocFX conceptual site under <code>docs/site/</code>. It is the docs-side
+half of the same single-owner discipline the engine enforces in code: usage prose lives here, architecture canon lives
+in <code>design/</code>, and nothing on this site restates a canonical contract. Read it before you add or edit a page; the rules
+are few but load-bearing, and each one exists because the alternative produced drift.</p>
+<p>The short version:</p>
+<ul>
+<li><strong>Write usage docs here; never move canon out of <code>design/</code>.</strong></li>
+<li><strong>Link to a canonical value — never copy it.</strong></li>
+<li><strong>A control page cites both the control source and the gallery snippet that runs it.</strong></li>
+<li><strong>Every code sample mirrors the real surface in <code>src/FluentGpu.*</code> — open the file and copy the names.</strong></li>
+<li><strong>Two checks before you commit: the harness if you touched samples, <code>check-canon.ps1</code> if you touched <code>design/</code>.</strong></li>
+</ul>
+<p>The rest of this page is the <em>why</em> behind each.</p>
+<hr>
+<h2 id="the-source-of-truth-rule-usage-docs-are-docfx-pages-architecture-canon-stays-in-design">The source-of-truth rule: usage docs are DocFX pages, architecture canon stays in <code>design/</code></h2>
+<p>There are two doc trees in this repository and they have different jobs. Keep them separate.</p>
+<ul>
+<li><strong><code>docs/site/</code></strong> (this site) is the <strong>working developer view</strong>: how to build apps, how to change the engine, where each
+thing lives, how to verify. It is task-oriented and source-grounded. It is <em>built</em> into a static site by DocFX.</li>
+<li><strong><code>design/</code></strong> (the design corpus, at the repository root) is the <strong>architecture source of truth</strong>: every binding
+contract, opcode shape, seam definition, scene column, threading rule, and budget. It is canon-gated and is <strong>not</strong>
+built into this site — it is read in the repo or on GitHub.</li>
+</ul>
+<p>The precedence is explicit and one-directional: <strong>when a usage page and a design doc disagree, the design doc wins.</strong>
+<a href="../../design/SPEC-INDEX.md"><code>design/SPEC-INDEX.md</code></a> is the precedence authority (it names the one owning doc and the
+current canonical value for every cross-cutting contract), and <a href="../../design/subsystems/README.md"><code>design/subsystems/README.md</code></a>
+is the contract-ownership map. Both are mirrored from the engine's <code>CLAUDE.md</code> working rules — the docs do not get a
+softer standard.</p>
+<p>The practical rule that falls out: <strong>never move canonical material out of <code>design/</code> into a usage page, and never let a
+usage page become the only place a contract is written down.</strong> If you find yourself explaining <em>what the contract is</em>
+(the exact handle byte layout, the DrawList opcode enum, the 13-phase frame order), you are writing in the wrong tree —
+that belongs in its owning design doc, and the usage page should link to it. A usage page explains <em>how to use</em> the
+contract; the design doc <em>defines</em> it. The <a href="design/index.html">Design canon page</a> on this site says the same thing from
+the reader's side, and the <a href="index.html">site home page</a> frames the whole &quot;two trees, design wins&quot; relationship.</p>
+<hr>
+<h2 id="never-duplicate-a-canonical-value--link-to-the-spec-index-row-or-its-owning-subsystem-doc">Never duplicate a canonical value — link to the SPEC-INDEX row or its owning subsystem doc</h2>
+<p>This is the rule that prevents the single most common defect in this repository. From <code>CLAUDE.md</code>:</p>
+<blockquote>
+<p>The #1 review finding is the same artifact (an opcode shape, a column, a seam) defined two ways in two docs.</p>
+</blockquote>
+<p>A restated contract is a <em>future</em> contradiction: the moment the owning doc changes its value, every copy is silently
+wrong, and the canon gate cannot see a copy that lives in prose phrased differently. So <strong>do not restate</strong> a struct
+shape, an opcode payload, an enum, a scene-column layout, a handle format, a threading rule, or a quarantine constant in
+a usage page. Instead, link to it:</p>
+<ul>
+<li>to the <strong>SPEC-INDEX row</strong> for the canonical value and its owner — <a href="../../design/SPEC-INDEX.md"><code>design/SPEC-INDEX.md</code></a> §2, or</li>
+<li>to the <strong>owning subsystem doc</strong> for the deep design — e.g. <a href="../../design/subsystems/reconciler-hooks.md"><code>design/subsystems/reconciler-hooks.md</code></a>
+for the reactive model and the <code>Prop&lt;T&gt;</code> surface, <a href="../../design/subsystems/gpu-renderer.md"><code>design/subsystems/gpu-renderer.md</code></a>
+for opcode payload shapes, <a href="../../design/subsystems/scene-memory.md"><code>design/subsystems/scene-memory.md</code></a> for the SoA
+columns.</li>
+</ul>
+<p>What a usage page <em>may</em> state is the <strong>honest, stable framing</strong> the corpus already commits to — the phrases that are
+truths, not values that drift: &quot;near-zero-allocation&quot; (zero managed alloc only in per-frame paint phases 6–13; bounded
+Gen0 at the reconcile edge), &quot;decoupled, not invincible&quot; (a sustained GPU stall still bounds back to the UI thread),
+&quot;production safety == CI coverage&quot;. Match that voice exactly; do not inflate it and do not soften it. The home page's
+<a href="index.html#honest-status">Honest status</a> section is the reference for the tone.</p>
+<p>A worked example of <em>linking instead of restating</em> is already in the site: the engine-contributor page
+<a href="engine-contributors/adding-or-modifying-a-control.html">Adding or modifying a control</a> states the control constraint in
+one sentence (&quot;a control introduces no new column, opcode, PAL seam, RHI method, or hook&quot;) and then <strong>links</strong> to
+<a href="../../design/subsystems/controls.md"><code>controls.md</code> §0/§13</a> for the authority, rather than recopying the rule's
+justification. Do that.</p>
+<hr>
+<h2 id="control-behavior-docs-cite-both-srcfluentgpucontrols-and-the-gallery-page">Control behavior docs cite BOTH <code>src/FluentGpu.Controls/*</code> and the gallery page</h2>
+<p>A page that documents a control's behavior is only trustworthy if its sample is <strong>real and proven</strong>. That means citing
+two sources, not one:</p>
+<ol>
+<li><strong>The control source</strong> — <code>src/FluentGpu.Controls/&lt;Control&gt;.cs</code>. This is the behavior of record: the factory
+signatures, the <code>Style</code> record, the <code>Part*</code> consts, the interaction wiring. Controls are pure composition over the
+engine seams — they mint no new opcode, column, PAL seam, RHI method, or hook (see
+<a href="engine-contributors/adding-or-modifying-a-control.html">Adding or modifying a control</a>) — so the <code>.cs</code> file is the
+complete, honest surface. Copy names and signatures from it; do not paraphrase them.</li>
+<li><strong>The gallery page that runs it</strong> — under <code>src/FluentGpu.WindowsApp/</code>. The gallery is the <strong>verified, runnable</strong> form
+of the docs sample. Each demo is built with <code>ControlExample.Build(title, example, …, output:, code:)</code>
+(<code>src/FluentGpu.WindowsApp/ControlExample.cs</code>), so the snippet you quote is the same code that compiles and renders in
+the live control gallery. The control pages live in <code>ControlGalleryPages.cs</code>, <code>GalleryPages.cs</code>, <code>TextPages.cs</code>,
+<code>DateTimePages.cs</code>, and <code>CollectionsMenusPages.cs</code>.</li>
+</ol>
+<p>The <a href="app-authors/controls-cookbook.html">Controls cookbook</a> is the model to follow — every recipe is &quot;mined from a
+runnable gallery page,&quot; and the page closes with a table mapping each control to its exact gallery page
+(e.g. <code>ControlGalleryPages.cs → SliderControlPage</code>). When you add or change a control doc, add or update that mapping so
+a reader can open the running example. If a sample is <em>not</em> in the gallery yet, it is not a verified sample — add the
+gallery page (or pick a different, real example) rather than inventing one in prose.</p>
+<hr>
+<h2 id="anti-invention-rule-every-code-sample-must-mirror-the-real-surface-in-srcfluentgpu">Anti-invention rule: every code sample must mirror the real surface in <code>src/FluentGpu.*</code></h2>
+<p>This is the hardest rule and the most important: <strong>never invent an API, control, prop, hook, or WinUI style in a
+sample.</strong> Inventing a plausible-looking method that does not exist is worse than omitting it — a reader who copies it
+hits a compile error and stops trusting the docs. The corpus has been burned by this before; the standing instruction is
+blunt: <em>open the file and copy the real names and signatures. If unsure, read more source; do not guess.</em></p>
+<p>Concretely, before you write a sample:</p>
+<ul>
+<li><strong>Open the file.</strong> Mirror exact method names, parameter names, and overload shapes. The signatures are stable enough to
+quote: for example <code>FluentApp.Run(Func&lt;Component&gt; root, string title = &quot;FluentGpu&quot;, int width = 800, int height = 600, bool mica = true, …)</code> is the real entry point (<code>src/FluentGpu.WindowsApp/FluentApp.cs</code>), and
+<code>ControlExample.Build(string title, Element example, string? description = null, …, string? code = null, …)</code> is the
+real gallery helper (<code>src/FluentGpu.WindowsApp/ControlExample.cs</code>).</li>
+<li><strong>Use the real authoring imports.</strong> The cheat-sheet imports are <code>using static FluentGpu.Dsl.Ui;</code>, <code>using FluentGpu.Hooks;</code>, <code>using FluentGpu.Signals;</code>, <code>using FluentGpu.Controls;</code> — these are the ones every guide and gallery
+page uses. (Note one true subtlety the docs already state honestly: <code>Signal&lt;T&gt;</code> and <code>Prop&lt;T&gt;</code> are authored from the
+<code>FluentGpu.Signals</code> namespace even though their files live under the <code>FluentGpu.Foundation</code> assembly's <code>Signals/</code>
+folder.)</li>
+<li><strong>Respect the signals mental model in the sample itself.</strong> A bound thunk reads <code>.Value</code> (it subscribes), not <code>.Peek()</code>;
+<code>ReactiveComponent.Setup()</code> shows a changing value through a bound prop (<code>Text = sig</code>, or <code>Text = Prop.Of(() =&gt; …)</code>),
+never <code>Ui.Text(sig.Value)</code>; parent→child data flows through signals or context, never constructor args. A sample that
+violates these isn't just stylistically off — it's wrong, and the <a href="../guide/pitfalls.md">Pitfalls</a> page exists because
+these are the mistakes that actually ship.</li>
+</ul>
+<p>If you are tempted to write <code>// (hypothetical API)</code> — stop. Either the surface exists (find it and cite it) or the page
+shouldn't claim it.</p>
+<hr>
+<h2 id="where-pages-get-their-sources">Where pages get their sources</h2>
+<p>Every page on this site is grounded in some combination of four places. Know which one owns what so you cite the right
+authority and don't reinvent prose that already exists:</p>
+<table>
+<thead>
+<tr>
+<th>Source</th>
+<th>What it is</th>
+<th>What you cite it for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>The developer guides</strong> — <a href="../guide/README.md"><code>docs/guide/</code></a></td>
+<td>The task-oriented, source-grounded guide that serves humans and agents (sections marked <strong>🤖 AGENT</strong> are machine-optimized).</td>
+<td>The signals mental model (<a href="../guide/reactivity.md">reactivity</a>), the element/layout/controls reference (<a href="../guide/components-elements-layout.md">components-elements-layout</a>), the symptom→cause→fix table (<a href="../guide/pitfalls.md">pitfalls</a>), WinUI fidelity rules (<a href="../guide/control-fidelity.md">control-fidelity</a>).</td>
+</tr>
+<tr>
+<td><strong>The gallery cookbook</strong> — <code>src/FluentGpu.WindowsApp/</code></td>
+<td>The runnable control gallery; every snippet compiles and renders.</td>
+<td>The verified, runnable form of any control sample. The <a href="app-authors/controls-cookbook.html">Controls cookbook</a> is its docs face.</td>
+</tr>
+<tr>
+<td><strong>The control / DSL source</strong> — <code>src/FluentGpu.*</code></td>
+<td>The engine itself — the real API surface.</td>
+<td>Exact names and signatures for every sample; the file &amp; ownership map in the <a href="../guide/README.md#-agent--file--ownership-map-where-to-change-what">guide hub</a> tells you which file owns what.</td>
+</tr>
+<tr>
+<td><strong>The design corpus</strong> — <a href="../../design/README.md"><code>design/</code></a></td>
+<td>The architecture source of truth, canon-gated.</td>
+<td>Any cross-cutting contract — link the <a href="../../design/SPEC-INDEX.md">SPEC-INDEX row</a> or the owning <a href="../../design/subsystems/README.md">subsystem doc</a>; never restate it.</td>
+</tr>
+</tbody>
+</table>
+<p>The <strong>API reference</strong> under <code>api/</code> is a fifth source, but it is <em>generated</em>, not written — see the next section.</p>
+<p>By audience: <strong>app-author pages</strong> (<a href="app-authors/index.html">App Authors</a>) lean on the guides and the gallery — they show
+<em>how to build</em>, with runnable examples and the gotchas from <a href="../guide/pitfalls.md">pitfalls</a>. <strong>Engine-contributor
+pages</strong> (<a href="engine-contributors/index.html">Engine Contributors</a>) lean on the engine source and the design corpus — they
+explain <em>how internals work</em>, cite the exact file from the where-to-change map, and end with <em>how to verify</em> against the
+harness. Keep each page on its side of that line.</p>
+<hr>
+<h2 id="building-the-site-docfx-metadata--build-and-regenerating-the-api-yaml">Building the site (docfx metadata + build) and regenerating the API YAML</h2>
+<p>The site is DocFX. The config is <a href="./docfx.json"><code>docs/site/docfx.json</code></a>. Two commands, in order:</p>
+<pre><code class="lang-text">docfx metadata docs/site/docfx.json   # regenerate the API YAML under docs/site/api/
+docfx build    docs/site/docfx.json   # build the conceptual + API site into docs/site/_site/
+</code></pre>
+<p><code>docfx metadata</code> reads the engine projects listed in <code>docfx.json</code>'s <code>metadata.src</code> block and emits the <code>*.yml</code> files
+under <code>api/</code> that the API section is built from. That YAML is <strong>derived from XML doc comments</strong>: the solution baseline
+<a href="../../src/Directory.Build.props"><code>src/Directory.Build.props</code></a> sets <code>GenerateDocumentationFile=true</code> (with <code>CS1591</code>
+suppressed, so members without doc comments don't warn), which means a normal <code>dotnet build</code> already produces the doc XML
+that <code>docfx metadata</code> consumes. So: build the solution, then run <code>docfx metadata</code>, then <code>docfx build</code>.</p>
+<p>Two consequences worth knowing, both stated on the <a href="api/index.html">API reference page</a>:</p>
+<ul>
+<li><strong>The <code>api/</code> pages are generated — do not hand-edit them.</strong> If an API description is wrong, fix the XML doc comment on
+the type or member in <code>src/FluentGpu.*</code> and regenerate. Editing the YAML is editing build output.</li>
+<li><strong>The harness and gallery apps are excluded from API metadata</strong> (<code>FluentGpu.VerticalSlice</code> and <code>FluentGpu.WindowsApp</code>
+are applications, not library surface), as are the source generators and the headless test seams. Their <em>source</em> is
+still cited heavily from conceptual pages — that's where verified samples come from — but they produce no API YAML.</li>
+</ul>
+<p>When you add a new conceptual page, add it to the relevant <code>toc.yml</code> (the section TOCs are
+<a href="app-authors/toc.html"><code>app-authors/toc.yml</code></a> and <a href="engine-contributors/toc.html"><code>engine-contributors/toc.yml</code></a>; the
+top nav is <a href="toc.html"><code>toc.yml</code></a>) so it appears in navigation.</p>
+<hr>
+<h2 id="the-two-checks-before-committing-docs">The two checks before committing docs</h2>
+<p>Two gates, each conditional on what you touched. Run the one(s) that apply.</p>
+<h3 id="1-if-you-touched-or-added-code-samples--prove-the-surface-is-real-and-green">1. If you touched or added code samples — prove the surface is real and green</h3>
+<p>The point of the anti-invention rule is that samples reflect a <em>working</em> surface. The fastest way to prove the API you
+documented actually exists and behaves is the headless verification harness — ~60 cross-seam golden checks, no GPU and no
+window:</p>
+<pre><code class="lang-text">dotnet build src/FluentGpu.VerticalSlice                 # clean build first
+dotnet run   --project src/FluentGpu.VerticalSlice       # must print: ALL CHECKS PASSED
+</code></pre>
+<p>A clean build is itself the cheapest anti-invention check: if a name in your sample doesn't exist, the surface it lives
+on won't compile. If your page documents reactive/layout/render behavior, the harness is also where you'd confirm the
+claim — checks assert on <code>FrameStats</code> (<code>Rendered</code>, <code>ComponentsRendered</code>, and <code>HotPhaseAllocBytes</code>, which must be <code>0</code> on
+steady frames). GPU pixels are <em>not</em> asserted by the harness; that is a separate manual &quot;needs-pixels&quot; pass on the real
+D3D12 path, and a doc should describe it as such rather than claiming pixel-level verification it didn't do.</p>
+<h3 id="2-if-you-touched-anything-under-design--run-the-canon-drift-gate">2. If you touched anything under <code>design/</code> — run the canon drift gate</h3>
+<p>Editing a usage page on this site does <strong>not</strong> require the canon gate (the gate scans the <code>design/</code> tree, which this site
+is not part of). But if your change also touched the design corpus — say you corrected a canonical value and updated its
+SPEC-INDEX row — run the drift gate, which fails if a known-stale or superseded token reappears in the live <code>design/</code>
+tree:</p>
+<pre><code class="lang-powershell">powershell -File design/check-canon.ps1   # exit 0 = clean
+</code></pre>
+<p>The order for a canon change is fixed: edit <a href="../../design/SPEC-INDEX.md"><code>design/SPEC-INDEX.md</code></a> first, then the owning
+doc, then run the gate. To intentionally mention a superseded form in live prose (to explain a correction), put
+<code>&lt;!-- canon-allow: reason --&gt;</code> on that line. This is the design-side discipline; the <a href="design/index.html">Design canon page</a>
+covers it from the reader's perspective.</p>
+<hr>
+<p><strong>See also:</strong> the <a href="index.html">site home page</a> for the two-trees relationship and the honest-status voice; the
+<a href="app-authors/index.html">App Authors</a> and <a href="engine-contributors/index.html">Engine Contributors</a> hubs for the two reader
+paths; the <a href="api/index.html">API reference</a> for how the generated section works; and the developer
+<a href="../guide/README.md">guide hub</a> for the file &amp; ownership map every sample is grounded in.</p>
+
+</article>
+
+
+        <div class="next-article d-print-none border-top" id="nextArticle"></div>
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

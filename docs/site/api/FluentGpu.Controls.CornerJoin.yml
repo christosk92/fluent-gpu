@@ -1,0 +1,207 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.CornerJoin
+  commentId: T:FluentGpu.Controls.CornerJoin
+  id: CornerJoin
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.CornerJoin.Bottom
+  - FluentGpu.Controls.CornerJoin.Left
+  - FluentGpu.Controls.CornerJoin.None
+  - FluentGpu.Controls.CornerJoin.Right
+  - FluentGpu.Controls.CornerJoin.Top
+  langs:
+  - csharp
+  - vb
+  name: CornerJoin
+  nameWithType: CornerJoin
+  fullName: FluentGpu.Controls.CornerJoin
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CornerJoin
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Which popup corners abut (and so should square against) the anchor edge — WinUI <code>UpdateCornerRadius</code>
+        corner-joining for ComboBox/AutoSuggestBox/DropDownButton, where the dropdown reads as one piece with the field.
+  example: []
+  syntax:
+    content: >-
+      [Flags]
+
+      public enum CornerJoin : byte
+    content.vb: >-
+      <Flags>
+
+      Public Enum CornerJoin As Byte
+  attributes:
+  - type: System.FlagsAttribute
+    ctor: System.FlagsAttribute.#ctor
+    arguments: []
+- uid: FluentGpu.Controls.CornerJoin.None
+  commentId: F:FluentGpu.Controls.CornerJoin.None
+  id: None
+  parent: FluentGpu.Controls.CornerJoin
+  langs:
+  - csharp
+  - vb
+  name: None
+  nameWithType: CornerJoin.None
+  fullName: FluentGpu.Controls.CornerJoin.None
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: None
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: None = 0
+    return:
+      type: FluentGpu.Controls.CornerJoin
+- uid: FluentGpu.Controls.CornerJoin.Top
+  commentId: F:FluentGpu.Controls.CornerJoin.Top
+  id: Top
+  parent: FluentGpu.Controls.CornerJoin
+  langs:
+  - csharp
+  - vb
+  name: Top
+  nameWithType: CornerJoin.Top
+  fullName: FluentGpu.Controls.CornerJoin.Top
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Top
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Top = 1
+    return:
+      type: FluentGpu.Controls.CornerJoin
+- uid: FluentGpu.Controls.CornerJoin.Bottom
+  commentId: F:FluentGpu.Controls.CornerJoin.Bottom
+  id: Bottom
+  parent: FluentGpu.Controls.CornerJoin
+  langs:
+  - csharp
+  - vb
+  name: Bottom
+  nameWithType: CornerJoin.Bottom
+  fullName: FluentGpu.Controls.CornerJoin.Bottom
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Bottom
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Bottom = 2
+    return:
+      type: FluentGpu.Controls.CornerJoin
+- uid: FluentGpu.Controls.CornerJoin.Left
+  commentId: F:FluentGpu.Controls.CornerJoin.Left
+  id: Left
+  parent: FluentGpu.Controls.CornerJoin
+  langs:
+  - csharp
+  - vb
+  name: Left
+  nameWithType: CornerJoin.Left
+  fullName: FluentGpu.Controls.CornerJoin.Left
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Left
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Left = 4
+    return:
+      type: FluentGpu.Controls.CornerJoin
+- uid: FluentGpu.Controls.CornerJoin.Right
+  commentId: F:FluentGpu.Controls.CornerJoin.Right
+  id: Right
+  parent: FluentGpu.Controls.CornerJoin
+  langs:
+  - csharp
+  - vb
+  name: Right
+  nameWithType: CornerJoin.Right
+  fullName: FluentGpu.Controls.CornerJoin.Right
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/FlyoutPositioner.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Right
+    path: ../../src/FluentGpu.Controls/FlyoutPositioner.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Right = 8
+    return:
+      type: FluentGpu.Controls.CornerJoin
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.CornerJoin
+  commentId: T:FluentGpu.Controls.CornerJoin
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.CornerJoin.html
+  name: CornerJoin
+  nameWithType: CornerJoin
+  fullName: FluentGpu.Controls.CornerJoin

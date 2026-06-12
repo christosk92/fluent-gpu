@@ -1,0 +1,1317 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.ToggleSplitButton
+  commentId: T:FluentGpu.Controls.ToggleSplitButton
+  id: ToggleSplitButton
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.ToggleSplitButton.Create(FluentGpu.Dsl.Element,FluentGpu.Signals.Signal{System.Boolean},System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem},System.Action{System.Boolean},System.Boolean)
+  - FluentGpu.Controls.ToggleSplitButton.Create(System.String,FluentGpu.Signals.Signal{System.Boolean},System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem},System.Action{System.Boolean},System.String,System.Boolean)
+  - FluentGpu.Controls.ToggleSplitButton.Glyph
+  - FluentGpu.Controls.ToggleSplitButton.IsChecked
+  - FluentGpu.Controls.ToggleSplitButton.IsEnabled
+  - FluentGpu.Controls.ToggleSplitButton.Items
+  - FluentGpu.Controls.ToggleSplitButton.Label
+  - FluentGpu.Controls.ToggleSplitButton.OnToggle
+  - FluentGpu.Controls.ToggleSplitButton.OpenOnMount
+  - FluentGpu.Controls.ToggleSplitButton.PrimaryContent
+  - FluentGpu.Controls.ToggleSplitButton.Render
+  langs:
+  - csharp
+  - vb
+  name: ToggleSplitButton
+  nameWithType: ToggleSplitButton
+  fullName: FluentGpu.Controls.ToggleSplitButton
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleSplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ToggleSplitButton
+    path: ../../src/FluentGpu.Controls/ToggleSplitButton.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A WinUI <code>ToggleSplitButton</code> (SplitButton + checked state). Like <xref href="FluentGpu.Controls.SplitButton" data-throw-if-not-resolved="false"></xref> it is one joined chrome
+
+    with two independently-clickable halves — a primary half on the left and a dropdown half on the right separated by a
+
+    1px divider — but the primary half <em>toggles</em> on/off instead of running a one-shot action: clicking it (or
+
+    Enter/Space activation) flips <xref href="FluentGpu.Controls.ToggleSplitButton.IsChecked" data-throw-if-not-resolved="false"></xref> and raises <xref href="FluentGpu.Controls.ToggleSplitButton.OnToggle" data-throw-if-not-resolved="false"></xref>; the dropdown half opens a
+
+    <xref href="FluentGpu.Controls.MenuFlyout" data-throw-if-not-resolved="false"></xref>. WinUI derives ToggleSplitButton from SplitButton and they share one ControlTemplate; the
+
+    checked visual-states are driven by <code>InternalIsChecked()</code> (SplitButton.cpp UpdateVisualStates) — so this control
+
+    is the SplitButton chrome with the accent <code>Checked*</code> token ramps folded in.
+
+
+    <p>
+
+    When checked, both halves fill accent (SplitButtonBackgroundChecked = AccentFillColorDefault), the foreground is
+
+    TextOnAccent, the outer border is AccentControlElevationBorder, and the inner divider switches to the on-accent
+
+    divider stroke. Open/close goes through the overlay popup service (<xref href="FluentGpu.Controls.Overlay.Service" data-throw-if-not-resolved="false"></xref>): re-click toggles,
+
+    Escape / click-outside light-dismiss, focus captured on open + restored on close (host-wired), FocusTrap roves the
+
+    menu, and ExpandCollapse Collapsed↔Expanded is raised by the overlay lifecycle. Keyboard: Enter/Space toggle the
+
+    primary (the engine's focused-clickable activation), Down opens the flyout. <xref href="FluentGpu.Controls.ToggleSplitButton.IsEnabled" data-throw-if-not-resolved="false"></xref> gates all
+
+    interaction via the engine and folds the chrome to the disabled tokens. The checked state is a caller
+
+    <xref href="FluentGpu.Signals.Signal%601" data-throw-if-not-resolved="false"></xref> so a page can read/display it; pass <xref href="FluentGpu.Controls.ToggleSplitButton.OnToggle" data-throw-if-not-resolved="false"></xref> to observe flips.
+
+    </p>
+  example: []
+  syntax:
+    content: 'public sealed class ToggleSplitButton : Component'
+    content.vb: Public NotInheritable Class ToggleSplitButton Inherits Component
+  inheritance:
+  - System.Object
+  - FluentGpu.Hooks.Component
+  inheritedMembers:
+  - FluentGpu.Hooks.Component.Context
+  - FluentGpu.Hooks.Component.RunsOnce
+  - FluentGpu.Hooks.Component.RenderWithHooks
+  - FluentGpu.Hooks.Component.Unmount
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+  extensionMethods:
+  - FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseEntrance(System.Single,System.Object)
+  - FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseHoverScale(System.Boolean,System.Single)
+- uid: FluentGpu.Controls.ToggleSplitButton.Label
+  commentId: F:FluentGpu.Controls.ToggleSplitButton.Label
+  id: Label
+  parent: FluentGpu.Controls.ToggleSplitButton
+  langs:
+  - csharp
+  - vb
+  name: Label
+  nameWithType: ToggleSplitButton.Label
+  fullName: FluentGpu.Controls.ToggleSplitButton.Label
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleSplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Label
+    path: ../../src/FluentGpu.Controls/ToggleSplitButton.cs
+    startLine: 29
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string Label
+    return:
+      type: System.String
+    content.vb: Public Label As String
+- uid: FluentGpu.Controls.ToggleSplitButton.Glyph
+  commentId: F:FluentGpu.Controls.ToggleSplitButton.Glyph
+  id: Glyph
+  parent: FluentGpu.Controls.ToggleSplitButton
+  langs:
+  - csharp
+  - vb
+  name: Glyph
+  nameWithType: ToggleSplitButton.Glyph
+  fullName: FluentGpu.Controls.ToggleSplitButton.Glyph
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleSplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Glyph
+    path: ../../src/FluentGpu.Controls/ToggleSplitButton.cs
+    startLine: 30
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string? Glyph
+    return:
+      type: System.String
+    content.vb: Public Glyph As String
+- uid: FluentGpu.Controls.ToggleSplitButton.PrimaryContent
+  commentId: F:FluentGpu.Controls.ToggleSplitButton.PrimaryContent
+  id: PrimaryContent
+  parent: FluentGpu.Controls.ToggleSplitButton
+  langs:
+  - csharp
+  - vb
+  name: PrimaryContent
+  nameWithType: ToggleSplitButton.PrimaryContent
+  fullName: FluentGpu.Controls.ToggleSplitButton.PrimaryContent
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleSplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PrimaryContent
+    path: ../../src/FluentGpu.Controls/ToggleSplitButton.cs
+    startLine: 31
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Element? PrimaryContent
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public PrimaryContent As Element
+- uid: FluentGpu.Controls.ToggleSplitButton.IsChecked
+  commentId: F:FluentGpu.Controls.ToggleSplitButton.IsChecked
+  id: IsChecked
+  parent: FluentGpu.Controls.ToggleSplitButton
+  langs:
+  - csharp
+  - vb
+  name: IsChecked
+  nameWithType: ToggleSplitButton.IsChecked
+  fullName: FluentGpu.Controls.ToggleSplitButton.IsChecked
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleSplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsChecked
+    path: ../../src/FluentGpu.Controls/ToggleSplitButton.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Signal<bool> IsChecked
+    return:
+      type: FluentGpu.Signals.Signal{System.Boolean}
+    content.vb: Public IsChecked As Signal(Of Boolean)
+- uid: FluentGpu.Controls.ToggleSplitButton.IsEnabled
+  commentId: F:FluentGpu.Controls.ToggleSplitButton.IsEnabled
+  id: IsEnabled
+  parent: FluentGpu.Controls.ToggleSplitButton
+  langs:
+  - csharp
+  - vb
+  name: IsEnabled
+  nameWithType: ToggleSplitButton.IsEnabled
+  fullName: FluentGpu.Controls.ToggleSplitButton.IsEnabled
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleSplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsEnabled
+    path: ../../src/FluentGpu.Controls/ToggleSplitButton.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool IsEnabled
+    return:
+      type: System.Boolean
+    content.vb: Public IsEnabled As Boolean
+- uid: FluentGpu.Controls.ToggleSplitButton.OnToggle
+  commentId: F:FluentGpu.Controls.ToggleSplitButton.OnToggle
+  id: OnToggle
+  parent: FluentGpu.Controls.ToggleSplitButton
+  langs:
+  - csharp
+  - vb
+  name: OnToggle
+  nameWithType: ToggleSplitButton.OnToggle
+  fullName: FluentGpu.Controls.ToggleSplitButton.OnToggle
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleSplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnToggle
+    path: ../../src/FluentGpu.Controls/ToggleSplitButton.cs
+    startLine: 34
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Action<bool>? OnToggle
+    return:
+      type: System.Action{System.Boolean}
+    content.vb: Public OnToggle As Action(Of Boolean)
+- uid: FluentGpu.Controls.ToggleSplitButton.Items
+  commentId: F:FluentGpu.Controls.ToggleSplitButton.Items
+  id: Items
+  parent: FluentGpu.Controls.ToggleSplitButton
+  langs:
+  - csharp
+  - vb
+  name: Items
+  nameWithType: ToggleSplitButton.Items
+  fullName: FluentGpu.Controls.ToggleSplitButton.Items
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleSplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Items
+    path: ../../src/FluentGpu.Controls/ToggleSplitButton.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public IReadOnlyList<MenuFlyoutItem> Items
+    return:
+      type: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem}
+    content.vb: Public Items As IReadOnlyList(Of MenuFlyoutItem)
+- uid: FluentGpu.Controls.ToggleSplitButton.OpenOnMount
+  commentId: F:FluentGpu.Controls.ToggleSplitButton.OpenOnMount
+  id: OpenOnMount
+  parent: FluentGpu.Controls.ToggleSplitButton
+  langs:
+  - csharp
+  - vb
+  name: OpenOnMount
+  nameWithType: ToggleSplitButton.OpenOnMount
+  fullName: FluentGpu.Controls.ToggleSplitButton.OpenOnMount
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleSplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OpenOnMount
+    path: ../../src/FluentGpu.Controls/ToggleSplitButton.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool OpenOnMount
+    return:
+      type: System.Boolean
+    content.vb: Public OpenOnMount As Boolean
+- uid: FluentGpu.Controls.ToggleSplitButton.Create(System.String,FluentGpu.Signals.Signal{System.Boolean},System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem},System.Action{System.Boolean},System.String,System.Boolean)
+  commentId: M:FluentGpu.Controls.ToggleSplitButton.Create(System.String,FluentGpu.Signals.Signal{System.Boolean},System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem},System.Action{System.Boolean},System.String,System.Boolean)
+  id: Create(System.String,FluentGpu.Signals.Signal{System.Boolean},System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem},System.Action{System.Boolean},System.String,System.Boolean)
+  parent: FluentGpu.Controls.ToggleSplitButton
+  langs:
+  - csharp
+  - vb
+  name: Create(string, Signal<bool>, IReadOnlyList<MenuFlyoutItem>, Action<bool>?, string?, bool)
+  nameWithType: ToggleSplitButton.Create(string, Signal<bool>, IReadOnlyList<MenuFlyoutItem>, Action<bool>?, string?, bool)
+  fullName: FluentGpu.Controls.ToggleSplitButton.Create(string, FluentGpu.Signals.Signal<bool>, System.Collections.Generic.IReadOnlyList<FluentGpu.Controls.MenuFlyoutItem>, System.Action<bool>?, string?, bool)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleSplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/ToggleSplitButton.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static Element Create(string label, Signal<bool> isChecked, IReadOnlyList<MenuFlyoutItem> items, Action<bool>? onToggle = null, string? glyph = null, bool isEnabled = true)
+    parameters:
+    - id: label
+      type: System.String
+    - id: isChecked
+      type: FluentGpu.Signals.Signal{System.Boolean}
+    - id: items
+      type: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem}
+    - id: onToggle
+      type: System.Action{System.Boolean}
+    - id: glyph
+      type: System.String
+    - id: isEnabled
+      type: System.Boolean
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Create(label As String, isChecked As Signal(Of Boolean), items As IReadOnlyList(Of MenuFlyoutItem), onToggle As Action(Of Boolean) = Nothing, glyph As String = Nothing, isEnabled As Boolean = True) As Element
+  overload: FluentGpu.Controls.ToggleSplitButton.Create*
+  nameWithType.vb: ToggleSplitButton.Create(String, Signal(Of Boolean), IReadOnlyList(Of MenuFlyoutItem), Action(Of Boolean), String, Boolean)
+  fullName.vb: FluentGpu.Controls.ToggleSplitButton.Create(String, FluentGpu.Signals.Signal(Of Boolean), System.Collections.Generic.IReadOnlyList(Of FluentGpu.Controls.MenuFlyoutItem), System.Action(Of Boolean), String, Boolean)
+  name.vb: Create(String, Signal(Of Boolean), IReadOnlyList(Of MenuFlyoutItem), Action(Of Boolean), String, Boolean)
+- uid: FluentGpu.Controls.ToggleSplitButton.Create(FluentGpu.Dsl.Element,FluentGpu.Signals.Signal{System.Boolean},System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem},System.Action{System.Boolean},System.Boolean)
+  commentId: M:FluentGpu.Controls.ToggleSplitButton.Create(FluentGpu.Dsl.Element,FluentGpu.Signals.Signal{System.Boolean},System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem},System.Action{System.Boolean},System.Boolean)
+  id: Create(FluentGpu.Dsl.Element,FluentGpu.Signals.Signal{System.Boolean},System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem},System.Action{System.Boolean},System.Boolean)
+  parent: FluentGpu.Controls.ToggleSplitButton
+  langs:
+  - csharp
+  - vb
+  name: Create(Element, Signal<bool>, IReadOnlyList<MenuFlyoutItem>, Action<bool>?, bool)
+  nameWithType: ToggleSplitButton.Create(Element, Signal<bool>, IReadOnlyList<MenuFlyoutItem>, Action<bool>?, bool)
+  fullName: FluentGpu.Controls.ToggleSplitButton.Create(FluentGpu.Dsl.Element, FluentGpu.Signals.Signal<bool>, System.Collections.Generic.IReadOnlyList<FluentGpu.Controls.MenuFlyoutItem>, System.Action<bool>?, bool)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleSplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/ToggleSplitButton.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static Element Create(Element primaryContent, Signal<bool> isChecked, IReadOnlyList<MenuFlyoutItem> items, Action<bool>? onToggle = null, bool isEnabled = true)
+    parameters:
+    - id: primaryContent
+      type: FluentGpu.Dsl.Element
+    - id: isChecked
+      type: FluentGpu.Signals.Signal{System.Boolean}
+    - id: items
+      type: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem}
+    - id: onToggle
+      type: System.Action{System.Boolean}
+    - id: isEnabled
+      type: System.Boolean
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Create(primaryContent As Element, isChecked As Signal(Of Boolean), items As IReadOnlyList(Of MenuFlyoutItem), onToggle As Action(Of Boolean) = Nothing, isEnabled As Boolean = True) As Element
+  overload: FluentGpu.Controls.ToggleSplitButton.Create*
+  nameWithType.vb: ToggleSplitButton.Create(Element, Signal(Of Boolean), IReadOnlyList(Of MenuFlyoutItem), Action(Of Boolean), Boolean)
+  fullName.vb: FluentGpu.Controls.ToggleSplitButton.Create(FluentGpu.Dsl.Element, FluentGpu.Signals.Signal(Of Boolean), System.Collections.Generic.IReadOnlyList(Of FluentGpu.Controls.MenuFlyoutItem), System.Action(Of Boolean), Boolean)
+  name.vb: Create(Element, Signal(Of Boolean), IReadOnlyList(Of MenuFlyoutItem), Action(Of Boolean), Boolean)
+- uid: FluentGpu.Controls.ToggleSplitButton.Render
+  commentId: M:FluentGpu.Controls.ToggleSplitButton.Render
+  id: Render
+  parent: FluentGpu.Controls.ToggleSplitButton
+  langs:
+  - csharp
+  - vb
+  name: Render()
+  nameWithType: ToggleSplitButton.Render()
+  fullName: FluentGpu.Controls.ToggleSplitButton.Render()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleSplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Render
+    path: ../../src/FluentGpu.Controls/ToggleSplitButton.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  example: []
+  syntax:
+    content: public override Element Render()
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Overrides Function Render() As Element
+  overridden: FluentGpu.Hooks.Component.Render
+  overload: FluentGpu.Controls.ToggleSplitButton.Render*
+references:
+- uid: FluentGpu.Controls.SplitButton
+  commentId: T:FluentGpu.Controls.SplitButton
+  href: FluentGpu.Controls.SplitButton.html
+  name: SplitButton
+  nameWithType: SplitButton
+  fullName: FluentGpu.Controls.SplitButton
+- uid: FluentGpu.Controls.ToggleSplitButton.IsChecked
+  commentId: F:FluentGpu.Controls.ToggleSplitButton.IsChecked
+  href: FluentGpu.Controls.ToggleSplitButton.html#FluentGpu_Controls_ToggleSplitButton_IsChecked
+  name: IsChecked
+  nameWithType: ToggleSplitButton.IsChecked
+  fullName: FluentGpu.Controls.ToggleSplitButton.IsChecked
+- uid: FluentGpu.Controls.ToggleSplitButton.OnToggle
+  commentId: F:FluentGpu.Controls.ToggleSplitButton.OnToggle
+  href: FluentGpu.Controls.ToggleSplitButton.html#FluentGpu_Controls_ToggleSplitButton_OnToggle
+  name: OnToggle
+  nameWithType: ToggleSplitButton.OnToggle
+  fullName: FluentGpu.Controls.ToggleSplitButton.OnToggle
+- uid: FluentGpu.Controls.MenuFlyout
+  commentId: T:FluentGpu.Controls.MenuFlyout
+  href: FluentGpu.Controls.MenuFlyout.html
+  name: MenuFlyout
+  nameWithType: MenuFlyout
+  fullName: FluentGpu.Controls.MenuFlyout
+- uid: FluentGpu.Controls.Overlay.Service
+  commentId: F:FluentGpu.Controls.Overlay.Service
+  href: FluentGpu.Controls.Overlay.html#FluentGpu_Controls_Overlay_Service
+  name: Service
+  nameWithType: Overlay.Service
+  fullName: FluentGpu.Controls.Overlay.Service
+- uid: FluentGpu.Controls.ToggleSplitButton.IsEnabled
+  commentId: F:FluentGpu.Controls.ToggleSplitButton.IsEnabled
+  href: FluentGpu.Controls.ToggleSplitButton.html#FluentGpu_Controls_ToggleSplitButton_IsEnabled
+  name: IsEnabled
+  nameWithType: ToggleSplitButton.IsEnabled
+  fullName: FluentGpu.Controls.ToggleSplitButton.IsEnabled
+- uid: FluentGpu.Signals.Signal`1
+  commentId: T:FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<T>
+  nameWithType: Signal<T>
+  fullName: FluentGpu.Signals.Signal<T>
+  nameWithType.vb: Signal(Of T)
+  fullName.vb: FluentGpu.Signals.Signal(Of T)
+  name.vb: Signal(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Hooks.Component
+  commentId: T:FluentGpu.Hooks.Component
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.Component.html
+  name: Component
+  nameWithType: Component
+  fullName: FluentGpu.Hooks.Component
+- uid: FluentGpu.Hooks.Component.Context
+  commentId: P:FluentGpu.Hooks.Component.Context
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Context
+  name: Context
+  nameWithType: Component.Context
+  fullName: FluentGpu.Hooks.Component.Context
+- uid: FluentGpu.Hooks.Component.RunsOnce
+  commentId: P:FluentGpu.Hooks.Component.RunsOnce
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RunsOnce
+  name: RunsOnce
+  nameWithType: Component.RunsOnce
+  fullName: FluentGpu.Hooks.Component.RunsOnce
+- uid: FluentGpu.Hooks.Component.RenderWithHooks
+  commentId: M:FluentGpu.Hooks.Component.RenderWithHooks
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  name: RenderWithHooks()
+  nameWithType: Component.RenderWithHooks()
+  fullName: FluentGpu.Hooks.Component.RenderWithHooks()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.RenderWithHooks
+    name: RenderWithHooks
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.RenderWithHooks
+    name: RenderWithHooks
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  - name: (
+  - name: )
+- uid: FluentGpu.Hooks.Component.Unmount
+  commentId: M:FluentGpu.Hooks.Component.Unmount
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  name: Unmount()
+  nameWithType: Component.Unmount()
+  fullName: FluentGpu.Hooks.Component.Unmount()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.Unmount
+    name: Unmount
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.Unmount
+    name: Unmount
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseEntrance(System.Single,System.Object)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  parent: FluentGpu.Hooks.MotionHooks
+  definition: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  name: UseEntrance(Component, float, object)
+  nameWithType: MotionHooks.UseEntrance(Component, float, object)
+  fullName: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, float, object)
+  nameWithType.vb: MotionHooks.UseEntrance(Component, Single, Object)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, Single, Object)
+  name.vb: UseEntrance(Component, Single, Object)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseHoverScale(System.Boolean,System.Single)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  parent: FluentGpu.Hooks.MotionHooks
+  definition: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  name: UseHoverScale(Component, bool, float)
+  nameWithType: MotionHooks.UseHoverScale(Component, bool, float)
+  fullName: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, bool, float)
+  nameWithType.vb: MotionHooks.UseHoverScale(Component, Boolean, Single)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, Boolean, Single)
+  name.vb: UseHoverScale(Component, Boolean, Single)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Hooks
+  commentId: N:FluentGpu.Hooks
+  href: FluentGpu.html
+  name: FluentGpu.Hooks
+  nameWithType: FluentGpu.Hooks
+  fullName: FluentGpu.Hooks
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+- uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  isExternal: true
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  name: UseEntrance(Component, float, object)
+  nameWithType: MotionHooks.UseEntrance(Component, float, object)
+  fullName: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, float, object)
+  nameWithType.vb: MotionHooks.UseEntrance(Component, Single, Object)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, Single, Object)
+  name.vb: UseEntrance(Component, Single, Object)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Hooks.MotionHooks
+  commentId: T:FluentGpu.Hooks.MotionHooks
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.MotionHooks.html
+  name: MotionHooks
+  nameWithType: MotionHooks
+  fullName: FluentGpu.Hooks.MotionHooks
+- uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  isExternal: true
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  name: UseHoverScale(Component, bool, float)
+  nameWithType: MotionHooks.UseHoverScale(Component, bool, float)
+  fullName: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, bool, float)
+  nameWithType.vb: MotionHooks.UseHoverScale(Component, Boolean, Single)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, Boolean, Single)
+  name.vb: UseHoverScale(Component, Boolean, Single)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: FluentGpu.Signals.Signal{System.Boolean}
+  commentId: T:FluentGpu.Signals.Signal{System.Boolean}
+  parent: FluentGpu.Signals
+  definition: FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<bool>
+  nameWithType: Signal<bool>
+  fullName: FluentGpu.Signals.Signal<bool>
+  nameWithType.vb: Signal(Of Boolean)
+  fullName.vb: FluentGpu.Signals.Signal(Of Boolean)
+  name.vb: Signal(Of Boolean)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+- uid: FluentGpu.Signals
+  commentId: N:FluentGpu.Signals
+  href: FluentGpu.html
+  name: FluentGpu.Signals
+  nameWithType: FluentGpu.Signals
+  fullName: FluentGpu.Signals
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: System.Action{System.Boolean}
+  commentId: T:System.Action{System.Boolean}
+  parent: System
+  definition: System.Action`1
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<bool>
+  nameWithType: Action<bool>
+  fullName: System.Action<bool>
+  nameWithType.vb: Action(Of Boolean)
+  fullName.vb: System.Action(Of Boolean)
+  name.vb: Action(Of Boolean)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+- uid: System.Action`1
+  commentId: T:System.Action`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<T>
+  nameWithType: Action<T>
+  fullName: System.Action<T>
+  nameWithType.vb: Action(Of T)
+  fullName.vb: System.Action(Of T)
+  name.vb: Action(Of T)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem}
+  commentId: T:System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem}
+  parent: System.Collections.Generic
+  definition: System.Collections.Generic.IReadOnlyList`1
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<MenuFlyoutItem>
+  nameWithType: IReadOnlyList<MenuFlyoutItem>
+  fullName: System.Collections.Generic.IReadOnlyList<FluentGpu.Controls.MenuFlyoutItem>
+  nameWithType.vb: IReadOnlyList(Of MenuFlyoutItem)
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of FluentGpu.Controls.MenuFlyoutItem)
+  name.vb: IReadOnlyList(Of MenuFlyoutItem)
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - uid: FluentGpu.Controls.MenuFlyoutItem
+    name: MenuFlyoutItem
+    href: FluentGpu.Controls.MenuFlyoutItem.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.MenuFlyoutItem
+    name: MenuFlyoutItem
+    href: FluentGpu.Controls.MenuFlyoutItem.html
+  - name: )
+- uid: System.Collections.Generic.IReadOnlyList`1
+  commentId: T:System.Collections.Generic.IReadOnlyList`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<T>
+  nameWithType: IReadOnlyList<T>
+  fullName: System.Collections.Generic.IReadOnlyList<T>
+  nameWithType.vb: IReadOnlyList(Of T)
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of T)
+  name.vb: IReadOnlyList(Of T)
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Collections.Generic
+  commentId: N:System.Collections.Generic
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System.Collections.Generic
+  nameWithType: System.Collections.Generic
+  fullName: System.Collections.Generic
+  spec.csharp:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+  spec.vb:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+- uid: FluentGpu.Controls.ToggleSplitButton.Create*
+  commentId: Overload:FluentGpu.Controls.ToggleSplitButton.Create
+  href: FluentGpu.Controls.ToggleSplitButton.html#FluentGpu_Controls_ToggleSplitButton_Create_System_String_FluentGpu_Signals_Signal_System_Boolean__System_Collections_Generic_IReadOnlyList_FluentGpu_Controls_MenuFlyoutItem__System_Action_System_Boolean__System_String_System_Boolean_
+  name: Create
+  nameWithType: ToggleSplitButton.Create
+  fullName: FluentGpu.Controls.ToggleSplitButton.Create
+- uid: FluentGpu.Hooks.Component.Render
+  commentId: M:FluentGpu.Hooks.Component.Render
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  name: Render()
+  nameWithType: Component.Render()
+  fullName: FluentGpu.Hooks.Component.Render()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.Render
+    name: Render
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.Render
+    name: Render
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  - name: (
+  - name: )
+- uid: FluentGpu.Controls.ToggleSplitButton.Render*
+  commentId: Overload:FluentGpu.Controls.ToggleSplitButton.Render
+  href: FluentGpu.Controls.ToggleSplitButton.html#FluentGpu_Controls_ToggleSplitButton_Render
+  name: Render
+  nameWithType: ToggleSplitButton.Render
+  fullName: FluentGpu.Controls.ToggleSplitButton.Render

@@ -1,0 +1,143 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.ContentDialogResult
+  commentId: T:FluentGpu.Controls.ContentDialogResult
+  id: ContentDialogResult
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.ContentDialogResult.None
+  - FluentGpu.Controls.ContentDialogResult.Primary
+  - FluentGpu.Controls.ContentDialogResult.Secondary
+  langs:
+  - csharp
+  - vb
+  name: ContentDialogResult
+  nameWithType: ContentDialogResult
+  fullName: FluentGpu.Controls.ContentDialogResult
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ContentDialogResult
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    How a ContentDialog was dismissed (WinUI <code>ContentDialogResult</code>): the primary/secondary command, or
+        None (close button / Escape / programmatic / light-of-modal never applies).
+  example: []
+  syntax:
+    content: 'public enum ContentDialogResult : byte'
+    content.vb: Public Enum ContentDialogResult As Byte
+- uid: FluentGpu.Controls.ContentDialogResult.None
+  commentId: F:FluentGpu.Controls.ContentDialogResult.None
+  id: None
+  parent: FluentGpu.Controls.ContentDialogResult
+  langs:
+  - csharp
+  - vb
+  name: None
+  nameWithType: ContentDialogResult.None
+  fullName: FluentGpu.Controls.ContentDialogResult.None
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: None
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: None = 0
+    return:
+      type: FluentGpu.Controls.ContentDialogResult
+- uid: FluentGpu.Controls.ContentDialogResult.Primary
+  commentId: F:FluentGpu.Controls.ContentDialogResult.Primary
+  id: Primary
+  parent: FluentGpu.Controls.ContentDialogResult
+  langs:
+  - csharp
+  - vb
+  name: Primary
+  nameWithType: ContentDialogResult.Primary
+  fullName: FluentGpu.Controls.ContentDialogResult.Primary
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Primary
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Primary = 1
+    return:
+      type: FluentGpu.Controls.ContentDialogResult
+- uid: FluentGpu.Controls.ContentDialogResult.Secondary
+  commentId: F:FluentGpu.Controls.ContentDialogResult.Secondary
+  id: Secondary
+  parent: FluentGpu.Controls.ContentDialogResult
+  langs:
+  - csharp
+  - vb
+  name: Secondary
+  nameWithType: ContentDialogResult.Secondary
+  fullName: FluentGpu.Controls.ContentDialogResult.Secondary
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Secondary
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Secondary = 2
+    return:
+      type: FluentGpu.Controls.ContentDialogResult
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.ContentDialogResult
+  commentId: T:FluentGpu.Controls.ContentDialogResult
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ContentDialogResult.html
+  name: ContentDialogResult
+  nameWithType: ContentDialogResult
+  fullName: FluentGpu.Controls.ContentDialogResult

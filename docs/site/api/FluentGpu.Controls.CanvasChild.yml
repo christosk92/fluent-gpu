@@ -1,0 +1,552 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.CanvasChild
+  commentId: T:FluentGpu.Controls.CanvasChild
+  id: CanvasChild
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.CanvasChild.#ctor(System.Single,System.Single,FluentGpu.Dsl.Element)
+  - FluentGpu.Controls.CanvasChild.Child
+  - FluentGpu.Controls.CanvasChild.X
+  - FluentGpu.Controls.CanvasChild.Y
+  langs:
+  - csharp
+  - vb
+  name: CanvasChild
+  nameWithType: CanvasChild
+  fullName: FluentGpu.Controls.CanvasChild
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Canvas.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CanvasChild
+    path: ../../src/FluentGpu.Controls/Canvas.cs
+    startLine: 6
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: A single absolutely-positioned child placed at (<xref href="FluentGpu.Controls.CanvasChild.X" data-throw-if-not-resolved="false"></xref>, <xref href="FluentGpu.Controls.CanvasChild.Y" data-throw-if-not-resolved="false"></xref>) within a <xref href="FluentGpu.Controls.Canvas" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: 'public sealed record CanvasChild : IEquatable<CanvasChild>'
+    content.vb: Public NotInheritable Class CanvasChild Implements IEquatable(Of CanvasChild)
+  inheritance:
+  - System.Object
+  implements:
+  - System.IEquatable{FluentGpu.Controls.CanvasChild}
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.CanvasChild.#ctor(System.Single,System.Single,FluentGpu.Dsl.Element)
+  commentId: M:FluentGpu.Controls.CanvasChild.#ctor(System.Single,System.Single,FluentGpu.Dsl.Element)
+  id: '#ctor(System.Single,System.Single,FluentGpu.Dsl.Element)'
+  parent: FluentGpu.Controls.CanvasChild
+  langs:
+  - csharp
+  - vb
+  name: CanvasChild(float, float, Element)
+  nameWithType: CanvasChild.CanvasChild(float, float, Element)
+  fullName: FluentGpu.Controls.CanvasChild.CanvasChild(float, float, FluentGpu.Dsl.Element)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Canvas.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Controls/Canvas.cs
+    startLine: 6
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: A single absolutely-positioned child placed at (<xref href="FluentGpu.Controls.CanvasChild.X" data-throw-if-not-resolved="false"></xref>, <xref href="FluentGpu.Controls.CanvasChild.Y" data-throw-if-not-resolved="false"></xref>) within a <xref href="FluentGpu.Controls.Canvas" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: public CanvasChild(float X, float Y, Element Child)
+    parameters:
+    - id: X
+      type: System.Single
+    - id: Y
+      type: System.Single
+    - id: Child
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Sub New(X As Single, Y As Single, Child As Element)
+  overload: FluentGpu.Controls.CanvasChild.#ctor*
+  nameWithType.vb: CanvasChild.New(Single, Single, Element)
+  fullName.vb: FluentGpu.Controls.CanvasChild.New(Single, Single, FluentGpu.Dsl.Element)
+  name.vb: New(Single, Single, Element)
+- uid: FluentGpu.Controls.CanvasChild.X
+  commentId: P:FluentGpu.Controls.CanvasChild.X
+  id: X
+  parent: FluentGpu.Controls.CanvasChild
+  langs:
+  - csharp
+  - vb
+  name: X
+  nameWithType: CanvasChild.X
+  fullName: FluentGpu.Controls.CanvasChild.X
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Canvas.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: X
+    path: ../../src/FluentGpu.Controls/Canvas.cs
+    startLine: 6
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float X { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property X As Single
+  overload: FluentGpu.Controls.CanvasChild.X*
+- uid: FluentGpu.Controls.CanvasChild.Y
+  commentId: P:FluentGpu.Controls.CanvasChild.Y
+  id: Y
+  parent: FluentGpu.Controls.CanvasChild
+  langs:
+  - csharp
+  - vb
+  name: Y
+  nameWithType: CanvasChild.Y
+  fullName: FluentGpu.Controls.CanvasChild.Y
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Canvas.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Y
+    path: ../../src/FluentGpu.Controls/Canvas.cs
+    startLine: 6
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float Y { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Y As Single
+  overload: FluentGpu.Controls.CanvasChild.Y*
+- uid: FluentGpu.Controls.CanvasChild.Child
+  commentId: P:FluentGpu.Controls.CanvasChild.Child
+  id: Child
+  parent: FluentGpu.Controls.CanvasChild
+  langs:
+  - csharp
+  - vb
+  name: Child
+  nameWithType: CanvasChild.Child
+  fullName: FluentGpu.Controls.CanvasChild.Child
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Canvas.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Child
+    path: ../../src/FluentGpu.Controls/Canvas.cs
+    startLine: 6
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Element Child { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Property Child As Element
+  overload: FluentGpu.Controls.CanvasChild.Child*
+references:
+- uid: FluentGpu.Controls.CanvasChild.X
+  commentId: P:FluentGpu.Controls.CanvasChild.X
+  href: FluentGpu.Controls.CanvasChild.html#FluentGpu_Controls_CanvasChild_X
+  name: X
+  nameWithType: CanvasChild.X
+  fullName: FluentGpu.Controls.CanvasChild.X
+- uid: FluentGpu.Controls.CanvasChild.Y
+  commentId: P:FluentGpu.Controls.CanvasChild.Y
+  href: FluentGpu.Controls.CanvasChild.html#FluentGpu_Controls_CanvasChild_Y
+  name: Y
+  nameWithType: CanvasChild.Y
+  fullName: FluentGpu.Controls.CanvasChild.Y
+- uid: FluentGpu.Controls.Canvas
+  commentId: T:FluentGpu.Controls.Canvas
+  href: FluentGpu.Controls.Canvas.html
+  name: Canvas
+  nameWithType: Canvas
+  fullName: FluentGpu.Controls.Canvas
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.IEquatable{FluentGpu.Controls.CanvasChild}
+  commentId: T:System.IEquatable{FluentGpu.Controls.CanvasChild}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<CanvasChild>
+  nameWithType: IEquatable<CanvasChild>
+  fullName: System.IEquatable<FluentGpu.Controls.CanvasChild>
+  nameWithType.vb: IEquatable(Of CanvasChild)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.CanvasChild)
+  name.vb: IEquatable(Of CanvasChild)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.CanvasChild
+    name: CanvasChild
+    href: FluentGpu.Controls.CanvasChild.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.CanvasChild
+    name: CanvasChild
+    href: FluentGpu.Controls.CanvasChild.html
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.CanvasChild.#ctor*
+  commentId: Overload:FluentGpu.Controls.CanvasChild.#ctor
+  href: FluentGpu.Controls.CanvasChild.html#FluentGpu_Controls_CanvasChild__ctor_System_Single_System_Single_FluentGpu_Dsl_Element_
+  name: CanvasChild
+  nameWithType: CanvasChild.CanvasChild
+  fullName: FluentGpu.Controls.CanvasChild.CanvasChild
+  nameWithType.vb: CanvasChild.New
+  fullName.vb: FluentGpu.Controls.CanvasChild.New
+  name.vb: New
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: FluentGpu.Controls.CanvasChild.X*
+  commentId: Overload:FluentGpu.Controls.CanvasChild.X
+  href: FluentGpu.Controls.CanvasChild.html#FluentGpu_Controls_CanvasChild_X
+  name: X
+  nameWithType: CanvasChild.X
+  fullName: FluentGpu.Controls.CanvasChild.X
+- uid: FluentGpu.Controls.CanvasChild.Y*
+  commentId: Overload:FluentGpu.Controls.CanvasChild.Y
+  href: FluentGpu.Controls.CanvasChild.html#FluentGpu_Controls_CanvasChild_Y
+  name: Y
+  nameWithType: CanvasChild.Y
+  fullName: FluentGpu.Controls.CanvasChild.Y
+- uid: FluentGpu.Controls.CanvasChild.Child*
+  commentId: Overload:FluentGpu.Controls.CanvasChild.Child
+  href: FluentGpu.Controls.CanvasChild.html#FluentGpu_Controls_CanvasChild_Child
+  name: Child
+  nameWithType: CanvasChild.Child
+  fullName: FluentGpu.Controls.CanvasChild.Child

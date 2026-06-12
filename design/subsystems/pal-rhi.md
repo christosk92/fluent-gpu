@@ -1,7 +1,7 @@
 # FluentGpu — Subsystem Design: PAL + RHI + Windowing / Present
 
-> **Owning subsystem:** the platform-abstraction layer (`FluentGpu.Pal` + `Pal.Windows`), the
-> render-hardware interface (`FluentGpu.Rhi` + `Rhi.D3D12`), and the windowing/present plumbing
+> **Owning subsystem:** the platform-abstraction layer (`FluentGpu.Pal` + `FluentGpu.Windows` Pal/), the
+> render-hardware interface (`FluentGpu.Rhi` + `FluentGpu.Windows` D3D12/), and the windowing/present plumbing
 > (Win32 window, DXGI flip-model swapchain, the multi-visual DirectComposition present-tree).
 > This is the **swap line**: everything above it sees only POD descriptors, generational handles,
 > spans, and an opaque `NativeHandle`; everything below it is OS/GPU-specific and lives in leaf
@@ -30,9 +30,9 @@ backbuffer, map a buffer, or call `Present`. This is confinement-as-safety: refc
 audited, they are structurally impossible because exactly one thread can `AddRef`/`Release`/`Dispose`.
 
 Consequence for this subsystem:
-- The **Win32 window + message pump runs on the UI thread** (`Pal.Windows`). `WndProc` and DPI live
+- The **Win32 window + message pump runs on the UI thread** (`FluentGpu.Windows` Pal/). `WndProc` and DPI live
   on the UI thread because they are coupled to input and to the OS modal loops (`WM_ENTERSIZEMOVE`).
-- The **D3D12 device, swapchain, DComp tree, and `Present` run on the RENDER thread** (`Rhi.D3D12`).
+- The **D3D12 device, swapchain, DComp tree, and `Present` run on the RENDER thread** (`FluentGpu.Windows` D3D12/).
 - The seam between them is the immutable `SceneFrame` snapshot (UI→render publish) and a small set of
   cross-thread single-aligned-word channels (device-lost reason, present-ack seq, resize request).
 - `IVirtualMemory`, `IImageCodec`, `ISystemColors`, `IBackdropSource`, and `IVideoPresenter` placement
@@ -44,7 +44,7 @@ trivially by there being one thread. The interfaces and ownership boundaries bel
 render-thread split (build-order step 4) is a thread move, not a redesign.
 
 ```
-        UI THREAD (Pal.Windows)                        RENDER THREAD (Rhi.D3D12)
+        UI THREAD (FluentGpu.Windows/Pal/)             RENDER THREAD (FluentGpu.Windows/D3D12/)
  ┌───────────────────────────────┐            ┌──────────────────────────────────────────┐
  │ HWND · WndProc · PerMonitorV2  │  publish   │ ID3D12Device · DIRECT queue · ID3D12Fence │
  │ MsgWaitForMultipleObjectsEx    │  SceneFrame│ RTV/DSV/CBV-SRV-UAV heaps · D3D12MA       │
@@ -59,14 +59,14 @@ render-thread split (build-order step 4) is a thread move, not a redesign.
 ```
 
 Assemblies (per `architecture-spec.md` §3, `app-requirements-waveemusic.md` §5): interfaces in
-`FluentGpu.Pal` and `FluentGpu.Rhi` (dep: `Foundation` only). Reference impls `FluentGpu.Pal.Windows`
-and `FluentGpu.Rhi.D3D12` are **leaves** (dep: their iface + `Foundation` + `Win32.Interop`), referenced
-**only by `Hosting`**. The WIC codec is a separate leaf `Media.Codecs.Wic` behind portable `IImageCodec`
+`FluentGpu.Pal` and `FluentGpu.Rhi` (dep: `Foundation` only). Reference impls `FluentGpu.Windows` (Pal/ folder)
+and `FluentGpu.Windows` (D3D12/ folder) are **leaves** (dep: their iface + `Foundation` + `FluentGpu.Windows` Interop/), referenced
+**only by `Hosting`**. The WIC codec is a separate leaf `FluentGpu.Windows` (Wic/ folder) behind portable `IImageCodec`
 (owned by `FluentGpu.Media` iface). `IVirtualMemory` is consumed by `Foundation`'s `ChunkedArena`.
 
 ---
 
-## 1. PAL — platform / OS seam (`FluentGpu.Pal`, impl `Pal.Windows`)
+## 1. PAL — platform / OS seam (`FluentGpu.Pal`, impl `FluentGpu.Windows` Pal/)
 
 ### 1.1 Core window / app / loop (folds `architecture-spec.md` §4.7; POD-only across the seam)
 
@@ -131,7 +131,7 @@ public interface IImeSession { void SetCompositionRect(in RectPx caret); void En
 `CloseRequested`, and `DeviceLost` (mirrored from the render-thread word — see §6). The host reads these
 in phase 1 (pump) and phase 2 (dispatch).
 
-### 1.2 Win32 reference impl (`Pal.Windows`) — UI thread
+### 1.2 Win32 reference impl (`FluentGpu.Windows` Pal/) — UI thread
 
 - **Window class:** `RegisterClassExW` once. Own redraw via DXGI/DComp, so `CS_HREDRAW|CS_VREDRAW`
   are **off** (no `WM_PAINT` storm on resize). `CreateWindowExW`.
@@ -165,7 +165,7 @@ above `Hosting` recompiles; the per-OS factory in `Hosting` selects leaves with 
 
 ---
 
-## 2. RHI — render-hardware seam (`FluentGpu.Rhi`, impl `Rhi.D3D12`) — render thread
+## 2. RHI — render-hardware seam (`FluentGpu.Rhi`, impl `FluentGpu.Windows` D3D12/) — render thread
 
 Graphics-first. **Zero COM/pointers cross the interface** — generational handles + POD descs + spans
 only. `SubmitDrawList` is the PRIMARY hot path; the per-opcode `ICommandEncoder` is the secondary API.
@@ -270,7 +270,7 @@ aligned words, `Volatile`); the resize request is the only UI→render side chan
 
 ---
 
-## 3. D3D12 device, queues, fences, heaps, allocator (`Rhi.D3D12`)
+## 3. D3D12 device, queues, fences, heaps, allocator (`FluentGpu.Windows` D3D12/)
 
 Forked from ComputeSharp's compute-only `GraphicsDevice` (per `architecture-spec.md` §3b.3): keep
 fence-wait, device-lost (`fence→MaxValue` + `RegisterWaitForSingleObject`), per-LUID device cache,
@@ -499,7 +499,7 @@ public interface IVideoPresenter
 }
 ```
 
-`Pal.Windows` → DComp child visual whose content is the external `IDCompositionSurface`/swapchain the
+`FluentGpu.Windows` Pal/ → DComp child visual whose content is the external `IDCompositionSurface`/swapchain the
 app's `MediaPlayer` (PlayReady `MediaPlayerElement` / SpoutDx cross-process texture) renders into.
 FluentGpu records only `DrawVideoCmd` (the hole-punch) and pokes `Place`. **The heaviest continuous work
 is off our thread by construction** — this is the one surface where single-thread v1 is an advantage:
@@ -529,7 +529,7 @@ public interface ISystemColors
     bool IsHighContrast { get; }
 }
 ```
-`Pal.Windows` reads `HKCU\…\Personalize` + `SPI_GETHIGHCONTRAST` + accent registry once at startup and
+`FluentGpu.Windows` Pal/ reads `HKCU\…\Personalize` + `SPI_GETHIGHCONTRAST` + accent registry once at startup and
 per `WM_SETTINGCHANGE`, bumping `Epoch`. The reactive context is **`Context<uint>` over `Epoch`**
 (DepKey-projectable, boxless) — NOT `Context<SystemColorSnapshot>` (a 112B struct cannot project into a
 16B `DepKey`; that would box). `UseSystemColors()` reads the fat snapshot by value from the stable
@@ -546,7 +546,7 @@ public interface IBackdropSource
     void SetWindowBackdrop(NativeHandle window, HostBackdropKind kind, ColorF tint);
 }
 ```
-`Pal.Windows` → `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE)` and/or a DComp backdrop **sibling
+`FluentGpu.Windows` Pal/ → `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE)` and/or a DComp backdrop **sibling
 visual below** our swapchain visual. Our root clears transparent (premul-0); DWM composes Mica through.
 HC → `None` + opaque fill. macOS → `NSVisualEffectView`. **In-app Acrylic** (toast/add-to-playlist over
 content) is NOT this seam — it is a renderer two-pass FrameGraph step (snapshot behind-region into a
@@ -563,7 +563,7 @@ public interface IVirtualMemory
     void Release(nint addr);
 }
 ```
-`Pal.Windows` → `VirtualAlloc(MEM_RESERVE)` / `VirtualAlloc(MEM_COMMIT)` / `VirtualFree`. macOS →
+`FluentGpu.Windows` Pal/ → `VirtualAlloc(MEM_RESERVE)` / `VirtualAlloc(MEM_COMMIT)` / `VirtualFree`. macOS →
 `mmap(PROT_NONE)` + `mmap(MAP_FIXED)` / `madvise(MADV_FREE)`. Supersedes the single-buffer per-frame
 arena with the segmented `ChunkedArena` (reserve-then-commit, native-backed, no copy, **no LOH cliff**,
 GC never sees it). A **native high-water counter — NOT the GC byte tripwire — gates chunk growth** (the
@@ -580,7 +580,7 @@ public interface IImageCodec
     bool TryDownsample16x16(ReadOnlySpan<byte> source, Span<byte> dst256);  // palette-extraction feed
 }
 ```
-Leaf `Media.Codecs.Wic` (WIC: `IWICImagingFactory` → `CreateDecoderFromStream` → `IWICBitmapScaler`
+Leaf `FluentGpu.Windows` (Wic/ folder) (WIC: `IWICImagingFactory` → `CreateDecoderFromStream` → `IWICBitmapScaler`
 constrained to the bucket → `CopyPixels` into a **recycled CPU staging slab**). Runs entirely on the
 **worker pool** (`hardened-v1-plan.md` §2.1) — pure function over immutable bytes, results by handle,
 touches no SceneStore/RhiTable/fence. Palette extraction (`FluentGpu.Theme`) consumes the worker's CPU
@@ -608,7 +608,7 @@ public interface IPlatformLocale                     // modeled EXACTLY on ISyst
     LocaleSnapshot GetSnapshot();                    // current-culture fact by value
 }
 ```
-`Pal.Windows` reads `GetUserDefaultLocaleName` + the regional `GetLocaleInfoEx` formatting fields once at
+`FluentGpu.Windows` Pal/ reads `GetUserDefaultLocaleName` + the regional `GetLocaleInfoEx` formatting fields once at
 startup and per `WM_SETTINGCHANGE`, bumping `Epoch`. Like `ISystemColors`, the reactive context is
 **`Context<uint>` over `Epoch`** (DepKey-projectable, boxless) — consumers subscribe to the Epoch and re-read
 the fat `LocaleSnapshot` on demand; a fat `CultureInfo`/snapshot is **never** placed in a context (it would

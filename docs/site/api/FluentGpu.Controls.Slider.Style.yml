@@ -1,0 +1,1334 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.Slider.Style
+  commentId: T:FluentGpu.Controls.Slider.Style
+  id: Slider.Style
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.Slider.Style.InlineTickFill
+  - FluentGpu.Controls.Slider.Style.InnerDisabledScale
+  - FluentGpu.Controls.Slider.Style.InnerHoverScale
+  - FluentGpu.Controls.Slider.Style.InnerPressScale
+  - FluentGpu.Controls.Slider.Style.InnerRestScale
+  - FluentGpu.Controls.Slider.Style.InnerThumbDiameter
+  - FluentGpu.Controls.Slider.Style.RailFill
+  - FluentGpu.Controls.Slider.Style.RailFillDisabled
+  - FluentGpu.Controls.Slider.Style.ThumbBorder
+  - FluentGpu.Controls.Slider.Style.ThumbBorderWidth
+  - FluentGpu.Controls.Slider.Style.ThumbCornerRadius
+  - FluentGpu.Controls.Slider.Style.ThumbFill
+  - FluentGpu.Controls.Slider.Style.ThumbFillDisabled
+  - FluentGpu.Controls.Slider.Style.ThumbFillPointerOver
+  - FluentGpu.Controls.Slider.Style.ThumbFillPressed
+  - FluentGpu.Controls.Slider.Style.ThumbRing
+  - FluentGpu.Controls.Slider.Style.ThumbRingDiameter
+  - FluentGpu.Controls.Slider.Style.TickFill
+  - FluentGpu.Controls.Slider.Style.TickFillDisabled
+  - FluentGpu.Controls.Slider.Style.TrackCornerRadius
+  - FluentGpu.Controls.Slider.Style.TrackHeight
+  - FluentGpu.Controls.Slider.Style.ValueFill
+  - FluentGpu.Controls.Slider.Style.ValueFillDisabled
+  - FluentGpu.Controls.Slider.Style.ValueFillPointerOver
+  - FluentGpu.Controls.Slider.Style.ValueFillPressed
+  langs:
+  - csharp
+  - vb
+  name: Slider.Style
+  nameWithType: Slider.Style
+  fullName: FluentGpu.Controls.Slider.Style
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Style
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 58
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: 'public sealed record Slider.Style : IEquatable<Slider.Style>'
+    content.vb: Public NotInheritable Class Slider.Style Implements IEquatable(Of Slider.Style)
+  inheritance:
+  - System.Object
+  implements:
+  - System.IEquatable{FluentGpu.Controls.Slider.Style}
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.Slider.Style.TrackHeight
+  commentId: P:FluentGpu.Controls.Slider.Style.TrackHeight
+  id: TrackHeight
+  parent: FluentGpu.Controls.Slider.Style
+  langs:
+  - csharp
+  - vb
+  name: TrackHeight
+  nameWithType: Slider.Style.TrackHeight
+  fullName: FluentGpu.Controls.Slider.Style.TrackHeight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TrackHeight
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 60
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float TrackHeight { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property TrackHeight As Single
+  overload: FluentGpu.Controls.Slider.Style.TrackHeight*
+- uid: FluentGpu.Controls.Slider.Style.TrackCornerRadius
+  commentId: P:FluentGpu.Controls.Slider.Style.TrackCornerRadius
+  id: TrackCornerRadius
+  parent: FluentGpu.Controls.Slider.Style
+  langs:
+  - csharp
+  - vb
+  name: TrackCornerRadius
+  nameWithType: Slider.Style.TrackCornerRadius
+  fullName: FluentGpu.Controls.Slider.Style.TrackCornerRadius
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TrackCornerRadius
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 61
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float TrackCornerRadius { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property TrackCornerRadius As Single
+  overload: FluentGpu.Controls.Slider.Style.TrackCornerRadius*
+- uid: FluentGpu.Controls.Slider.Style.RailFill
+  commentId: P:FluentGpu.Controls.Slider.Style.RailFill
+  id: RailFill
+  parent: FluentGpu.Controls.Slider.Style
+  langs:
+  - csharp
+  - vb
+  name: RailFill
+  nameWithType: Slider.Style.RailFill
+  fullName: FluentGpu.Controls.Slider.Style.RailFill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RailFill
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF RailFill { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property RailFill As ColorF
+  overload: FluentGpu.Controls.Slider.Style.RailFill*
+- uid: FluentGpu.Controls.Slider.Style.RailFillDisabled
+  commentId: P:FluentGpu.Controls.Slider.Style.RailFillDisabled
+  id: RailFillDisabled
+  parent: FluentGpu.Controls.Slider.Style
+  langs:
+  - csharp
+  - vb
+  name: RailFillDisabled
+  nameWithType: Slider.Style.RailFillDisabled
+  fullName: FluentGpu.Controls.Slider.Style.RailFillDisabled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RailFillDisabled
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 63
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF RailFillDisabled { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property RailFillDisabled As ColorF
+  overload: FluentGpu.Controls.Slider.Style.RailFillDisabled*
+- uid: FluentGpu.Controls.Slider.Style.ValueFill
+  commentId: P:FluentGpu.Controls.Slider.Style.ValueFill
+  id: ValueFill
+  parent: FluentGpu.Controls.Slider.Style
+  langs:
+  - csharp
+  - vb
+  name: ValueFill
+  nameWithType: Slider.Style.ValueFill
+  fullName: FluentGpu.Controls.Slider.Style.ValueFill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ValueFill
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 64
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF ValueFill { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property ValueFill As ColorF
+  overload: FluentGpu.Controls.Slider.Style.ValueFill*
+- uid: FluentGpu.Controls.Slider.Style.ValueFillPointerOver
+  commentId: P:FluentGpu.Controls.Slider.Style.ValueFillPointerOver
+  id: ValueFillPointerOver
+  parent: FluentGpu.Controls.Slider.Style
+  langs:
+  - csharp
+  - vb
+  name: ValueFillPointerOver
+  nameWithType: Slider.Style.ValueFillPointerOver
+  fullName: FluentGpu.Controls.Slider.Style.ValueFillPointerOver
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ValueFillPointerOver
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 65
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF ValueFillPointerOver { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property ValueFillPointerOver As ColorF
+  overload: FluentGpu.Controls.Slider.Style.ValueFillPointerOver*
+- uid: FluentGpu.Controls.Slider.Style.ValueFillPressed
+  commentId: P:FluentGpu.Controls.Slider.Style.ValueFillPressed
+  id: ValueFillPressed
+  parent: FluentGpu.Controls.Slider.Style
+  langs:
+  - csharp
+  - vb
+  name: ValueFillPressed
+  nameWithType: Slider.Style.ValueFillPressed
+  fullName: FluentGpu.Controls.Slider.Style.ValueFillPressed
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ValueFillPressed
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 66
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF ValueFillPressed { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property ValueFillPressed As ColorF
+  overload: FluentGpu.Controls.Slider.Style.ValueFillPressed*
+- uid: FluentGpu.Controls.Slider.Style.ValueFillDisabled
+  commentId: P:FluentGpu.Controls.Slider.Style.ValueFillDisabled
+  id: ValueFillDisabled
+  parent: FluentGpu.Controls.Slider.Style
+  langs:
+  - csharp
+  - vb
+  name: ValueFillDisabled
+  nameWithType: Slider.Style.ValueFillDisabled
+  fullName: FluentGpu.Controls.Slider.Style.ValueFillDisabled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ValueFillDisabled
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 67
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF ValueFillDisabled { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property ValueFillDisabled As ColorF
+  overload: FluentGpu.Controls.Slider.Style.ValueFillDisabled*
+- uid: FluentGpu.Controls.Slider.Style.ThumbRingDiameter
+  commentId: P:FluentGpu.Controls.Slider.Style.ThumbRingDiameter
+  id: ThumbRingDiameter
+  parent: FluentGpu.Controls.Slider.Style
+  langs:
+  - csharp
+  - vb
+  name: ThumbRingDiameter
+  nameWithType: Slider.Style.ThumbRingDiameter
+  fullName: FluentGpu.Controls.Slider.Style.ThumbRingDiameter
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ThumbRingDiameter
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 70
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The thumb's VISUAL diameter: the 18px Thumb part (SliderHorizontalThumbWidth/Height, lines 169-170)
+        + the template Border's Margin="-2" (line 198) ⇒ a 22px ring on screen.
+  example: []
+  syntax:
+    content: public float ThumbRingDiameter { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property ThumbRingDiameter As Single
+  overload: FluentGpu.Controls.Slider.Style.ThumbRingDiameter*
+- uid: FluentGpu.Controls.Slider.Style.InnerThumbDiameter
+  commentId: P:FluentGpu.Controls.Slider.Style.InnerThumbDiameter
+  id: InnerThumbDiameter
+  parent: FluentGpu.Controls.Slider.Style
+  langs:
+  - csharp
+  - vb
+  name: InnerThumbDiameter
+  nameWithType: Slider.Style.InnerThumbDiameter
+  fullName: FluentGpu.Controls.Slider.Style.InnerThumbDiameter
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InnerThumbDiameter
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 71
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float InnerThumbDiameter { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property InnerThumbDiameter As Single
+  overload: FluentGpu.Controls.Slider.Style.InnerThumbDiameter*
+- uid: FluentGpu.Controls.Slider.Style.ThumbRing
+  commentId: P:FluentGpu.Controls.Slider.Style.ThumbRing
+  id: ThumbRing
+  parent: FluentGpu.Controls.Slider.Style
+  langs:
+  - csharp
+  - vb
+  name: ThumbRing
+  nameWithType: Slider.Style.ThumbRing
+  fullName: FluentGpu.Controls.Slider.Style.ThumbRing
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ThumbRing
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 72
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF ThumbRing { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property ThumbRing As ColorF
+  overload: FluentGpu.Controls.Slider.Style.ThumbRing*
+- uid: FluentGpu.Controls.Slider.Style.ThumbFill
+  commentId: P:FluentGpu.Controls.Slider.Style.ThumbFill
+  id: ThumbFill
+  parent: FluentGpu.Controls.Slider.Style
+  langs:
+  - csharp
+  - vb
+  name: ThumbFill
+  nameWithType: Slider.Style.ThumbFill
+  fullName: FluentGpu.Controls.Slider.Style.ThumbFill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ThumbFill
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 73
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF ThumbFill { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property ThumbFill As ColorF
+  overload: FluentGpu.Controls.Slider.Style.ThumbFill*
+- uid: FluentGpu.Controls.Slider.Style.ThumbFillPointerOver
+  commentId: P:FluentGpu.Controls.Slider.Style.ThumbFillPointerOver
+  id: ThumbFillPointerOver
+  parent: FluentGpu.Controls.Slider.Style
+  langs:
+  - csharp
+  - vb
+  name: ThumbFillPointerOver
+  nameWithType: Slider.Style.ThumbFillPointerOver
+  fullName: FluentGpu.Controls.Slider.Style.ThumbFillPointerOver
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ThumbFillPointerOver
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 74
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF ThumbFillPointerOver { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property ThumbFillPointerOver As ColorF
+  overload: FluentGpu.Controls.Slider.Style.ThumbFillPointerOver*
+- uid: FluentGpu.Controls.Slider.Style.ThumbFillPressed
+  commentId: P:FluentGpu.Controls.Slider.Style.ThumbFillPressed
+  id: ThumbFillPressed
+  parent: FluentGpu.Controls.Slider.Style
+  langs:
+  - csharp
+  - vb
+  name: ThumbFillPressed
+  nameWithType: Slider.Style.ThumbFillPressed
+  fullName: FluentGpu.Controls.Slider.Style.ThumbFillPressed
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ThumbFillPressed
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 75
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF ThumbFillPressed { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property ThumbFillPressed As ColorF
+  overload: FluentGpu.Controls.Slider.Style.ThumbFillPressed*
+- uid: FluentGpu.Controls.Slider.Style.ThumbFillDisabled
+  commentId: P:FluentGpu.Controls.Slider.Style.ThumbFillDisabled
+  id: ThumbFillDisabled
+  parent: FluentGpu.Controls.Slider.Style
+  langs:
+  - csharp
+  - vb
+  name: ThumbFillDisabled
+  nameWithType: Slider.Style.ThumbFillDisabled
+  fullName: FluentGpu.Controls.Slider.Style.ThumbFillDisabled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ThumbFillDisabled
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 76
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF ThumbFillDisabled { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property ThumbFillDisabled As ColorF
+  overload: FluentGpu.Controls.Slider.Style.ThumbFillDisabled*
+- uid: FluentGpu.Controls.Slider.Style.ThumbBorder
+  commentId: P:FluentGpu.Controls.Slider.Style.ThumbBorder
+  id: ThumbBorder
+  parent: FluentGpu.Controls.Slider.Style
+  langs:
+  - csharp
+  - vb
+  name: ThumbBorder
+  nameWithType: Slider.Style.ThumbBorder
+  fullName: FluentGpu.Controls.Slider.Style.ThumbBorder
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ThumbBorder
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 77
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public GradientSpec? ThumbBorder { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.GradientSpec}
+    content.vb: Public Property ThumbBorder As GradientSpec?
+  overload: FluentGpu.Controls.Slider.Style.ThumbBorder*
+- uid: FluentGpu.Controls.Slider.Style.ThumbBorderWidth
+  commentId: P:FluentGpu.Controls.Slider.Style.ThumbBorderWidth
+  id: ThumbBorderWidth
+  parent: FluentGpu.Controls.Slider.Style
+  langs:
+  - csharp
+  - vb
+  name: ThumbBorderWidth
+  nameWithType: Slider.Style.ThumbBorderWidth
+  fullName: FluentGpu.Controls.Slider.Style.ThumbBorderWidth
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ThumbBorderWidth
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 78
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float ThumbBorderWidth { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property ThumbBorderWidth As Single
+  overload: FluentGpu.Controls.Slider.Style.ThumbBorderWidth*
+- uid: FluentGpu.Controls.Slider.Style.ThumbCornerRadius
+  commentId: P:FluentGpu.Controls.Slider.Style.ThumbCornerRadius
+  id: ThumbCornerRadius
+  parent: FluentGpu.Controls.Slider.Style
+  langs:
+  - csharp
+  - vb
+  name: ThumbCornerRadius
+  nameWithType: Slider.Style.ThumbCornerRadius
+  fullName: FluentGpu.Controls.Slider.Style.ThumbCornerRadius
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ThumbCornerRadius
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 79
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float ThumbCornerRadius { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property ThumbCornerRadius As Single
+  overload: FluentGpu.Controls.Slider.Style.ThumbCornerRadius*
+- uid: FluentGpu.Controls.Slider.Style.InnerRestScale
+  commentId: P:FluentGpu.Controls.Slider.Style.InnerRestScale
+  id: InnerRestScale
+  parent: FluentGpu.Controls.Slider.Style
+  langs:
+  - csharp
+  - vb
+  name: InnerRestScale
+  nameWithType: Slider.Style.InnerRestScale
+  fullName: FluentGpu.Controls.Slider.Style.InnerRestScale
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InnerRestScale
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 81
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float InnerRestScale { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property InnerRestScale As Single
+  overload: FluentGpu.Controls.Slider.Style.InnerRestScale*
+- uid: FluentGpu.Controls.Slider.Style.InnerHoverScale
+  commentId: P:FluentGpu.Controls.Slider.Style.InnerHoverScale
+  id: InnerHoverScale
+  parent: FluentGpu.Controls.Slider.Style
+  langs:
+  - csharp
+  - vb
+  name: InnerHoverScale
+  nameWithType: Slider.Style.InnerHoverScale
+  fullName: FluentGpu.Controls.Slider.Style.InnerHoverScale
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InnerHoverScale
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 82
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float InnerHoverScale { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property InnerHoverScale As Single
+  overload: FluentGpu.Controls.Slider.Style.InnerHoverScale*
+- uid: FluentGpu.Controls.Slider.Style.InnerPressScale
+  commentId: P:FluentGpu.Controls.Slider.Style.InnerPressScale
+  id: InnerPressScale
+  parent: FluentGpu.Controls.Slider.Style
+  langs:
+  - csharp
+  - vb
+  name: InnerPressScale
+  nameWithType: Slider.Style.InnerPressScale
+  fullName: FluentGpu.Controls.Slider.Style.InnerPressScale
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InnerPressScale
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 83
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float InnerPressScale { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property InnerPressScale As Single
+  overload: FluentGpu.Controls.Slider.Style.InnerPressScale*
+- uid: FluentGpu.Controls.Slider.Style.InnerDisabledScale
+  commentId: P:FluentGpu.Controls.Slider.Style.InnerDisabledScale
+  id: InnerDisabledScale
+  parent: FluentGpu.Controls.Slider.Style
+  langs:
+  - csharp
+  - vb
+  name: InnerDisabledScale
+  nameWithType: Slider.Style.InnerDisabledScale
+  fullName: FluentGpu.Controls.Slider.Style.InnerDisabledScale
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InnerDisabledScale
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 84
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float InnerDisabledScale { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property InnerDisabledScale As Single
+  overload: FluentGpu.Controls.Slider.Style.InnerDisabledScale*
+- uid: FluentGpu.Controls.Slider.Style.TickFill
+  commentId: P:FluentGpu.Controls.Slider.Style.TickFill
+  id: TickFill
+  parent: FluentGpu.Controls.Slider.Style
+  langs:
+  - csharp
+  - vb
+  name: TickFill
+  nameWithType: Slider.Style.TickFill
+  fullName: FluentGpu.Controls.Slider.Style.TickFill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TickFill
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 85
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF TickFill { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property TickFill As ColorF
+  overload: FluentGpu.Controls.Slider.Style.TickFill*
+- uid: FluentGpu.Controls.Slider.Style.TickFillDisabled
+  commentId: P:FluentGpu.Controls.Slider.Style.TickFillDisabled
+  id: TickFillDisabled
+  parent: FluentGpu.Controls.Slider.Style
+  langs:
+  - csharp
+  - vb
+  name: TickFillDisabled
+  nameWithType: Slider.Style.TickFillDisabled
+  fullName: FluentGpu.Controls.Slider.Style.TickFillDisabled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TickFillDisabled
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 86
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF TickFillDisabled { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property TickFillDisabled As ColorF
+  overload: FluentGpu.Controls.Slider.Style.TickFillDisabled*
+- uid: FluentGpu.Controls.Slider.Style.InlineTickFill
+  commentId: P:FluentGpu.Controls.Slider.Style.InlineTickFill
+  id: InlineTickFill
+  parent: FluentGpu.Controls.Slider.Style
+  langs:
+  - csharp
+  - vb
+  name: InlineTickFill
+  nameWithType: Slider.Style.InlineTickFill
+  fullName: FluentGpu.Controls.Slider.Style.InlineTickFill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InlineTickFill
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 87
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF InlineTickFill { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property InlineTickFill As ColorF
+  overload: FluentGpu.Controls.Slider.Style.InlineTickFill*
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.IEquatable{FluentGpu.Controls.Slider.Style}
+  commentId: T:System.IEquatable{FluentGpu.Controls.Slider.Style}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<Slider.Style>
+  nameWithType: IEquatable<Slider.Style>
+  fullName: System.IEquatable<FluentGpu.Controls.Slider.Style>
+  nameWithType.vb: IEquatable(Of Slider.Style)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.Slider.Style)
+  name.vb: IEquatable(Of Slider.Style)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.Slider
+    name: Slider
+    href: FluentGpu.Controls.Slider.html
+  - name: .
+  - uid: FluentGpu.Controls.Slider.Style
+    name: Style
+    href: FluentGpu.Controls.Slider.Style.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.Slider
+    name: Slider
+    href: FluentGpu.Controls.Slider.html
+  - name: .
+  - uid: FluentGpu.Controls.Slider.Style
+    name: Style
+    href: FluentGpu.Controls.Slider.Style.html
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.Slider.Style.TrackHeight*
+  commentId: Overload:FluentGpu.Controls.Slider.Style.TrackHeight
+  href: FluentGpu.Controls.Slider.Style.html#FluentGpu_Controls_Slider_Style_TrackHeight
+  name: TrackHeight
+  nameWithType: Slider.Style.TrackHeight
+  fullName: FluentGpu.Controls.Slider.Style.TrackHeight
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Controls.Slider.Style.TrackCornerRadius*
+  commentId: Overload:FluentGpu.Controls.Slider.Style.TrackCornerRadius
+  href: FluentGpu.Controls.Slider.Style.html#FluentGpu_Controls_Slider_Style_TrackCornerRadius
+  name: TrackCornerRadius
+  nameWithType: Slider.Style.TrackCornerRadius
+  fullName: FluentGpu.Controls.Slider.Style.TrackCornerRadius
+- uid: FluentGpu.Controls.Slider.Style.RailFill*
+  commentId: Overload:FluentGpu.Controls.Slider.Style.RailFill
+  href: FluentGpu.Controls.Slider.Style.html#FluentGpu_Controls_Slider_Style_RailFill
+  name: RailFill
+  nameWithType: Slider.Style.RailFill
+  fullName: FluentGpu.Controls.Slider.Style.RailFill
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Controls.Slider.Style.RailFillDisabled*
+  commentId: Overload:FluentGpu.Controls.Slider.Style.RailFillDisabled
+  href: FluentGpu.Controls.Slider.Style.html#FluentGpu_Controls_Slider_Style_RailFillDisabled
+  name: RailFillDisabled
+  nameWithType: Slider.Style.RailFillDisabled
+  fullName: FluentGpu.Controls.Slider.Style.RailFillDisabled
+- uid: FluentGpu.Controls.Slider.Style.ValueFill*
+  commentId: Overload:FluentGpu.Controls.Slider.Style.ValueFill
+  href: FluentGpu.Controls.Slider.Style.html#FluentGpu_Controls_Slider_Style_ValueFill
+  name: ValueFill
+  nameWithType: Slider.Style.ValueFill
+  fullName: FluentGpu.Controls.Slider.Style.ValueFill
+- uid: FluentGpu.Controls.Slider.Style.ValueFillPointerOver*
+  commentId: Overload:FluentGpu.Controls.Slider.Style.ValueFillPointerOver
+  href: FluentGpu.Controls.Slider.Style.html#FluentGpu_Controls_Slider_Style_ValueFillPointerOver
+  name: ValueFillPointerOver
+  nameWithType: Slider.Style.ValueFillPointerOver
+  fullName: FluentGpu.Controls.Slider.Style.ValueFillPointerOver
+- uid: FluentGpu.Controls.Slider.Style.ValueFillPressed*
+  commentId: Overload:FluentGpu.Controls.Slider.Style.ValueFillPressed
+  href: FluentGpu.Controls.Slider.Style.html#FluentGpu_Controls_Slider_Style_ValueFillPressed
+  name: ValueFillPressed
+  nameWithType: Slider.Style.ValueFillPressed
+  fullName: FluentGpu.Controls.Slider.Style.ValueFillPressed
+- uid: FluentGpu.Controls.Slider.Style.ValueFillDisabled*
+  commentId: Overload:FluentGpu.Controls.Slider.Style.ValueFillDisabled
+  href: FluentGpu.Controls.Slider.Style.html#FluentGpu_Controls_Slider_Style_ValueFillDisabled
+  name: ValueFillDisabled
+  nameWithType: Slider.Style.ValueFillDisabled
+  fullName: FluentGpu.Controls.Slider.Style.ValueFillDisabled
+- uid: FluentGpu.Controls.Slider.Style.ThumbRingDiameter*
+  commentId: Overload:FluentGpu.Controls.Slider.Style.ThumbRingDiameter
+  href: FluentGpu.Controls.Slider.Style.html#FluentGpu_Controls_Slider_Style_ThumbRingDiameter
+  name: ThumbRingDiameter
+  nameWithType: Slider.Style.ThumbRingDiameter
+  fullName: FluentGpu.Controls.Slider.Style.ThumbRingDiameter
+- uid: FluentGpu.Controls.Slider.Style.InnerThumbDiameter*
+  commentId: Overload:FluentGpu.Controls.Slider.Style.InnerThumbDiameter
+  href: FluentGpu.Controls.Slider.Style.html#FluentGpu_Controls_Slider_Style_InnerThumbDiameter
+  name: InnerThumbDiameter
+  nameWithType: Slider.Style.InnerThumbDiameter
+  fullName: FluentGpu.Controls.Slider.Style.InnerThumbDiameter
+- uid: FluentGpu.Controls.Slider.Style.ThumbRing*
+  commentId: Overload:FluentGpu.Controls.Slider.Style.ThumbRing
+  href: FluentGpu.Controls.Slider.Style.html#FluentGpu_Controls_Slider_Style_ThumbRing
+  name: ThumbRing
+  nameWithType: Slider.Style.ThumbRing
+  fullName: FluentGpu.Controls.Slider.Style.ThumbRing
+- uid: FluentGpu.Controls.Slider.Style.ThumbFill*
+  commentId: Overload:FluentGpu.Controls.Slider.Style.ThumbFill
+  href: FluentGpu.Controls.Slider.Style.html#FluentGpu_Controls_Slider_Style_ThumbFill
+  name: ThumbFill
+  nameWithType: Slider.Style.ThumbFill
+  fullName: FluentGpu.Controls.Slider.Style.ThumbFill
+- uid: FluentGpu.Controls.Slider.Style.ThumbFillPointerOver*
+  commentId: Overload:FluentGpu.Controls.Slider.Style.ThumbFillPointerOver
+  href: FluentGpu.Controls.Slider.Style.html#FluentGpu_Controls_Slider_Style_ThumbFillPointerOver
+  name: ThumbFillPointerOver
+  nameWithType: Slider.Style.ThumbFillPointerOver
+  fullName: FluentGpu.Controls.Slider.Style.ThumbFillPointerOver
+- uid: FluentGpu.Controls.Slider.Style.ThumbFillPressed*
+  commentId: Overload:FluentGpu.Controls.Slider.Style.ThumbFillPressed
+  href: FluentGpu.Controls.Slider.Style.html#FluentGpu_Controls_Slider_Style_ThumbFillPressed
+  name: ThumbFillPressed
+  nameWithType: Slider.Style.ThumbFillPressed
+  fullName: FluentGpu.Controls.Slider.Style.ThumbFillPressed
+- uid: FluentGpu.Controls.Slider.Style.ThumbFillDisabled*
+  commentId: Overload:FluentGpu.Controls.Slider.Style.ThumbFillDisabled
+  href: FluentGpu.Controls.Slider.Style.html#FluentGpu_Controls_Slider_Style_ThumbFillDisabled
+  name: ThumbFillDisabled
+  nameWithType: Slider.Style.ThumbFillDisabled
+  fullName: FluentGpu.Controls.Slider.Style.ThumbFillDisabled
+- uid: FluentGpu.Controls.Slider.Style.ThumbBorder*
+  commentId: Overload:FluentGpu.Controls.Slider.Style.ThumbBorder
+  href: FluentGpu.Controls.Slider.Style.html#FluentGpu_Controls_Slider_Style_ThumbBorder
+  name: ThumbBorder
+  nameWithType: Slider.Style.ThumbBorder
+  fullName: FluentGpu.Controls.Slider.Style.ThumbBorder
+- uid: System.Nullable{FluentGpu.Foundation.GradientSpec}
+  commentId: T:System.Nullable{FluentGpu.Foundation.GradientSpec}
+  parent: System
+  definition: System.Nullable`1
+  href: FluentGpu.Foundation.GradientSpec.html
+  name: GradientSpec?
+  nameWithType: GradientSpec?
+  fullName: FluentGpu.Foundation.GradientSpec?
+  spec.csharp:
+  - uid: FluentGpu.Foundation.GradientSpec
+    name: GradientSpec
+    href: FluentGpu.Foundation.GradientSpec.html
+  - name: '?'
+  spec.vb:
+  - uid: FluentGpu.Foundation.GradientSpec
+    name: GradientSpec
+    href: FluentGpu.Foundation.GradientSpec.html
+  - name: '?'
+- uid: System.Nullable`1
+  commentId: T:System.Nullable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  name: Nullable<T>
+  nameWithType: Nullable<T>
+  fullName: System.Nullable<T>
+  nameWithType.vb: Nullable(Of T)
+  fullName.vb: System.Nullable(Of T)
+  name.vb: Nullable(Of T)
+  spec.csharp:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.Slider.Style.ThumbBorderWidth*
+  commentId: Overload:FluentGpu.Controls.Slider.Style.ThumbBorderWidth
+  href: FluentGpu.Controls.Slider.Style.html#FluentGpu_Controls_Slider_Style_ThumbBorderWidth
+  name: ThumbBorderWidth
+  nameWithType: Slider.Style.ThumbBorderWidth
+  fullName: FluentGpu.Controls.Slider.Style.ThumbBorderWidth
+- uid: FluentGpu.Controls.Slider.Style.ThumbCornerRadius*
+  commentId: Overload:FluentGpu.Controls.Slider.Style.ThumbCornerRadius
+  href: FluentGpu.Controls.Slider.Style.html#FluentGpu_Controls_Slider_Style_ThumbCornerRadius
+  name: ThumbCornerRadius
+  nameWithType: Slider.Style.ThumbCornerRadius
+  fullName: FluentGpu.Controls.Slider.Style.ThumbCornerRadius
+- uid: FluentGpu.Controls.Slider.Style.InnerRestScale*
+  commentId: Overload:FluentGpu.Controls.Slider.Style.InnerRestScale
+  href: FluentGpu.Controls.Slider.Style.html#FluentGpu_Controls_Slider_Style_InnerRestScale
+  name: InnerRestScale
+  nameWithType: Slider.Style.InnerRestScale
+  fullName: FluentGpu.Controls.Slider.Style.InnerRestScale
+- uid: FluentGpu.Controls.Slider.Style.InnerHoverScale*
+  commentId: Overload:FluentGpu.Controls.Slider.Style.InnerHoverScale
+  href: FluentGpu.Controls.Slider.Style.html#FluentGpu_Controls_Slider_Style_InnerHoverScale
+  name: InnerHoverScale
+  nameWithType: Slider.Style.InnerHoverScale
+  fullName: FluentGpu.Controls.Slider.Style.InnerHoverScale
+- uid: FluentGpu.Controls.Slider.Style.InnerPressScale*
+  commentId: Overload:FluentGpu.Controls.Slider.Style.InnerPressScale
+  href: FluentGpu.Controls.Slider.Style.html#FluentGpu_Controls_Slider_Style_InnerPressScale
+  name: InnerPressScale
+  nameWithType: Slider.Style.InnerPressScale
+  fullName: FluentGpu.Controls.Slider.Style.InnerPressScale
+- uid: FluentGpu.Controls.Slider.Style.InnerDisabledScale*
+  commentId: Overload:FluentGpu.Controls.Slider.Style.InnerDisabledScale
+  href: FluentGpu.Controls.Slider.Style.html#FluentGpu_Controls_Slider_Style_InnerDisabledScale
+  name: InnerDisabledScale
+  nameWithType: Slider.Style.InnerDisabledScale
+  fullName: FluentGpu.Controls.Slider.Style.InnerDisabledScale
+- uid: FluentGpu.Controls.Slider.Style.TickFill*
+  commentId: Overload:FluentGpu.Controls.Slider.Style.TickFill
+  href: FluentGpu.Controls.Slider.Style.html#FluentGpu_Controls_Slider_Style_TickFill
+  name: TickFill
+  nameWithType: Slider.Style.TickFill
+  fullName: FluentGpu.Controls.Slider.Style.TickFill
+- uid: FluentGpu.Controls.Slider.Style.TickFillDisabled*
+  commentId: Overload:FluentGpu.Controls.Slider.Style.TickFillDisabled
+  href: FluentGpu.Controls.Slider.Style.html#FluentGpu_Controls_Slider_Style_TickFillDisabled
+  name: TickFillDisabled
+  nameWithType: Slider.Style.TickFillDisabled
+  fullName: FluentGpu.Controls.Slider.Style.TickFillDisabled
+- uid: FluentGpu.Controls.Slider.Style.InlineTickFill*
+  commentId: Overload:FluentGpu.Controls.Slider.Style.InlineTickFill
+  href: FluentGpu.Controls.Slider.Style.html#FluentGpu_Controls_Slider_Style_InlineTickFill
+  name: InlineTickFill
+  nameWithType: Slider.Style.InlineTickFill
+  fullName: FluentGpu.Controls.Slider.Style.InlineTickFill

@@ -1,0 +1,178 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.DismissBehavior
+  commentId: T:FluentGpu.Controls.DismissBehavior
+  id: DismissBehavior
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.DismissBehavior.LightDismiss
+  - FluentGpu.Controls.DismissBehavior.Modal
+  - FluentGpu.Controls.DismissBehavior.None
+  langs:
+  - csharp
+  - vb
+  name: DismissBehavior
+  nameWithType: DismissBehavior
+  fullName: FluentGpu.Controls.DismissBehavior
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DismissBehavior
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 30
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Opens anchored, light-dismissable flyouts (menus, ComboBox/DropDownButton/SplitButton dropdowns, ColorPicker). A
+
+    control captures its own node via <xref href="FluentGpu.Dsl.BoxEl.OnRealized" data-throw-if-not-resolved="false"></xref> and passes a thunk for it as the anchor; the host
+
+    positions the popup relative to the anchor's on-screen rect (flip/nudge into the viewport) and animates it open/closed
+
+    with the WinUI MenuPopupThemeTransition. Resolve via <code>UseContext(Overlay.Service)</code> inside an <xref href="FluentGpu.Controls.OverlayHost" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: 'public enum DismissBehavior : byte'
+    content.vb: Public Enum DismissBehavior As Byte
+- uid: FluentGpu.Controls.DismissBehavior.LightDismiss
+  commentId: F:FluentGpu.Controls.DismissBehavior.LightDismiss
+  id: LightDismiss
+  parent: FluentGpu.Controls.DismissBehavior
+  langs:
+  - csharp
+  - vb
+  name: LightDismiss
+  nameWithType: DismissBehavior.LightDismiss
+  fullName: FluentGpu.Controls.DismissBehavior.LightDismiss
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LightDismiss
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 30
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: LightDismiss = 0
+    return:
+      type: FluentGpu.Controls.DismissBehavior
+- uid: FluentGpu.Controls.DismissBehavior.Modal
+  commentId: F:FluentGpu.Controls.DismissBehavior.Modal
+  id: Modal
+  parent: FluentGpu.Controls.DismissBehavior
+  langs:
+  - csharp
+  - vb
+  name: Modal
+  nameWithType: DismissBehavior.Modal
+  fullName: FluentGpu.Controls.DismissBehavior.Modal
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Modal
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 30
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Modal = 1
+    return:
+      type: FluentGpu.Controls.DismissBehavior
+- uid: FluentGpu.Controls.DismissBehavior.None
+  commentId: F:FluentGpu.Controls.DismissBehavior.None
+  id: None
+  parent: FluentGpu.Controls.DismissBehavior
+  langs:
+  - csharp
+  - vb
+  name: None
+  nameWithType: DismissBehavior.None
+  fullName: FluentGpu.Controls.DismissBehavior.None
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: None
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 30
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: None = 2
+    return:
+      type: FluentGpu.Controls.DismissBehavior
+references:
+- uid: FluentGpu.Dsl.BoxEl.OnRealized
+  commentId: P:FluentGpu.Dsl.BoxEl.OnRealized
+  href: FluentGpu.Dsl.BoxEl.html#FluentGpu_Dsl_BoxEl_OnRealized
+  name: OnRealized
+  nameWithType: BoxEl.OnRealized
+  fullName: FluentGpu.Dsl.BoxEl.OnRealized
+- uid: FluentGpu.Controls.OverlayHost
+  commentId: T:FluentGpu.Controls.OverlayHost
+  href: FluentGpu.Controls.OverlayHost.html
+  name: OverlayHost
+  nameWithType: OverlayHost
+  fullName: FluentGpu.Controls.OverlayHost
+- uid: FluentGpu.Controls.DismissBehavior.LightDismiss
+  commentId: F:FluentGpu.Controls.DismissBehavior.LightDismiss
+  href: FluentGpu.Controls.DismissBehavior.html#FluentGpu_Controls_DismissBehavior_LightDismiss
+  name: LightDismiss
+  nameWithType: DismissBehavior.LightDismiss
+  fullName: FluentGpu.Controls.DismissBehavior.LightDismiss
+- uid: FluentGpu.Controls.DismissBehavior.Modal
+  commentId: F:FluentGpu.Controls.DismissBehavior.Modal
+  href: FluentGpu.Controls.DismissBehavior.html#FluentGpu_Controls_DismissBehavior_Modal
+  name: Modal
+  nameWithType: DismissBehavior.Modal
+  fullName: FluentGpu.Controls.DismissBehavior.Modal
+- uid: FluentGpu.Controls.DismissBehavior.None
+  commentId: F:FluentGpu.Controls.DismissBehavior.None
+  href: FluentGpu.Controls.DismissBehavior.html#FluentGpu_Controls_DismissBehavior_None
+  name: None
+  nameWithType: DismissBehavior.None
+  fullName: FluentGpu.Controls.DismissBehavior.None
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.DismissBehavior
+  commentId: T:FluentGpu.Controls.DismissBehavior
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.DismissBehavior.html
+  name: DismissBehavior
+  nameWithType: DismissBehavior
+  fullName: FluentGpu.Controls.DismissBehavior

@@ -1,0 +1,860 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Class RatingControl | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Class RatingControl | FluentGpu Developer Docs ">
+      
+      <meta name="description" content="A WinUI RatingControl: a row of stars set by click or press-and-sweep, with an optional caption. The control is a two-layer star row -- an always-present unset/background layer (outline glyph E734) and a clipped Set layer (filled glyph E735) revealed to the current rating. Faithful port of RatingControl.cpp: State model --  (caller ; -1 == unset), an unset  shown until a real value is set, and an optional .Pointer preview -- press-and-sweep fills the stars to the pointer (with a partial tail) and lifts the foreground to the pointer-over visual-state color; release commits.  clears the rating when you click the star equal to the current value. Implicit capture keeps the sweep alive OFF the strip while pressed, so dragging past the LEFT edge and releasing clears to  (RatingControl.cpp:799-805, 856-863, 888-906). A TOUCH press lifts the hover-scale scalar to c_touchOverScale = 1.0 (vs mouse 0.8) so the focal star grows to full size under the finger.Keyboard -- Left/Down -1, Right/Up +1, Home clears, End sets  (RatingControl::OnKeyDown).Read-only / disabled --  renders a fixed rating with no interaction; =false dims the foreground to the disabled brush and gates all input. Custom font/image item-info (RatingItemFontInfo/RatingItemImageInfo per-state glyphs/images) is deferred.">
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/new/feat/prop-unification/apiSpec/new?filename=FluentGpu_Controls_RatingControl.md&amp;value=---%0Auid%3A%20FluentGpu.Controls.RatingControl%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="ManagedReference">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="FluentGpu.Controls.RatingControl">
+
+
+
+  <h1 id="FluentGpu_Controls_RatingControl" data-uid="FluentGpu.Controls.RatingControl" class="text-break">
+Class RatingControl  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/RatingControl.cs/#L127"><i class="bi bi-code-slash"></i></a>
+  </h1>
+
+  <div class="facts text-secondary">
+    <dl><dt>Namespace</dt><dd><a class="xref" href="FluentGpu.html">FluentGpu</a>.<a class="xref" href="FluentGpu.Controls.html">Controls</a></dd></dl>
+  <dl><dt>Assembly</dt><dd>FluentGpu.Controls.dll</dd></dl>
+  </div>
+
+  <div class="markdown summary"><p>A WinUI <code>RatingControl</code>: a row of stars set by click or press-and-sweep, with an optional caption. The control
+is a two-layer star row -- an always-present unset/background layer (outline glyph E734) and a clipped Set layer
+(filled glyph E735) revealed to the current rating. Faithful port of <code>RatingControl.cpp</code>:</p>
+<ul><li><b>State model</b> -- <a class="xref" href="FluentGpu.Controls.RatingControl.html#FluentGpu_Controls_RatingControl_Value">Value</a> (caller <a class="xref" href="FluentGpu.Signals.FloatSignal.html">FloatSignal</a>; <code>-1</code> == unset), an unset
+<a class="xref" href="FluentGpu.Controls.RatingControl.html#FluentGpu_Controls_RatingControl_PlaceholderValue">PlaceholderValue</a> shown until a real value is set, and an optional <a class="xref" href="FluentGpu.Controls.RatingControl.html#FluentGpu_Controls_RatingControl_Caption">Caption</a>.</li><li><b>Pointer preview</b> -- press-and-sweep fills the stars to the pointer (with a partial tail) and lifts the
+foreground to the pointer-over visual-state color; release commits. <a class="xref" href="FluentGpu.Controls.RatingControl.html#FluentGpu_Controls_RatingControl_IsClearEnabled">IsClearEnabled</a> clears the rating
+when you click the star equal to the current value. Implicit capture keeps the sweep alive OFF the strip while
+pressed, so dragging past the LEFT edge and releasing clears to <a class="xref" href="FluentGpu.Controls.RatingControl.html#FluentGpu_Controls_RatingControl_NoValueSet">NoValueSet</a>
+(<code>RatingControl.cpp:799-805, 856-863, 888-906</code>). A TOUCH press lifts the hover-scale scalar to
+<code>c_touchOverScale</code> = 1.0 (vs mouse 0.8) so the focal star grows to full size under the finger.</li><li><b>Keyboard</b> -- Left/Down -1, Right/Up +1, Home clears, End sets <a class="xref" href="FluentGpu.Controls.RatingControl.html#FluentGpu_Controls_RatingControl_MaxRating">MaxRating</a>
+(<code>RatingControl::OnKeyDown</code>).</li><li><b>Read-only / disabled</b> -- <a class="xref" href="FluentGpu.Controls.RatingControl.html#FluentGpu_Controls_RatingControl_ReadOnly">ReadOnly</a> renders a fixed rating with no interaction;
+<a class="xref" href="FluentGpu.Controls.RatingControl.html#FluentGpu_Controls_RatingControl_IsEnabled">IsEnabled</a>=false dims the foreground to the disabled brush and gates all input.</li></ul>
+<p>Custom font/image item-info (<code>RatingItemFontInfo</code>/<code>RatingItemImageInfo</code> per-state glyphs/images) is deferred.</p>
+</div>
+  <div class="markdown conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public sealed class RatingControl : Component</code></pre>
+  </div>
+
+
+
+
+  <dl class="typelist inheritance">
+    <dt>Inheritance</dt>
+    <dd>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></div>
+      <div><a class="xref" href="FluentGpu.Hooks.Component.html">Component</a></div>
+      <div><span class="xref">RatingControl</span></div>
+    </dd>
+  </dl>
+
+
+
+  <dl class="typelist inheritedMembers">
+    <dt>Inherited Members</dt>
+    <dd>
+    <div>
+      <a class="xref" href="FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Context">Component.Context</a>
+    </div>
+    <div>
+      <a class="xref" href="FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RunsOnce">Component.RunsOnce</a>
+    </div>
+    <div>
+      <a class="xref" href="FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks">Component.RenderWithHooks()</a>
+    </div>
+    <div>
+      <a class="xref" href="FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount">Component.Unmount()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)">object.Equals(object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)">object.Equals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gethashcode">object.GetHashCode()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gettype">object.GetType()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.referenceequals">object.ReferenceEquals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.tostring">object.ToString()</a>
+    </div>
+  </dd></dl>
+
+  <dl class="typelist extensionMethods">
+    <dt>Extension Methods</dt>
+    <dd>
+  <div>
+      <a class="xref" href="FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_">MotionHooks.UseEntrance(Component, float, object?)</a>
+  </div>
+  <div>
+      <a class="xref" href="FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_">MotionHooks.UseHoverScale(Component, bool, float)</a>
+  </div>
+  </dd></dl>
+
+
+
+
+
+  <h2 class="section" id="fields">Fields
+</h2>
+
+
+
+  <h3 id="FluentGpu_Controls_RatingControl_Caption" data-uid="FluentGpu.Controls.RatingControl.Caption">
+  Caption
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/RatingControl.cs/#L156"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public string Caption</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_RatingControl_InitialSetValue" data-uid="FluentGpu.Controls.RatingControl.InitialSetValue">
+  InitialSetValue
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/RatingControl.cs/#L157"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int InitialSetValue</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_RatingControl_IsClearEnabled" data-uid="FluentGpu.Controls.RatingControl.IsClearEnabled">
+  IsClearEnabled
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/RatingControl.cs/#L158"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool IsClearEnabled</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_RatingControl_IsEnabled" data-uid="FluentGpu.Controls.RatingControl.IsEnabled">
+  IsEnabled
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/RatingControl.cs/#L160"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool IsEnabled</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_RatingControl_ItemSpacing" data-uid="FluentGpu.Controls.RatingControl.ItemSpacing">
+  ItemSpacing
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/RatingControl.cs/#L169"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float ItemSpacing</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_RatingControl_MaxRating" data-uid="FluentGpu.Controls.RatingControl.MaxRating">
+  MaxRating
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/RatingControl.cs/#L154"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int MaxRating</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_RatingControl_NoValueSet" data-uid="FluentGpu.Controls.RatingControl.NoValueSet">
+  NoValueSet
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/RatingControl.cs/#L134"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The WinUI <code>c_noValueSetSentinel</code>: <a class="xref" href="FluentGpu.Controls.RatingControl.html#FluentGpu_Controls_RatingControl_Value">Value</a> &lt;= this means &quot;unset&quot;.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float NoValueSet = -1</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_RatingControl_OnChange" data-uid="FluentGpu.Controls.RatingControl.OnChange">
+  OnChange
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/RatingControl.cs/#L161"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Action&lt;float&gt;? OnChange</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action-1">Action</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_RatingControl_PartCaption" data-uid="FluentGpu.Controls.RatingControl.PartCaption">
+  PartCaption
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/RatingControl.cs/#L151"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The trailing caption (WinUI Caption TextBlock) — a <a class="xref" href="FluentGpu.Dsl.TextEl.html">TextEl</a> part
+(<code>Parts.Set&lt;TextEl&gt;(…)</code>). No owned props.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartCaption = &quot;Caption&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_RatingControl_PartRoot" data-uid="FluentGpu.Controls.RatingControl.PartRoot">
+  PartRoot
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/RatingControl.cs/#L140"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The returned control root (star strip + caption). Owned: OnKeyDown (the arrow/Home/End rating keys),
+Role, Children.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartRoot = &quot;Root&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_RatingControl_PartStarCell" data-uid="FluentGpu.Controls.RatingControl.PartStarCell">
+  PartStarCell
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/RatingControl.cs/#L148"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Each star cell (applied to EVERY star — full, empty and partial alike). Owned: TransformBind +
+TransformOriginX/Y (the focal hover-scale expression about the cell centre).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartStarCell = &quot;StarCell&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_RatingControl_PartStarRow" data-uid="FluentGpu.Controls.RatingControl.PartStarRow">
+  PartStarRow
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/RatingControl.cs/#L145"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The interactive star strip (WinUI RatingBackgroundStackPanel). Owned: OnHoverMove, OnPointerDown,
+OnPointerPressed, OnDrag, OnClick, OnPointerExit (the hover/sweep/commit lifecycle), Children. NOTE: the sweep
+math maps pointer X over the STOCK width (<a class="xref" href="FluentGpu.Controls.RatingControl.html#FluentGpu_Controls_RatingControl_StarSize">StarSize</a>/<a class="xref" href="FluentGpu.Controls.RatingControl.html#FluentGpu_Controls_RatingControl_ItemSpacing">ItemSpacing</a>) — resizing this
+part skews the star-under-pointer mapping.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartStarRow = &quot;StarRow&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_RatingControl_Parts" data-uid="FluentGpu.Controls.RatingControl.Parts">
+  Parts
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/RatingControl.cs/#L164"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Lightweight per-part styling (CSS ::part): modifiers keyed by the <code>PartXxx</code> consts; see
+<a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a> for the contract.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public TemplateParts? Parts</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_RatingControl_PlaceholderValue" data-uid="FluentGpu.Controls.RatingControl.PlaceholderValue">
+  PlaceholderValue
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/RatingControl.cs/#L155"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float PlaceholderValue</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_RatingControl_ReadOnly" data-uid="FluentGpu.Controls.RatingControl.ReadOnly">
+  ReadOnly
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/RatingControl.cs/#L159"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool ReadOnly</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_RatingControl_StarSize" data-uid="FluentGpu.Controls.RatingControl.StarSize">
+  StarSize
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/RatingControl.cs/#L168"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float StarSize</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_RatingControl_Value" data-uid="FluentGpu.Controls.RatingControl.Value">
+  Value
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/RatingControl.cs/#L153"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public FloatSignal Value</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Signals.FloatSignal.html">FloatSignal</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+  <h2 class="section" id="methods">Methods
+</h2>
+
+
+  <a id="FluentGpu_Controls_RatingControl_Coerce_" data-uid="FluentGpu.Controls.RatingControl.Coerce*"></a>
+
+  <h3 id="FluentGpu_Controls_RatingControl_Coerce_System_Single_System_Int32_" data-uid="FluentGpu.Controls.RatingControl.Coerce(System.Single,System.Int32)">
+  Coerce(float, int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/RatingControl.cs/#L457"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Programmatic value coercion (RatingControl::CoerceValueBetweenMinAndMax): a negative value snaps to the
+<a class="xref" href="FluentGpu.Controls.RatingControl.html#FluentGpu_Controls_RatingControl_NoValueSet">NoValueSet</a> (-1) &quot;unset&quot; sentinel; a value in (0,1] snaps up to 1 (a single star); a value above
+<code class="paramref">max</code> clamps down to max. Fractional values in (1,max] keep their tail (the partial-star fill).
+Applied to both <a class="xref" href="FluentGpu.Controls.RatingControl.html#FluentGpu_Controls_RatingControl_Value">Value</a> and <a class="xref" href="FluentGpu.Controls.RatingControl.html#FluentGpu_Controls_RatingControl_PlaceholderValue">PlaceholderValue</a> at render time.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static float Coerce(float value, int max)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>value</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>max</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_RatingControl_Create_" data-uid="FluentGpu.Controls.RatingControl.Create*"></a>
+
+  <h3 id="FluentGpu_Controls_RatingControl_Create_FluentGpu_Signals_FloatSignal_System_Int32_System_Single_System_String_System_Boolean_System_Boolean_System_Boolean_System_Action_System_Single__" data-uid="FluentGpu.Controls.RatingControl.Create(FluentGpu.Signals.FloatSignal,System.Int32,System.Single,System.String,System.Boolean,System.Boolean,System.Boolean,System.Action{System.Single})">
+  Create(FloatSignal, int, float, string, bool, bool, bool, Action&lt;float&gt;?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/RatingControl.cs/#L173"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static Element Create(FloatSignal value, int max = 5, float placeholder = -1, string caption = &quot;&quot;, bool readOnly = false, bool isEnabled = true, bool isClearEnabled = true, Action&lt;float&gt;? onChange = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>value</code> <a class="xref" href="FluentGpu.Signals.FloatSignal.html">FloatSignal</a></dt>
+    <dd></dd>
+    <dt><code>max</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>placeholder</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>caption</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>readOnly</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+    <dt><code>isEnabled</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+    <dt><code>isClearEnabled</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+    <dt><code>onChange</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action-1">Action</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.Element.html">Element</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_RatingControl_Render_" data-uid="FluentGpu.Controls.RatingControl.Render*"></a>
+
+  <h3 id="FluentGpu_Controls_RatingControl_Render" data-uid="FluentGpu.Controls.RatingControl.Render">
+  Render()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/RatingControl.cs/#L182"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public override Element Render()</code></pre>
+  </div>
+
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.Element.html">Element</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+</article>
+
+
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

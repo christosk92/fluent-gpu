@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Class Win32TextInput | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Class Win32TextInput | FluentGpu Developer Docs ">
+      
+      <meta name="description" content="Imm32 IME plumbing for one window: suppresses the system composition window, reads the composition string + caret + clause attributes on WM_IME_COMPOSITION, forwards them to the registered sink, and positions the candidate window at the caret (CFS_EXCLUDE). Reused buffers — the typing edge allocates only event strings.">
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="ManagedReference">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="FluentGpu.Pal.Windows.Win32TextInput">
+
+
+
+  <h1 id="FluentGpu_Pal_Windows_Win32TextInput" data-uid="FluentGpu.Pal.Windows.Win32TextInput" class="text-break">
+Class Win32TextInput  
+  </h1>
+
+  <div class="facts text-secondary">
+    <dl><dt>Namespace</dt><dd><a class="xref" href="FluentGpu.html">FluentGpu</a>.<a class="xref" href="FluentGpu.Pal.html">Pal</a>.<a class="xref" href="FluentGpu.Pal.Windows.html">Windows</a></dd></dl>
+  <dl><dt>Assembly</dt><dd>FluentGpu.Pal.Windows.dll</dd></dl>
+  </div>
+
+  <div class="markdown summary"><p>Imm32 IME plumbing for one window: suppresses the system composition window, reads the composition string +
+caret + clause attributes on WM_IME_COMPOSITION, forwards them to the registered sink, and positions the
+candidate window at the caret (CFS_EXCLUDE). Reused buffers — the typing edge allocates only event strings.</p>
+</div>
+  <div class="markdown conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public sealed class Win32TextInput : IPlatformTextInput</code></pre>
+  </div>
+
+
+
+
+  <dl class="typelist inheritance">
+    <dt>Inheritance</dt>
+    <dd>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></div>
+      <div><span class="xref">Win32TextInput</span></div>
+    </dd>
+  </dl>
+
+  <dl class="typelist implements">
+    <dt>Implements</dt>
+    <dd>
+      <div><a class="xref" href="FluentGpu.Pal.IPlatformTextInput.html">IPlatformTextInput</a></div>
+    </dd>
+  </dl>
+
+
+  <dl class="typelist inheritedMembers">
+    <dt>Inherited Members</dt>
+    <dd>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)">object.Equals(object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)">object.Equals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gethashcode">object.GetHashCode()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gettype">object.GetType()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.referenceequals">object.ReferenceEquals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.tostring">object.ToString()</a>
+    </div>
+  </dd></dl>
+
+
+
+
+
+
+  <h2 class="section" id="constructors">Constructors
+</h2>
+
+
+  <a id="FluentGpu_Pal_Windows_Win32TextInput__ctor_" data-uid="FluentGpu.Pal.Windows.Win32TextInput.#ctor*"></a>
+
+  <h3 id="FluentGpu_Pal_Windows_Win32TextInput__ctor_System_IntPtr_" data-uid="FluentGpu.Pal.Windows.Win32TextInput.#ctor(System.IntPtr)">
+  Win32TextInput(nint)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Pal.Windows/Win32TextServices.cs/#L98"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Win32TextInput(nint hwnd)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>hwnd</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.intptr">nint</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <h2 class="section" id="properties">Properties
+</h2>
+
+
+  <a id="FluentGpu_Pal_Windows_Win32TextInput_CaretBlinkMs_" data-uid="FluentGpu.Pal.Windows.Win32TextInput.CaretBlinkMs*"></a>
+
+  <h3 id="FluentGpu_Pal_Windows_Win32TextInput_CaretBlinkMs" data-uid="FluentGpu.Pal.Windows.Win32TextInput.CaretBlinkMs">
+  CaretBlinkMs
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Pal.Windows/Win32TextServices.cs/#L100"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The OS caret blink half-period in ms (Win32 GetCaretBlinkTime; headless = a fixed test value).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int CaretBlinkMs { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <h2 class="section" id="methods">Methods
+</h2>
+
+
+  <a id="FluentGpu_Pal_Windows_Win32TextInput_OnComposition_" data-uid="FluentGpu.Pal.Windows.Win32TextInput.OnComposition*"></a>
+
+  <h3 id="FluentGpu_Pal_Windows_Win32TextInput_OnComposition_System_Int64_" data-uid="FluentGpu.Pal.Windows.Win32TextInput.OnComposition(System.Int64)">
+  OnComposition(long)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Pal.Windows/Win32TextServices.cs/#L135"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>WM_IME_COMPOSITION: lParam says which pieces are valid. A single message can both COMMIT the previous
+composition (GCS_RESULTSTR) and open the next one (GCS_COMPSTR) — deliver in that order, like Imm32 does.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void OnComposition(long lParam)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>lParam</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int64">long</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Pal_Windows_Win32TextInput_OnEndComposition_" data-uid="FluentGpu.Pal.Windows.Win32TextInput.OnEndComposition*"></a>
+
+  <h3 id="FluentGpu_Pal_Windows_Win32TextInput_OnEndComposition" data-uid="FluentGpu.Pal.Windows.Win32TextInput.OnEndComposition">
+  OnEndComposition()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Pal.Windows/Win32TextServices.cs/#L131"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void OnEndComposition()</code></pre>
+  </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Pal_Windows_Win32TextInput_OnStartComposition_" data-uid="FluentGpu.Pal.Windows.Win32TextInput.OnStartComposition*"></a>
+
+  <h3 id="FluentGpu_Pal_Windows_Win32TextInput_OnStartComposition" data-uid="FluentGpu.Pal.Windows.Win32TextInput.OnStartComposition">
+  OnStartComposition()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Pal.Windows/Win32TextServices.cs/#L129"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void OnStartComposition()</code></pre>
+  </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Pal_Windows_Win32TextInput_SetCaretRectPx_" data-uid="FluentGpu.Pal.Windows.Win32TextInput.SetCaretRectPx*"></a>
+
+  <h3 id="FluentGpu_Pal_Windows_Win32TextInput_SetCaretRectPx_FluentGpu_Foundation_RectF__" data-uid="FluentGpu.Pal.Windows.Win32TextInput.SetCaretRectPx(FluentGpu.Foundation.RectF@)">
+  SetCaretRectPx(in RectF)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Pal.Windows/Win32TextServices.cs/#L115"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Position the candidate window: the caret rect in PHYSICAL window pixels (CFS_EXCLUDE placement).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void SetCaretRectPx(in RectF rect)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>rect</code> <a class="xref" href="FluentGpu.Foundation.RectF.html">RectF</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Pal_Windows_Win32TextInput_SetEditable_" data-uid="FluentGpu.Pal.Windows.Win32TextInput.SetEditable*"></a>
+
+  <h3 id="FluentGpu_Pal_Windows_Win32TextInput_SetEditable_System_Boolean_" data-uid="FluentGpu.Pal.Windows.Win32TextInput.SetEditable(System.Boolean)">
+  SetEditable(bool)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Pal.Windows/Win32TextServices.cs/#L107"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Enable/disable the IME for this window (ImmAssociateContext on/off) — flipped when keyboard focus
+enters/leaves an editable control, so the IME never composes over a button.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void SetEditable(bool editable)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>editable</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Pal_Windows_Win32TextInput_SetSink_" data-uid="FluentGpu.Pal.Windows.Win32TextInput.SetSink*"></a>
+
+  <h3 id="FluentGpu_Pal_Windows_Win32TextInput_SetSink_FluentGpu_Pal_ITextInputSink_" data-uid="FluentGpu.Pal.Windows.Win32TextInput.SetSink(FluentGpu.Pal.ITextInputSink)">
+  SetSink(ITextInputSink?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Pal.Windows/Win32TextServices.cs/#L105"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Register the composition sink (the focused editor, via the input router). Null = none.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void SetSink(ITextInputSink? sink)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>sink</code> <a class="xref" href="FluentGpu.Pal.ITextInputSink.html">ITextInputSink</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+
+</article>
+
+
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

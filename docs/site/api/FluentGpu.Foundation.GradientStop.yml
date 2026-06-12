@@ -1,0 +1,476 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.GradientStop
+  commentId: T:FluentGpu.Foundation.GradientStop
+  id: GradientStop
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.GradientStop.#ctor(System.Single,FluentGpu.Foundation.ColorF)
+  - FluentGpu.Foundation.GradientStop.Color
+  - FluentGpu.Foundation.GradientStop.Offset
+  langs:
+  - csharp
+  - vb
+  name: GradientStop
+  nameWithType: GradientStop
+  fullName: FluentGpu.Foundation.GradientStop
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GradientStop
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 34
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: 'One gradient stop: a normalized position (0..1 along the gradient axis) and its color.'
+  example: []
+  syntax:
+    content: 'public readonly record struct GradientStop : IEquatable<GradientStop>'
+    content.vb: Public Structure GradientStop Implements IEquatable(Of GradientStop)
+  implements:
+  - System.IEquatable{FluentGpu.Foundation.GradientStop}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Foundation.GradientStop.#ctor(System.Single,FluentGpu.Foundation.ColorF)
+  commentId: M:FluentGpu.Foundation.GradientStop.#ctor(System.Single,FluentGpu.Foundation.ColorF)
+  id: '#ctor(System.Single,FluentGpu.Foundation.ColorF)'
+  parent: FluentGpu.Foundation.GradientStop
+  langs:
+  - csharp
+  - vb
+  name: GradientStop(float, ColorF)
+  nameWithType: GradientStop.GradientStop(float, ColorF)
+  fullName: FluentGpu.Foundation.GradientStop.GradientStop(float, FluentGpu.Foundation.ColorF)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 34
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: 'One gradient stop: a normalized position (0..1 along the gradient axis) and its color.'
+  example: []
+  syntax:
+    content: public GradientStop(float Offset, ColorF Color)
+    parameters:
+    - id: Offset
+      type: System.Single
+    - id: Color
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Sub New(Offset As Single, Color As ColorF)
+  overload: FluentGpu.Foundation.GradientStop.#ctor*
+  nameWithType.vb: GradientStop.New(Single, ColorF)
+  fullName.vb: FluentGpu.Foundation.GradientStop.New(Single, FluentGpu.Foundation.ColorF)
+  name.vb: New(Single, ColorF)
+- uid: FluentGpu.Foundation.GradientStop.Offset
+  commentId: P:FluentGpu.Foundation.GradientStop.Offset
+  id: Offset
+  parent: FluentGpu.Foundation.GradientStop
+  langs:
+  - csharp
+  - vb
+  name: Offset
+  nameWithType: GradientStop.Offset
+  fullName: FluentGpu.Foundation.GradientStop.Offset
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Offset
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 34
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float Offset { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Offset As Single
+  overload: FluentGpu.Foundation.GradientStop.Offset*
+- uid: FluentGpu.Foundation.GradientStop.Color
+  commentId: P:FluentGpu.Foundation.GradientStop.Color
+  id: Color
+  parent: FluentGpu.Foundation.GradientStop
+  langs:
+  - csharp
+  - vb
+  name: Color
+  nameWithType: GradientStop.Color
+  fullName: FluentGpu.Foundation.GradientStop.Color
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Color
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 34
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public ColorF Color { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property Color As ColorF
+  overload: FluentGpu.Foundation.GradientStop.Color*
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.IEquatable{FluentGpu.Foundation.GradientStop}
+  commentId: T:System.IEquatable{FluentGpu.Foundation.GradientStop}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<GradientStop>
+  nameWithType: IEquatable<GradientStop>
+  fullName: System.IEquatable<FluentGpu.Foundation.GradientStop>
+  nameWithType.vb: IEquatable(Of GradientStop)
+  fullName.vb: System.IEquatable(Of FluentGpu.Foundation.GradientStop)
+  name.vb: IEquatable(Of GradientStop)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Foundation.GradientStop
+    name: GradientStop
+    href: FluentGpu.Foundation.GradientStop.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.GradientStop
+    name: GradientStop
+    href: FluentGpu.Foundation.GradientStop.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Foundation.GradientStop.#ctor*
+  commentId: Overload:FluentGpu.Foundation.GradientStop.#ctor
+  href: FluentGpu.Foundation.GradientStop.html#FluentGpu_Foundation_GradientStop__ctor_System_Single_FluentGpu_Foundation_ColorF_
+  name: GradientStop
+  nameWithType: GradientStop.GradientStop
+  fullName: FluentGpu.Foundation.GradientStop.GradientStop
+  nameWithType.vb: GradientStop.New
+  fullName.vb: FluentGpu.Foundation.GradientStop.New
+  name.vb: New
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Foundation.GradientStop.Offset*
+  commentId: Overload:FluentGpu.Foundation.GradientStop.Offset
+  href: FluentGpu.Foundation.GradientStop.html#FluentGpu_Foundation_GradientStop_Offset
+  name: Offset
+  nameWithType: GradientStop.Offset
+  fullName: FluentGpu.Foundation.GradientStop.Offset
+- uid: FluentGpu.Foundation.GradientStop.Color*
+  commentId: Overload:FluentGpu.Foundation.GradientStop.Color
+  href: FluentGpu.Foundation.GradientStop.html#FluentGpu_Foundation_GradientStop_Color
+  name: Color
+  nameWithType: GradientStop.Color
+  fullName: FluentGpu.Foundation.GradientStop.Color

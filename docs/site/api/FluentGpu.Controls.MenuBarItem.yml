@@ -1,0 +1,638 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.MenuBarItem
+  commentId: T:FluentGpu.Controls.MenuBarItem
+  id: MenuBarItem
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.MenuBarItem.#ctor(System.String,System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem})
+  - FluentGpu.Controls.MenuBarItem.AccessKey
+  - FluentGpu.Controls.MenuBarItem.Items
+  - FluentGpu.Controls.MenuBarItem.Title
+  langs:
+  - csharp
+  - vb
+  name: MenuBarItem
+  nameWithType: MenuBarItem
+  fullName: FluentGpu.Controls.MenuBarItem
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MenuBarItem
+    path: ../../src/FluentGpu.Controls/MenuBar.cs
+    startLine: 12
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A single top-level entry in a <xref href="FluentGpu.Controls.MenuBar" data-throw-if-not-resolved="false"></xref>: a clickable title (e.g. "File") whose
+        <code class="paramref">Items</code> populate the <xref href="FluentGpu.Controls.MenuFlyout" data-throw-if-not-resolved="false"></xref> that opens beneath it. <xref href="FluentGpu.Controls.MenuBarItem.AccessKey" data-throw-if-not-resolved="false"></xref> is
+        the Alt-mnemonic letter (WinUI MenuBarItem AccessKey — MenuBarItem.cpp:249 OnMenuBarItemAccessKeyInvoked →
+        ShowMenuFlyout); '\0' derives it from the first letter of <code class="paramref">Title</code>.
+  example: []
+  syntax:
+    content: 'public sealed record MenuBarItem : IEquatable<MenuBarItem>'
+    content.vb: Public NotInheritable Class MenuBarItem Implements IEquatable(Of MenuBarItem)
+  inheritance:
+  - System.Object
+  implements:
+  - System.IEquatable{FluentGpu.Controls.MenuBarItem}
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.MenuBarItem.#ctor(System.String,System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem})
+  commentId: M:FluentGpu.Controls.MenuBarItem.#ctor(System.String,System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem})
+  id: '#ctor(System.String,System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem})'
+  parent: FluentGpu.Controls.MenuBarItem
+  langs:
+  - csharp
+  - vb
+  name: MenuBarItem(string, IReadOnlyList<MenuFlyoutItem>)
+  nameWithType: MenuBarItem.MenuBarItem(string, IReadOnlyList<MenuFlyoutItem>)
+  fullName: FluentGpu.Controls.MenuBarItem.MenuBarItem(string, System.Collections.Generic.IReadOnlyList<FluentGpu.Controls.MenuFlyoutItem>)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Controls/MenuBar.cs
+    startLine: 12
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A single top-level entry in a <xref href="FluentGpu.Controls.MenuBar" data-throw-if-not-resolved="false"></xref>: a clickable title (e.g. "File") whose
+        <code class="paramref">Items</code> populate the <xref href="FluentGpu.Controls.MenuFlyout" data-throw-if-not-resolved="false"></xref> that opens beneath it. <xref href="FluentGpu.Controls.MenuBarItem.AccessKey" data-throw-if-not-resolved="false"></xref> is
+        the Alt-mnemonic letter (WinUI MenuBarItem AccessKey — MenuBarItem.cpp:249 OnMenuBarItemAccessKeyInvoked →
+        ShowMenuFlyout); '\0' derives it from the first letter of <code class="paramref">Title</code>.
+  example: []
+  syntax:
+    content: public MenuBarItem(string Title, IReadOnlyList<MenuFlyoutItem> Items)
+    parameters:
+    - id: Title
+      type: System.String
+    - id: Items
+      type: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem}
+    content.vb: Public Sub New(Title As String, Items As IReadOnlyList(Of MenuFlyoutItem))
+  overload: FluentGpu.Controls.MenuBarItem.#ctor*
+  nameWithType.vb: MenuBarItem.New(String, IReadOnlyList(Of MenuFlyoutItem))
+  fullName.vb: FluentGpu.Controls.MenuBarItem.New(String, System.Collections.Generic.IReadOnlyList(Of FluentGpu.Controls.MenuFlyoutItem))
+  name.vb: New(String, IReadOnlyList(Of MenuFlyoutItem))
+- uid: FluentGpu.Controls.MenuBarItem.Title
+  commentId: P:FluentGpu.Controls.MenuBarItem.Title
+  id: Title
+  parent: FluentGpu.Controls.MenuBarItem
+  langs:
+  - csharp
+  - vb
+  name: Title
+  nameWithType: MenuBarItem.Title
+  fullName: FluentGpu.Controls.MenuBarItem.Title
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Title
+    path: ../../src/FluentGpu.Controls/MenuBar.cs
+    startLine: 12
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string Title { get; init; }
+    parameters: []
+    return:
+      type: System.String
+    content.vb: Public Property Title As String
+  overload: FluentGpu.Controls.MenuBarItem.Title*
+- uid: FluentGpu.Controls.MenuBarItem.Items
+  commentId: P:FluentGpu.Controls.MenuBarItem.Items
+  id: Items
+  parent: FluentGpu.Controls.MenuBarItem
+  langs:
+  - csharp
+  - vb
+  name: Items
+  nameWithType: MenuBarItem.Items
+  fullName: FluentGpu.Controls.MenuBarItem.Items
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Items
+    path: ../../src/FluentGpu.Controls/MenuBar.cs
+    startLine: 12
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public IReadOnlyList<MenuFlyoutItem> Items { get; init; }
+    parameters: []
+    return:
+      type: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem}
+    content.vb: Public Property Items As IReadOnlyList(Of MenuFlyoutItem)
+  overload: FluentGpu.Controls.MenuBarItem.Items*
+- uid: FluentGpu.Controls.MenuBarItem.AccessKey
+  commentId: P:FluentGpu.Controls.MenuBarItem.AccessKey
+  id: AccessKey
+  parent: FluentGpu.Controls.MenuBarItem
+  langs:
+  - csharp
+  - vb
+  name: AccessKey
+  nameWithType: MenuBarItem.AccessKey
+  fullName: FluentGpu.Controls.MenuBarItem.AccessKey
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/MenuBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AccessKey
+    path: ../../src/FluentGpu.Controls/MenuBar.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public char AccessKey { get; init; }
+    parameters: []
+    return:
+      type: System.Char
+    content.vb: Public Property AccessKey As Char
+  overload: FluentGpu.Controls.MenuBarItem.AccessKey*
+references:
+- uid: FluentGpu.Controls.MenuBar
+  commentId: T:FluentGpu.Controls.MenuBar
+  href: FluentGpu.Controls.MenuBar.html
+  name: MenuBar
+  nameWithType: MenuBar
+  fullName: FluentGpu.Controls.MenuBar
+- uid: FluentGpu.Controls.MenuFlyout
+  commentId: T:FluentGpu.Controls.MenuFlyout
+  href: FluentGpu.Controls.MenuFlyout.html
+  name: MenuFlyout
+  nameWithType: MenuFlyout
+  fullName: FluentGpu.Controls.MenuFlyout
+- uid: FluentGpu.Controls.MenuBarItem.AccessKey
+  commentId: P:FluentGpu.Controls.MenuBarItem.AccessKey
+  href: FluentGpu.Controls.MenuBarItem.html#FluentGpu_Controls_MenuBarItem_AccessKey
+  name: AccessKey
+  nameWithType: MenuBarItem.AccessKey
+  fullName: FluentGpu.Controls.MenuBarItem.AccessKey
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.IEquatable{FluentGpu.Controls.MenuBarItem}
+  commentId: T:System.IEquatable{FluentGpu.Controls.MenuBarItem}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<MenuBarItem>
+  nameWithType: IEquatable<MenuBarItem>
+  fullName: System.IEquatable<FluentGpu.Controls.MenuBarItem>
+  nameWithType.vb: IEquatable(Of MenuBarItem)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.MenuBarItem)
+  name.vb: IEquatable(Of MenuBarItem)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.MenuBarItem
+    name: MenuBarItem
+    href: FluentGpu.Controls.MenuBarItem.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.MenuBarItem
+    name: MenuBarItem
+    href: FluentGpu.Controls.MenuBarItem.html
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.MenuBarItem.#ctor*
+  commentId: Overload:FluentGpu.Controls.MenuBarItem.#ctor
+  href: FluentGpu.Controls.MenuBarItem.html#FluentGpu_Controls_MenuBarItem__ctor_System_String_System_Collections_Generic_IReadOnlyList_FluentGpu_Controls_MenuFlyoutItem__
+  name: MenuBarItem
+  nameWithType: MenuBarItem.MenuBarItem
+  fullName: FluentGpu.Controls.MenuBarItem.MenuBarItem
+  nameWithType.vb: MenuBarItem.New
+  fullName.vb: FluentGpu.Controls.MenuBarItem.New
+  name.vb: New
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem}
+  commentId: T:System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem}
+  parent: System.Collections.Generic
+  definition: System.Collections.Generic.IReadOnlyList`1
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<MenuFlyoutItem>
+  nameWithType: IReadOnlyList<MenuFlyoutItem>
+  fullName: System.Collections.Generic.IReadOnlyList<FluentGpu.Controls.MenuFlyoutItem>
+  nameWithType.vb: IReadOnlyList(Of MenuFlyoutItem)
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of FluentGpu.Controls.MenuFlyoutItem)
+  name.vb: IReadOnlyList(Of MenuFlyoutItem)
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - uid: FluentGpu.Controls.MenuFlyoutItem
+    name: MenuFlyoutItem
+    href: FluentGpu.Controls.MenuFlyoutItem.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.MenuFlyoutItem
+    name: MenuFlyoutItem
+    href: FluentGpu.Controls.MenuFlyoutItem.html
+  - name: )
+- uid: System.Collections.Generic.IReadOnlyList`1
+  commentId: T:System.Collections.Generic.IReadOnlyList`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<T>
+  nameWithType: IReadOnlyList<T>
+  fullName: System.Collections.Generic.IReadOnlyList<T>
+  nameWithType.vb: IReadOnlyList(Of T)
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of T)
+  name.vb: IReadOnlyList(Of T)
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Collections.Generic
+  commentId: N:System.Collections.Generic
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System.Collections.Generic
+  nameWithType: System.Collections.Generic
+  fullName: System.Collections.Generic
+  spec.csharp:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+  spec.vb:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+- uid: FluentGpu.Controls.MenuBarItem.Title*
+  commentId: Overload:FluentGpu.Controls.MenuBarItem.Title
+  href: FluentGpu.Controls.MenuBarItem.html#FluentGpu_Controls_MenuBarItem_Title
+  name: Title
+  nameWithType: MenuBarItem.Title
+  fullName: FluentGpu.Controls.MenuBarItem.Title
+- uid: FluentGpu.Controls.MenuBarItem.Items*
+  commentId: Overload:FluentGpu.Controls.MenuBarItem.Items
+  href: FluentGpu.Controls.MenuBarItem.html#FluentGpu_Controls_MenuBarItem_Items
+  name: Items
+  nameWithType: MenuBarItem.Items
+  fullName: FluentGpu.Controls.MenuBarItem.Items
+- uid: FluentGpu.Controls.MenuBarItem.AccessKey*
+  commentId: Overload:FluentGpu.Controls.MenuBarItem.AccessKey
+  href: FluentGpu.Controls.MenuBarItem.html#FluentGpu_Controls_MenuBarItem_AccessKey
+  name: AccessKey
+  nameWithType: MenuBarItem.AccessKey
+  fullName: FluentGpu.Controls.MenuBarItem.AccessKey
+- uid: System.Char
+  commentId: T:System.Char
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.char
+  name: char
+  nameWithType: char
+  fullName: char
+  nameWithType.vb: Char
+  fullName.vb: Char
+  name.vb: Char

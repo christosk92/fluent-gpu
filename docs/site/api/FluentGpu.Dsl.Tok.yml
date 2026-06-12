@@ -1,0 +1,3652 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Dsl.Tok
+  commentId: T:FluentGpu.Dsl.Tok
+  id: Tok
+  parent: FluentGpu.Dsl
+  children:
+  - FluentGpu.Dsl.Tok.AccentControlElevationBorder
+  - FluentGpu.Dsl.Tok.AccentDefault
+  - FluentGpu.Dsl.Tok.AccentDisabled
+  - FluentGpu.Dsl.Tok.AccentSecondary
+  - FluentGpu.Dsl.Tok.AccentSelectedTextBackground
+  - FluentGpu.Dsl.Tok.AccentSubtle
+  - FluentGpu.Dsl.Tok.AccentTertiary
+  - FluentGpu.Dsl.Tok.AccentTextPrimary
+  - FluentGpu.Dsl.Tok.AccentTextSecondary
+  - FluentGpu.Dsl.Tok.AccentTextTertiary
+  - FluentGpu.Dsl.Tok.AcrylicBase
+  - FluentGpu.Dsl.Tok.AcrylicFlyout
+  - FluentGpu.Dsl.Tok.AcrylicTint
+  - FluentGpu.Dsl.Tok.CaptionCloseHover
+  - FluentGpu.Dsl.Tok.CaptionClosePressed
+  - FluentGpu.Dsl.Tok.CircleElevationBorder
+  - FluentGpu.Dsl.Tok.ControlElevationBorder
+  - FluentGpu.Dsl.Tok.Dark
+  - FluentGpu.Dsl.Tok.FillCardDefault
+  - FluentGpu.Dsl.Tok.FillCardSecondary
+  - FluentGpu.Dsl.Tok.FillControlAltDisabled
+  - FluentGpu.Dsl.Tok.FillControlAltQuaternary
+  - FluentGpu.Dsl.Tok.FillControlAltSecondary
+  - FluentGpu.Dsl.Tok.FillControlAltTertiary
+  - FluentGpu.Dsl.Tok.FillControlDefault
+  - FluentGpu.Dsl.Tok.FillControlDisabled
+  - FluentGpu.Dsl.Tok.FillControlInputActive
+  - FluentGpu.Dsl.Tok.FillControlOnImage
+  - FluentGpu.Dsl.Tok.FillControlSecondary
+  - FluentGpu.Dsl.Tok.FillControlSolid
+  - FluentGpu.Dsl.Tok.FillControlStrong
+  - FluentGpu.Dsl.Tok.FillControlStrongDisabled
+  - FluentGpu.Dsl.Tok.FillControlTertiary
+  - FluentGpu.Dsl.Tok.FillLayerAlt
+  - FluentGpu.Dsl.Tok.FillLayerDefault
+  - FluentGpu.Dsl.Tok.FillSmoke
+  - FluentGpu.Dsl.Tok.FillSolidBase
+  - FluentGpu.Dsl.Tok.FillSolidBaseAlt
+  - FluentGpu.Dsl.Tok.FillSolidSecondary
+  - FluentGpu.Dsl.Tok.FillSolidTertiary
+  - FluentGpu.Dsl.Tok.FillSubtleSecondary
+  - FluentGpu.Dsl.Tok.FillSubtleTertiary
+  - FluentGpu.Dsl.Tok.FillSubtleTransparent
+  - FluentGpu.Dsl.Tok.FocusInner
+  - FluentGpu.Dsl.Tok.FocusOuter
+  - FluentGpu.Dsl.Tok.FocusThickness
+  - FluentGpu.Dsl.Tok.HeroGradientBottom
+  - FluentGpu.Dsl.Tok.HeroGradientTop
+  - FluentGpu.Dsl.Tok.Light
+  - FluentGpu.Dsl.Tok.ScrollThumb
+  - FluentGpu.Dsl.Tok.SetAccent(System.Nullable{FluentGpu.Foundation.ColorF})
+  - FluentGpu.Dsl.Tok.SetWindowBackground(FluentGpu.Foundation.ColorF)
+  - FluentGpu.Dsl.Tok.StrokeCardDefault
+  - FluentGpu.Dsl.Tok.StrokeControlDefault
+  - FluentGpu.Dsl.Tok.StrokeControlOnAccentDefault
+  - FluentGpu.Dsl.Tok.StrokeControlOnAccentSecondary
+  - FluentGpu.Dsl.Tok.StrokeControlOnAccentTertiary
+  - FluentGpu.Dsl.Tok.StrokeControlSecondary
+  - FluentGpu.Dsl.Tok.StrokeControlStrongDefault
+  - FluentGpu.Dsl.Tok.StrokeControlStrongDisabled
+  - FluentGpu.Dsl.Tok.StrokeDividerDefault
+  - FluentGpu.Dsl.Tok.StrokeFlyoutDefault
+  - FluentGpu.Dsl.Tok.StrokeSurfaceDefault
+  - FluentGpu.Dsl.Tok.SystemFillAttention
+  - FluentGpu.Dsl.Tok.SystemFillAttentionBackground
+  - FluentGpu.Dsl.Tok.SystemFillCaution
+  - FluentGpu.Dsl.Tok.SystemFillCautionBackground
+  - FluentGpu.Dsl.Tok.SystemFillCritical
+  - FluentGpu.Dsl.Tok.SystemFillCriticalBackground
+  - FluentGpu.Dsl.Tok.SystemFillSolidNeutral
+  - FluentGpu.Dsl.Tok.SystemFillSuccess
+  - FluentGpu.Dsl.Tok.SystemFillSuccessBackground
+  - FluentGpu.Dsl.Tok.T
+  - FluentGpu.Dsl.Tok.TextControlDescriptionForeground
+  - FluentGpu.Dsl.Tok.TextControlForegroundDisabled
+  - FluentGpu.Dsl.Tok.TextControlHeaderForeground
+  - FluentGpu.Dsl.Tok.TextControlHeaderForegroundDisabled
+  - FluentGpu.Dsl.Tok.TextDisabled
+  - FluentGpu.Dsl.Tok.TextInverse
+  - FluentGpu.Dsl.Tok.TextOnAccentDisabled
+  - FluentGpu.Dsl.Tok.TextOnAccentPrimary
+  - FluentGpu.Dsl.Tok.TextOnAccentSecondary
+  - FluentGpu.Dsl.Tok.TextOnAccentSelectedText
+  - FluentGpu.Dsl.Tok.TextPrimary
+  - FluentGpu.Dsl.Tok.TextSecondary
+  - FluentGpu.Dsl.Tok.TextTertiary
+  - FluentGpu.Dsl.Tok.Theme
+  - FluentGpu.Dsl.Tok.Use(FluentGpu.Dsl.ThemeKind)
+  - FluentGpu.Dsl.Tok.WindowBackground
+  langs:
+  - csharp
+  - vb
+  name: Tok
+  nameWithType: Tok
+  fullName: FluentGpu.Dsl.Tok
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Tok
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 155
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: >-
+    The active design-token table + the theme switch. Author UI reads tokens via the static getters (e.g.
+
+    <code>Tok.FillCardDefault</code>); they resolve against <xref href="FluentGpu.Dsl.Tok.T" data-throw-if-not-resolved="false"></xref> at zero per-read cost. <xref href="FluentGpu.Dsl.Tok.Use(FluentGpu.Dsl.ThemeKind)" data-throw-if-not-resolved="false"></xref> re-themes
+
+    the whole app with one pointer write. The OS accent + Mica window background are mutable overrides on top of the set,
+
+    so they survive a theme swap and let the host inject the live system accent at startup.
+  example: []
+  syntax:
+    content: public static class Tok
+    content.vb: Public Module Tok
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.MemberwiseClone
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Dsl.Tok.Dark
+  commentId: F:FluentGpu.Dsl.Tok.Dark
+  id: Dark
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: Dark
+  nameWithType: Tok.Dark
+  fullName: FluentGpu.Dsl.Tok.Dark
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Dark
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 157
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static readonly TokenSet Dark
+    return:
+      type: FluentGpu.Dsl.TokenSet
+    content.vb: Public Shared ReadOnly Dark As TokenSet
+- uid: FluentGpu.Dsl.Tok.Light
+  commentId: F:FluentGpu.Dsl.Tok.Light
+  id: Light
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: Light
+  nameWithType: Tok.Light
+  fullName: FluentGpu.Dsl.Tok.Light
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Light
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 158
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static readonly TokenSet Light
+    return:
+      type: FluentGpu.Dsl.TokenSet
+    content.vb: Public Shared ReadOnly Light As TokenSet
+- uid: FluentGpu.Dsl.Tok.T
+  commentId: F:FluentGpu.Dsl.Tok.T
+  id: T
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: T
+  nameWithType: Tok.T
+  fullName: FluentGpu.Dsl.Tok.T
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: T
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 160
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static TokenSet T
+    return:
+      type: FluentGpu.Dsl.TokenSet
+    content.vb: Public Shared T As TokenSet
+- uid: FluentGpu.Dsl.Tok.Theme
+  commentId: P:FluentGpu.Dsl.Tok.Theme
+  id: Theme
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: Theme
+  nameWithType: Tok.Theme
+  fullName: FluentGpu.Dsl.Tok.Theme
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Theme
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 161
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ThemeKind Theme { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Dsl.ThemeKind
+    content.vb: Public Shared Property Theme As ThemeKind
+  overload: FluentGpu.Dsl.Tok.Theme*
+- uid: FluentGpu.Dsl.Tok.Use(FluentGpu.Dsl.ThemeKind)
+  commentId: M:FluentGpu.Dsl.Tok.Use(FluentGpu.Dsl.ThemeKind)
+  id: Use(FluentGpu.Dsl.ThemeKind)
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: Use(ThemeKind)
+  nameWithType: Tok.Use(ThemeKind)
+  fullName: FluentGpu.Dsl.Tok.Use(FluentGpu.Dsl.ThemeKind)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Use
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 166
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static void Use(ThemeKind kind)
+    parameters:
+    - id: kind
+      type: FluentGpu.Dsl.ThemeKind
+    content.vb: Public Shared Sub Use(kind As ThemeKind)
+  overload: FluentGpu.Dsl.Tok.Use*
+- uid: FluentGpu.Dsl.Tok.SetAccent(System.Nullable{FluentGpu.Foundation.ColorF})
+  commentId: M:FluentGpu.Dsl.Tok.SetAccent(System.Nullable{FluentGpu.Foundation.ColorF})
+  id: SetAccent(System.Nullable{FluentGpu.Foundation.ColorF})
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: SetAccent(ColorF?)
+  nameWithType: Tok.SetAccent(ColorF?)
+  fullName: FluentGpu.Dsl.Tok.SetAccent(FluentGpu.Foundation.ColorF?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SetAccent
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 170
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: >-
+    Inject the OS accent (host startup) or a developer global override; all accent tokens (fill + text +
+        subtle + hero + attention) recompute from it. Pass <code>null</code> to clear the override and revert to the theme default.
+  example: []
+  syntax:
+    content: public static void SetAccent(ColorF? c)
+    parameters:
+    - id: c
+      type: System.Nullable{FluentGpu.Foundation.ColorF}
+    content.vb: Public Shared Sub SetAccent(c As ColorF?)
+  overload: FluentGpu.Dsl.Tok.SetAccent*
+- uid: FluentGpu.Dsl.Tok.SetWindowBackground(FluentGpu.Foundation.ColorF)
+  commentId: M:FluentGpu.Dsl.Tok.SetWindowBackground(FluentGpu.Foundation.ColorF)
+  id: SetWindowBackground(FluentGpu.Foundation.ColorF)
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: SetWindowBackground(ColorF)
+  nameWithType: Tok.SetWindowBackground(ColorF)
+  fullName: FluentGpu.Dsl.Tok.SetWindowBackground(FluentGpu.Foundation.ColorF)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SetWindowBackground
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 171
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static void SetWindowBackground(ColorF c)
+    parameters:
+    - id: c
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared Sub SetWindowBackground(c As ColorF)
+  overload: FluentGpu.Dsl.Tok.SetWindowBackground*
+- uid: FluentGpu.Dsl.Tok.FillControlDefault
+  commentId: P:FluentGpu.Dsl.Tok.FillControlDefault
+  id: FillControlDefault
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FillControlDefault
+  nameWithType: Tok.FillControlDefault
+  fullName: FluentGpu.Dsl.Tok.FillControlDefault
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillControlDefault
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 174
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FillControlDefault { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FillControlDefault As ColorF
+  overload: FluentGpu.Dsl.Tok.FillControlDefault*
+- uid: FluentGpu.Dsl.Tok.FillControlSecondary
+  commentId: P:FluentGpu.Dsl.Tok.FillControlSecondary
+  id: FillControlSecondary
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FillControlSecondary
+  nameWithType: Tok.FillControlSecondary
+  fullName: FluentGpu.Dsl.Tok.FillControlSecondary
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillControlSecondary
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 175
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FillControlSecondary { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FillControlSecondary As ColorF
+  overload: FluentGpu.Dsl.Tok.FillControlSecondary*
+- uid: FluentGpu.Dsl.Tok.FillControlTertiary
+  commentId: P:FluentGpu.Dsl.Tok.FillControlTertiary
+  id: FillControlTertiary
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FillControlTertiary
+  nameWithType: Tok.FillControlTertiary
+  fullName: FluentGpu.Dsl.Tok.FillControlTertiary
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillControlTertiary
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 176
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FillControlTertiary { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FillControlTertiary As ColorF
+  overload: FluentGpu.Dsl.Tok.FillControlTertiary*
+- uid: FluentGpu.Dsl.Tok.FillControlDisabled
+  commentId: P:FluentGpu.Dsl.Tok.FillControlDisabled
+  id: FillControlDisabled
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FillControlDisabled
+  nameWithType: Tok.FillControlDisabled
+  fullName: FluentGpu.Dsl.Tok.FillControlDisabled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillControlDisabled
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 177
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FillControlDisabled { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FillControlDisabled As ColorF
+  overload: FluentGpu.Dsl.Tok.FillControlDisabled*
+- uid: FluentGpu.Dsl.Tok.FillControlStrong
+  commentId: P:FluentGpu.Dsl.Tok.FillControlStrong
+  id: FillControlStrong
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FillControlStrong
+  nameWithType: Tok.FillControlStrong
+  fullName: FluentGpu.Dsl.Tok.FillControlStrong
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillControlStrong
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 178
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FillControlStrong { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FillControlStrong As ColorF
+  overload: FluentGpu.Dsl.Tok.FillControlStrong*
+- uid: FluentGpu.Dsl.Tok.FillControlStrongDisabled
+  commentId: P:FluentGpu.Dsl.Tok.FillControlStrongDisabled
+  id: FillControlStrongDisabled
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FillControlStrongDisabled
+  nameWithType: Tok.FillControlStrongDisabled
+  fullName: FluentGpu.Dsl.Tok.FillControlStrongDisabled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillControlStrongDisabled
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 179
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FillControlStrongDisabled { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FillControlStrongDisabled As ColorF
+  overload: FluentGpu.Dsl.Tok.FillControlStrongDisabled*
+- uid: FluentGpu.Dsl.Tok.FillControlSolid
+  commentId: P:FluentGpu.Dsl.Tok.FillControlSolid
+  id: FillControlSolid
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FillControlSolid
+  nameWithType: Tok.FillControlSolid
+  fullName: FluentGpu.Dsl.Tok.FillControlSolid
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillControlSolid
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 180
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FillControlSolid { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FillControlSolid As ColorF
+  overload: FluentGpu.Dsl.Tok.FillControlSolid*
+- uid: FluentGpu.Dsl.Tok.FillControlOnImage
+  commentId: P:FluentGpu.Dsl.Tok.FillControlOnImage
+  id: FillControlOnImage
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FillControlOnImage
+  nameWithType: Tok.FillControlOnImage
+  fullName: FluentGpu.Dsl.Tok.FillControlOnImage
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillControlOnImage
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 181
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FillControlOnImage { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FillControlOnImage As ColorF
+  overload: FluentGpu.Dsl.Tok.FillControlOnImage*
+- uid: FluentGpu.Dsl.Tok.FillSubtleTransparent
+  commentId: P:FluentGpu.Dsl.Tok.FillSubtleTransparent
+  id: FillSubtleTransparent
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FillSubtleTransparent
+  nameWithType: Tok.FillSubtleTransparent
+  fullName: FluentGpu.Dsl.Tok.FillSubtleTransparent
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillSubtleTransparent
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 182
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FillSubtleTransparent { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FillSubtleTransparent As ColorF
+  overload: FluentGpu.Dsl.Tok.FillSubtleTransparent*
+- uid: FluentGpu.Dsl.Tok.FillSubtleSecondary
+  commentId: P:FluentGpu.Dsl.Tok.FillSubtleSecondary
+  id: FillSubtleSecondary
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FillSubtleSecondary
+  nameWithType: Tok.FillSubtleSecondary
+  fullName: FluentGpu.Dsl.Tok.FillSubtleSecondary
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillSubtleSecondary
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 183
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FillSubtleSecondary { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FillSubtleSecondary As ColorF
+  overload: FluentGpu.Dsl.Tok.FillSubtleSecondary*
+- uid: FluentGpu.Dsl.Tok.FillSubtleTertiary
+  commentId: P:FluentGpu.Dsl.Tok.FillSubtleTertiary
+  id: FillSubtleTertiary
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FillSubtleTertiary
+  nameWithType: Tok.FillSubtleTertiary
+  fullName: FluentGpu.Dsl.Tok.FillSubtleTertiary
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillSubtleTertiary
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 184
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FillSubtleTertiary { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FillSubtleTertiary As ColorF
+  overload: FluentGpu.Dsl.Tok.FillSubtleTertiary*
+- uid: FluentGpu.Dsl.Tok.FillCardDefault
+  commentId: P:FluentGpu.Dsl.Tok.FillCardDefault
+  id: FillCardDefault
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FillCardDefault
+  nameWithType: Tok.FillCardDefault
+  fullName: FluentGpu.Dsl.Tok.FillCardDefault
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillCardDefault
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 185
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FillCardDefault { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FillCardDefault As ColorF
+  overload: FluentGpu.Dsl.Tok.FillCardDefault*
+- uid: FluentGpu.Dsl.Tok.FillCardSecondary
+  commentId: P:FluentGpu.Dsl.Tok.FillCardSecondary
+  id: FillCardSecondary
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FillCardSecondary
+  nameWithType: Tok.FillCardSecondary
+  fullName: FluentGpu.Dsl.Tok.FillCardSecondary
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillCardSecondary
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 186
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FillCardSecondary { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FillCardSecondary As ColorF
+  overload: FluentGpu.Dsl.Tok.FillCardSecondary*
+- uid: FluentGpu.Dsl.Tok.FillLayerDefault
+  commentId: P:FluentGpu.Dsl.Tok.FillLayerDefault
+  id: FillLayerDefault
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FillLayerDefault
+  nameWithType: Tok.FillLayerDefault
+  fullName: FluentGpu.Dsl.Tok.FillLayerDefault
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillLayerDefault
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 187
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FillLayerDefault { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FillLayerDefault As ColorF
+  overload: FluentGpu.Dsl.Tok.FillLayerDefault*
+- uid: FluentGpu.Dsl.Tok.FillLayerAlt
+  commentId: P:FluentGpu.Dsl.Tok.FillLayerAlt
+  id: FillLayerAlt
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FillLayerAlt
+  nameWithType: Tok.FillLayerAlt
+  fullName: FluentGpu.Dsl.Tok.FillLayerAlt
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillLayerAlt
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 188
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FillLayerAlt { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FillLayerAlt As ColorF
+  overload: FluentGpu.Dsl.Tok.FillLayerAlt*
+- uid: FluentGpu.Dsl.Tok.FillSolidBase
+  commentId: P:FluentGpu.Dsl.Tok.FillSolidBase
+  id: FillSolidBase
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FillSolidBase
+  nameWithType: Tok.FillSolidBase
+  fullName: FluentGpu.Dsl.Tok.FillSolidBase
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillSolidBase
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 189
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FillSolidBase { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FillSolidBase As ColorF
+  overload: FluentGpu.Dsl.Tok.FillSolidBase*
+- uid: FluentGpu.Dsl.Tok.FillSolidBaseAlt
+  commentId: P:FluentGpu.Dsl.Tok.FillSolidBaseAlt
+  id: FillSolidBaseAlt
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FillSolidBaseAlt
+  nameWithType: Tok.FillSolidBaseAlt
+  fullName: FluentGpu.Dsl.Tok.FillSolidBaseAlt
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillSolidBaseAlt
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 190
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FillSolidBaseAlt { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FillSolidBaseAlt As ColorF
+  overload: FluentGpu.Dsl.Tok.FillSolidBaseAlt*
+- uid: FluentGpu.Dsl.Tok.FillSolidSecondary
+  commentId: P:FluentGpu.Dsl.Tok.FillSolidSecondary
+  id: FillSolidSecondary
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FillSolidSecondary
+  nameWithType: Tok.FillSolidSecondary
+  fullName: FluentGpu.Dsl.Tok.FillSolidSecondary
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillSolidSecondary
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 191
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FillSolidSecondary { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FillSolidSecondary As ColorF
+  overload: FluentGpu.Dsl.Tok.FillSolidSecondary*
+- uid: FluentGpu.Dsl.Tok.FillSolidTertiary
+  commentId: P:FluentGpu.Dsl.Tok.FillSolidTertiary
+  id: FillSolidTertiary
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FillSolidTertiary
+  nameWithType: Tok.FillSolidTertiary
+  fullName: FluentGpu.Dsl.Tok.FillSolidTertiary
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillSolidTertiary
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 192
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FillSolidTertiary { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FillSolidTertiary As ColorF
+  overload: FluentGpu.Dsl.Tok.FillSolidTertiary*
+- uid: FluentGpu.Dsl.Tok.FillSmoke
+  commentId: P:FluentGpu.Dsl.Tok.FillSmoke
+  id: FillSmoke
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FillSmoke
+  nameWithType: Tok.FillSmoke
+  fullName: FluentGpu.Dsl.Tok.FillSmoke
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillSmoke
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 193
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FillSmoke { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FillSmoke As ColorF
+  overload: FluentGpu.Dsl.Tok.FillSmoke*
+- uid: FluentGpu.Dsl.Tok.StrokeControlDefault
+  commentId: P:FluentGpu.Dsl.Tok.StrokeControlDefault
+  id: StrokeControlDefault
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: StrokeControlDefault
+  nameWithType: Tok.StrokeControlDefault
+  fullName: FluentGpu.Dsl.Tok.StrokeControlDefault
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StrokeControlDefault
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 196
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF StrokeControlDefault { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property StrokeControlDefault As ColorF
+  overload: FluentGpu.Dsl.Tok.StrokeControlDefault*
+- uid: FluentGpu.Dsl.Tok.StrokeControlSecondary
+  commentId: P:FluentGpu.Dsl.Tok.StrokeControlSecondary
+  id: StrokeControlSecondary
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: StrokeControlSecondary
+  nameWithType: Tok.StrokeControlSecondary
+  fullName: FluentGpu.Dsl.Tok.StrokeControlSecondary
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StrokeControlSecondary
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 197
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF StrokeControlSecondary { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property StrokeControlSecondary As ColorF
+  overload: FluentGpu.Dsl.Tok.StrokeControlSecondary*
+- uid: FluentGpu.Dsl.Tok.StrokeCardDefault
+  commentId: P:FluentGpu.Dsl.Tok.StrokeCardDefault
+  id: StrokeCardDefault
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: StrokeCardDefault
+  nameWithType: Tok.StrokeCardDefault
+  fullName: FluentGpu.Dsl.Tok.StrokeCardDefault
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StrokeCardDefault
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 198
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF StrokeCardDefault { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property StrokeCardDefault As ColorF
+  overload: FluentGpu.Dsl.Tok.StrokeCardDefault*
+- uid: FluentGpu.Dsl.Tok.StrokeDividerDefault
+  commentId: P:FluentGpu.Dsl.Tok.StrokeDividerDefault
+  id: StrokeDividerDefault
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: StrokeDividerDefault
+  nameWithType: Tok.StrokeDividerDefault
+  fullName: FluentGpu.Dsl.Tok.StrokeDividerDefault
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StrokeDividerDefault
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 199
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF StrokeDividerDefault { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property StrokeDividerDefault As ColorF
+  overload: FluentGpu.Dsl.Tok.StrokeDividerDefault*
+- uid: FluentGpu.Dsl.Tok.StrokeSurfaceDefault
+  commentId: P:FluentGpu.Dsl.Tok.StrokeSurfaceDefault
+  id: StrokeSurfaceDefault
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: StrokeSurfaceDefault
+  nameWithType: Tok.StrokeSurfaceDefault
+  fullName: FluentGpu.Dsl.Tok.StrokeSurfaceDefault
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StrokeSurfaceDefault
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 200
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF StrokeSurfaceDefault { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property StrokeSurfaceDefault As ColorF
+  overload: FluentGpu.Dsl.Tok.StrokeSurfaceDefault*
+- uid: FluentGpu.Dsl.Tok.StrokeFlyoutDefault
+  commentId: P:FluentGpu.Dsl.Tok.StrokeFlyoutDefault
+  id: StrokeFlyoutDefault
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: StrokeFlyoutDefault
+  nameWithType: Tok.StrokeFlyoutDefault
+  fullName: FluentGpu.Dsl.Tok.StrokeFlyoutDefault
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StrokeFlyoutDefault
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 201
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF StrokeFlyoutDefault { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property StrokeFlyoutDefault As ColorF
+  overload: FluentGpu.Dsl.Tok.StrokeFlyoutDefault*
+- uid: FluentGpu.Dsl.Tok.StrokeControlOnAccentDefault
+  commentId: P:FluentGpu.Dsl.Tok.StrokeControlOnAccentDefault
+  id: StrokeControlOnAccentDefault
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: StrokeControlOnAccentDefault
+  nameWithType: Tok.StrokeControlOnAccentDefault
+  fullName: FluentGpu.Dsl.Tok.StrokeControlOnAccentDefault
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StrokeControlOnAccentDefault
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 202
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF StrokeControlOnAccentDefault { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property StrokeControlOnAccentDefault As ColorF
+  overload: FluentGpu.Dsl.Tok.StrokeControlOnAccentDefault*
+- uid: FluentGpu.Dsl.Tok.StrokeControlOnAccentSecondary
+  commentId: P:FluentGpu.Dsl.Tok.StrokeControlOnAccentSecondary
+  id: StrokeControlOnAccentSecondary
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: StrokeControlOnAccentSecondary
+  nameWithType: Tok.StrokeControlOnAccentSecondary
+  fullName: FluentGpu.Dsl.Tok.StrokeControlOnAccentSecondary
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StrokeControlOnAccentSecondary
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 203
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF StrokeControlOnAccentSecondary { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property StrokeControlOnAccentSecondary As ColorF
+  overload: FluentGpu.Dsl.Tok.StrokeControlOnAccentSecondary*
+- uid: FluentGpu.Dsl.Tok.StrokeControlOnAccentTertiary
+  commentId: P:FluentGpu.Dsl.Tok.StrokeControlOnAccentTertiary
+  id: StrokeControlOnAccentTertiary
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: StrokeControlOnAccentTertiary
+  nameWithType: Tok.StrokeControlOnAccentTertiary
+  fullName: FluentGpu.Dsl.Tok.StrokeControlOnAccentTertiary
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StrokeControlOnAccentTertiary
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 204
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF StrokeControlOnAccentTertiary { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property StrokeControlOnAccentTertiary As ColorF
+  overload: FluentGpu.Dsl.Tok.StrokeControlOnAccentTertiary*
+- uid: FluentGpu.Dsl.Tok.ControlElevationBorder
+  commentId: P:FluentGpu.Dsl.Tok.ControlElevationBorder
+  id: ControlElevationBorder
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: ControlElevationBorder
+  nameWithType: Tok.ControlElevationBorder
+  fullName: FluentGpu.Dsl.Tok.ControlElevationBorder
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ControlElevationBorder
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 211
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: >-
+    WinUI ControlElevationBorderBrush: the signature Fluent control border — MappingMode="Absolute"
+        StartPoint 0,0 EndPoint 0,3: the secondary→default blend lives in a 3-PHYSICAL-px band at one edge, the
+        default stroke everywhere else (Common_themeresources_any.xaml:186-191 dark). LIGHT carries a ScaleTransform
+        ScaleY=-1 (:382-390) anchoring the band (darker secondary edge) at the BOTTOM — encoded as AnchorEnd.
+        Theme-aware; pass to BoxEl.BorderBrush. (Allocated at reconcile time, not per frame.)
+  example: []
+  syntax:
+    content: public static GradientSpec ControlElevationBorder { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.GradientSpec
+    content.vb: Public Shared ReadOnly Property ControlElevationBorder As GradientSpec
+  overload: FluentGpu.Dsl.Tok.ControlElevationBorder*
+- uid: FluentGpu.Dsl.Tok.AccentControlElevationBorder
+  commentId: P:FluentGpu.Dsl.Tok.AccentControlElevationBorder
+  id: AccentControlElevationBorder
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: AccentControlElevationBorder
+  nameWithType: Tok.AccentControlElevationBorder
+  fullName: FluentGpu.Dsl.Tok.AccentControlElevationBorder
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AccentControlElevationBorder
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 218
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: >-
+    WinUI AccentControlElevationBorderBrush (accent buttons / checked toggles): the same absolute 3px
+        band, mirrored (ScaleY=-1) in BOTH themes — the darker on-accent secondary edge sits at the BOTTOM
+        (Common_themeresources_any.xaml:198-205 dark / :397-404 light).
+  example: []
+  syntax:
+    content: public static GradientSpec AccentControlElevationBorder { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.GradientSpec
+    content.vb: Public Shared ReadOnly Property AccentControlElevationBorder As GradientSpec
+  overload: FluentGpu.Dsl.Tok.AccentControlElevationBorder*
+- uid: FluentGpu.Dsl.Tok.CircleElevationBorder
+  commentId: P:FluentGpu.Dsl.Tok.CircleElevationBorder
+  id: CircleElevationBorder
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: CircleElevationBorder
+  nameWithType: Tok.CircleElevationBorder
+  fullName: FluentGpu.Dsl.Tok.CircleElevationBorder
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CircleElevationBorder
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 225
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: >-
+    WinUI CircleElevationBorderBrush (Common_themeresources_any.xaml:192-198 dark / :391-397 light): a
+        RelativeToBoundingBox vertical 2-stop gradient — ControlStrokeColorDefault @0.50 → ControlStrokeColorSecondary
+        @0.70 — the subtle rim on circular knobs/glyphs (ToggleSwitch SwitchKnobOn stroke, RadioButton glyph stroke).
+  example: []
+  syntax:
+    content: public static GradientSpec CircleElevationBorder { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.GradientSpec
+    content.vb: Public Shared ReadOnly Property CircleElevationBorder As GradientSpec
+  overload: FluentGpu.Dsl.Tok.CircleElevationBorder*
+- uid: FluentGpu.Dsl.Tok.TextPrimary
+  commentId: P:FluentGpu.Dsl.Tok.TextPrimary
+  id: TextPrimary
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: TextPrimary
+  nameWithType: Tok.TextPrimary
+  fullName: FluentGpu.Dsl.Tok.TextPrimary
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextPrimary
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 229
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF TextPrimary { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property TextPrimary As ColorF
+  overload: FluentGpu.Dsl.Tok.TextPrimary*
+- uid: FluentGpu.Dsl.Tok.TextSecondary
+  commentId: P:FluentGpu.Dsl.Tok.TextSecondary
+  id: TextSecondary
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: TextSecondary
+  nameWithType: Tok.TextSecondary
+  fullName: FluentGpu.Dsl.Tok.TextSecondary
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextSecondary
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 230
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF TextSecondary { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property TextSecondary As ColorF
+  overload: FluentGpu.Dsl.Tok.TextSecondary*
+- uid: FluentGpu.Dsl.Tok.TextTertiary
+  commentId: P:FluentGpu.Dsl.Tok.TextTertiary
+  id: TextTertiary
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: TextTertiary
+  nameWithType: Tok.TextTertiary
+  fullName: FluentGpu.Dsl.Tok.TextTertiary
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextTertiary
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 231
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF TextTertiary { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property TextTertiary As ColorF
+  overload: FluentGpu.Dsl.Tok.TextTertiary*
+- uid: FluentGpu.Dsl.Tok.TextDisabled
+  commentId: P:FluentGpu.Dsl.Tok.TextDisabled
+  id: TextDisabled
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: TextDisabled
+  nameWithType: Tok.TextDisabled
+  fullName: FluentGpu.Dsl.Tok.TextDisabled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextDisabled
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 232
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF TextDisabled { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property TextDisabled As ColorF
+  overload: FluentGpu.Dsl.Tok.TextDisabled*
+- uid: FluentGpu.Dsl.Tok.TextOnAccentPrimary
+  commentId: P:FluentGpu.Dsl.Tok.TextOnAccentPrimary
+  id: TextOnAccentPrimary
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: TextOnAccentPrimary
+  nameWithType: Tok.TextOnAccentPrimary
+  fullName: FluentGpu.Dsl.Tok.TextOnAccentPrimary
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextOnAccentPrimary
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 233
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF TextOnAccentPrimary { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property TextOnAccentPrimary As ColorF
+  overload: FluentGpu.Dsl.Tok.TextOnAccentPrimary*
+- uid: FluentGpu.Dsl.Tok.TextOnAccentSecondary
+  commentId: P:FluentGpu.Dsl.Tok.TextOnAccentSecondary
+  id: TextOnAccentSecondary
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: TextOnAccentSecondary
+  nameWithType: Tok.TextOnAccentSecondary
+  fullName: FluentGpu.Dsl.Tok.TextOnAccentSecondary
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextOnAccentSecondary
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 234
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF TextOnAccentSecondary { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property TextOnAccentSecondary As ColorF
+  overload: FluentGpu.Dsl.Tok.TextOnAccentSecondary*
+- uid: FluentGpu.Dsl.Tok.TextOnAccentDisabled
+  commentId: P:FluentGpu.Dsl.Tok.TextOnAccentDisabled
+  id: TextOnAccentDisabled
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: TextOnAccentDisabled
+  nameWithType: Tok.TextOnAccentDisabled
+  fullName: FluentGpu.Dsl.Tok.TextOnAccentDisabled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextOnAccentDisabled
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 235
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF TextOnAccentDisabled { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property TextOnAccentDisabled As ColorF
+  overload: FluentGpu.Dsl.Tok.TextOnAccentDisabled*
+- uid: FluentGpu.Dsl.Tok.TextOnAccentSelectedText
+  commentId: P:FluentGpu.Dsl.Tok.TextOnAccentSelectedText
+  id: TextOnAccentSelectedText
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: TextOnAccentSelectedText
+  nameWithType: Tok.TextOnAccentSelectedText
+  fullName: FluentGpu.Dsl.Tok.TextOnAccentSelectedText
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextOnAccentSelectedText
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 236
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF TextOnAccentSelectedText { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property TextOnAccentSelectedText As ColorF
+  overload: FluentGpu.Dsl.Tok.TextOnAccentSelectedText*
+- uid: FluentGpu.Dsl.Tok.CaptionCloseHover
+  commentId: P:FluentGpu.Dsl.Tok.CaptionCloseHover
+  id: CaptionCloseHover
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: CaptionCloseHover
+  nameWithType: Tok.CaptionCloseHover
+  fullName: FluentGpu.Dsl.Tok.CaptionCloseHover
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CaptionCloseHover
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 239
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF CaptionCloseHover { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property CaptionCloseHover As ColorF
+  overload: FluentGpu.Dsl.Tok.CaptionCloseHover*
+- uid: FluentGpu.Dsl.Tok.CaptionClosePressed
+  commentId: P:FluentGpu.Dsl.Tok.CaptionClosePressed
+  id: CaptionClosePressed
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: CaptionClosePressed
+  nameWithType: Tok.CaptionClosePressed
+  fullName: FluentGpu.Dsl.Tok.CaptionClosePressed
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CaptionClosePressed
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 240
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF CaptionClosePressed { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property CaptionClosePressed As ColorF
+  overload: FluentGpu.Dsl.Tok.CaptionClosePressed*
+- uid: FluentGpu.Dsl.Tok.AccentDefault
+  commentId: P:FluentGpu.Dsl.Tok.AccentDefault
+  id: AccentDefault
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: AccentDefault
+  nameWithType: Tok.AccentDefault
+  fullName: FluentGpu.Dsl.Tok.AccentDefault
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AccentDefault
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 243
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF AccentDefault { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property AccentDefault As ColorF
+  overload: FluentGpu.Dsl.Tok.AccentDefault*
+- uid: FluentGpu.Dsl.Tok.AccentSecondary
+  commentId: P:FluentGpu.Dsl.Tok.AccentSecondary
+  id: AccentSecondary
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: AccentSecondary
+  nameWithType: Tok.AccentSecondary
+  fullName: FluentGpu.Dsl.Tok.AccentSecondary
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AccentSecondary
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 244
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF AccentSecondary { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property AccentSecondary As ColorF
+  overload: FluentGpu.Dsl.Tok.AccentSecondary*
+- uid: FluentGpu.Dsl.Tok.AccentTertiary
+  commentId: P:FluentGpu.Dsl.Tok.AccentTertiary
+  id: AccentTertiary
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: AccentTertiary
+  nameWithType: Tok.AccentTertiary
+  fullName: FluentGpu.Dsl.Tok.AccentTertiary
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AccentTertiary
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 245
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF AccentTertiary { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property AccentTertiary As ColorF
+  overload: FluentGpu.Dsl.Tok.AccentTertiary*
+- uid: FluentGpu.Dsl.Tok.AccentDisabled
+  commentId: P:FluentGpu.Dsl.Tok.AccentDisabled
+  id: AccentDisabled
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: AccentDisabled
+  nameWithType: Tok.AccentDisabled
+  fullName: FluentGpu.Dsl.Tok.AccentDisabled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AccentDisabled
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 246
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF AccentDisabled { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property AccentDisabled As ColorF
+  overload: FluentGpu.Dsl.Tok.AccentDisabled*
+- uid: FluentGpu.Dsl.Tok.AccentSubtle
+  commentId: P:FluentGpu.Dsl.Tok.AccentSubtle
+  id: AccentSubtle
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: AccentSubtle
+  nameWithType: Tok.AccentSubtle
+  fullName: FluentGpu.Dsl.Tok.AccentSubtle
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AccentSubtle
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 247
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF AccentSubtle { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property AccentSubtle As ColorF
+  overload: FluentGpu.Dsl.Tok.AccentSubtle*
+- uid: FluentGpu.Dsl.Tok.AccentTextPrimary
+  commentId: P:FluentGpu.Dsl.Tok.AccentTextPrimary
+  id: AccentTextPrimary
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: AccentTextPrimary
+  nameWithType: Tok.AccentTextPrimary
+  fullName: FluentGpu.Dsl.Tok.AccentTextPrimary
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AccentTextPrimary
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 251
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF AccentTextPrimary { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property AccentTextPrimary As ColorF
+  overload: FluentGpu.Dsl.Tok.AccentTextPrimary*
+- uid: FluentGpu.Dsl.Tok.AccentTextSecondary
+  commentId: P:FluentGpu.Dsl.Tok.AccentTextSecondary
+  id: AccentTextSecondary
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: AccentTextSecondary
+  nameWithType: Tok.AccentTextSecondary
+  fullName: FluentGpu.Dsl.Tok.AccentTextSecondary
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AccentTextSecondary
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 252
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF AccentTextSecondary { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property AccentTextSecondary As ColorF
+  overload: FluentGpu.Dsl.Tok.AccentTextSecondary*
+- uid: FluentGpu.Dsl.Tok.AccentTextTertiary
+  commentId: P:FluentGpu.Dsl.Tok.AccentTextTertiary
+  id: AccentTextTertiary
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: AccentTextTertiary
+  nameWithType: Tok.AccentTextTertiary
+  fullName: FluentGpu.Dsl.Tok.AccentTextTertiary
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AccentTextTertiary
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 253
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF AccentTextTertiary { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property AccentTextTertiary As ColorF
+  overload: FluentGpu.Dsl.Tok.AccentTextTertiary*
+- uid: FluentGpu.Dsl.Tok.AccentSelectedTextBackground
+  commentId: P:FluentGpu.Dsl.Tok.AccentSelectedTextBackground
+  id: AccentSelectedTextBackground
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: AccentSelectedTextBackground
+  nameWithType: Tok.AccentSelectedTextBackground
+  fullName: FluentGpu.Dsl.Tok.AccentSelectedTextBackground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AccentSelectedTextBackground
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 256
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF AccentSelectedTextBackground { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property AccentSelectedTextBackground As ColorF
+  overload: FluentGpu.Dsl.Tok.AccentSelectedTextBackground*
+- uid: FluentGpu.Dsl.Tok.FocusOuter
+  commentId: P:FluentGpu.Dsl.Tok.FocusOuter
+  id: FocusOuter
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FocusOuter
+  nameWithType: Tok.FocusOuter
+  fullName: FluentGpu.Dsl.Tok.FocusOuter
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FocusOuter
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 270
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FocusOuter { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FocusOuter As ColorF
+  overload: FluentGpu.Dsl.Tok.FocusOuter*
+- uid: FluentGpu.Dsl.Tok.FocusInner
+  commentId: P:FluentGpu.Dsl.Tok.FocusInner
+  id: FocusInner
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FocusInner
+  nameWithType: Tok.FocusInner
+  fullName: FluentGpu.Dsl.Tok.FocusInner
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FocusInner
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 271
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FocusInner { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FocusInner As ColorF
+  overload: FluentGpu.Dsl.Tok.FocusInner*
+- uid: FluentGpu.Dsl.Tok.FocusThickness
+  commentId: F:FluentGpu.Dsl.Tok.FocusThickness
+  id: FocusThickness
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FocusThickness
+  nameWithType: Tok.FocusThickness
+  fullName: FluentGpu.Dsl.Tok.FocusThickness
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FocusThickness
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 272
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public const float FocusThickness = 2
+    return:
+      type: System.Single
+    content.vb: Public Const FocusThickness As Single = 2
+- uid: FluentGpu.Dsl.Tok.ScrollThumb
+  commentId: P:FluentGpu.Dsl.Tok.ScrollThumb
+  id: ScrollThumb
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: ScrollThumb
+  nameWithType: Tok.ScrollThumb
+  fullName: FluentGpu.Dsl.Tok.ScrollThumb
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ScrollThumb
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 275
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF ScrollThumb { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property ScrollThumb As ColorF
+  overload: FluentGpu.Dsl.Tok.ScrollThumb*
+- uid: FluentGpu.Dsl.Tok.AcrylicTint
+  commentId: P:FluentGpu.Dsl.Tok.AcrylicTint
+  id: AcrylicTint
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: AcrylicTint
+  nameWithType: Tok.AcrylicTint
+  fullName: FluentGpu.Dsl.Tok.AcrylicTint
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AcrylicTint
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 276
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF AcrylicTint { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property AcrylicTint As ColorF
+  overload: FluentGpu.Dsl.Tok.AcrylicTint*
+- uid: FluentGpu.Dsl.Tok.AcrylicBase
+  commentId: P:FluentGpu.Dsl.Tok.AcrylicBase
+  id: AcrylicBase
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: AcrylicBase
+  nameWithType: Tok.AcrylicBase
+  fullName: FluentGpu.Dsl.Tok.AcrylicBase
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AcrylicBase
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 277
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF AcrylicBase { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property AcrylicBase As ColorF
+  overload: FluentGpu.Dsl.Tok.AcrylicBase*
+- uid: FluentGpu.Dsl.Tok.AcrylicFlyout
+  commentId: P:FluentGpu.Dsl.Tok.AcrylicFlyout
+  id: AcrylicFlyout
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: AcrylicFlyout
+  nameWithType: Tok.AcrylicFlyout
+  fullName: FluentGpu.Dsl.Tok.AcrylicFlyout
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AcrylicFlyout
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 279
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: Theme-aware default flyout acrylic (see <xref href="FluentGpu.Dsl.TokenSet.AcrylicFlyout" data-throw-if-not-resolved="false"></xref> for the WinUI sources).
+  example: []
+  syntax:
+    content: public static AcrylicSpec AcrylicFlyout { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.AcrylicSpec
+    content.vb: Public Shared ReadOnly Property AcrylicFlyout As AcrylicSpec
+  overload: FluentGpu.Dsl.Tok.AcrylicFlyout*
+- uid: FluentGpu.Dsl.Tok.HeroGradientTop
+  commentId: P:FluentGpu.Dsl.Tok.HeroGradientTop
+  id: HeroGradientTop
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: HeroGradientTop
+  nameWithType: Tok.HeroGradientTop
+  fullName: FluentGpu.Dsl.Tok.HeroGradientTop
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HeroGradientTop
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 280
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF HeroGradientTop { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property HeroGradientTop As ColorF
+  overload: FluentGpu.Dsl.Tok.HeroGradientTop*
+- uid: FluentGpu.Dsl.Tok.HeroGradientBottom
+  commentId: P:FluentGpu.Dsl.Tok.HeroGradientBottom
+  id: HeroGradientBottom
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: HeroGradientBottom
+  nameWithType: Tok.HeroGradientBottom
+  fullName: FluentGpu.Dsl.Tok.HeroGradientBottom
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HeroGradientBottom
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 281
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF HeroGradientBottom { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property HeroGradientBottom As ColorF
+  overload: FluentGpu.Dsl.Tok.HeroGradientBottom*
+- uid: FluentGpu.Dsl.Tok.FillControlAltSecondary
+  commentId: P:FluentGpu.Dsl.Tok.FillControlAltSecondary
+  id: FillControlAltSecondary
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FillControlAltSecondary
+  nameWithType: Tok.FillControlAltSecondary
+  fullName: FluentGpu.Dsl.Tok.FillControlAltSecondary
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillControlAltSecondary
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 284
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FillControlAltSecondary { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FillControlAltSecondary As ColorF
+  overload: FluentGpu.Dsl.Tok.FillControlAltSecondary*
+- uid: FluentGpu.Dsl.Tok.FillControlAltTertiary
+  commentId: P:FluentGpu.Dsl.Tok.FillControlAltTertiary
+  id: FillControlAltTertiary
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FillControlAltTertiary
+  nameWithType: Tok.FillControlAltTertiary
+  fullName: FluentGpu.Dsl.Tok.FillControlAltTertiary
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillControlAltTertiary
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 285
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FillControlAltTertiary { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FillControlAltTertiary As ColorF
+  overload: FluentGpu.Dsl.Tok.FillControlAltTertiary*
+- uid: FluentGpu.Dsl.Tok.FillControlAltQuaternary
+  commentId: P:FluentGpu.Dsl.Tok.FillControlAltQuaternary
+  id: FillControlAltQuaternary
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FillControlAltQuaternary
+  nameWithType: Tok.FillControlAltQuaternary
+  fullName: FluentGpu.Dsl.Tok.FillControlAltQuaternary
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillControlAltQuaternary
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 286
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FillControlAltQuaternary { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FillControlAltQuaternary As ColorF
+  overload: FluentGpu.Dsl.Tok.FillControlAltQuaternary*
+- uid: FluentGpu.Dsl.Tok.FillControlAltDisabled
+  commentId: P:FluentGpu.Dsl.Tok.FillControlAltDisabled
+  id: FillControlAltDisabled
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FillControlAltDisabled
+  nameWithType: Tok.FillControlAltDisabled
+  fullName: FluentGpu.Dsl.Tok.FillControlAltDisabled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillControlAltDisabled
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 287
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FillControlAltDisabled { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FillControlAltDisabled As ColorF
+  overload: FluentGpu.Dsl.Tok.FillControlAltDisabled*
+- uid: FluentGpu.Dsl.Tok.StrokeControlStrongDefault
+  commentId: P:FluentGpu.Dsl.Tok.StrokeControlStrongDefault
+  id: StrokeControlStrongDefault
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: StrokeControlStrongDefault
+  nameWithType: Tok.StrokeControlStrongDefault
+  fullName: FluentGpu.Dsl.Tok.StrokeControlStrongDefault
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StrokeControlStrongDefault
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 290
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF StrokeControlStrongDefault { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property StrokeControlStrongDefault As ColorF
+  overload: FluentGpu.Dsl.Tok.StrokeControlStrongDefault*
+- uid: FluentGpu.Dsl.Tok.StrokeControlStrongDisabled
+  commentId: P:FluentGpu.Dsl.Tok.StrokeControlStrongDisabled
+  id: StrokeControlStrongDisabled
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: StrokeControlStrongDisabled
+  nameWithType: Tok.StrokeControlStrongDisabled
+  fullName: FluentGpu.Dsl.Tok.StrokeControlStrongDisabled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StrokeControlStrongDisabled
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 291
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF StrokeControlStrongDisabled { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property StrokeControlStrongDisabled As ColorF
+  overload: FluentGpu.Dsl.Tok.StrokeControlStrongDisabled*
+- uid: FluentGpu.Dsl.Tok.FillControlInputActive
+  commentId: P:FluentGpu.Dsl.Tok.FillControlInputActive
+  id: FillControlInputActive
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: FillControlInputActive
+  nameWithType: Tok.FillControlInputActive
+  fullName: FluentGpu.Dsl.Tok.FillControlInputActive
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillControlInputActive
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 292
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF FillControlInputActive { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property FillControlInputActive As ColorF
+  overload: FluentGpu.Dsl.Tok.FillControlInputActive*
+- uid: FluentGpu.Dsl.Tok.TextControlHeaderForeground
+  commentId: P:FluentGpu.Dsl.Tok.TextControlHeaderForeground
+  id: TextControlHeaderForeground
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: TextControlHeaderForeground
+  nameWithType: Tok.TextControlHeaderForeground
+  fullName: FluentGpu.Dsl.Tok.TextControlHeaderForeground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextControlHeaderForeground
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 295
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF TextControlHeaderForeground { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property TextControlHeaderForeground As ColorF
+  overload: FluentGpu.Dsl.Tok.TextControlHeaderForeground*
+- uid: FluentGpu.Dsl.Tok.TextControlHeaderForegroundDisabled
+  commentId: P:FluentGpu.Dsl.Tok.TextControlHeaderForegroundDisabled
+  id: TextControlHeaderForegroundDisabled
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: TextControlHeaderForegroundDisabled
+  nameWithType: Tok.TextControlHeaderForegroundDisabled
+  fullName: FluentGpu.Dsl.Tok.TextControlHeaderForegroundDisabled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextControlHeaderForegroundDisabled
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 296
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF TextControlHeaderForegroundDisabled { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property TextControlHeaderForegroundDisabled As ColorF
+  overload: FluentGpu.Dsl.Tok.TextControlHeaderForegroundDisabled*
+- uid: FluentGpu.Dsl.Tok.TextControlDescriptionForeground
+  commentId: P:FluentGpu.Dsl.Tok.TextControlDescriptionForeground
+  id: TextControlDescriptionForeground
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: TextControlDescriptionForeground
+  nameWithType: Tok.TextControlDescriptionForeground
+  fullName: FluentGpu.Dsl.Tok.TextControlDescriptionForeground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextControlDescriptionForeground
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 297
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF TextControlDescriptionForeground { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property TextControlDescriptionForeground As ColorF
+  overload: FluentGpu.Dsl.Tok.TextControlDescriptionForeground*
+- uid: FluentGpu.Dsl.Tok.TextControlForegroundDisabled
+  commentId: P:FluentGpu.Dsl.Tok.TextControlForegroundDisabled
+  id: TextControlForegroundDisabled
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: TextControlForegroundDisabled
+  nameWithType: Tok.TextControlForegroundDisabled
+  fullName: FluentGpu.Dsl.Tok.TextControlForegroundDisabled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextControlForegroundDisabled
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 298
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF TextControlForegroundDisabled { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property TextControlForegroundDisabled As ColorF
+  overload: FluentGpu.Dsl.Tok.TextControlForegroundDisabled*
+- uid: FluentGpu.Dsl.Tok.SystemFillCritical
+  commentId: P:FluentGpu.Dsl.Tok.SystemFillCritical
+  id: SystemFillCritical
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: SystemFillCritical
+  nameWithType: Tok.SystemFillCritical
+  fullName: FluentGpu.Dsl.Tok.SystemFillCritical
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SystemFillCritical
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 301
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF SystemFillCritical { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property SystemFillCritical As ColorF
+  overload: FluentGpu.Dsl.Tok.SystemFillCritical*
+- uid: FluentGpu.Dsl.Tok.SystemFillCaution
+  commentId: P:FluentGpu.Dsl.Tok.SystemFillCaution
+  id: SystemFillCaution
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: SystemFillCaution
+  nameWithType: Tok.SystemFillCaution
+  fullName: FluentGpu.Dsl.Tok.SystemFillCaution
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SystemFillCaution
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 302
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF SystemFillCaution { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property SystemFillCaution As ColorF
+  overload: FluentGpu.Dsl.Tok.SystemFillCaution*
+- uid: FluentGpu.Dsl.Tok.SystemFillSuccess
+  commentId: P:FluentGpu.Dsl.Tok.SystemFillSuccess
+  id: SystemFillSuccess
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: SystemFillSuccess
+  nameWithType: Tok.SystemFillSuccess
+  fullName: FluentGpu.Dsl.Tok.SystemFillSuccess
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SystemFillSuccess
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 303
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF SystemFillSuccess { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property SystemFillSuccess As ColorF
+  overload: FluentGpu.Dsl.Tok.SystemFillSuccess*
+- uid: FluentGpu.Dsl.Tok.SystemFillAttention
+  commentId: P:FluentGpu.Dsl.Tok.SystemFillAttention
+  id: SystemFillAttention
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: SystemFillAttention
+  nameWithType: Tok.SystemFillAttention
+  fullName: FluentGpu.Dsl.Tok.SystemFillAttention
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SystemFillAttention
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 304
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF SystemFillAttention { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property SystemFillAttention As ColorF
+  overload: FluentGpu.Dsl.Tok.SystemFillAttention*
+- uid: FluentGpu.Dsl.Tok.SystemFillCriticalBackground
+  commentId: P:FluentGpu.Dsl.Tok.SystemFillCriticalBackground
+  id: SystemFillCriticalBackground
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: SystemFillCriticalBackground
+  nameWithType: Tok.SystemFillCriticalBackground
+  fullName: FluentGpu.Dsl.Tok.SystemFillCriticalBackground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SystemFillCriticalBackground
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 305
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF SystemFillCriticalBackground { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property SystemFillCriticalBackground As ColorF
+  overload: FluentGpu.Dsl.Tok.SystemFillCriticalBackground*
+- uid: FluentGpu.Dsl.Tok.SystemFillCautionBackground
+  commentId: P:FluentGpu.Dsl.Tok.SystemFillCautionBackground
+  id: SystemFillCautionBackground
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: SystemFillCautionBackground
+  nameWithType: Tok.SystemFillCautionBackground
+  fullName: FluentGpu.Dsl.Tok.SystemFillCautionBackground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SystemFillCautionBackground
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 306
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF SystemFillCautionBackground { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property SystemFillCautionBackground As ColorF
+  overload: FluentGpu.Dsl.Tok.SystemFillCautionBackground*
+- uid: FluentGpu.Dsl.Tok.SystemFillSuccessBackground
+  commentId: P:FluentGpu.Dsl.Tok.SystemFillSuccessBackground
+  id: SystemFillSuccessBackground
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: SystemFillSuccessBackground
+  nameWithType: Tok.SystemFillSuccessBackground
+  fullName: FluentGpu.Dsl.Tok.SystemFillSuccessBackground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SystemFillSuccessBackground
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 307
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF SystemFillSuccessBackground { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property SystemFillSuccessBackground As ColorF
+  overload: FluentGpu.Dsl.Tok.SystemFillSuccessBackground*
+- uid: FluentGpu.Dsl.Tok.SystemFillAttentionBackground
+  commentId: P:FluentGpu.Dsl.Tok.SystemFillAttentionBackground
+  id: SystemFillAttentionBackground
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: SystemFillAttentionBackground
+  nameWithType: Tok.SystemFillAttentionBackground
+  fullName: FluentGpu.Dsl.Tok.SystemFillAttentionBackground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SystemFillAttentionBackground
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 308
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF SystemFillAttentionBackground { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property SystemFillAttentionBackground As ColorF
+  overload: FluentGpu.Dsl.Tok.SystemFillAttentionBackground*
+- uid: FluentGpu.Dsl.Tok.SystemFillSolidNeutral
+  commentId: P:FluentGpu.Dsl.Tok.SystemFillSolidNeutral
+  id: SystemFillSolidNeutral
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: SystemFillSolidNeutral
+  nameWithType: Tok.SystemFillSolidNeutral
+  fullName: FluentGpu.Dsl.Tok.SystemFillSolidNeutral
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SystemFillSolidNeutral
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 309
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF SystemFillSolidNeutral { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property SystemFillSolidNeutral As ColorF
+  overload: FluentGpu.Dsl.Tok.SystemFillSolidNeutral*
+- uid: FluentGpu.Dsl.Tok.TextInverse
+  commentId: P:FluentGpu.Dsl.Tok.TextInverse
+  id: TextInverse
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: TextInverse
+  nameWithType: Tok.TextInverse
+  fullName: FluentGpu.Dsl.Tok.TextInverse
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextInverse
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 310
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF TextInverse { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property TextInverse As ColorF
+  overload: FluentGpu.Dsl.Tok.TextInverse*
+- uid: FluentGpu.Dsl.Tok.WindowBackground
+  commentId: P:FluentGpu.Dsl.Tok.WindowBackground
+  id: WindowBackground
+  parent: FluentGpu.Dsl.Tok
+  langs:
+  - csharp
+  - vb
+  name: WindowBackground
+  nameWithType: Tok.WindowBackground
+  fullName: FluentGpu.Dsl.Tok.WindowBackground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: WindowBackground
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 312
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF WindowBackground { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property WindowBackground As ColorF
+  overload: FluentGpu.Dsl.Tok.WindowBackground*
+references:
+- uid: FluentGpu.Dsl.Tok.T
+  commentId: F:FluentGpu.Dsl.Tok.T
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_T
+  name: T
+  nameWithType: Tok.T
+  fullName: FluentGpu.Dsl.Tok.T
+- uid: FluentGpu.Dsl.Tok.Use(FluentGpu.Dsl.ThemeKind)
+  commentId: M:FluentGpu.Dsl.Tok.Use(FluentGpu.Dsl.ThemeKind)
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_Use_FluentGpu_Dsl_ThemeKind_
+  name: Use(ThemeKind)
+  nameWithType: Tok.Use(ThemeKind)
+  fullName: FluentGpu.Dsl.Tok.Use(FluentGpu.Dsl.ThemeKind)
+  spec.csharp:
+  - uid: FluentGpu.Dsl.Tok.Use(FluentGpu.Dsl.ThemeKind)
+    name: Use
+    href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_Use_FluentGpu_Dsl_ThemeKind_
+  - name: (
+  - uid: FluentGpu.Dsl.ThemeKind
+    name: ThemeKind
+    href: FluentGpu.Dsl.ThemeKind.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Dsl.Tok.Use(FluentGpu.Dsl.ThemeKind)
+    name: Use
+    href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_Use_FluentGpu_Dsl_ThemeKind_
+  - name: (
+  - uid: FluentGpu.Dsl.ThemeKind
+    name: ThemeKind
+    href: FluentGpu.Dsl.ThemeKind.html
+  - name: )
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.MemberwiseClone
+  commentId: M:System.Object.MemberwiseClone
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  name: MemberwiseClone()
+  nameWithType: object.MemberwiseClone()
+  fullName: object.MemberwiseClone()
+  nameWithType.vb: Object.MemberwiseClone()
+  fullName.vb: Object.MemberwiseClone()
+  spec.csharp:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Dsl.TokenSet
+  commentId: T:FluentGpu.Dsl.TokenSet
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.TokenSet.html
+  name: TokenSet
+  nameWithType: TokenSet
+  fullName: FluentGpu.Dsl.TokenSet
+- uid: FluentGpu.Dsl.Tok.Theme*
+  commentId: Overload:FluentGpu.Dsl.Tok.Theme
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_Theme
+  name: Theme
+  nameWithType: Tok.Theme
+  fullName: FluentGpu.Dsl.Tok.Theme
+- uid: FluentGpu.Dsl.ThemeKind
+  commentId: T:FluentGpu.Dsl.ThemeKind
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.ThemeKind.html
+  name: ThemeKind
+  nameWithType: ThemeKind
+  fullName: FluentGpu.Dsl.ThemeKind
+- uid: FluentGpu.Dsl.Tok.Use*
+  commentId: Overload:FluentGpu.Dsl.Tok.Use
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_Use_FluentGpu_Dsl_ThemeKind_
+  name: Use
+  nameWithType: Tok.Use
+  fullName: FluentGpu.Dsl.Tok.Use
+- uid: FluentGpu.Dsl.Tok.SetAccent*
+  commentId: Overload:FluentGpu.Dsl.Tok.SetAccent
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_SetAccent_System_Nullable_FluentGpu_Foundation_ColorF__
+  name: SetAccent
+  nameWithType: Tok.SetAccent
+  fullName: FluentGpu.Dsl.Tok.SetAccent
+- uid: System.Nullable{FluentGpu.Foundation.ColorF}
+  commentId: T:System.Nullable{FluentGpu.Foundation.ColorF}
+  parent: System
+  definition: System.Nullable`1
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF?
+  nameWithType: ColorF?
+  fullName: FluentGpu.Foundation.ColorF?
+  spec.csharp:
+  - uid: FluentGpu.Foundation.ColorF
+    name: ColorF
+    href: FluentGpu.Foundation.ColorF.html
+  - name: '?'
+  spec.vb:
+  - uid: FluentGpu.Foundation.ColorF
+    name: ColorF
+    href: FluentGpu.Foundation.ColorF.html
+  - name: '?'
+- uid: System.Nullable`1
+  commentId: T:System.Nullable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  name: Nullable<T>
+  nameWithType: Nullable<T>
+  fullName: System.Nullable<T>
+  nameWithType.vb: Nullable(Of T)
+  fullName.vb: System.Nullable(Of T)
+  name.vb: Nullable(Of T)
+  spec.csharp:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Dsl.Tok.SetWindowBackground*
+  commentId: Overload:FluentGpu.Dsl.Tok.SetWindowBackground
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_SetWindowBackground_FluentGpu_Foundation_ColorF_
+  name: SetWindowBackground
+  nameWithType: Tok.SetWindowBackground
+  fullName: FluentGpu.Dsl.Tok.SetWindowBackground
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Dsl.Tok.FillControlDefault*
+  commentId: Overload:FluentGpu.Dsl.Tok.FillControlDefault
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FillControlDefault
+  name: FillControlDefault
+  nameWithType: Tok.FillControlDefault
+  fullName: FluentGpu.Dsl.Tok.FillControlDefault
+- uid: FluentGpu.Dsl.Tok.FillControlSecondary*
+  commentId: Overload:FluentGpu.Dsl.Tok.FillControlSecondary
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FillControlSecondary
+  name: FillControlSecondary
+  nameWithType: Tok.FillControlSecondary
+  fullName: FluentGpu.Dsl.Tok.FillControlSecondary
+- uid: FluentGpu.Dsl.Tok.FillControlTertiary*
+  commentId: Overload:FluentGpu.Dsl.Tok.FillControlTertiary
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FillControlTertiary
+  name: FillControlTertiary
+  nameWithType: Tok.FillControlTertiary
+  fullName: FluentGpu.Dsl.Tok.FillControlTertiary
+- uid: FluentGpu.Dsl.Tok.FillControlDisabled*
+  commentId: Overload:FluentGpu.Dsl.Tok.FillControlDisabled
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FillControlDisabled
+  name: FillControlDisabled
+  nameWithType: Tok.FillControlDisabled
+  fullName: FluentGpu.Dsl.Tok.FillControlDisabled
+- uid: FluentGpu.Dsl.Tok.FillControlStrong*
+  commentId: Overload:FluentGpu.Dsl.Tok.FillControlStrong
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FillControlStrong
+  name: FillControlStrong
+  nameWithType: Tok.FillControlStrong
+  fullName: FluentGpu.Dsl.Tok.FillControlStrong
+- uid: FluentGpu.Dsl.Tok.FillControlStrongDisabled*
+  commentId: Overload:FluentGpu.Dsl.Tok.FillControlStrongDisabled
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FillControlStrongDisabled
+  name: FillControlStrongDisabled
+  nameWithType: Tok.FillControlStrongDisabled
+  fullName: FluentGpu.Dsl.Tok.FillControlStrongDisabled
+- uid: FluentGpu.Dsl.Tok.FillControlSolid*
+  commentId: Overload:FluentGpu.Dsl.Tok.FillControlSolid
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FillControlSolid
+  name: FillControlSolid
+  nameWithType: Tok.FillControlSolid
+  fullName: FluentGpu.Dsl.Tok.FillControlSolid
+- uid: FluentGpu.Dsl.Tok.FillControlOnImage*
+  commentId: Overload:FluentGpu.Dsl.Tok.FillControlOnImage
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FillControlOnImage
+  name: FillControlOnImage
+  nameWithType: Tok.FillControlOnImage
+  fullName: FluentGpu.Dsl.Tok.FillControlOnImage
+- uid: FluentGpu.Dsl.Tok.FillSubtleTransparent*
+  commentId: Overload:FluentGpu.Dsl.Tok.FillSubtleTransparent
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FillSubtleTransparent
+  name: FillSubtleTransparent
+  nameWithType: Tok.FillSubtleTransparent
+  fullName: FluentGpu.Dsl.Tok.FillSubtleTransparent
+- uid: FluentGpu.Dsl.Tok.FillSubtleSecondary*
+  commentId: Overload:FluentGpu.Dsl.Tok.FillSubtleSecondary
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FillSubtleSecondary
+  name: FillSubtleSecondary
+  nameWithType: Tok.FillSubtleSecondary
+  fullName: FluentGpu.Dsl.Tok.FillSubtleSecondary
+- uid: FluentGpu.Dsl.Tok.FillSubtleTertiary*
+  commentId: Overload:FluentGpu.Dsl.Tok.FillSubtleTertiary
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FillSubtleTertiary
+  name: FillSubtleTertiary
+  nameWithType: Tok.FillSubtleTertiary
+  fullName: FluentGpu.Dsl.Tok.FillSubtleTertiary
+- uid: FluentGpu.Dsl.Tok.FillCardDefault*
+  commentId: Overload:FluentGpu.Dsl.Tok.FillCardDefault
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FillCardDefault
+  name: FillCardDefault
+  nameWithType: Tok.FillCardDefault
+  fullName: FluentGpu.Dsl.Tok.FillCardDefault
+- uid: FluentGpu.Dsl.Tok.FillCardSecondary*
+  commentId: Overload:FluentGpu.Dsl.Tok.FillCardSecondary
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FillCardSecondary
+  name: FillCardSecondary
+  nameWithType: Tok.FillCardSecondary
+  fullName: FluentGpu.Dsl.Tok.FillCardSecondary
+- uid: FluentGpu.Dsl.Tok.FillLayerDefault*
+  commentId: Overload:FluentGpu.Dsl.Tok.FillLayerDefault
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FillLayerDefault
+  name: FillLayerDefault
+  nameWithType: Tok.FillLayerDefault
+  fullName: FluentGpu.Dsl.Tok.FillLayerDefault
+- uid: FluentGpu.Dsl.Tok.FillLayerAlt*
+  commentId: Overload:FluentGpu.Dsl.Tok.FillLayerAlt
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FillLayerAlt
+  name: FillLayerAlt
+  nameWithType: Tok.FillLayerAlt
+  fullName: FluentGpu.Dsl.Tok.FillLayerAlt
+- uid: FluentGpu.Dsl.Tok.FillSolidBase*
+  commentId: Overload:FluentGpu.Dsl.Tok.FillSolidBase
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FillSolidBase
+  name: FillSolidBase
+  nameWithType: Tok.FillSolidBase
+  fullName: FluentGpu.Dsl.Tok.FillSolidBase
+- uid: FluentGpu.Dsl.Tok.FillSolidBaseAlt*
+  commentId: Overload:FluentGpu.Dsl.Tok.FillSolidBaseAlt
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FillSolidBaseAlt
+  name: FillSolidBaseAlt
+  nameWithType: Tok.FillSolidBaseAlt
+  fullName: FluentGpu.Dsl.Tok.FillSolidBaseAlt
+- uid: FluentGpu.Dsl.Tok.FillSolidSecondary*
+  commentId: Overload:FluentGpu.Dsl.Tok.FillSolidSecondary
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FillSolidSecondary
+  name: FillSolidSecondary
+  nameWithType: Tok.FillSolidSecondary
+  fullName: FluentGpu.Dsl.Tok.FillSolidSecondary
+- uid: FluentGpu.Dsl.Tok.FillSolidTertiary*
+  commentId: Overload:FluentGpu.Dsl.Tok.FillSolidTertiary
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FillSolidTertiary
+  name: FillSolidTertiary
+  nameWithType: Tok.FillSolidTertiary
+  fullName: FluentGpu.Dsl.Tok.FillSolidTertiary
+- uid: FluentGpu.Dsl.Tok.FillSmoke*
+  commentId: Overload:FluentGpu.Dsl.Tok.FillSmoke
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FillSmoke
+  name: FillSmoke
+  nameWithType: Tok.FillSmoke
+  fullName: FluentGpu.Dsl.Tok.FillSmoke
+- uid: FluentGpu.Dsl.Tok.StrokeControlDefault*
+  commentId: Overload:FluentGpu.Dsl.Tok.StrokeControlDefault
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_StrokeControlDefault
+  name: StrokeControlDefault
+  nameWithType: Tok.StrokeControlDefault
+  fullName: FluentGpu.Dsl.Tok.StrokeControlDefault
+- uid: FluentGpu.Dsl.Tok.StrokeControlSecondary*
+  commentId: Overload:FluentGpu.Dsl.Tok.StrokeControlSecondary
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_StrokeControlSecondary
+  name: StrokeControlSecondary
+  nameWithType: Tok.StrokeControlSecondary
+  fullName: FluentGpu.Dsl.Tok.StrokeControlSecondary
+- uid: FluentGpu.Dsl.Tok.StrokeCardDefault*
+  commentId: Overload:FluentGpu.Dsl.Tok.StrokeCardDefault
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_StrokeCardDefault
+  name: StrokeCardDefault
+  nameWithType: Tok.StrokeCardDefault
+  fullName: FluentGpu.Dsl.Tok.StrokeCardDefault
+- uid: FluentGpu.Dsl.Tok.StrokeDividerDefault*
+  commentId: Overload:FluentGpu.Dsl.Tok.StrokeDividerDefault
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_StrokeDividerDefault
+  name: StrokeDividerDefault
+  nameWithType: Tok.StrokeDividerDefault
+  fullName: FluentGpu.Dsl.Tok.StrokeDividerDefault
+- uid: FluentGpu.Dsl.Tok.StrokeSurfaceDefault*
+  commentId: Overload:FluentGpu.Dsl.Tok.StrokeSurfaceDefault
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_StrokeSurfaceDefault
+  name: StrokeSurfaceDefault
+  nameWithType: Tok.StrokeSurfaceDefault
+  fullName: FluentGpu.Dsl.Tok.StrokeSurfaceDefault
+- uid: FluentGpu.Dsl.Tok.StrokeFlyoutDefault*
+  commentId: Overload:FluentGpu.Dsl.Tok.StrokeFlyoutDefault
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_StrokeFlyoutDefault
+  name: StrokeFlyoutDefault
+  nameWithType: Tok.StrokeFlyoutDefault
+  fullName: FluentGpu.Dsl.Tok.StrokeFlyoutDefault
+- uid: FluentGpu.Dsl.Tok.StrokeControlOnAccentDefault*
+  commentId: Overload:FluentGpu.Dsl.Tok.StrokeControlOnAccentDefault
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_StrokeControlOnAccentDefault
+  name: StrokeControlOnAccentDefault
+  nameWithType: Tok.StrokeControlOnAccentDefault
+  fullName: FluentGpu.Dsl.Tok.StrokeControlOnAccentDefault
+- uid: FluentGpu.Dsl.Tok.StrokeControlOnAccentSecondary*
+  commentId: Overload:FluentGpu.Dsl.Tok.StrokeControlOnAccentSecondary
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_StrokeControlOnAccentSecondary
+  name: StrokeControlOnAccentSecondary
+  nameWithType: Tok.StrokeControlOnAccentSecondary
+  fullName: FluentGpu.Dsl.Tok.StrokeControlOnAccentSecondary
+- uid: FluentGpu.Dsl.Tok.StrokeControlOnAccentTertiary*
+  commentId: Overload:FluentGpu.Dsl.Tok.StrokeControlOnAccentTertiary
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_StrokeControlOnAccentTertiary
+  name: StrokeControlOnAccentTertiary
+  nameWithType: Tok.StrokeControlOnAccentTertiary
+  fullName: FluentGpu.Dsl.Tok.StrokeControlOnAccentTertiary
+- uid: FluentGpu.Dsl.Tok.ControlElevationBorder*
+  commentId: Overload:FluentGpu.Dsl.Tok.ControlElevationBorder
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_ControlElevationBorder
+  name: ControlElevationBorder
+  nameWithType: Tok.ControlElevationBorder
+  fullName: FluentGpu.Dsl.Tok.ControlElevationBorder
+- uid: FluentGpu.Foundation.GradientSpec
+  commentId: T:FluentGpu.Foundation.GradientSpec
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.GradientSpec.html
+  name: GradientSpec
+  nameWithType: GradientSpec
+  fullName: FluentGpu.Foundation.GradientSpec
+- uid: FluentGpu.Dsl.Tok.AccentControlElevationBorder*
+  commentId: Overload:FluentGpu.Dsl.Tok.AccentControlElevationBorder
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_AccentControlElevationBorder
+  name: AccentControlElevationBorder
+  nameWithType: Tok.AccentControlElevationBorder
+  fullName: FluentGpu.Dsl.Tok.AccentControlElevationBorder
+- uid: FluentGpu.Dsl.Tok.CircleElevationBorder*
+  commentId: Overload:FluentGpu.Dsl.Tok.CircleElevationBorder
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_CircleElevationBorder
+  name: CircleElevationBorder
+  nameWithType: Tok.CircleElevationBorder
+  fullName: FluentGpu.Dsl.Tok.CircleElevationBorder
+- uid: FluentGpu.Dsl.Tok.TextPrimary*
+  commentId: Overload:FluentGpu.Dsl.Tok.TextPrimary
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_TextPrimary
+  name: TextPrimary
+  nameWithType: Tok.TextPrimary
+  fullName: FluentGpu.Dsl.Tok.TextPrimary
+- uid: FluentGpu.Dsl.Tok.TextSecondary*
+  commentId: Overload:FluentGpu.Dsl.Tok.TextSecondary
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_TextSecondary
+  name: TextSecondary
+  nameWithType: Tok.TextSecondary
+  fullName: FluentGpu.Dsl.Tok.TextSecondary
+- uid: FluentGpu.Dsl.Tok.TextTertiary*
+  commentId: Overload:FluentGpu.Dsl.Tok.TextTertiary
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_TextTertiary
+  name: TextTertiary
+  nameWithType: Tok.TextTertiary
+  fullName: FluentGpu.Dsl.Tok.TextTertiary
+- uid: FluentGpu.Dsl.Tok.TextDisabled*
+  commentId: Overload:FluentGpu.Dsl.Tok.TextDisabled
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_TextDisabled
+  name: TextDisabled
+  nameWithType: Tok.TextDisabled
+  fullName: FluentGpu.Dsl.Tok.TextDisabled
+- uid: FluentGpu.Dsl.Tok.TextOnAccentPrimary*
+  commentId: Overload:FluentGpu.Dsl.Tok.TextOnAccentPrimary
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_TextOnAccentPrimary
+  name: TextOnAccentPrimary
+  nameWithType: Tok.TextOnAccentPrimary
+  fullName: FluentGpu.Dsl.Tok.TextOnAccentPrimary
+- uid: FluentGpu.Dsl.Tok.TextOnAccentSecondary*
+  commentId: Overload:FluentGpu.Dsl.Tok.TextOnAccentSecondary
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_TextOnAccentSecondary
+  name: TextOnAccentSecondary
+  nameWithType: Tok.TextOnAccentSecondary
+  fullName: FluentGpu.Dsl.Tok.TextOnAccentSecondary
+- uid: FluentGpu.Dsl.Tok.TextOnAccentDisabled*
+  commentId: Overload:FluentGpu.Dsl.Tok.TextOnAccentDisabled
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_TextOnAccentDisabled
+  name: TextOnAccentDisabled
+  nameWithType: Tok.TextOnAccentDisabled
+  fullName: FluentGpu.Dsl.Tok.TextOnAccentDisabled
+- uid: FluentGpu.Dsl.Tok.TextOnAccentSelectedText*
+  commentId: Overload:FluentGpu.Dsl.Tok.TextOnAccentSelectedText
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_TextOnAccentSelectedText
+  name: TextOnAccentSelectedText
+  nameWithType: Tok.TextOnAccentSelectedText
+  fullName: FluentGpu.Dsl.Tok.TextOnAccentSelectedText
+- uid: FluentGpu.Dsl.Tok.CaptionCloseHover*
+  commentId: Overload:FluentGpu.Dsl.Tok.CaptionCloseHover
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_CaptionCloseHover
+  name: CaptionCloseHover
+  nameWithType: Tok.CaptionCloseHover
+  fullName: FluentGpu.Dsl.Tok.CaptionCloseHover
+- uid: FluentGpu.Dsl.Tok.CaptionClosePressed*
+  commentId: Overload:FluentGpu.Dsl.Tok.CaptionClosePressed
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_CaptionClosePressed
+  name: CaptionClosePressed
+  nameWithType: Tok.CaptionClosePressed
+  fullName: FluentGpu.Dsl.Tok.CaptionClosePressed
+- uid: FluentGpu.Dsl.Tok.AccentDefault*
+  commentId: Overload:FluentGpu.Dsl.Tok.AccentDefault
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_AccentDefault
+  name: AccentDefault
+  nameWithType: Tok.AccentDefault
+  fullName: FluentGpu.Dsl.Tok.AccentDefault
+- uid: FluentGpu.Dsl.Tok.AccentSecondary*
+  commentId: Overload:FluentGpu.Dsl.Tok.AccentSecondary
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_AccentSecondary
+  name: AccentSecondary
+  nameWithType: Tok.AccentSecondary
+  fullName: FluentGpu.Dsl.Tok.AccentSecondary
+- uid: FluentGpu.Dsl.Tok.AccentTertiary*
+  commentId: Overload:FluentGpu.Dsl.Tok.AccentTertiary
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_AccentTertiary
+  name: AccentTertiary
+  nameWithType: Tok.AccentTertiary
+  fullName: FluentGpu.Dsl.Tok.AccentTertiary
+- uid: FluentGpu.Dsl.Tok.AccentDisabled*
+  commentId: Overload:FluentGpu.Dsl.Tok.AccentDisabled
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_AccentDisabled
+  name: AccentDisabled
+  nameWithType: Tok.AccentDisabled
+  fullName: FluentGpu.Dsl.Tok.AccentDisabled
+- uid: FluentGpu.Dsl.Tok.AccentSubtle*
+  commentId: Overload:FluentGpu.Dsl.Tok.AccentSubtle
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_AccentSubtle
+  name: AccentSubtle
+  nameWithType: Tok.AccentSubtle
+  fullName: FluentGpu.Dsl.Tok.AccentSubtle
+- uid: FluentGpu.Dsl.Tok.AccentTextPrimary*
+  commentId: Overload:FluentGpu.Dsl.Tok.AccentTextPrimary
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_AccentTextPrimary
+  name: AccentTextPrimary
+  nameWithType: Tok.AccentTextPrimary
+  fullName: FluentGpu.Dsl.Tok.AccentTextPrimary
+- uid: FluentGpu.Dsl.Tok.AccentTextSecondary*
+  commentId: Overload:FluentGpu.Dsl.Tok.AccentTextSecondary
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_AccentTextSecondary
+  name: AccentTextSecondary
+  nameWithType: Tok.AccentTextSecondary
+  fullName: FluentGpu.Dsl.Tok.AccentTextSecondary
+- uid: FluentGpu.Dsl.Tok.AccentTextTertiary*
+  commentId: Overload:FluentGpu.Dsl.Tok.AccentTextTertiary
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_AccentTextTertiary
+  name: AccentTextTertiary
+  nameWithType: Tok.AccentTextTertiary
+  fullName: FluentGpu.Dsl.Tok.AccentTextTertiary
+- uid: FluentGpu.Dsl.Tok.AccentSelectedTextBackground*
+  commentId: Overload:FluentGpu.Dsl.Tok.AccentSelectedTextBackground
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_AccentSelectedTextBackground
+  name: AccentSelectedTextBackground
+  nameWithType: Tok.AccentSelectedTextBackground
+  fullName: FluentGpu.Dsl.Tok.AccentSelectedTextBackground
+- uid: FluentGpu.Dsl.Tok.FocusOuter*
+  commentId: Overload:FluentGpu.Dsl.Tok.FocusOuter
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FocusOuter
+  name: FocusOuter
+  nameWithType: Tok.FocusOuter
+  fullName: FluentGpu.Dsl.Tok.FocusOuter
+- uid: FluentGpu.Dsl.Tok.FocusInner*
+  commentId: Overload:FluentGpu.Dsl.Tok.FocusInner
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FocusInner
+  name: FocusInner
+  nameWithType: Tok.FocusInner
+  fullName: FluentGpu.Dsl.Tok.FocusInner
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Dsl.Tok.ScrollThumb*
+  commentId: Overload:FluentGpu.Dsl.Tok.ScrollThumb
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_ScrollThumb
+  name: ScrollThumb
+  nameWithType: Tok.ScrollThumb
+  fullName: FluentGpu.Dsl.Tok.ScrollThumb
+- uid: FluentGpu.Dsl.Tok.AcrylicTint*
+  commentId: Overload:FluentGpu.Dsl.Tok.AcrylicTint
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_AcrylicTint
+  name: AcrylicTint
+  nameWithType: Tok.AcrylicTint
+  fullName: FluentGpu.Dsl.Tok.AcrylicTint
+- uid: FluentGpu.Dsl.Tok.AcrylicBase*
+  commentId: Overload:FluentGpu.Dsl.Tok.AcrylicBase
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_AcrylicBase
+  name: AcrylicBase
+  nameWithType: Tok.AcrylicBase
+  fullName: FluentGpu.Dsl.Tok.AcrylicBase
+- uid: FluentGpu.Dsl.TokenSet.AcrylicFlyout
+  commentId: P:FluentGpu.Dsl.TokenSet.AcrylicFlyout
+  href: FluentGpu.Dsl.TokenSet.html#FluentGpu_Dsl_TokenSet_AcrylicFlyout
+  name: AcrylicFlyout
+  nameWithType: TokenSet.AcrylicFlyout
+  fullName: FluentGpu.Dsl.TokenSet.AcrylicFlyout
+- uid: FluentGpu.Dsl.Tok.AcrylicFlyout*
+  commentId: Overload:FluentGpu.Dsl.Tok.AcrylicFlyout
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_AcrylicFlyout
+  name: AcrylicFlyout
+  nameWithType: Tok.AcrylicFlyout
+  fullName: FluentGpu.Dsl.Tok.AcrylicFlyout
+- uid: FluentGpu.Foundation.AcrylicSpec
+  commentId: T:FluentGpu.Foundation.AcrylicSpec
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.AcrylicSpec.html
+  name: AcrylicSpec
+  nameWithType: AcrylicSpec
+  fullName: FluentGpu.Foundation.AcrylicSpec
+- uid: FluentGpu.Dsl.Tok.HeroGradientTop*
+  commentId: Overload:FluentGpu.Dsl.Tok.HeroGradientTop
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_HeroGradientTop
+  name: HeroGradientTop
+  nameWithType: Tok.HeroGradientTop
+  fullName: FluentGpu.Dsl.Tok.HeroGradientTop
+- uid: FluentGpu.Dsl.Tok.HeroGradientBottom*
+  commentId: Overload:FluentGpu.Dsl.Tok.HeroGradientBottom
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_HeroGradientBottom
+  name: HeroGradientBottom
+  nameWithType: Tok.HeroGradientBottom
+  fullName: FluentGpu.Dsl.Tok.HeroGradientBottom
+- uid: FluentGpu.Dsl.Tok.FillControlAltSecondary*
+  commentId: Overload:FluentGpu.Dsl.Tok.FillControlAltSecondary
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FillControlAltSecondary
+  name: FillControlAltSecondary
+  nameWithType: Tok.FillControlAltSecondary
+  fullName: FluentGpu.Dsl.Tok.FillControlAltSecondary
+- uid: FluentGpu.Dsl.Tok.FillControlAltTertiary*
+  commentId: Overload:FluentGpu.Dsl.Tok.FillControlAltTertiary
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FillControlAltTertiary
+  name: FillControlAltTertiary
+  nameWithType: Tok.FillControlAltTertiary
+  fullName: FluentGpu.Dsl.Tok.FillControlAltTertiary
+- uid: FluentGpu.Dsl.Tok.FillControlAltQuaternary*
+  commentId: Overload:FluentGpu.Dsl.Tok.FillControlAltQuaternary
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FillControlAltQuaternary
+  name: FillControlAltQuaternary
+  nameWithType: Tok.FillControlAltQuaternary
+  fullName: FluentGpu.Dsl.Tok.FillControlAltQuaternary
+- uid: FluentGpu.Dsl.Tok.FillControlAltDisabled*
+  commentId: Overload:FluentGpu.Dsl.Tok.FillControlAltDisabled
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FillControlAltDisabled
+  name: FillControlAltDisabled
+  nameWithType: Tok.FillControlAltDisabled
+  fullName: FluentGpu.Dsl.Tok.FillControlAltDisabled
+- uid: FluentGpu.Dsl.Tok.StrokeControlStrongDefault*
+  commentId: Overload:FluentGpu.Dsl.Tok.StrokeControlStrongDefault
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_StrokeControlStrongDefault
+  name: StrokeControlStrongDefault
+  nameWithType: Tok.StrokeControlStrongDefault
+  fullName: FluentGpu.Dsl.Tok.StrokeControlStrongDefault
+- uid: FluentGpu.Dsl.Tok.StrokeControlStrongDisabled*
+  commentId: Overload:FluentGpu.Dsl.Tok.StrokeControlStrongDisabled
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_StrokeControlStrongDisabled
+  name: StrokeControlStrongDisabled
+  nameWithType: Tok.StrokeControlStrongDisabled
+  fullName: FluentGpu.Dsl.Tok.StrokeControlStrongDisabled
+- uid: FluentGpu.Dsl.Tok.FillControlInputActive*
+  commentId: Overload:FluentGpu.Dsl.Tok.FillControlInputActive
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_FillControlInputActive
+  name: FillControlInputActive
+  nameWithType: Tok.FillControlInputActive
+  fullName: FluentGpu.Dsl.Tok.FillControlInputActive
+- uid: FluentGpu.Dsl.Tok.TextControlHeaderForeground*
+  commentId: Overload:FluentGpu.Dsl.Tok.TextControlHeaderForeground
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_TextControlHeaderForeground
+  name: TextControlHeaderForeground
+  nameWithType: Tok.TextControlHeaderForeground
+  fullName: FluentGpu.Dsl.Tok.TextControlHeaderForeground
+- uid: FluentGpu.Dsl.Tok.TextControlHeaderForegroundDisabled*
+  commentId: Overload:FluentGpu.Dsl.Tok.TextControlHeaderForegroundDisabled
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_TextControlHeaderForegroundDisabled
+  name: TextControlHeaderForegroundDisabled
+  nameWithType: Tok.TextControlHeaderForegroundDisabled
+  fullName: FluentGpu.Dsl.Tok.TextControlHeaderForegroundDisabled
+- uid: FluentGpu.Dsl.Tok.TextControlDescriptionForeground*
+  commentId: Overload:FluentGpu.Dsl.Tok.TextControlDescriptionForeground
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_TextControlDescriptionForeground
+  name: TextControlDescriptionForeground
+  nameWithType: Tok.TextControlDescriptionForeground
+  fullName: FluentGpu.Dsl.Tok.TextControlDescriptionForeground
+- uid: FluentGpu.Dsl.Tok.TextControlForegroundDisabled*
+  commentId: Overload:FluentGpu.Dsl.Tok.TextControlForegroundDisabled
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_TextControlForegroundDisabled
+  name: TextControlForegroundDisabled
+  nameWithType: Tok.TextControlForegroundDisabled
+  fullName: FluentGpu.Dsl.Tok.TextControlForegroundDisabled
+- uid: FluentGpu.Dsl.Tok.SystemFillCritical*
+  commentId: Overload:FluentGpu.Dsl.Tok.SystemFillCritical
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_SystemFillCritical
+  name: SystemFillCritical
+  nameWithType: Tok.SystemFillCritical
+  fullName: FluentGpu.Dsl.Tok.SystemFillCritical
+- uid: FluentGpu.Dsl.Tok.SystemFillCaution*
+  commentId: Overload:FluentGpu.Dsl.Tok.SystemFillCaution
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_SystemFillCaution
+  name: SystemFillCaution
+  nameWithType: Tok.SystemFillCaution
+  fullName: FluentGpu.Dsl.Tok.SystemFillCaution
+- uid: FluentGpu.Dsl.Tok.SystemFillSuccess*
+  commentId: Overload:FluentGpu.Dsl.Tok.SystemFillSuccess
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_SystemFillSuccess
+  name: SystemFillSuccess
+  nameWithType: Tok.SystemFillSuccess
+  fullName: FluentGpu.Dsl.Tok.SystemFillSuccess
+- uid: FluentGpu.Dsl.Tok.SystemFillAttention*
+  commentId: Overload:FluentGpu.Dsl.Tok.SystemFillAttention
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_SystemFillAttention
+  name: SystemFillAttention
+  nameWithType: Tok.SystemFillAttention
+  fullName: FluentGpu.Dsl.Tok.SystemFillAttention
+- uid: FluentGpu.Dsl.Tok.SystemFillCriticalBackground*
+  commentId: Overload:FluentGpu.Dsl.Tok.SystemFillCriticalBackground
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_SystemFillCriticalBackground
+  name: SystemFillCriticalBackground
+  nameWithType: Tok.SystemFillCriticalBackground
+  fullName: FluentGpu.Dsl.Tok.SystemFillCriticalBackground
+- uid: FluentGpu.Dsl.Tok.SystemFillCautionBackground*
+  commentId: Overload:FluentGpu.Dsl.Tok.SystemFillCautionBackground
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_SystemFillCautionBackground
+  name: SystemFillCautionBackground
+  nameWithType: Tok.SystemFillCautionBackground
+  fullName: FluentGpu.Dsl.Tok.SystemFillCautionBackground
+- uid: FluentGpu.Dsl.Tok.SystemFillSuccessBackground*
+  commentId: Overload:FluentGpu.Dsl.Tok.SystemFillSuccessBackground
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_SystemFillSuccessBackground
+  name: SystemFillSuccessBackground
+  nameWithType: Tok.SystemFillSuccessBackground
+  fullName: FluentGpu.Dsl.Tok.SystemFillSuccessBackground
+- uid: FluentGpu.Dsl.Tok.SystemFillAttentionBackground*
+  commentId: Overload:FluentGpu.Dsl.Tok.SystemFillAttentionBackground
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_SystemFillAttentionBackground
+  name: SystemFillAttentionBackground
+  nameWithType: Tok.SystemFillAttentionBackground
+  fullName: FluentGpu.Dsl.Tok.SystemFillAttentionBackground
+- uid: FluentGpu.Dsl.Tok.SystemFillSolidNeutral*
+  commentId: Overload:FluentGpu.Dsl.Tok.SystemFillSolidNeutral
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_SystemFillSolidNeutral
+  name: SystemFillSolidNeutral
+  nameWithType: Tok.SystemFillSolidNeutral
+  fullName: FluentGpu.Dsl.Tok.SystemFillSolidNeutral
+- uid: FluentGpu.Dsl.Tok.TextInverse*
+  commentId: Overload:FluentGpu.Dsl.Tok.TextInverse
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_TextInverse
+  name: TextInverse
+  nameWithType: Tok.TextInverse
+  fullName: FluentGpu.Dsl.Tok.TextInverse
+- uid: FluentGpu.Dsl.Tok.WindowBackground*
+  commentId: Overload:FluentGpu.Dsl.Tok.WindowBackground
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_WindowBackground
+  name: WindowBackground
+  nameWithType: Tok.WindowBackground
+  fullName: FluentGpu.Dsl.Tok.WindowBackground

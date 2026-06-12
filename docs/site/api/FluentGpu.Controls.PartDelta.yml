@@ -1,0 +1,811 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.PartDelta
+  commentId: T:FluentGpu.Controls.PartDelta
+  id: PartDelta
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.PartDelta.#ctor(System.Nullable{FluentGpu.Foundation.ColorF},System.Nullable{FluentGpu.Foundation.ColorF},System.Nullable{System.Single},System.Nullable{FluentGpu.Foundation.CornerRadius4},System.Nullable{FluentGpu.Foundation.Edges4},System.Nullable{FluentGpu.Foundation.ColorF},System.String)
+  - FluentGpu.Controls.PartDelta.Border
+  - FluentGpu.Controls.PartDelta.Corners
+  - FluentGpu.Controls.PartDelta.Fill
+  - FluentGpu.Controls.PartDelta.Foreground
+  - FluentGpu.Controls.PartDelta.Glyph
+  - FluentGpu.Controls.PartDelta.None
+  - FluentGpu.Controls.PartDelta.Opacity
+  - FluentGpu.Controls.PartDelta.Padding
+  langs:
+  - csharp
+  - vb
+  name: PartDelta
+  nameWithType: PartDelta
+  fullName: FluentGpu.Controls.PartDelta
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectorVisuals.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartDelta
+    path: ../../src/FluentGpu.Controls/SelectorVisuals.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Per-item VARIATION as VALUES (the newly-legal per-item-customization seam — supersedes the banned
+        per-item TemplateParts modifier in recycled scroll paths). Every field is a nullable override: null ⇒ keep the
+        preset default. Applied DURING chrome construction (a plain `with`-swap into the already-allocated BoxEl/TextEl
+        record), so per-item variation costs ZERO extra allocation and is provably shape-stable (the realizer
+        shape-hash guard + a steady-scroll HotPhaseAllocBytes==0 check enforce it; docs/guide/control-fidelity.md §6).
+        The producing Func must be pure-value: no new/box/LINQ/Animate per call.
+  example: []
+  syntax:
+    content: 'public readonly record struct PartDelta : IEquatable<PartDelta>'
+    content.vb: Public Structure PartDelta Implements IEquatable(Of PartDelta)
+  implements:
+  - System.IEquatable{FluentGpu.Controls.PartDelta}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Controls.PartDelta.#ctor(System.Nullable{FluentGpu.Foundation.ColorF},System.Nullable{FluentGpu.Foundation.ColorF},System.Nullable{System.Single},System.Nullable{FluentGpu.Foundation.CornerRadius4},System.Nullable{FluentGpu.Foundation.Edges4},System.Nullable{FluentGpu.Foundation.ColorF},System.String)
+  commentId: M:FluentGpu.Controls.PartDelta.#ctor(System.Nullable{FluentGpu.Foundation.ColorF},System.Nullable{FluentGpu.Foundation.ColorF},System.Nullable{System.Single},System.Nullable{FluentGpu.Foundation.CornerRadius4},System.Nullable{FluentGpu.Foundation.Edges4},System.Nullable{FluentGpu.Foundation.ColorF},System.String)
+  id: '#ctor(System.Nullable{FluentGpu.Foundation.ColorF},System.Nullable{FluentGpu.Foundation.ColorF},System.Nullable{System.Single},System.Nullable{FluentGpu.Foundation.CornerRadius4},System.Nullable{FluentGpu.Foundation.Edges4},System.Nullable{FluentGpu.Foundation.ColorF},System.String)'
+  parent: FluentGpu.Controls.PartDelta
+  langs:
+  - csharp
+  - vb
+  name: PartDelta(ColorF?, ColorF?, float?, CornerRadius4?, Edges4?, ColorF?, string?)
+  nameWithType: PartDelta.PartDelta(ColorF?, ColorF?, float?, CornerRadius4?, Edges4?, ColorF?, string?)
+  fullName: FluentGpu.Controls.PartDelta.PartDelta(FluentGpu.Foundation.ColorF?, FluentGpu.Foundation.ColorF?, float?, FluentGpu.Foundation.CornerRadius4?, FluentGpu.Foundation.Edges4?, FluentGpu.Foundation.ColorF?, string?)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectorVisuals.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Controls/SelectorVisuals.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Per-item VARIATION as VALUES (the newly-legal per-item-customization seam — supersedes the banned
+        per-item TemplateParts modifier in recycled scroll paths). Every field is a nullable override: null ⇒ keep the
+        preset default. Applied DURING chrome construction (a plain `with`-swap into the already-allocated BoxEl/TextEl
+        record), so per-item variation costs ZERO extra allocation and is provably shape-stable (the realizer
+        shape-hash guard + a steady-scroll HotPhaseAllocBytes==0 check enforce it; docs/guide/control-fidelity.md §6).
+        The producing Func must be pure-value: no new/box/LINQ/Animate per call.
+  example: []
+  syntax:
+    content: public PartDelta(ColorF? Fill = null, ColorF? Foreground = null, float? Opacity = null, CornerRadius4? Corners = null, Edges4? Padding = null, ColorF? Border = null, string? Glyph = null)
+    parameters:
+    - id: Fill
+      type: System.Nullable{FluentGpu.Foundation.ColorF}
+    - id: Foreground
+      type: System.Nullable{FluentGpu.Foundation.ColorF}
+    - id: Opacity
+      type: System.Nullable{System.Single}
+    - id: Corners
+      type: System.Nullable{FluentGpu.Foundation.CornerRadius4}
+    - id: Padding
+      type: System.Nullable{FluentGpu.Foundation.Edges4}
+    - id: Border
+      type: System.Nullable{FluentGpu.Foundation.ColorF}
+    - id: Glyph
+      type: System.String
+    content.vb: Public Sub New(Fill As ColorF? = Nothing, Foreground As ColorF? = Nothing, Opacity As Single? = Nothing, Corners As CornerRadius4? = Nothing, Padding As Edges4? = Nothing, Border As ColorF? = Nothing, Glyph As String = Nothing)
+  overload: FluentGpu.Controls.PartDelta.#ctor*
+  nameWithType.vb: PartDelta.New(ColorF?, ColorF?, Single?, CornerRadius4?, Edges4?, ColorF?, String)
+  fullName.vb: FluentGpu.Controls.PartDelta.New(FluentGpu.Foundation.ColorF?, FluentGpu.Foundation.ColorF?, Single?, FluentGpu.Foundation.CornerRadius4?, FluentGpu.Foundation.Edges4?, FluentGpu.Foundation.ColorF?, String)
+  name.vb: New(ColorF?, ColorF?, Single?, CornerRadius4?, Edges4?, ColorF?, String)
+- uid: FluentGpu.Controls.PartDelta.Fill
+  commentId: P:FluentGpu.Controls.PartDelta.Fill
+  id: Fill
+  parent: FluentGpu.Controls.PartDelta
+  langs:
+  - csharp
+  - vb
+  name: Fill
+  nameWithType: PartDelta.Fill
+  fullName: FluentGpu.Controls.PartDelta.Fill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectorVisuals.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Fill
+    path: ../../src/FluentGpu.Controls/SelectorVisuals.cs
+    startLine: 28
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF? Fill { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.ColorF}
+    content.vb: Public Property Fill As ColorF?
+  overload: FluentGpu.Controls.PartDelta.Fill*
+- uid: FluentGpu.Controls.PartDelta.Foreground
+  commentId: P:FluentGpu.Controls.PartDelta.Foreground
+  id: Foreground
+  parent: FluentGpu.Controls.PartDelta
+  langs:
+  - csharp
+  - vb
+  name: Foreground
+  nameWithType: PartDelta.Foreground
+  fullName: FluentGpu.Controls.PartDelta.Foreground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectorVisuals.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Foreground
+    path: ../../src/FluentGpu.Controls/SelectorVisuals.cs
+    startLine: 29
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF? Foreground { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.ColorF}
+    content.vb: Public Property Foreground As ColorF?
+  overload: FluentGpu.Controls.PartDelta.Foreground*
+- uid: FluentGpu.Controls.PartDelta.Opacity
+  commentId: P:FluentGpu.Controls.PartDelta.Opacity
+  id: Opacity
+  parent: FluentGpu.Controls.PartDelta
+  langs:
+  - csharp
+  - vb
+  name: Opacity
+  nameWithType: PartDelta.Opacity
+  fullName: FluentGpu.Controls.PartDelta.Opacity
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectorVisuals.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Opacity
+    path: ../../src/FluentGpu.Controls/SelectorVisuals.cs
+    startLine: 30
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float? Opacity { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{System.Single}
+    content.vb: Public Property Opacity As Single?
+  overload: FluentGpu.Controls.PartDelta.Opacity*
+- uid: FluentGpu.Controls.PartDelta.Corners
+  commentId: P:FluentGpu.Controls.PartDelta.Corners
+  id: Corners
+  parent: FluentGpu.Controls.PartDelta
+  langs:
+  - csharp
+  - vb
+  name: Corners
+  nameWithType: PartDelta.Corners
+  fullName: FluentGpu.Controls.PartDelta.Corners
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectorVisuals.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Corners
+    path: ../../src/FluentGpu.Controls/SelectorVisuals.cs
+    startLine: 31
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public CornerRadius4? Corners { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.CornerRadius4}
+    content.vb: Public Property Corners As CornerRadius4?
+  overload: FluentGpu.Controls.PartDelta.Corners*
+- uid: FluentGpu.Controls.PartDelta.Padding
+  commentId: P:FluentGpu.Controls.PartDelta.Padding
+  id: Padding
+  parent: FluentGpu.Controls.PartDelta
+  langs:
+  - csharp
+  - vb
+  name: Padding
+  nameWithType: PartDelta.Padding
+  fullName: FluentGpu.Controls.PartDelta.Padding
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectorVisuals.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Padding
+    path: ../../src/FluentGpu.Controls/SelectorVisuals.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Edges4? Padding { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.Edges4}
+    content.vb: Public Property Padding As Edges4?
+  overload: FluentGpu.Controls.PartDelta.Padding*
+- uid: FluentGpu.Controls.PartDelta.Border
+  commentId: P:FluentGpu.Controls.PartDelta.Border
+  id: Border
+  parent: FluentGpu.Controls.PartDelta
+  langs:
+  - csharp
+  - vb
+  name: Border
+  nameWithType: PartDelta.Border
+  fullName: FluentGpu.Controls.PartDelta.Border
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectorVisuals.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Border
+    path: ../../src/FluentGpu.Controls/SelectorVisuals.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF? Border { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.ColorF}
+    content.vb: Public Property Border As ColorF?
+  overload: FluentGpu.Controls.PartDelta.Border*
+- uid: FluentGpu.Controls.PartDelta.Glyph
+  commentId: P:FluentGpu.Controls.PartDelta.Glyph
+  id: Glyph
+  parent: FluentGpu.Controls.PartDelta
+  langs:
+  - csharp
+  - vb
+  name: Glyph
+  nameWithType: PartDelta.Glyph
+  fullName: FluentGpu.Controls.PartDelta.Glyph
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectorVisuals.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Glyph
+    path: ../../src/FluentGpu.Controls/SelectorVisuals.cs
+    startLine: 34
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string? Glyph { get; init; }
+    parameters: []
+    return:
+      type: System.String
+    content.vb: Public Property Glyph As String
+  overload: FluentGpu.Controls.PartDelta.Glyph*
+- uid: FluentGpu.Controls.PartDelta.None
+  commentId: F:FluentGpu.Controls.PartDelta.None
+  id: None
+  parent: FluentGpu.Controls.PartDelta
+  langs:
+  - csharp
+  - vb
+  name: None
+  nameWithType: PartDelta.None
+  fullName: FluentGpu.Controls.PartDelta.None
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectorVisuals.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: None
+    path: ../../src/FluentGpu.Controls/SelectorVisuals.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static readonly PartDelta None
+    return:
+      type: FluentGpu.Controls.PartDelta
+    content.vb: Public Shared ReadOnly None As PartDelta
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.IEquatable{FluentGpu.Controls.PartDelta}
+  commentId: T:System.IEquatable{FluentGpu.Controls.PartDelta}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<PartDelta>
+  nameWithType: IEquatable<PartDelta>
+  fullName: System.IEquatable<FluentGpu.Controls.PartDelta>
+  nameWithType.vb: IEquatable(Of PartDelta)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.PartDelta)
+  name.vb: IEquatable(Of PartDelta)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.PartDelta
+    name: PartDelta
+    href: FluentGpu.Controls.PartDelta.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.PartDelta
+    name: PartDelta
+    href: FluentGpu.Controls.PartDelta.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Controls.PartDelta.#ctor*
+  commentId: Overload:FluentGpu.Controls.PartDelta.#ctor
+  href: FluentGpu.Controls.PartDelta.html#FluentGpu_Controls_PartDelta__ctor_System_Nullable_FluentGpu_Foundation_ColorF__System_Nullable_FluentGpu_Foundation_ColorF__System_Nullable_System_Single__System_Nullable_FluentGpu_Foundation_CornerRadius4__System_Nullable_FluentGpu_Foundation_Edges4__System_Nullable_FluentGpu_Foundation_ColorF__System_String_
+  name: PartDelta
+  nameWithType: PartDelta.PartDelta
+  fullName: FluentGpu.Controls.PartDelta.PartDelta
+  nameWithType.vb: PartDelta.New
+  fullName.vb: FluentGpu.Controls.PartDelta.New
+  name.vb: New
+- uid: System.Nullable{FluentGpu.Foundation.ColorF}
+  commentId: T:System.Nullable{FluentGpu.Foundation.ColorF}
+  parent: System
+  definition: System.Nullable`1
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF?
+  nameWithType: ColorF?
+  fullName: FluentGpu.Foundation.ColorF?
+  spec.csharp:
+  - uid: FluentGpu.Foundation.ColorF
+    name: ColorF
+    href: FluentGpu.Foundation.ColorF.html
+  - name: '?'
+  spec.vb:
+  - uid: FluentGpu.Foundation.ColorF
+    name: ColorF
+    href: FluentGpu.Foundation.ColorF.html
+  - name: '?'
+- uid: System.Nullable{System.Single}
+  commentId: T:System.Nullable{System.Single}
+  parent: System
+  definition: System.Nullable`1
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float?
+  nameWithType: float?
+  fullName: float?
+  nameWithType.vb: Single?
+  fullName.vb: Single?
+  name.vb: Single?
+  spec.csharp:
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: '?'
+  spec.vb:
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: '?'
+- uid: System.Nullable{FluentGpu.Foundation.CornerRadius4}
+  commentId: T:System.Nullable{FluentGpu.Foundation.CornerRadius4}
+  parent: System
+  definition: System.Nullable`1
+  href: FluentGpu.Foundation.CornerRadius4.html
+  name: CornerRadius4?
+  nameWithType: CornerRadius4?
+  fullName: FluentGpu.Foundation.CornerRadius4?
+  spec.csharp:
+  - uid: FluentGpu.Foundation.CornerRadius4
+    name: CornerRadius4
+    href: FluentGpu.Foundation.CornerRadius4.html
+  - name: '?'
+  spec.vb:
+  - uid: FluentGpu.Foundation.CornerRadius4
+    name: CornerRadius4
+    href: FluentGpu.Foundation.CornerRadius4.html
+  - name: '?'
+- uid: System.Nullable{FluentGpu.Foundation.Edges4}
+  commentId: T:System.Nullable{FluentGpu.Foundation.Edges4}
+  parent: System
+  definition: System.Nullable`1
+  href: FluentGpu.Foundation.Edges4.html
+  name: Edges4?
+  nameWithType: Edges4?
+  fullName: FluentGpu.Foundation.Edges4?
+  spec.csharp:
+  - uid: FluentGpu.Foundation.Edges4
+    name: Edges4
+    href: FluentGpu.Foundation.Edges4.html
+  - name: '?'
+  spec.vb:
+  - uid: FluentGpu.Foundation.Edges4
+    name: Edges4
+    href: FluentGpu.Foundation.Edges4.html
+  - name: '?'
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: System.Nullable`1
+  commentId: T:System.Nullable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  name: Nullable<T>
+  nameWithType: Nullable<T>
+  fullName: System.Nullable<T>
+  nameWithType.vb: Nullable(Of T)
+  fullName.vb: System.Nullable(Of T)
+  name.vb: Nullable(Of T)
+  spec.csharp:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.PartDelta.Fill*
+  commentId: Overload:FluentGpu.Controls.PartDelta.Fill
+  href: FluentGpu.Controls.PartDelta.html#FluentGpu_Controls_PartDelta_Fill
+  name: Fill
+  nameWithType: PartDelta.Fill
+  fullName: FluentGpu.Controls.PartDelta.Fill
+- uid: FluentGpu.Controls.PartDelta.Foreground*
+  commentId: Overload:FluentGpu.Controls.PartDelta.Foreground
+  href: FluentGpu.Controls.PartDelta.html#FluentGpu_Controls_PartDelta_Foreground
+  name: Foreground
+  nameWithType: PartDelta.Foreground
+  fullName: FluentGpu.Controls.PartDelta.Foreground
+- uid: FluentGpu.Controls.PartDelta.Opacity*
+  commentId: Overload:FluentGpu.Controls.PartDelta.Opacity
+  href: FluentGpu.Controls.PartDelta.html#FluentGpu_Controls_PartDelta_Opacity
+  name: Opacity
+  nameWithType: PartDelta.Opacity
+  fullName: FluentGpu.Controls.PartDelta.Opacity
+- uid: FluentGpu.Controls.PartDelta.Corners*
+  commentId: Overload:FluentGpu.Controls.PartDelta.Corners
+  href: FluentGpu.Controls.PartDelta.html#FluentGpu_Controls_PartDelta_Corners
+  name: Corners
+  nameWithType: PartDelta.Corners
+  fullName: FluentGpu.Controls.PartDelta.Corners
+- uid: FluentGpu.Controls.PartDelta.Padding*
+  commentId: Overload:FluentGpu.Controls.PartDelta.Padding
+  href: FluentGpu.Controls.PartDelta.html#FluentGpu_Controls_PartDelta_Padding
+  name: Padding
+  nameWithType: PartDelta.Padding
+  fullName: FluentGpu.Controls.PartDelta.Padding
+- uid: FluentGpu.Controls.PartDelta.Border*
+  commentId: Overload:FluentGpu.Controls.PartDelta.Border
+  href: FluentGpu.Controls.PartDelta.html#FluentGpu_Controls_PartDelta_Border
+  name: Border
+  nameWithType: PartDelta.Border
+  fullName: FluentGpu.Controls.PartDelta.Border
+- uid: FluentGpu.Controls.PartDelta.Glyph*
+  commentId: Overload:FluentGpu.Controls.PartDelta.Glyph
+  href: FluentGpu.Controls.PartDelta.html#FluentGpu_Controls_PartDelta_Glyph
+  name: Glyph
+  nameWithType: PartDelta.Glyph
+  fullName: FluentGpu.Controls.PartDelta.Glyph
+- uid: FluentGpu.Controls.PartDelta
+  commentId: T:FluentGpu.Controls.PartDelta
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.PartDelta.html
+  name: PartDelta
+  nameWithType: PartDelta
+  fullName: FluentGpu.Controls.PartDelta

@@ -1,0 +1,136 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Render.LayerKind
+  commentId: T:FluentGpu.Render.LayerKind
+  id: LayerKind
+  parent: FluentGpu.Render
+  children:
+  - FluentGpu.Render.LayerKind.Acrylic
+  - FluentGpu.Render.LayerKind.Opacity
+  langs:
+  - csharp
+  - vb
+  name: LayerKind
+  nameWithType: LayerKind
+  fullName: FluentGpu.Render.LayerKind
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LayerKind
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  summary: What a <xref href="FluentGpu.Render.PushLayerCmd" data-throw-if-not-resolved="false"></xref>…PopLayer pair composites.
+  example: []
+  syntax:
+    content: public enum LayerKind
+    content.vb: Public Enum LayerKind
+- uid: FluentGpu.Render.LayerKind.Acrylic
+  commentId: F:FluentGpu.Render.LayerKind.Acrylic
+  id: Acrylic
+  parent: FluentGpu.Render.LayerKind
+  langs:
+  - csharp
+  - vb
+  name: Acrylic
+  nameWithType: LayerKind.Acrylic
+  fullName: FluentGpu.Render.LayerKind.Acrylic
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Acrylic
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 40
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  summary: >-
+    In-app acrylic: snapshot+blur the canvas under DeviceRect, composite the WinUI AcrylicBrush recipe
+        (tint/luminosity/noise — AcrylicBrush.cpp:500-548), then the subtree draws on top.
+  example: []
+  syntax:
+    content: Acrylic = 0
+    return:
+      type: FluentGpu.Render.LayerKind
+- uid: FluentGpu.Render.LayerKind.Opacity
+  commentId: F:FluentGpu.Render.LayerKind.Opacity
+  id: Opacity
+  parent: FluentGpu.Render.LayerKind
+  langs:
+  - csharp
+  - vb
+  name: Opacity
+  nameWithType: LayerKind.Opacity
+  fullName: FluentGpu.Render.LayerKind.Opacity
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Opacity
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 45
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  summary: >-
+    Flat opacity group (WinUI Composition LayerVisual semantics): the subtree between Push/Pop renders at
+        FULL alpha into a pooled offscreen RT, then composites ONCE over the canvas at <xref href="FluentGpu.Render.PushLayerCmd.GroupAlpha" data-throw-if-not-resolved="false"></xref>
+        — overlapping children do not double-blend (unlike the default per-node multiplied opacity, which matches
+        WinUI's plain Visual.Opacity). Tint/blur fields are unused for this kind.
+  example: []
+  syntax:
+    content: Opacity = 1
+    return:
+      type: FluentGpu.Render.LayerKind
+references:
+- uid: FluentGpu.Render.PushLayerCmd
+  commentId: T:FluentGpu.Render.PushLayerCmd
+  href: FluentGpu.Render.PushLayerCmd.html
+  name: PushLayerCmd
+  nameWithType: PushLayerCmd
+  fullName: FluentGpu.Render.PushLayerCmd
+- uid: FluentGpu.Render
+  commentId: N:FluentGpu.Render
+  href: FluentGpu.html
+  name: FluentGpu.Render
+  nameWithType: FluentGpu.Render
+  fullName: FluentGpu.Render
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Render
+    name: Render
+    href: FluentGpu.Render.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Render
+    name: Render
+    href: FluentGpu.Render.html
+- uid: FluentGpu.Render.LayerKind
+  commentId: T:FluentGpu.Render.LayerKind
+  parent: FluentGpu.Render
+  href: FluentGpu.Render.LayerKind.html
+  name: LayerKind
+  nameWithType: LayerKind
+  fullName: FluentGpu.Render.LayerKind
+- uid: FluentGpu.Render.PushLayerCmd.GroupAlpha
+  commentId: P:FluentGpu.Render.PushLayerCmd.GroupAlpha
+  href: FluentGpu.Render.PushLayerCmd.html#FluentGpu_Render_PushLayerCmd_GroupAlpha
+  name: GroupAlpha
+  nameWithType: PushLayerCmd.GroupAlpha
+  fullName: FluentGpu.Render.PushLayerCmd.GroupAlpha

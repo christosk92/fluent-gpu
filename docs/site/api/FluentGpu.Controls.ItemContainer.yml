@@ -1,0 +1,910 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.ItemContainer
+  commentId: T:FluentGpu.Controls.ItemContainer
+  id: ItemContainer
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.ItemContainer.Build(FluentGpu.Dsl.Element,System.Boolean,System.Action{FluentGpu.Controls.ItemContainerTrigger,FluentGpu.Foundation.KeyModifiers},System.Boolean,System.Boolean,System.Boolean,System.Nullable{FluentGpu.Foundation.CornerRadius4},System.Action{System.Boolean},System.Single,System.Single,System.Boolean,FluentGpu.Controls.PartDelta)
+  - FluentGpu.Controls.ItemContainer.Build(FluentGpu.Dsl.Element,System.Boolean,System.Action{System.Boolean},System.Boolean,System.Nullable{FluentGpu.Foundation.CornerRadius4})
+  - FluentGpu.Controls.ItemContainer.CheckboxGlyphSize
+  - FluentGpu.Controls.ItemContainer.CheckboxSize
+  - FluentGpu.Controls.ItemContainer.DisabledOpacity
+  - FluentGpu.Controls.ItemContainer.FadeMs
+  - FluentGpu.Controls.ItemContainer.SelectedInnerMargin
+  - FluentGpu.Controls.ItemContainer.SelectedInnerThickness
+  - FluentGpu.Controls.ItemContainer.SelectionVisualThickness
+  langs:
+  - csharp
+  - vb
+  name: ItemContainer
+  nameWithType: ItemContainer
+  fullName: FluentGpu.Controls.ItemContainer
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemContainer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ItemContainer
+    path: ../../src/FluentGpu.Controls/ItemContainer.cs
+    startLine: 46
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>ItemContainer</code> (controls\dev\ItemContainer\ItemContainer.xaml) — the single-item wrapper every modern
+
+    items control (ItemsView) realizes around its templates: pointer-state plate, dual-stroke selection visual,
+
+    multi-select checkbox, disabled dimming, focusability. Built as a STATIC factory returning a plain keyed BoxEl
+
+    tree (no Component, no reactive binds) so a realized window of containers stays on the virtualization recycle
+
+    fast path (<code>TreeReconciler.IsRecyclable</code>).
+
+
+    Template mapping (ItemContainer.xaml:11-145, values verified in ItemContainer_themeresources.xaml):
+
+    • PART_ContainerRoot — the root box: Background = ItemContainerBackground = SubtleFillColorTransparent (:5/:37,
+      transparent both themes); Disabled → Opacity 0.3 (ItemContainerDisabledOpacity, :54).
+    • PART_SelectionVisual (xaml:116-126) — 3px border, BorderBrush = ItemContainerSelectionVisualBackground =
+      AccentFillColorDefault (:14/:46 → Tok.AccentDefault, #60CDFF dark / #005FB8 light), deferred
+      (x:DeferLoadStrategy="Lazy") → mounted only while selected; SelectedPointerOver/Pressed fade it in over
+      ControlFastAnimationDuration with KeySpline 0,0,0,1 (xaml:54-56) → enter-fade 167ms decelerate.
+      Disabled collapses it (xaml:108-110).
+    • PART_CommonVisual (xaml:127-135) — ONE full-stretch rectangle declared AFTER the child placeholder (the child
+      is inserted at index 0, ItemContainer.cpp:66), so it overlays the item content. It carries BOTH faces:
+      – the pointer-state fill (xaml:17-33): PointerOver = ItemContainerPointerOverBackground =
+        SubtleFillColorSecondary (#0FFFFFFF dark :6 / #09000000 light :38); Pressed = ItemContainerPressedBackground
+        = SubtleFillColorTertiary (#0AFFFFFF dark :7 / #06000000 light :39); the Selected* ramp resolves to the SAME
+        brushes (:12-13/:44-45). Drawn ABOVE the content so the tint reads over opaque photo-wall tiles.
+      – the 1px selected inner stroke: Stroke = ItemContainerSelectedInnerBorderBrush = ControlSolidFillColorDefault
+        (:17/:49 → Tok.FillControlSolid, #FF454545 dark / #FFFFFFFF light; Common_themeresources_any.xaml:24/:228),
+        StrokeThickness = ItemContainerSelectedInnerThickness = 1 (:58), selected Margin =
+        ItemContainerSelectedInnerMargin = 2 (:57). At rest the stroke is transparent (ItemContainerBorderBrush, :8).
+    • PART_SelectionCheckbox (xaml:136-144, style :63-139) — top-right (:59-60), Margin 4,−2 (:56), 20px box,
+      unchecked plate = ItemContainerCheckboxBackgroundUnchecked = ControlOnImageFillColorDefault (:18 →
+      Tok.FillControlOnImage, #B31C1C1C dark / #C9FFFFFF light), stroke = CheckBoxCheckBackgroundStrokeUnchecked
+      (→ Tok.StrokeControlStrongDefault); Multiple mode fades it in over ControlFastAnimationDuration (xaml:93-99).
+
+    Interaction mapping (engine-deliberate): selection fires at the PRESS edge via <code>OnPointerPressed</code> — the one
+
+    pointer callback carrying the modifier chord/click count (WinUI processes selection at PointerReleased; the visual
+
+    outcome is identical and Win32 lists select on button-down). The container takes NO OnClick so Enter and Space
+
+    reach <code>OnKeyDown</code> distinctly (the dispatcher's Enter/Space activation would otherwise collapse them), giving
+
+    WinUI's EnterKey-vs-SpaceKey invoke split (ItemsView.cpp:423-426).
+  example: []
+  syntax:
+    content: public static class ItemContainer
+    content.vb: Public Module ItemContainer
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.MemberwiseClone
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.ItemContainer.DisabledOpacity
+  commentId: F:FluentGpu.Controls.ItemContainer.DisabledOpacity
+  id: DisabledOpacity
+  parent: FluentGpu.Controls.ItemContainer
+  langs:
+  - csharp
+  - vb
+  name: DisabledOpacity
+  nameWithType: ItemContainer.DisabledOpacity
+  fullName: FluentGpu.Controls.ItemContainer.DisabledOpacity
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemContainer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DisabledOpacity
+    path: ../../src/FluentGpu.Controls/ItemContainer.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float DisabledOpacity = 0.3
+    return:
+      type: System.Single
+    content.vb: Public Const DisabledOpacity As Single = 0.3
+- uid: FluentGpu.Controls.ItemContainer.SelectionVisualThickness
+  commentId: F:FluentGpu.Controls.ItemContainer.SelectionVisualThickness
+  id: SelectionVisualThickness
+  parent: FluentGpu.Controls.ItemContainer
+  langs:
+  - csharp
+  - vb
+  name: SelectionVisualThickness
+  nameWithType: ItemContainer.SelectionVisualThickness
+  fullName: FluentGpu.Controls.ItemContainer.SelectionVisualThickness
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemContainer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SelectionVisualThickness
+    path: ../../src/FluentGpu.Controls/ItemContainer.cs
+    startLine: 49
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float SelectionVisualThickness = 3
+    return:
+      type: System.Single
+    content.vb: Public Const SelectionVisualThickness As Single = 3
+- uid: FluentGpu.Controls.ItemContainer.SelectedInnerThickness
+  commentId: F:FluentGpu.Controls.ItemContainer.SelectedInnerThickness
+  id: SelectedInnerThickness
+  parent: FluentGpu.Controls.ItemContainer
+  langs:
+  - csharp
+  - vb
+  name: SelectedInnerThickness
+  nameWithType: ItemContainer.SelectedInnerThickness
+  fullName: FluentGpu.Controls.ItemContainer.SelectedInnerThickness
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemContainer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SelectedInnerThickness
+    path: ../../src/FluentGpu.Controls/ItemContainer.cs
+    startLine: 50
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float SelectedInnerThickness = 1
+    return:
+      type: System.Single
+    content.vb: Public Const SelectedInnerThickness As Single = 1
+- uid: FluentGpu.Controls.ItemContainer.SelectedInnerMargin
+  commentId: F:FluentGpu.Controls.ItemContainer.SelectedInnerMargin
+  id: SelectedInnerMargin
+  parent: FluentGpu.Controls.ItemContainer
+  langs:
+  - csharp
+  - vb
+  name: SelectedInnerMargin
+  nameWithType: ItemContainer.SelectedInnerMargin
+  fullName: FluentGpu.Controls.ItemContainer.SelectedInnerMargin
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemContainer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SelectedInnerMargin
+    path: ../../src/FluentGpu.Controls/ItemContainer.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float SelectedInnerMargin = 2
+    return:
+      type: System.Single
+    content.vb: Public Const SelectedInnerMargin As Single = 2
+- uid: FluentGpu.Controls.ItemContainer.CheckboxSize
+  commentId: F:FluentGpu.Controls.ItemContainer.CheckboxSize
+  id: CheckboxSize
+  parent: FluentGpu.Controls.ItemContainer
+  langs:
+  - csharp
+  - vb
+  name: CheckboxSize
+  nameWithType: ItemContainer.CheckboxSize
+  fullName: FluentGpu.Controls.ItemContainer.CheckboxSize
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemContainer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CheckboxSize
+    path: ../../src/FluentGpu.Controls/ItemContainer.cs
+    startLine: 52
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float CheckboxSize = 20
+    return:
+      type: System.Single
+    content.vb: Public Const CheckboxSize As Single = 20
+- uid: FluentGpu.Controls.ItemContainer.CheckboxGlyphSize
+  commentId: F:FluentGpu.Controls.ItemContainer.CheckboxGlyphSize
+  id: CheckboxGlyphSize
+  parent: FluentGpu.Controls.ItemContainer
+  langs:
+  - csharp
+  - vb
+  name: CheckboxGlyphSize
+  nameWithType: ItemContainer.CheckboxGlyphSize
+  fullName: FluentGpu.Controls.ItemContainer.CheckboxGlyphSize
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemContainer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CheckboxGlyphSize
+    path: ../../src/FluentGpu.Controls/ItemContainer.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float CheckboxGlyphSize = 12
+    return:
+      type: System.Single
+    content.vb: Public Const CheckboxGlyphSize As Single = 12
+- uid: FluentGpu.Controls.ItemContainer.FadeMs
+  commentId: F:FluentGpu.Controls.ItemContainer.FadeMs
+  id: FadeMs
+  parent: FluentGpu.Controls.ItemContainer
+  langs:
+  - csharp
+  - vb
+  name: FadeMs
+  nameWithType: ItemContainer.FadeMs
+  fullName: FluentGpu.Controls.ItemContainer.FadeMs
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemContainer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FadeMs
+    path: ../../src/FluentGpu.Controls/ItemContainer.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float FadeMs = 167
+    return:
+      type: System.Single
+    content.vb: Public Const FadeMs As Single = 167
+- uid: FluentGpu.Controls.ItemContainer.Build(FluentGpu.Dsl.Element,System.Boolean,System.Action{System.Boolean},System.Boolean,System.Nullable{FluentGpu.Foundation.CornerRadius4})
+  commentId: M:FluentGpu.Controls.ItemContainer.Build(FluentGpu.Dsl.Element,System.Boolean,System.Action{System.Boolean},System.Boolean,System.Nullable{FluentGpu.Foundation.CornerRadius4})
+  id: Build(FluentGpu.Dsl.Element,System.Boolean,System.Action{System.Boolean},System.Boolean,System.Nullable{FluentGpu.Foundation.CornerRadius4})
+  parent: FluentGpu.Controls.ItemContainer
+  langs:
+  - csharp
+  - vb
+  name: Build(Element, bool, Action<bool>, bool, CornerRadius4?)
+  nameWithType: ItemContainer.Build(Element, bool, Action<bool>, bool, CornerRadius4?)
+  fullName: FluentGpu.Controls.ItemContainer.Build(FluentGpu.Dsl.Element, bool, System.Action<bool>, bool, FluentGpu.Foundation.CornerRadius4?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemContainer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Build
+    path: ../../src/FluentGpu.Controls/ItemContainer.cs
+    startLine: 58
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Standalone two-state convenience: toggles <code class="paramref">isSelected</code> on tap/Space (the WinUI
+        out-of-ItemsView ItemContainer behavior, IsSelected get/set per ItemContainer.idl:69).
+  example: []
+  syntax:
+    content: public static BoxEl Build(Element child, bool isSelected, Action<bool> onSelectionChanged, bool isEnabled = true, CornerRadius4? corners = null)
+    parameters:
+    - id: child
+      type: FluentGpu.Dsl.Element
+    - id: isSelected
+      type: System.Boolean
+    - id: onSelectionChanged
+      type: System.Action{System.Boolean}
+    - id: isEnabled
+      type: System.Boolean
+    - id: corners
+      type: System.Nullable{FluentGpu.Foundation.CornerRadius4}
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Build(child As Element, isSelected As Boolean, onSelectionChanged As Action(Of Boolean), isEnabled As Boolean = True, corners As CornerRadius4? = Nothing) As BoxEl
+  overload: FluentGpu.Controls.ItemContainer.Build*
+  nameWithType.vb: ItemContainer.Build(Element, Boolean, Action(Of Boolean), Boolean, CornerRadius4?)
+  fullName.vb: FluentGpu.Controls.ItemContainer.Build(FluentGpu.Dsl.Element, Boolean, System.Action(Of Boolean), Boolean, FluentGpu.Foundation.CornerRadius4?)
+  name.vb: Build(Element, Boolean, Action(Of Boolean), Boolean, CornerRadius4?)
+- uid: FluentGpu.Controls.ItemContainer.Build(FluentGpu.Dsl.Element,System.Boolean,System.Action{FluentGpu.Controls.ItemContainerTrigger,FluentGpu.Foundation.KeyModifiers},System.Boolean,System.Boolean,System.Boolean,System.Nullable{FluentGpu.Foundation.CornerRadius4},System.Action{System.Boolean},System.Single,System.Single,System.Boolean,FluentGpu.Controls.PartDelta)
+  commentId: M:FluentGpu.Controls.ItemContainer.Build(FluentGpu.Dsl.Element,System.Boolean,System.Action{FluentGpu.Controls.ItemContainerTrigger,FluentGpu.Foundation.KeyModifiers},System.Boolean,System.Boolean,System.Boolean,System.Nullable{FluentGpu.Foundation.CornerRadius4},System.Action{System.Boolean},System.Single,System.Single,System.Boolean,FluentGpu.Controls.PartDelta)
+  id: Build(FluentGpu.Dsl.Element,System.Boolean,System.Action{FluentGpu.Controls.ItemContainerTrigger,FluentGpu.Foundation.KeyModifiers},System.Boolean,System.Boolean,System.Boolean,System.Nullable{FluentGpu.Foundation.CornerRadius4},System.Action{System.Boolean},System.Single,System.Single,System.Boolean,FluentGpu.Controls.PartDelta)
+  parent: FluentGpu.Controls.ItemContainer
+  langs:
+  - csharp
+  - vb
+  name: Build(Element, bool, Action<ItemContainerTrigger, KeyModifiers>?, bool, bool, bool, CornerRadius4?, Action<bool>?, float, float, bool, PartDelta)
+  nameWithType: ItemContainer.Build(Element, bool, Action<ItemContainerTrigger, KeyModifiers>?, bool, bool, bool, CornerRadius4?, Action<bool>?, float, float, bool, PartDelta)
+  fullName: FluentGpu.Controls.ItemContainer.Build(FluentGpu.Dsl.Element, bool, System.Action<FluentGpu.Controls.ItemContainerTrigger, FluentGpu.Foundation.KeyModifiers>?, bool, bool, bool, FluentGpu.Foundation.CornerRadius4?, System.Action<bool>?, float, float, bool, FluentGpu.Controls.PartDelta)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemContainer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Build
+    path: ../../src/FluentGpu.Controls/ItemContainer.cs
+    startLine: 77
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The full container. <code class="paramref">onInteraction</code> receives the WinUI interaction trigger + the live modifier
+
+    chord — a composing control (ItemsView) routes it through its selector. The returned tree is plain (recyclable);
+
+    realize-time closures are the only managed cost. <code class="paramref">isTabStop</code> is the roving-tab-stop seam:
+
+    ItemsView keeps it true on the keyboard-current container ONLY (TabNavigation="Once", ItemsView.xaml:7).
+  example: []
+  syntax:
+    content: public static BoxEl Build(Element child, bool isSelected, Action<ItemContainerTrigger, KeyModifiers>? onInteraction = null, bool isEnabled = true, bool showSelectionCheckbox = false, bool isChecked = false, CornerRadius4? corners = null, Action<bool>? onFocusChanged = null, float width = NaN, float height = NaN, bool isTabStop = true, PartDelta partDelta = default)
+    parameters:
+    - id: child
+      type: FluentGpu.Dsl.Element
+    - id: isSelected
+      type: System.Boolean
+    - id: onInteraction
+      type: System.Action{FluentGpu.Controls.ItemContainerTrigger,FluentGpu.Foundation.KeyModifiers}
+    - id: isEnabled
+      type: System.Boolean
+    - id: showSelectionCheckbox
+      type: System.Boolean
+    - id: isChecked
+      type: System.Boolean
+    - id: corners
+      type: System.Nullable{FluentGpu.Foundation.CornerRadius4}
+    - id: onFocusChanged
+      type: System.Action{System.Boolean}
+    - id: width
+      type: System.Single
+    - id: height
+      type: System.Single
+    - id: isTabStop
+      type: System.Boolean
+    - id: partDelta
+      type: FluentGpu.Controls.PartDelta
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Build(child As Element, isSelected As Boolean, onInteraction As Action(Of ItemContainerTrigger, KeyModifiers) = Nothing, isEnabled As Boolean = True, showSelectionCheckbox As Boolean = False, isChecked As Boolean = False, corners As CornerRadius4? = Nothing, onFocusChanged As Action(Of Boolean) = Nothing, width As Single = NaN, height As Single = NaN, isTabStop As Boolean = True, partDelta As PartDelta = Nothing) As BoxEl
+  overload: FluentGpu.Controls.ItemContainer.Build*
+  nameWithType.vb: ItemContainer.Build(Element, Boolean, Action(Of ItemContainerTrigger, KeyModifiers), Boolean, Boolean, Boolean, CornerRadius4?, Action(Of Boolean), Single, Single, Boolean, PartDelta)
+  fullName.vb: FluentGpu.Controls.ItemContainer.Build(FluentGpu.Dsl.Element, Boolean, System.Action(Of FluentGpu.Controls.ItemContainerTrigger, FluentGpu.Foundation.KeyModifiers), Boolean, Boolean, Boolean, FluentGpu.Foundation.CornerRadius4?, System.Action(Of Boolean), Single, Single, Boolean, FluentGpu.Controls.PartDelta)
+  name.vb: Build(Element, Boolean, Action(Of ItemContainerTrigger, KeyModifiers), Boolean, Boolean, Boolean, CornerRadius4?, Action(Of Boolean), Single, Single, Boolean, PartDelta)
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.MemberwiseClone
+  commentId: M:System.Object.MemberwiseClone
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  name: MemberwiseClone()
+  nameWithType: object.MemberwiseClone()
+  fullName: object.MemberwiseClone()
+  nameWithType.vb: Object.MemberwiseClone()
+  fullName.vb: Object.MemberwiseClone()
+  spec.csharp:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Controls.ItemContainer.Build*
+  commentId: Overload:FluentGpu.Controls.ItemContainer.Build
+  href: FluentGpu.Controls.ItemContainer.html#FluentGpu_Controls_ItemContainer_Build_FluentGpu_Dsl_Element_System_Boolean_System_Action_System_Boolean__System_Boolean_System_Nullable_FluentGpu_Foundation_CornerRadius4__
+  name: Build
+  nameWithType: ItemContainer.Build
+  fullName: FluentGpu.Controls.ItemContainer.Build
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: System.Action{System.Boolean}
+  commentId: T:System.Action{System.Boolean}
+  parent: System
+  definition: System.Action`1
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<bool>
+  nameWithType: Action<bool>
+  fullName: System.Action<bool>
+  nameWithType.vb: Action(Of Boolean)
+  fullName.vb: System.Action(Of Boolean)
+  name.vb: Action(Of Boolean)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+- uid: System.Nullable{FluentGpu.Foundation.CornerRadius4}
+  commentId: T:System.Nullable{FluentGpu.Foundation.CornerRadius4}
+  parent: System
+  definition: System.Nullable`1
+  href: FluentGpu.Foundation.CornerRadius4.html
+  name: CornerRadius4?
+  nameWithType: CornerRadius4?
+  fullName: FluentGpu.Foundation.CornerRadius4?
+  spec.csharp:
+  - uid: FluentGpu.Foundation.CornerRadius4
+    name: CornerRadius4
+    href: FluentGpu.Foundation.CornerRadius4.html
+  - name: '?'
+  spec.vb:
+  - uid: FluentGpu.Foundation.CornerRadius4
+    name: CornerRadius4
+    href: FluentGpu.Foundation.CornerRadius4.html
+  - name: '?'
+- uid: FluentGpu.Dsl.BoxEl
+  commentId: T:FluentGpu.Dsl.BoxEl
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.BoxEl.html
+  name: BoxEl
+  nameWithType: BoxEl
+  fullName: FluentGpu.Dsl.BoxEl
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: System.Action`1
+  commentId: T:System.Action`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<T>
+  nameWithType: Action<T>
+  fullName: System.Action<T>
+  nameWithType.vb: Action(Of T)
+  fullName.vb: System.Action(Of T)
+  name.vb: Action(Of T)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Nullable`1
+  commentId: T:System.Nullable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  name: Nullable<T>
+  nameWithType: Nullable<T>
+  fullName: System.Nullable<T>
+  nameWithType.vb: Nullable(Of T)
+  fullName.vb: System.Nullable(Of T)
+  name.vb: Nullable(Of T)
+  spec.csharp:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Action{FluentGpu.Controls.ItemContainerTrigger,FluentGpu.Foundation.KeyModifiers}
+  commentId: T:System.Action{FluentGpu.Controls.ItemContainerTrigger,FluentGpu.Foundation.KeyModifiers}
+  parent: System
+  definition: System.Action`2
+  href: https://learn.microsoft.com/dotnet/api/system.action-2
+  name: Action<ItemContainerTrigger, KeyModifiers>
+  nameWithType: Action<ItemContainerTrigger, KeyModifiers>
+  fullName: System.Action<FluentGpu.Controls.ItemContainerTrigger, FluentGpu.Foundation.KeyModifiers>
+  nameWithType.vb: Action(Of ItemContainerTrigger, KeyModifiers)
+  fullName.vb: System.Action(Of FluentGpu.Controls.ItemContainerTrigger, FluentGpu.Foundation.KeyModifiers)
+  name.vb: Action(Of ItemContainerTrigger, KeyModifiers)
+  spec.csharp:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: <
+  - uid: FluentGpu.Controls.ItemContainerTrigger
+    name: ItemContainerTrigger
+    href: FluentGpu.Controls.ItemContainerTrigger.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Foundation.KeyModifiers
+    name: KeyModifiers
+    href: FluentGpu.Foundation.KeyModifiers.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.ItemContainerTrigger
+    name: ItemContainerTrigger
+    href: FluentGpu.Controls.ItemContainerTrigger.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Foundation.KeyModifiers
+    name: KeyModifiers
+    href: FluentGpu.Foundation.KeyModifiers.html
+  - name: )
+- uid: FluentGpu.Controls.PartDelta
+  commentId: T:FluentGpu.Controls.PartDelta
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.PartDelta.html
+  name: PartDelta
+  nameWithType: PartDelta
+  fullName: FluentGpu.Controls.PartDelta
+- uid: System.Action`2
+  commentId: T:System.Action`2
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-2
+  name: Action<T1, T2>
+  nameWithType: Action<T1, T2>
+  fullName: System.Action<T1, T2>
+  nameWithType.vb: Action(Of T1, T2)
+  fullName.vb: System.Action(Of T1, T2)
+  name.vb: Action(Of T1, T2)
+  spec.csharp:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: <
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: )

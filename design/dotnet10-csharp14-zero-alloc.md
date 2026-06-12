@@ -38,8 +38,8 @@ Set these once. They are the substrate for every pattern in this doc.
 ```
 
 **Assembly split (load-bearing — see §F):**
-- **`FluentGpu.Renderer` / `FluentGpu.Pal`** — carries `[assembly: DisableRuntimeMarshalling]`. Hand-vtable `calli` only. All interop blittable. This attribute makes the compiler *prove* every P/Invoke, delegate, and unmanaged-fn-ptr boundary is blittable (CA1421 otherwise) — the cheapest zero-alloc guardrail you can buy.
-- **`FluentGpu.PlatformIntegration`** — UIA/TSF/OLE/DWrite-setup COM via `[GeneratedComInterface]`/`[GeneratedComClass]`. **No** `DisableRuntimeMarshalling` here (source-gen COM uses `in`/`out` modifiers that the attribute bans). Keep each generated COM interface hierarchy inside this one assembly (cross-assembly `[GeneratedComInterface]` inheritance has a rebuild-coupling vtable-offset pitfall).
+- **`FluentGpu.Windows`** (D3D12/ + Pal/ hot path) — carries `[assembly: DisableRuntimeMarshalling]`. Hand-vtable `calli` only. All interop blittable. This attribute makes the compiler *prove* every P/Invoke, delegate, and unmanaged-fn-ptr boundary is blittable (CA1421 otherwise) — the cheapest zero-alloc guardrail you can buy.
+- **Cold COM (UIA/TSF/OLE/DWrite-setup) in `FluentGpu.Windows/Uia/`** — uses `[GeneratedComInterface]`/`[GeneratedComClass]`. **No** `DisableRuntimeMarshalling` on these files (source-gen COM uses `in`/`out` modifiers that the attribute bans). If the `DisableRuntimeMarshalling` assembly-level attribute conflicts, isolate cold COM into a thin satellite assembly. Keep each generated COM interface hierarchy inside one assembly (cross-assembly `[GeneratedComInterface]` inheritance has a rebuild-coupling vtable-offset pitfall).
 
 **Interceptors opt-in (only if a source generator emits them — see Hooks/DSL):**
 ```xml
@@ -259,7 +259,7 @@ Pipelines is purpose-built for **async byte-stream I/O with backpressure across 
 - [ ] **Baseline:** add the `net10.0` / `LangVersion 14.0` / `PublishAot` / `InvariantGlobalization` / `TrimMode full` block to `Directory.Build.props`.
 - [ ] **GC:** set `<ServerGarbageCollection>false</>` + `<ConcurrentGarbageCollection>true</>`; document "DATAS on, never Server GC."
 - [ ] **Startup:** `GCSettings.LatencyMode = SustainedLowLatency` once at engine init; add optional `FrameLoop.BeginCriticalSpan(budget)` wrapping `TryStartNoGCRegion` *with bool check + fallback* (NOT per-frame).
-- [ ] **Assembly split:** `[assembly: DisableRuntimeMarshalling]` on `FluentGpu.Renderer`/`Pal`; create `FluentGpu.PlatformIntegration` (no attribute) for source-gen COM; keep each COM hierarchy single-assembly.
+- [ ] **Assembly split:** `[assembly: DisableRuntimeMarshalling]` on `FluentGpu.Windows` (hot-path D3D12/Pal interop); isolate source-gen COM (UIA/TSF/OLE — no attribute) in `FluentGpu.Windows/Uia/` or a thin satellite if the attribute conflicts; keep each COM hierarchy single-assembly.
 - [ ] **COM ruling:** rewrite "reject ComWrappers" → "hand-vtable on per-frame hot path + in-loop CCWs; `[GeneratedComInterface]`/`[GeneratedComClass]` everywhere cold." Re-justify the hot-path rejection on **cache-lookup + call-site-control**, not "per-call RCW alloc."
 - [ ] **Interop:** mandate `[LibraryImport]` for every flat C export; ban `[DllImport]`. Confirm IIDs are `"…"u8` via `static ReadOnlySpan<byte> => …` properties.
 - [ ] **DrawList:** specify writer = `IBufferWriter<byte>` contract over arena cursor; consumer = `ReadOnlySpan<byte>` + `MemoryMarshal.Read`. Explicitly state "no `Pipe`/`ArrayBufferWriter`/`ReadOnlySequence`/`SequenceReader` on the paint path."

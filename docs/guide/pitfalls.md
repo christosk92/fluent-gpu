@@ -9,10 +9,10 @@ Read this before debugging. Each row is a real failure mode of the signals-first
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| A `ReactiveComponent` shows a stale value forever | `Setup()` runs **once**; `Ui.Text(sig.Value)` read the value one time | Use a binding: `new TextEl("") { TextBind = () => sig.Value }`. In `Setup()`, *everything dynamic* must be a bind / `For` / `Show`. |
-| A binding never updates | The thunk used `.Peek()` (no subscribe) — or read a plain field, not a signal | Read `.Value` inside the thunk: `TransformBind = () => Affine2D.Translation(sig.Value, 0)`. `.Value` subscribes the binding effect; `.Peek()` does not. |
+| A `ReactiveComponent` shows a stale value forever | `Setup()` runs **once**; `Ui.Text(sig.Value)` read the value one time | Use a bound prop: `new TextEl("") { Text = sig }` (signal-direct) or `Text = Prop.Of(() => f(sig.Value))`. In `Setup()`, *everything dynamic* must be a bind / `For` / `Show`. |
+| A binding never updates | The thunk used `.Peek()` (no subscribe) — or read a plain field, not a signal | Read `.Value` inside the thunk: `Transform = Prop.Of(() => Affine2D.Translation(sig.Value, 0))`. `.Value` subscribes the binding effect; `.Peek()` does not. |
 | Setting a signal does nothing visible | Whatever should react never *read* that signal (no subscription exists) | Make the renderer/binding read `signal.Value` (in `Render()` to re-render, or in a bind thunk to update a node). |
-| A child component ignores new data from its parent | Constructor args are **frozen at mount** — the factory isn't re-invoked on parent re-render | Pass a **`Signal<T>`** or use **context**; the child reads `sig.Value`/`UseContext` and updates. See [reactivity.md](./reactivity.md#props-dont-flow-through-constructors). |
+| A child component ignores new data from its parent | Constructor args are **frozen at mount** — the factory isn't re-invoked on parent re-render | Pass a **`Signal<T>`** or use **context**; the child reads `sig.Value`/`UseContext` and updates. Control factories should use a `Props` record + `Ctx.Provide` for runtime-changeable props. See [reactivity.md](./reactivity.md#props-dont-flow-through-constructors). |
 | Infinite re-render / `Flush exceeded 1000 iterations` in logs | A `setState`/signal write happens **during render** (a render re-schedules itself) | Move the write into an event handler or `UseEffect`. Never write a signal a component reads from inside its own `Render()`. |
 | Hooks throw / state lands in the wrong cell | Hooks called conditionally or in a loop — slot order shifted | Call hooks unconditionally, top-level, same order every render (the React rules-of-hooks; cells are slot-indexed). |
 | `UseContext` returns the default, not the provided value | No `Ctx.Provide` ancestor for that channel above this component | Wrap the subtree in `Ctx.Provide(channel, value, child)`; the consumer must be a descendant. |
@@ -22,19 +22,20 @@ Read this before debugging. Each row is a real failure mode of the signals-first
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Dragging a slider tanks FPS | A `setState` per pointer-move re-renders the owning component every frame | Use `Slider.Bind(FloatSignal)` (compositor bypass), or hand-bind the value to `TransformBind`. Confirm `FrameStats.Rendered == false` on drag. |
+| Dragging a slider tanks FPS | A `setState` per pointer-move re-renders the owning component every frame | Use `Slider.Bind(FloatSignal)` (compositor bypass), or hand-bind the value to `Transform`. Confirm `FrameStats.Rendered == false` on drag. |
 | A small change relayouts the whole page | No layout boundary above the change → the up-walk reaches the root → full layout | Give the enclosing container explicit `Width`+`Height`+`ClipToBounds=true` so it's a boundary. See [rendering-and-performance.md](./rendering-and-performance.md#scoped-relayout). |
 | `HotPhaseAllocBytes > 0` (zero-alloc check fails) | Allocation inside a bind thunk or hot effect body (`new`, LINQ, boxing, per-call closure) | Capture everything once at mount; the thunk must only read + write existing state. No allocation in phases 6–13. |
 | Whole app re-renders on one interaction | State lives too high (at the root), so the root's render-effect runs | Move state down into the component that owns it; or bind the hot value instead of `setState`. |
 | List with thousands of items is slow / leaks nodes | Not virtualized, or no stable `keyOf` | Use `Virtual.List`/`Repeater.ItemsRepeater` with `keyOf: i => stableId`. Only the window is realized; rows recycle. |
 | Scroll re-realizes/relayouts every frame | (rare) something marks the viewport dirty each frame | In-window scroll is transform-only by design; check you aren't re-rendering the list component each frame (move its state out / bind it). |
+| A virtualized list/grid allocates on every scroll frame (`HotPhaseAllocBytes > 0`) | A per-item closure or a per-item `TemplateParts` modifier is rebuilt on each realize; or a `PartDelta` lambda calls `new`/`Animate`/LINQ per item | Vary per-item chrome through `PartDelta` VALUES only (pure-value lambda, no allocation); keep the skin on the `ContainerFactory`/`SelectorVisual` seam; per-item structure uses `Opacity=0`/`Width=0` invisible-part flips, never add/remove children. See [control-fidelity §6](./control-fidelity.md#6-template-parts--one-generic-door-no-styling-knobs). |
 
 ## Layout & visuals
 
 | Symptom | Cause | Fix |
 |---|---|---|
 | Content vanishes / is clipped to a tiny box | A `ClipToBounds` ancestor has zero/!wrong size, or a presented-size animation clipped it on frame 1 | Check the node's `Width`/`Height`; dump with `FG_DUMP=1`. Boundaries need real sizes. |
-| A static `OffsetX`/`ScaleX`/`Opacity` you set "snaps back" each frame | An animation **or a `TransformBind`/`OpacityBind`** owns that channel; the reconciler won't also write the static value (else it'd fight the animator) | Drive the value through the bind/animation, not both. Pick one owner per channel. |
+| A static `OffsetX`/`ScaleX`/`Opacity` you set "snaps back" each frame | An animation **or a bound `Transform`/`Opacity`** owns that channel; the reconciler won't also write the static value (else it'd fight the animator) | Drive the value through the bind/animation, not both. Pick one owner per channel. |
 | Element not clickable | `HitTestVisible = false`, zero size, or no handler | Give it size and an `OnClick`/`OnPointerDown`; `HitTestVisible` defaults true. |
 | Text doesn't wrap | `Wrap = NoWrap` (default) or no width constraint to wrap against | `text.Wrapped()` + a bounded width (explicit `Width` or a stretching parent). |
 | Colors look wrong across themes | Hard-coded `ColorF` instead of tokens | Read `Tok.*` (e.g. `Tok.TextPrimary`, `Tok.FillCardDefault`); they follow `Tok.Use(theme)`. |

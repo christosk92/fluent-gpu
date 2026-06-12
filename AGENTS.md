@@ -36,7 +36,7 @@ A change reaches pixels through **one mechanism: a signal**. Reading a signal (`
 reactive computation; writing it re-runs only the computations that read it. A component's render is one such
 computation; a property *binding* is a finer one. Three update paths, cheapest first:
 
-- **Binding** (`TransformBind`/`OpacityBind`/`FillBind`): one effect → one scene-node prop, **compositor-only** (no
+- **Binding** (`Transform`/`Opacity`/`Fill` set to a Func/signal): one effect → one scene-node prop, **compositor-only** (no
   render/reconcile/layout). For high-frequency scalars (slider, scroll, progress, hover).
 - **Granular re-render** (`UseState`/`UseSignal`): re-renders the owning component's subtree + a **scoped** relayout.
 - **Reactive control-flow** (`Flow.For`/`Flow.Show`): keyed diff of one boundary's children, no parent re-render.
@@ -46,10 +46,10 @@ computation; a property *binding* is a finer one. Three update paths, cheapest f
 1. To make something update, a signal it **reads** must change. `.Value` subscribes; `.Peek()` does not.
 2. `Component.Render()` re-runs on its **own** state/context only. **Parent→child data flows via signals or context,
    never constructor args** — constructor values freeze at mount (the factory is not re-invoked on re-render).
-3. `ReactiveComponent.Setup()` runs **once**; show dynamic values via a binding (`TextBind = () => sig.Value`), not
+3. `ReactiveComponent.Setup()` runs **once**; show dynamic values via a bound prop (`Text = sig` signal-direct, or `Text = Prop.Of(() => …)` for derived text), not
    `Ui.Text(sig.Value)`.
 4. Bind thunks must read `.Value`, not `.Peek()`.
-5. `TransformBind`/`OpacityBind`/`FillBind` are compositor-only; `WidthBind`/`HeightBind`/`TextBind` trigger scoped
+5. Every bindable channel is ONE `Prop<T>` prop (value / `Func<T>` via `Prop.Of` / concrete signal). Bound `Transform`/`Opacity`/`Fill` are compositor-only; bound `Width`/`Height`/`Text` trigger scoped
    relayout. Prefer a transform bind for hot values.
 6. Never write a signal during render (it loops). Use an event handler or `UseEffect`.
 7. Hooks run in stable call order — no hooks inside `if`/loops.

@@ -1,0 +1,496 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Animation.AnimChannel
+  commentId: T:FluentGpu.Animation.AnimChannel
+  id: AnimChannel
+  parent: FluentGpu.Animation
+  children:
+  - FluentGpu.Animation.AnimChannel.ClipB
+  - FluentGpu.Animation.AnimChannel.ClipL
+  - FluentGpu.Animation.AnimChannel.ClipR
+  - FluentGpu.Animation.AnimChannel.ClipT
+  - FluentGpu.Animation.AnimChannel.LayoutH
+  - FluentGpu.Animation.AnimChannel.LayoutW
+  - FluentGpu.Animation.AnimChannel.Opacity
+  - FluentGpu.Animation.AnimChannel.Rotation
+  - FluentGpu.Animation.AnimChannel.ScaleX
+  - FluentGpu.Animation.AnimChannel.ScaleY
+  - FluentGpu.Animation.AnimChannel.SizeH
+  - FluentGpu.Animation.AnimChannel.SizeW
+  - FluentGpu.Animation.AnimChannel.StrokeTrimEnd
+  - FluentGpu.Animation.AnimChannel.StrokeTrimStart
+  - FluentGpu.Animation.AnimChannel.TranslateX
+  - FluentGpu.Animation.AnimChannel.TranslateY
+  langs:
+  - csharp
+  - vb
+  name: AnimChannel
+  nameWithType: AnimChannel
+  fullName: FluentGpu.Animation.AnimChannel
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AnimChannel
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: >-
+    Animatable channels. Transform channels compose into LocalTransform (TransformDirty); Opacity + the presented
+        SizeW/SizeH (the "Reveal" presented extent the recorder draws the fill + child-clip at) → PaintDirty. LayoutW/LayoutH
+        are the one deliberate exception to "animation never relays out": a SizeMode.Reflow track writes the interpolated
+        size into LayoutInput each tick and the host re-solves the nearest layout boundary, so neighbours reflow smoothly.
+  example: []
+  syntax:
+    content: 'public enum AnimChannel : byte'
+    content.vb: Public Enum AnimChannel As Byte
+- uid: FluentGpu.Animation.AnimChannel.TranslateX
+  commentId: F:FluentGpu.Animation.AnimChannel.TranslateX
+  id: TranslateX
+  parent: FluentGpu.Animation.AnimChannel
+  langs:
+  - csharp
+  - vb
+  name: TranslateX
+  nameWithType: AnimChannel.TranslateX
+  fullName: FluentGpu.Animation.AnimChannel.TranslateX
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TranslateX
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: TranslateX = 0
+    return:
+      type: FluentGpu.Animation.AnimChannel
+- uid: FluentGpu.Animation.AnimChannel.TranslateY
+  commentId: F:FluentGpu.Animation.AnimChannel.TranslateY
+  id: TranslateY
+  parent: FluentGpu.Animation.AnimChannel
+  langs:
+  - csharp
+  - vb
+  name: TranslateY
+  nameWithType: AnimChannel.TranslateY
+  fullName: FluentGpu.Animation.AnimChannel.TranslateY
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TranslateY
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: TranslateY = 1
+    return:
+      type: FluentGpu.Animation.AnimChannel
+- uid: FluentGpu.Animation.AnimChannel.ScaleX
+  commentId: F:FluentGpu.Animation.AnimChannel.ScaleX
+  id: ScaleX
+  parent: FluentGpu.Animation.AnimChannel
+  langs:
+  - csharp
+  - vb
+  name: ScaleX
+  nameWithType: AnimChannel.ScaleX
+  fullName: FluentGpu.Animation.AnimChannel.ScaleX
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ScaleX
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: ScaleX = 2
+    return:
+      type: FluentGpu.Animation.AnimChannel
+- uid: FluentGpu.Animation.AnimChannel.ScaleY
+  commentId: F:FluentGpu.Animation.AnimChannel.ScaleY
+  id: ScaleY
+  parent: FluentGpu.Animation.AnimChannel
+  langs:
+  - csharp
+  - vb
+  name: ScaleY
+  nameWithType: AnimChannel.ScaleY
+  fullName: FluentGpu.Animation.AnimChannel.ScaleY
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ScaleY
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: ScaleY = 3
+    return:
+      type: FluentGpu.Animation.AnimChannel
+- uid: FluentGpu.Animation.AnimChannel.Rotation
+  commentId: F:FluentGpu.Animation.AnimChannel.Rotation
+  id: Rotation
+  parent: FluentGpu.Animation.AnimChannel
+  langs:
+  - csharp
+  - vb
+  name: Rotation
+  nameWithType: AnimChannel.Rotation
+  fullName: FluentGpu.Animation.AnimChannel.Rotation
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Rotation
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: Rotation = 4
+    return:
+      type: FluentGpu.Animation.AnimChannel
+- uid: FluentGpu.Animation.AnimChannel.Opacity
+  commentId: F:FluentGpu.Animation.AnimChannel.Opacity
+  id: Opacity
+  parent: FluentGpu.Animation.AnimChannel
+  langs:
+  - csharp
+  - vb
+  name: Opacity
+  nameWithType: AnimChannel.Opacity
+  fullName: FluentGpu.Animation.AnimChannel.Opacity
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Opacity
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: Opacity = 5
+    return:
+      type: FluentGpu.Animation.AnimChannel
+- uid: FluentGpu.Animation.AnimChannel.SizeW
+  commentId: F:FluentGpu.Animation.AnimChannel.SizeW
+  id: SizeW
+  parent: FluentGpu.Animation.AnimChannel
+  langs:
+  - csharp
+  - vb
+  name: SizeW
+  nameWithType: AnimChannel.SizeW
+  fullName: FluentGpu.Animation.AnimChannel.SizeW
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SizeW
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: SizeW = 6
+    return:
+      type: FluentGpu.Animation.AnimChannel
+- uid: FluentGpu.Animation.AnimChannel.SizeH
+  commentId: F:FluentGpu.Animation.AnimChannel.SizeH
+  id: SizeH
+  parent: FluentGpu.Animation.AnimChannel
+  langs:
+  - csharp
+  - vb
+  name: SizeH
+  nameWithType: AnimChannel.SizeH
+  fullName: FluentGpu.Animation.AnimChannel.SizeH
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SizeH
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: SizeH = 7
+    return:
+      type: FluentGpu.Animation.AnimChannel
+- uid: FluentGpu.Animation.AnimChannel.StrokeTrimStart
+  commentId: F:FluentGpu.Animation.AnimChannel.StrokeTrimStart
+  id: StrokeTrimStart
+  parent: FluentGpu.Animation.AnimChannel
+  langs:
+  - csharp
+  - vb
+  name: StrokeTrimStart
+  nameWithType: AnimChannel.StrokeTrimStart
+  fullName: FluentGpu.Animation.AnimChannel.StrokeTrimStart
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StrokeTrimStart
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: StrokeTrimStart = 8
+    return:
+      type: FluentGpu.Animation.AnimChannel
+- uid: FluentGpu.Animation.AnimChannel.StrokeTrimEnd
+  commentId: F:FluentGpu.Animation.AnimChannel.StrokeTrimEnd
+  id: StrokeTrimEnd
+  parent: FluentGpu.Animation.AnimChannel
+  langs:
+  - csharp
+  - vb
+  name: StrokeTrimEnd
+  nameWithType: AnimChannel.StrokeTrimEnd
+  fullName: FluentGpu.Animation.AnimChannel.StrokeTrimEnd
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StrokeTrimEnd
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: StrokeTrimEnd = 9
+    return:
+      type: FluentGpu.Animation.AnimChannel
+- uid: FluentGpu.Animation.AnimChannel.ClipL
+  commentId: F:FluentGpu.Animation.AnimChannel.ClipL
+  id: ClipL
+  parent: FluentGpu.Animation.AnimChannel
+  langs:
+  - csharp
+  - vb
+  name: ClipL
+  nameWithType: AnimChannel.ClipL
+  fullName: FluentGpu.Animation.AnimChannel.ClipL
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ClipL
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: ClipL = 10
+    return:
+      type: FluentGpu.Animation.AnimChannel
+- uid: FluentGpu.Animation.AnimChannel.ClipT
+  commentId: F:FluentGpu.Animation.AnimChannel.ClipT
+  id: ClipT
+  parent: FluentGpu.Animation.AnimChannel
+  langs:
+  - csharp
+  - vb
+  name: ClipT
+  nameWithType: AnimChannel.ClipT
+  fullName: FluentGpu.Animation.AnimChannel.ClipT
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ClipT
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: ClipT = 11
+    return:
+      type: FluentGpu.Animation.AnimChannel
+- uid: FluentGpu.Animation.AnimChannel.ClipR
+  commentId: F:FluentGpu.Animation.AnimChannel.ClipR
+  id: ClipR
+  parent: FluentGpu.Animation.AnimChannel
+  langs:
+  - csharp
+  - vb
+  name: ClipR
+  nameWithType: AnimChannel.ClipR
+  fullName: FluentGpu.Animation.AnimChannel.ClipR
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ClipR
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: ClipR = 12
+    return:
+      type: FluentGpu.Animation.AnimChannel
+- uid: FluentGpu.Animation.AnimChannel.ClipB
+  commentId: F:FluentGpu.Animation.AnimChannel.ClipB
+  id: ClipB
+  parent: FluentGpu.Animation.AnimChannel
+  langs:
+  - csharp
+  - vb
+  name: ClipB
+  nameWithType: AnimChannel.ClipB
+  fullName: FluentGpu.Animation.AnimChannel.ClipB
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ClipB
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: ClipB = 13
+    return:
+      type: FluentGpu.Animation.AnimChannel
+- uid: FluentGpu.Animation.AnimChannel.LayoutW
+  commentId: F:FluentGpu.Animation.AnimChannel.LayoutW
+  id: LayoutW
+  parent: FluentGpu.Animation.AnimChannel
+  langs:
+  - csharp
+  - vb
+  name: LayoutW
+  nameWithType: AnimChannel.LayoutW
+  fullName: FluentGpu.Animation.AnimChannel.LayoutW
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LayoutW
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: LayoutW = 14
+    return:
+      type: FluentGpu.Animation.AnimChannel
+- uid: FluentGpu.Animation.AnimChannel.LayoutH
+  commentId: F:FluentGpu.Animation.AnimChannel.LayoutH
+  id: LayoutH
+  parent: FluentGpu.Animation.AnimChannel
+  langs:
+  - csharp
+  - vb
+  name: LayoutH
+  nameWithType: AnimChannel.LayoutH
+  fullName: FluentGpu.Animation.AnimChannel.LayoutH
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LayoutH
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: LayoutH = 15
+    return:
+      type: FluentGpu.Animation.AnimChannel
+references:
+- uid: FluentGpu.Animation
+  commentId: N:FluentGpu.Animation
+  href: FluentGpu.html
+  name: FluentGpu.Animation
+  nameWithType: FluentGpu.Animation
+  fullName: FluentGpu.Animation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Animation
+    name: Animation
+    href: FluentGpu.Animation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Animation
+    name: Animation
+    href: FluentGpu.Animation.html
+- uid: FluentGpu.Animation.AnimChannel
+  commentId: T:FluentGpu.Animation.AnimChannel
+  parent: FluentGpu.Animation
+  href: FluentGpu.Animation.AnimChannel.html
+  name: AnimChannel
+  nameWithType: AnimChannel
+  fullName: FluentGpu.Animation.AnimChannel

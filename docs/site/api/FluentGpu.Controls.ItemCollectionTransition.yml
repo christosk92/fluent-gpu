@@ -1,0 +1,650 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.ItemCollectionTransition
+  commentId: T:FluentGpu.Controls.ItemCollectionTransition
+  id: ItemCollectionTransition
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.ItemCollectionTransition.#ctor(System.Boolean,System.Boolean,System.Boolean,System.Single)
+  - FluentGpu.Controls.ItemCollectionTransition.AnimateAdds
+  - FluentGpu.Controls.ItemCollectionTransition.AnimateMoves
+  - FluentGpu.Controls.ItemCollectionTransition.AnimateRemoves
+  - FluentGpu.Controls.ItemCollectionTransition.Default
+  - FluentGpu.Controls.ItemCollectionTransition.DurationMs
+  langs:
+  - csharp
+  - vb
+  name: ItemCollectionTransition
+  nameWithType: ItemCollectionTransition
+  fullName: FluentGpu.Controls.ItemCollectionTransition
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ItemCollectionTransition
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>ItemCollectionTransition</code> mapped onto the engine's FLIP/<xref href="FluentGpu.Foundation.LayoutTransition" data-throw-if-not-resolved="false"></xref> pipeline
+
+    (E11-L2): Moves = position FLIP (a reorder/removal slides the survivors), Adds = enter fade-in, Removes = exit
+
+    fade-out, all over WinUI's <code>ControlFastAnimationDuration</code> 167ms / decelerate spline (0,0,0,1) — the timing the
+
+    ItemContainer/Repeater storyboards use (ItemContainer.xaml:54-56 KeySpline="0,0,0,1" at ControlFastAnimationDuration).
+
+    Virtualized caveat (documented, deliberate): enter transitions also play when an item SCROLLS into the realized
+
+    window as a fresh mount — WinUI's LinedFlow behaves the same way for newly realized elements.
+  example: []
+  syntax:
+    content: 'public readonly record struct ItemCollectionTransition : IEquatable<ItemCollectionTransition>'
+    content.vb: Public Structure ItemCollectionTransition Implements IEquatable(Of ItemCollectionTransition)
+  implements:
+  - System.IEquatable{FluentGpu.Controls.ItemCollectionTransition}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Controls.ItemCollectionTransition.#ctor(System.Boolean,System.Boolean,System.Boolean,System.Single)
+  commentId: M:FluentGpu.Controls.ItemCollectionTransition.#ctor(System.Boolean,System.Boolean,System.Boolean,System.Single)
+  id: '#ctor(System.Boolean,System.Boolean,System.Boolean,System.Single)'
+  parent: FluentGpu.Controls.ItemCollectionTransition
+  langs:
+  - csharp
+  - vb
+  name: ItemCollectionTransition(bool, bool, bool, float)
+  nameWithType: ItemCollectionTransition.ItemCollectionTransition(bool, bool, bool, float)
+  fullName: FluentGpu.Controls.ItemCollectionTransition.ItemCollectionTransition(bool, bool, bool, float)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>ItemCollectionTransition</code> mapped onto the engine's FLIP/<xref href="FluentGpu.Foundation.LayoutTransition" data-throw-if-not-resolved="false"></xref> pipeline
+
+    (E11-L2): Moves = position FLIP (a reorder/removal slides the survivors), Adds = enter fade-in, Removes = exit
+
+    fade-out, all over WinUI's <code>ControlFastAnimationDuration</code> 167ms / decelerate spline (0,0,0,1) — the timing the
+
+    ItemContainer/Repeater storyboards use (ItemContainer.xaml:54-56 KeySpline="0,0,0,1" at ControlFastAnimationDuration).
+
+    Virtualized caveat (documented, deliberate): enter transitions also play when an item SCROLLS into the realized
+
+    window as a fresh mount — WinUI's LinedFlow behaves the same way for newly realized elements.
+  example: []
+  syntax:
+    content: public ItemCollectionTransition(bool AnimateAdds = true, bool AnimateRemoves = true, bool AnimateMoves = true, float DurationMs = 167)
+    parameters:
+    - id: AnimateAdds
+      type: System.Boolean
+    - id: AnimateRemoves
+      type: System.Boolean
+    - id: AnimateMoves
+      type: System.Boolean
+    - id: DurationMs
+      type: System.Single
+    content.vb: Public Sub New(AnimateAdds As Boolean = True, AnimateRemoves As Boolean = True, AnimateMoves As Boolean = True, DurationMs As Single = 167)
+  overload: FluentGpu.Controls.ItemCollectionTransition.#ctor*
+  nameWithType.vb: ItemCollectionTransition.New(Boolean, Boolean, Boolean, Single)
+  fullName.vb: FluentGpu.Controls.ItemCollectionTransition.New(Boolean, Boolean, Boolean, Single)
+  name.vb: New(Boolean, Boolean, Boolean, Single)
+- uid: FluentGpu.Controls.ItemCollectionTransition.AnimateAdds
+  commentId: P:FluentGpu.Controls.ItemCollectionTransition.AnimateAdds
+  id: AnimateAdds
+  parent: FluentGpu.Controls.ItemCollectionTransition
+  langs:
+  - csharp
+  - vb
+  name: AnimateAdds
+  nameWithType: ItemCollectionTransition.AnimateAdds
+  fullName: FluentGpu.Controls.ItemCollectionTransition.AnimateAdds
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AnimateAdds
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 63
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool AnimateAdds { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property AnimateAdds As Boolean
+  overload: FluentGpu.Controls.ItemCollectionTransition.AnimateAdds*
+- uid: FluentGpu.Controls.ItemCollectionTransition.AnimateRemoves
+  commentId: P:FluentGpu.Controls.ItemCollectionTransition.AnimateRemoves
+  id: AnimateRemoves
+  parent: FluentGpu.Controls.ItemCollectionTransition
+  langs:
+  - csharp
+  - vb
+  name: AnimateRemoves
+  nameWithType: ItemCollectionTransition.AnimateRemoves
+  fullName: FluentGpu.Controls.ItemCollectionTransition.AnimateRemoves
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AnimateRemoves
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 64
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool AnimateRemoves { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property AnimateRemoves As Boolean
+  overload: FluentGpu.Controls.ItemCollectionTransition.AnimateRemoves*
+- uid: FluentGpu.Controls.ItemCollectionTransition.AnimateMoves
+  commentId: P:FluentGpu.Controls.ItemCollectionTransition.AnimateMoves
+  id: AnimateMoves
+  parent: FluentGpu.Controls.ItemCollectionTransition
+  langs:
+  - csharp
+  - vb
+  name: AnimateMoves
+  nameWithType: ItemCollectionTransition.AnimateMoves
+  fullName: FluentGpu.Controls.ItemCollectionTransition.AnimateMoves
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AnimateMoves
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 65
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool AnimateMoves { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property AnimateMoves As Boolean
+  overload: FluentGpu.Controls.ItemCollectionTransition.AnimateMoves*
+- uid: FluentGpu.Controls.ItemCollectionTransition.DurationMs
+  commentId: P:FluentGpu.Controls.ItemCollectionTransition.DurationMs
+  id: DurationMs
+  parent: FluentGpu.Controls.ItemCollectionTransition
+  langs:
+  - csharp
+  - vb
+  name: DurationMs
+  nameWithType: ItemCollectionTransition.DurationMs
+  fullName: FluentGpu.Controls.ItemCollectionTransition.DurationMs
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DurationMs
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 66
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float DurationMs { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property DurationMs As Single
+  overload: FluentGpu.Controls.ItemCollectionTransition.DurationMs*
+- uid: FluentGpu.Controls.ItemCollectionTransition.Default
+  commentId: P:FluentGpu.Controls.ItemCollectionTransition.Default
+  id: Default
+  parent: FluentGpu.Controls.ItemCollectionTransition
+  langs:
+  - csharp
+  - vb
+  name: Default
+  nameWithType: ItemCollectionTransition.Default
+  fullName: FluentGpu.Controls.ItemCollectionTransition.Default
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Default
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 70
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static ItemCollectionTransition Default { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.ItemCollectionTransition
+    content.vb: Public Shared ReadOnly Property [Default] As ItemCollectionTransition
+  overload: FluentGpu.Controls.ItemCollectionTransition.Default*
+references:
+- uid: FluentGpu.Foundation.LayoutTransition
+  commentId: T:FluentGpu.Foundation.LayoutTransition
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.LayoutTransition.html
+  name: LayoutTransition
+  nameWithType: LayoutTransition
+  fullName: FluentGpu.Foundation.LayoutTransition
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.IEquatable{FluentGpu.Controls.ItemCollectionTransition}
+  commentId: T:System.IEquatable{FluentGpu.Controls.ItemCollectionTransition}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<ItemCollectionTransition>
+  nameWithType: IEquatable<ItemCollectionTransition>
+  fullName: System.IEquatable<FluentGpu.Controls.ItemCollectionTransition>
+  nameWithType.vb: IEquatable(Of ItemCollectionTransition)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.ItemCollectionTransition)
+  name.vb: IEquatable(Of ItemCollectionTransition)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.ItemCollectionTransition
+    name: ItemCollectionTransition
+    href: FluentGpu.Controls.ItemCollectionTransition.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.ItemCollectionTransition
+    name: ItemCollectionTransition
+    href: FluentGpu.Controls.ItemCollectionTransition.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Controls.ItemCollectionTransition.#ctor*
+  commentId: Overload:FluentGpu.Controls.ItemCollectionTransition.#ctor
+  href: FluentGpu.Controls.ItemCollectionTransition.html#FluentGpu_Controls_ItemCollectionTransition__ctor_System_Boolean_System_Boolean_System_Boolean_System_Single_
+  name: ItemCollectionTransition
+  nameWithType: ItemCollectionTransition.ItemCollectionTransition
+  fullName: FluentGpu.Controls.ItemCollectionTransition.ItemCollectionTransition
+  nameWithType.vb: ItemCollectionTransition.New
+  fullName.vb: FluentGpu.Controls.ItemCollectionTransition.New
+  name.vb: New
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Controls.ItemCollectionTransition.AnimateAdds*
+  commentId: Overload:FluentGpu.Controls.ItemCollectionTransition.AnimateAdds
+  href: FluentGpu.Controls.ItemCollectionTransition.html#FluentGpu_Controls_ItemCollectionTransition_AnimateAdds
+  name: AnimateAdds
+  nameWithType: ItemCollectionTransition.AnimateAdds
+  fullName: FluentGpu.Controls.ItemCollectionTransition.AnimateAdds
+- uid: FluentGpu.Controls.ItemCollectionTransition.AnimateRemoves*
+  commentId: Overload:FluentGpu.Controls.ItemCollectionTransition.AnimateRemoves
+  href: FluentGpu.Controls.ItemCollectionTransition.html#FluentGpu_Controls_ItemCollectionTransition_AnimateRemoves
+  name: AnimateRemoves
+  nameWithType: ItemCollectionTransition.AnimateRemoves
+  fullName: FluentGpu.Controls.ItemCollectionTransition.AnimateRemoves
+- uid: FluentGpu.Controls.ItemCollectionTransition.AnimateMoves*
+  commentId: Overload:FluentGpu.Controls.ItemCollectionTransition.AnimateMoves
+  href: FluentGpu.Controls.ItemCollectionTransition.html#FluentGpu_Controls_ItemCollectionTransition_AnimateMoves
+  name: AnimateMoves
+  nameWithType: ItemCollectionTransition.AnimateMoves
+  fullName: FluentGpu.Controls.ItemCollectionTransition.AnimateMoves
+- uid: FluentGpu.Controls.ItemCollectionTransition.DurationMs*
+  commentId: Overload:FluentGpu.Controls.ItemCollectionTransition.DurationMs
+  href: FluentGpu.Controls.ItemCollectionTransition.html#FluentGpu_Controls_ItemCollectionTransition_DurationMs
+  name: DurationMs
+  nameWithType: ItemCollectionTransition.DurationMs
+  fullName: FluentGpu.Controls.ItemCollectionTransition.DurationMs
+- uid: FluentGpu.Controls.ItemCollectionTransition.Default*
+  commentId: Overload:FluentGpu.Controls.ItemCollectionTransition.Default
+  href: FluentGpu.Controls.ItemCollectionTransition.html#FluentGpu_Controls_ItemCollectionTransition_Default
+  name: Default
+  nameWithType: ItemCollectionTransition.Default
+  fullName: FluentGpu.Controls.ItemCollectionTransition.Default
+- uid: FluentGpu.Controls.ItemCollectionTransition
+  commentId: T:FluentGpu.Controls.ItemCollectionTransition
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ItemCollectionTransition.html
+  name: ItemCollectionTransition
+  nameWithType: ItemCollectionTransition
+  fullName: FluentGpu.Controls.ItemCollectionTransition

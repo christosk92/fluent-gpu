@@ -1,0 +1,157 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.TeachingTip.TailVisibilityMode
+  commentId: T:FluentGpu.Controls.TeachingTip.TailVisibilityMode
+  id: TeachingTip.TailVisibilityMode
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.TeachingTip.TailVisibilityMode.Auto
+  - FluentGpu.Controls.TeachingTip.TailVisibilityMode.Collapsed
+  - FluentGpu.Controls.TeachingTip.TailVisibilityMode.Visible
+  langs:
+  - csharp
+  - vb
+  name: TeachingTip.TailVisibilityMode
+  nameWithType: TeachingTip.TailVisibilityMode
+  fullName: FluentGpu.Controls.TeachingTip.TailVisibilityMode
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TailVisibilityMode
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 50
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI <code>TeachingTipTailVisibility</code>.
+  example: []
+  syntax:
+    content: 'public enum TeachingTip.TailVisibilityMode : byte'
+    content.vb: Public Enum TeachingTip.TailVisibilityMode As Byte
+- uid: FluentGpu.Controls.TeachingTip.TailVisibilityMode.Auto
+  commentId: F:FluentGpu.Controls.TeachingTip.TailVisibilityMode.Auto
+  id: Auto
+  parent: FluentGpu.Controls.TeachingTip.TailVisibilityMode
+  langs:
+  - csharp
+  - vb
+  name: Auto
+  nameWithType: TeachingTip.TailVisibilityMode.Auto
+  fullName: FluentGpu.Controls.TeachingTip.TailVisibilityMode.Auto
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Auto
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 50
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Auto = 0
+    return:
+      type: FluentGpu.Controls.TeachingTip.TailVisibilityMode
+- uid: FluentGpu.Controls.TeachingTip.TailVisibilityMode.Visible
+  commentId: F:FluentGpu.Controls.TeachingTip.TailVisibilityMode.Visible
+  id: Visible
+  parent: FluentGpu.Controls.TeachingTip.TailVisibilityMode
+  langs:
+  - csharp
+  - vb
+  name: Visible
+  nameWithType: TeachingTip.TailVisibilityMode.Visible
+  fullName: FluentGpu.Controls.TeachingTip.TailVisibilityMode.Visible
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Visible
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 50
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Visible = 1
+    return:
+      type: FluentGpu.Controls.TeachingTip.TailVisibilityMode
+- uid: FluentGpu.Controls.TeachingTip.TailVisibilityMode.Collapsed
+  commentId: F:FluentGpu.Controls.TeachingTip.TailVisibilityMode.Collapsed
+  id: Collapsed
+  parent: FluentGpu.Controls.TeachingTip.TailVisibilityMode
+  langs:
+  - csharp
+  - vb
+  name: Collapsed
+  nameWithType: TeachingTip.TailVisibilityMode.Collapsed
+  fullName: FluentGpu.Controls.TeachingTip.TailVisibilityMode.Collapsed
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Collapsed
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 50
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Collapsed = 2
+    return:
+      type: FluentGpu.Controls.TeachingTip.TailVisibilityMode
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.TeachingTip.TailVisibilityMode
+  commentId: T:FluentGpu.Controls.TeachingTip.TailVisibilityMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.TeachingTip.html
+  name: TeachingTip.TailVisibilityMode
+  nameWithType: TeachingTip.TailVisibilityMode
+  fullName: FluentGpu.Controls.TeachingTip.TailVisibilityMode
+  spec.csharp:
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.TailVisibilityMode
+    name: TailVisibilityMode
+    href: FluentGpu.Controls.TeachingTip.TailVisibilityMode.html
+  spec.vb:
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.TailVisibilityMode
+    name: TailVisibilityMode
+    href: FluentGpu.Controls.TeachingTip.TailVisibilityMode.html

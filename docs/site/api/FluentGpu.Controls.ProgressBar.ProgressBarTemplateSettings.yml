@@ -1,0 +1,697 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings
+  commentId: T:FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings
+  id: ProgressBar.ProgressBarTemplateSettings
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.#ctor(System.Single,System.Single,System.Single,System.Single,System.Single,System.Single)
+  - FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Container2AnimationEndPosition
+  - FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Container2AnimationStartPosition
+  - FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.ContainerAnimationEndPosition
+  - FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.ContainerAnimationStartPosition
+  - FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.For(System.Single)
+  - FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Indicator1Width
+  - FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Indicator2Width
+  langs:
+  - csharp
+  - vb
+  name: ProgressBar.ProgressBarTemplateSettings
+  nameWithType: ProgressBar.ProgressBarTemplateSettings
+  fullName: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ProgressBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ProgressBarTemplateSettings
+    path: ../../src/FluentGpu.Controls/ProgressBar.cs
+    startLine: 119
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The computed translate positions WinUI binds from ProgressBarTemplateSettings into the indeterminate
+        storyboards (ProgressBar.cpp UpdateWidthBasedTemplateSettings). Indicator widths follow SetProgressBarIndicatorWidth.
+  example: []
+  syntax:
+    content: 'public readonly record struct ProgressBar.ProgressBarTemplateSettings : IEquatable<ProgressBar.ProgressBarTemplateSettings>'
+    content.vb: Public Structure ProgressBar.ProgressBarTemplateSettings Implements IEquatable(Of ProgressBar.ProgressBarTemplateSettings)
+  implements:
+  - System.IEquatable{FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.#ctor(System.Single,System.Single,System.Single,System.Single,System.Single,System.Single)
+  commentId: M:FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.#ctor(System.Single,System.Single,System.Single,System.Single,System.Single,System.Single)
+  id: '#ctor(System.Single,System.Single,System.Single,System.Single,System.Single,System.Single)'
+  parent: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: ProgressBarTemplateSettings(float, float, float, float, float, float)
+  nameWithType: ProgressBar.ProgressBarTemplateSettings.ProgressBarTemplateSettings(float, float, float, float, float, float)
+  fullName: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.ProgressBarTemplateSettings(float, float, float, float, float, float)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ProgressBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Controls/ProgressBar.cs
+    startLine: 119
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The computed translate positions WinUI binds from ProgressBarTemplateSettings into the indeterminate
+        storyboards (ProgressBar.cpp UpdateWidthBasedTemplateSettings). Indicator widths follow SetProgressBarIndicatorWidth.
+  example: []
+  syntax:
+    content: public ProgressBarTemplateSettings(float Indicator1Width, float Indicator2Width, float ContainerAnimationStartPosition, float ContainerAnimationEndPosition, float Container2AnimationStartPosition, float Container2AnimationEndPosition)
+    parameters:
+    - id: Indicator1Width
+      type: System.Single
+    - id: Indicator2Width
+      type: System.Single
+    - id: ContainerAnimationStartPosition
+      type: System.Single
+    - id: ContainerAnimationEndPosition
+      type: System.Single
+    - id: Container2AnimationStartPosition
+      type: System.Single
+    - id: Container2AnimationEndPosition
+      type: System.Single
+    content.vb: Public Sub New(Indicator1Width As Single, Indicator2Width As Single, ContainerAnimationStartPosition As Single, ContainerAnimationEndPosition As Single, Container2AnimationStartPosition As Single, Container2AnimationEndPosition As Single)
+  overload: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.#ctor*
+  nameWithType.vb: ProgressBar.ProgressBarTemplateSettings.New(Single, Single, Single, Single, Single, Single)
+  fullName.vb: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.New(Single, Single, Single, Single, Single, Single)
+  name.vb: New(Single, Single, Single, Single, Single, Single)
+- uid: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Indicator1Width
+  commentId: P:FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Indicator1Width
+  id: Indicator1Width
+  parent: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: Indicator1Width
+  nameWithType: ProgressBar.ProgressBarTemplateSettings.Indicator1Width
+  fullName: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Indicator1Width
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ProgressBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Indicator1Width
+    path: ../../src/FluentGpu.Controls/ProgressBar.cs
+    startLine: 120
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float Indicator1Width { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Indicator1Width As Single
+  overload: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Indicator1Width*
+- uid: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Indicator2Width
+  commentId: P:FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Indicator2Width
+  id: Indicator2Width
+  parent: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: Indicator2Width
+  nameWithType: ProgressBar.ProgressBarTemplateSettings.Indicator2Width
+  fullName: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Indicator2Width
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ProgressBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Indicator2Width
+    path: ../../src/FluentGpu.Controls/ProgressBar.cs
+    startLine: 120
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float Indicator2Width { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Indicator2Width As Single
+  overload: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Indicator2Width*
+- uid: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.ContainerAnimationStartPosition
+  commentId: P:FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.ContainerAnimationStartPosition
+  id: ContainerAnimationStartPosition
+  parent: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: ContainerAnimationStartPosition
+  nameWithType: ProgressBar.ProgressBarTemplateSettings.ContainerAnimationStartPosition
+  fullName: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.ContainerAnimationStartPosition
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ProgressBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ContainerAnimationStartPosition
+    path: ../../src/FluentGpu.Controls/ProgressBar.cs
+    startLine: 121
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float ContainerAnimationStartPosition { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property ContainerAnimationStartPosition As Single
+  overload: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.ContainerAnimationStartPosition*
+- uid: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.ContainerAnimationEndPosition
+  commentId: P:FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.ContainerAnimationEndPosition
+  id: ContainerAnimationEndPosition
+  parent: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: ContainerAnimationEndPosition
+  nameWithType: ProgressBar.ProgressBarTemplateSettings.ContainerAnimationEndPosition
+  fullName: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.ContainerAnimationEndPosition
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ProgressBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ContainerAnimationEndPosition
+    path: ../../src/FluentGpu.Controls/ProgressBar.cs
+    startLine: 121
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float ContainerAnimationEndPosition { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property ContainerAnimationEndPosition As Single
+  overload: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.ContainerAnimationEndPosition*
+- uid: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Container2AnimationStartPosition
+  commentId: P:FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Container2AnimationStartPosition
+  id: Container2AnimationStartPosition
+  parent: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: Container2AnimationStartPosition
+  nameWithType: ProgressBar.ProgressBarTemplateSettings.Container2AnimationStartPosition
+  fullName: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Container2AnimationStartPosition
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ProgressBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Container2AnimationStartPosition
+    path: ../../src/FluentGpu.Controls/ProgressBar.cs
+    startLine: 122
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float Container2AnimationStartPosition { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Container2AnimationStartPosition As Single
+  overload: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Container2AnimationStartPosition*
+- uid: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Container2AnimationEndPosition
+  commentId: P:FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Container2AnimationEndPosition
+  id: Container2AnimationEndPosition
+  parent: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: Container2AnimationEndPosition
+  nameWithType: ProgressBar.ProgressBarTemplateSettings.Container2AnimationEndPosition
+  fullName: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Container2AnimationEndPosition
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ProgressBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Container2AnimationEndPosition
+    path: ../../src/FluentGpu.Controls/ProgressBar.cs
+    startLine: 122
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float Container2AnimationEndPosition { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Container2AnimationEndPosition As Single
+  overload: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Container2AnimationEndPosition*
+- uid: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.For(System.Single)
+  commentId: M:FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.For(System.Single)
+  id: For(System.Single)
+  parent: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: For(float)
+  nameWithType: ProgressBar.ProgressBarTemplateSettings.For(float)
+  fullName: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.For(float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ProgressBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: For
+    path: ../../src/FluentGpu.Controls/ProgressBar.cs
+    startLine: 124
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static ProgressBar.ProgressBarTemplateSettings For(float width)
+    parameters:
+    - id: width
+      type: System.Single
+    return:
+      type: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings
+    content.vb: Public Shared Function [For](width As Single) As ProgressBar.ProgressBarTemplateSettings
+  overload: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.For*
+  nameWithType.vb: ProgressBar.ProgressBarTemplateSettings.For(Single)
+  fullName.vb: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.For(Single)
+  name.vb: For(Single)
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.IEquatable{FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings}
+  commentId: T:System.IEquatable{FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<ProgressBar.ProgressBarTemplateSettings>
+  nameWithType: IEquatable<ProgressBar.ProgressBarTemplateSettings>
+  fullName: System.IEquatable<FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings>
+  nameWithType.vb: IEquatable(Of ProgressBar.ProgressBarTemplateSettings)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings)
+  name.vb: IEquatable(Of ProgressBar.ProgressBarTemplateSettings)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.ProgressBar
+    name: ProgressBar
+    href: FluentGpu.Controls.ProgressBar.html
+  - name: .
+  - uid: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings
+    name: ProgressBarTemplateSettings
+    href: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.ProgressBar
+    name: ProgressBar
+    href: FluentGpu.Controls.ProgressBar.html
+  - name: .
+  - uid: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings
+    name: ProgressBarTemplateSettings
+    href: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.#ctor*
+  commentId: Overload:FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.#ctor
+  href: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.html#FluentGpu_Controls_ProgressBar_ProgressBarTemplateSettings__ctor_System_Single_System_Single_System_Single_System_Single_System_Single_System_Single_
+  name: ProgressBarTemplateSettings
+  nameWithType: ProgressBar.ProgressBarTemplateSettings.ProgressBarTemplateSettings
+  fullName: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.ProgressBarTemplateSettings
+  nameWithType.vb: ProgressBar.ProgressBarTemplateSettings.New
+  fullName.vb: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.New
+  name.vb: New
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Indicator1Width*
+  commentId: Overload:FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Indicator1Width
+  href: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.html#FluentGpu_Controls_ProgressBar_ProgressBarTemplateSettings_Indicator1Width
+  name: Indicator1Width
+  nameWithType: ProgressBar.ProgressBarTemplateSettings.Indicator1Width
+  fullName: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Indicator1Width
+- uid: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Indicator2Width*
+  commentId: Overload:FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Indicator2Width
+  href: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.html#FluentGpu_Controls_ProgressBar_ProgressBarTemplateSettings_Indicator2Width
+  name: Indicator2Width
+  nameWithType: ProgressBar.ProgressBarTemplateSettings.Indicator2Width
+  fullName: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Indicator2Width
+- uid: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.ContainerAnimationStartPosition*
+  commentId: Overload:FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.ContainerAnimationStartPosition
+  href: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.html#FluentGpu_Controls_ProgressBar_ProgressBarTemplateSettings_ContainerAnimationStartPosition
+  name: ContainerAnimationStartPosition
+  nameWithType: ProgressBar.ProgressBarTemplateSettings.ContainerAnimationStartPosition
+  fullName: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.ContainerAnimationStartPosition
+- uid: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.ContainerAnimationEndPosition*
+  commentId: Overload:FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.ContainerAnimationEndPosition
+  href: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.html#FluentGpu_Controls_ProgressBar_ProgressBarTemplateSettings_ContainerAnimationEndPosition
+  name: ContainerAnimationEndPosition
+  nameWithType: ProgressBar.ProgressBarTemplateSettings.ContainerAnimationEndPosition
+  fullName: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.ContainerAnimationEndPosition
+- uid: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Container2AnimationStartPosition*
+  commentId: Overload:FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Container2AnimationStartPosition
+  href: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.html#FluentGpu_Controls_ProgressBar_ProgressBarTemplateSettings_Container2AnimationStartPosition
+  name: Container2AnimationStartPosition
+  nameWithType: ProgressBar.ProgressBarTemplateSettings.Container2AnimationStartPosition
+  fullName: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Container2AnimationStartPosition
+- uid: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Container2AnimationEndPosition*
+  commentId: Overload:FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Container2AnimationEndPosition
+  href: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.html#FluentGpu_Controls_ProgressBar_ProgressBarTemplateSettings_Container2AnimationEndPosition
+  name: Container2AnimationEndPosition
+  nameWithType: ProgressBar.ProgressBarTemplateSettings.Container2AnimationEndPosition
+  fullName: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.Container2AnimationEndPosition
+- uid: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.For*
+  commentId: Overload:FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.For
+  href: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.html#FluentGpu_Controls_ProgressBar_ProgressBarTemplateSettings_For_System_Single_
+  name: For
+  nameWithType: ProgressBar.ProgressBarTemplateSettings.For
+  fullName: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.For
+- uid: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings
+  commentId: T:FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ProgressBar.html
+  name: ProgressBar.ProgressBarTemplateSettings
+  nameWithType: ProgressBar.ProgressBarTemplateSettings
+  fullName: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings
+  spec.csharp:
+  - uid: FluentGpu.Controls.ProgressBar
+    name: ProgressBar
+    href: FluentGpu.Controls.ProgressBar.html
+  - name: .
+  - uid: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings
+    name: ProgressBarTemplateSettings
+    href: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.html
+  spec.vb:
+  - uid: FluentGpu.Controls.ProgressBar
+    name: ProgressBar
+    href: FluentGpu.Controls.ProgressBar.html
+  - name: .
+  - uid: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings
+    name: ProgressBarTemplateSettings
+    href: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings.html

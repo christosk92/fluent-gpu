@@ -1,0 +1,143 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.TabViewCloseButtonOverlayMode
+  commentId: T:FluentGpu.Controls.TabViewCloseButtonOverlayMode
+  id: TabViewCloseButtonOverlayMode
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.TabViewCloseButtonOverlayMode.Always
+  - FluentGpu.Controls.TabViewCloseButtonOverlayMode.Auto
+  - FluentGpu.Controls.TabViewCloseButtonOverlayMode.OnPointerOver
+  langs:
+  - csharp
+  - vb
+  name: TabViewCloseButtonOverlayMode
+  nameWithType: TabViewCloseButtonOverlayMode
+  fullName: FluentGpu.Controls.TabViewCloseButtonOverlayMode
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TabViewCloseButtonOverlayMode
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>TabViewCloseButtonOverlayMode</code> (TabView.idl:15-20). Auto/Always show the close button on
+        every closable tab; OnPointerOver shows it only while the tab is selected or hovered (TabViewItem.cpp:251-282).
+  example: []
+  syntax:
+    content: 'public enum TabViewCloseButtonOverlayMode : byte'
+    content.vb: Public Enum TabViewCloseButtonOverlayMode As Byte
+- uid: FluentGpu.Controls.TabViewCloseButtonOverlayMode.Auto
+  commentId: F:FluentGpu.Controls.TabViewCloseButtonOverlayMode.Auto
+  id: Auto
+  parent: FluentGpu.Controls.TabViewCloseButtonOverlayMode
+  langs:
+  - csharp
+  - vb
+  name: Auto
+  nameWithType: TabViewCloseButtonOverlayMode.Auto
+  fullName: FluentGpu.Controls.TabViewCloseButtonOverlayMode.Auto
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Auto
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Auto = 0
+    return:
+      type: FluentGpu.Controls.TabViewCloseButtonOverlayMode
+- uid: FluentGpu.Controls.TabViewCloseButtonOverlayMode.OnPointerOver
+  commentId: F:FluentGpu.Controls.TabViewCloseButtonOverlayMode.OnPointerOver
+  id: OnPointerOver
+  parent: FluentGpu.Controls.TabViewCloseButtonOverlayMode
+  langs:
+  - csharp
+  - vb
+  name: OnPointerOver
+  nameWithType: TabViewCloseButtonOverlayMode.OnPointerOver
+  fullName: FluentGpu.Controls.TabViewCloseButtonOverlayMode.OnPointerOver
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnPointerOver
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: OnPointerOver = 1
+    return:
+      type: FluentGpu.Controls.TabViewCloseButtonOverlayMode
+- uid: FluentGpu.Controls.TabViewCloseButtonOverlayMode.Always
+  commentId: F:FluentGpu.Controls.TabViewCloseButtonOverlayMode.Always
+  id: Always
+  parent: FluentGpu.Controls.TabViewCloseButtonOverlayMode
+  langs:
+  - csharp
+  - vb
+  name: Always
+  nameWithType: TabViewCloseButtonOverlayMode.Always
+  fullName: FluentGpu.Controls.TabViewCloseButtonOverlayMode.Always
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Always
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Always = 2
+    return:
+      type: FluentGpu.Controls.TabViewCloseButtonOverlayMode
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.TabViewCloseButtonOverlayMode
+  commentId: T:FluentGpu.Controls.TabViewCloseButtonOverlayMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.TabViewCloseButtonOverlayMode.html
+  name: TabViewCloseButtonOverlayMode
+  nameWithType: TabViewCloseButtonOverlayMode
+  fullName: FluentGpu.Controls.TabViewCloseButtonOverlayMode

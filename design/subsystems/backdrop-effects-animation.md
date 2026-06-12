@@ -80,7 +80,7 @@ reason. Open questions are flagged `OQ-n`. New cross-subsystem contract addition
         ┌───────────────────────▼────────────────────────────────┐   ┌──── FluentGpu.Pal (iface) ────┐
         │ FluentGpu.Effects.D2D1 (OPTIONAL leaf, Hosting-only)    │   │ IBackdropSource, ISystemColors │
         │  D2D1 effect graph (GaussianBlur/Shadow), FXC noise PS,  │   └──────────────┬─────────────────┘
-        │  ComputeSharp.D2D1 transpiler reuse (the noise kernel)   │     impl: FluentGpu.Pal.Windows
+        │  ComputeSharp.D2D1 transpiler reuse (the noise kernel)   │     impl: FluentGpu.Windows (Pal/ folder)
         └──────────────────────────────────────────────────────────┘     (DWM/DComp backdrop sibling visual)
 ```
 
@@ -95,14 +95,14 @@ reason. Open questions are flagged `OQ-n`. New cross-subsystem contract addition
 | `UseImageBackdrop`/`UseAcrylic`/`UseImplicitTransition`/`UseConnectedAnimation`/`UseDrivenAnimation`/`UseSyncedLyrics`(timing)/`UseReducedMotion` | thin compositions in **`FluentGpu.Media`** + **`FluentGpu.Hooks`** convenience | `UseRef`/`UseMemo`/`UseEffect` over the above; `DepKey`-span deps. |
 | `PushLayerCmd{Effect}` recording, `FrameGraph` two-pass scheduling, `LayerPool` | **`FluentGpu.Render`** | Offscreen RT machinery already owns layers (§7). |
 | `IEffectRunner` (seam) | **`FluentGpu.Render`** interface; impl in **`FluentGpu.Effects.D2D1`** (OPTIONAL leaf) | Windows-only D2D1/FXC behind the seam; Metal supplies MPS. |
-| `IBackdropSource`, `ISystemColors` (referenced) | **`FluentGpu.Pal`** iface; **`FluentGpu.Pal.Windows`** impl | DWM/DComp; OS leaf referenced only by Hosting. |
+| `IBackdropSource`, `ISystemColors` (referenced) | **`FluentGpu.Pal`** iface; **`FluentGpu.Windows` (Pal/ folder)** impl | DWM/DComp; OS leaf referenced only by Hosting. |
 
-All acyclic; `FluentGpu.Media`/`FluentGpu.Effects.D2D1`/`FluentGpu.Pal.Windows` are referenced **only by
+All acyclic; `FluentGpu.Media`/`FluentGpu.Effects.D2D1`/`FluentGpu.Windows` (Pal/ folder) are referenced **only by
 `Hosting`**. `Animation` already sits below `Hosting` in the §7 graph.
 
 **Portability boundary in one sentence:** everything above the `IEffectRunner`/`IBackdropSource` seams is
 portable C# (math, POD, column writes, FrameGraph policy); the only Windows code is `Effects.D2D1`
-(D2D1/FXC) and `Pal.Windows` (DWM/DComp). macOS reimplements those two leaves (MPS + `NSVisualEffectView`)
+(D2D1/FXC) and `FluentGpu.Windows` Pal/ (DWM/DComp). macOS reimplements those two leaves (MPS + `NSVisualEffectView`)
 and recompiles the rest unchanged.
 
 ---
@@ -119,7 +119,7 @@ namespace FluentGpu.Pal;
 
 public enum HostBackdropKind : byte { None, MicaBase, MicaAlt, AcrylicHost, Blurred }
 
-public interface IBackdropSource          // owned by Pal.Windows; referenced via Hosting
+public interface IBackdropSource          // owned by FluentGpu.Windows Pal/; referenced via Hosting
 {
     // Idempotent; safe to call on theme/HC/accent change. tint is sRGB straight-alpha.
     void SetWindowBackdrop(NativeHandle window, HostBackdropKind kind, ColorF tint);
@@ -128,7 +128,7 @@ public interface IBackdropSource          // owned by Pal.Windows; referenced vi
 }
 ```
 
-- **Windows impl (`Pal.Windows`):** `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_*)` for
+- **Windows impl (`FluentGpu.Windows` Pal/):** `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_*)` for
   Mica/Mica-Alt/host-Acrylic on Win11; on older builds (no `DWMWA_SYSTEMBACKDROP_TYPE`) fall back to a
   **DComp backdrop sibling visual placed BELOW our swapchain visual** carrying a `CreateBackdropBrush`/
   blur effect group. Either way the **swapchain back buffer is cleared transparent (premul 0)** in the
@@ -1017,7 +1017,7 @@ hole-punch are different regions and do not conflict.
 
 The portable surface (`FluentGpu.Animation` — now incl. the spring integrator, `SharedElementRegistry`,
 `ContentSizeAnimator`, `MotionTokenTable` —, `FluentGpu.Media` backdrop policy, `FluentGpu.Scene`
-`EffectAux`, `FluentGpu.Render` FrameGraph) recompiles unchanged. Only `Effects.D2D1` and `Pal.Windows`
+`EffectAux`, `FluentGpu.Render` FrameGraph) recompiles unchanged. Only `Effects.D2D1` and `FluentGpu.Windows` Pal/
 have Metal/AppKit counterparts. **The reduced-motion OS flag** (`SPI_GETCLIENTAREAANIMATION` /
 `accessibilityDisplayShouldReduceMotion`) is the only platform touch in the animation path.
 

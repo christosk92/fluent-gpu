@@ -1,36 +1,13 @@
 <Solution>
-  <Folder Name="/Core/">
-    <Project Path="FluentGpu.Foundation/FluentGpu.Foundation.csproj" />
-    <Project Path="FluentGpu.Scene/FluentGpu.Scene.csproj" />
-    <Project Path="FluentGpu.Layout/FluentGpu.Layout.csproj" />
-    <Project Path="FluentGpu.Render/FluentGpu.Render.csproj" />
-    <Project Path="FluentGpu.Dsl/FluentGpu.Dsl.csproj" />
-    <Project Path="FluentGpu.Hooks/FluentGpu.Hooks.csproj" />
-    <Project Path="FluentGpu.Reconciler/FluentGpu.Reconciler.csproj" />
+  <Folder Name="/UI-Rendering/">
+    <Project Path="FluentGpu.Engine/FluentGpu.Engine.csproj" />
+  </Folder>
+  <Folder Name="/Controls-Windowing/">
     <Project Path="FluentGpu.Controls/FluentGpu.Controls.csproj" />
-    <Project Path="FluentGpu.Input/FluentGpu.Input.csproj" />
-    <Project Path="FluentGpu.Animation/FluentGpu.Animation.csproj" />
-    <Project Path="FluentGpu.Hosting/FluentGpu.Hosting.csproj" />
-    <Project Path="FluentGpu.Media/FluentGpu.Media.csproj" />
+    <Project Path="FluentGpu.Windows/FluentGpu.Windows.csproj" />
   </Folder>
-  <Folder Name="/Seams/">
-    <Project Path="FluentGpu.Rhi/FluentGpu.Rhi.csproj" />
-    <Project Path="FluentGpu.Pal/FluentGpu.Pal.csproj" />
-    <Project Path="FluentGpu.Text/FluentGpu.Text.csproj" />
-  </Folder>
-  <Folder Name="/Backends.Windows/">
-    <Project Path="FluentGpu.Media.Codecs.Wic/FluentGpu.Media.Codecs.Wic.csproj" />
-    <Project Path="FluentGpu.Win32.Interop/FluentGpu.Win32.Interop.csproj" />
-    <Project Path="FluentGpu.Rhi.D3D12/FluentGpu.Rhi.D3D12.csproj" />
-    <Project Path="FluentGpu.Pal.Windows/FluentGpu.Pal.Windows.csproj" />
-    <Project Path="FluentGpu.Text.DirectWrite/FluentGpu.Text.DirectWrite.csproj" />
-    <Project Path="FluentGpu.Accessibility.Uia/FluentGpu.Accessibility.Uia.csproj" />
-    <Project Path="FluentGpu.Rhi.Gdi/FluentGpu.Rhi.Gdi.csproj" />
-  </Folder>
-  <Folder Name="/Backends.Headless/">
-    <Project Path="FluentGpu.Rhi.Headless/FluentGpu.Rhi.Headless.csproj" />
-    <Project Path="FluentGpu.Pal.Headless/FluentGpu.Pal.Headless.csproj" />
-    <Project Path="FluentGpu.Text.Headless/FluentGpu.Text.Headless.csproj" />
+  <Folder Name="/Windows-APIs/">
+    <Project Path="FluentGpu.WindowsApi/FluentGpu.WindowsApi.csproj" />
   </Folder>
   <Folder Name="/Tooling/">
     <Project Path="FluentGpu.SourceGen/FluentGpu.SourceGen.csproj" />

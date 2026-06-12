@@ -1,0 +1,649 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.SplitView
+  commentId: T:FluentGpu.Controls.SplitView
+  id: SplitView
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.SplitView.Create(FluentGpu.Dsl.Element,FluentGpu.Dsl.Element,System.Single,System.Boolean,FluentGpu.Controls.SplitViewDisplayMode,FluentGpu.Controls.SplitViewPanePlacement,System.Single,System.Action{System.Boolean},System.Action,System.Action,System.Action{FluentGpu.Controls.SplitViewPaneClosingArgs},System.Action,FluentGpu.Dsl.TemplateParts)
+  - FluentGpu.Controls.SplitView.PartContent
+  - FluentGpu.Controls.SplitView.PartPane
+  langs:
+  - csharp
+  - vb
+  name: SplitView
+  nameWithType: SplitView
+  fullName: FluentGpu.Controls.SplitView
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SplitView
+    path: ../../src/FluentGpu.Controls/SplitView.cs
+    startLine: 57
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A WinUI SplitView: a side <code>pane</code> and a flexible <code>content</code> area, composed per
+        <code>SplitViewDisplayMode</code> × <code>PanePlacement</code> × <code>IsPaneOpen</code> (the WinUI visual-state table,
+        SplitView_Partial.cpp:34-59):
+
+        <ul><li><b>Overlay</b> (the WinUI default) — the open pane floats over the content without reflow (PaneRoot
+        Canvas.ZIndex=1 over a ColumnSpan=2 ContentRoot, SplitView_themeresources.xaml:700, :718) and light-dismisses on
+        content click / Escape / a host resize, with the WinUI 0.35s/0.12s slide.</li><li><b>Inline</b> — the open pane reserves <code>paneWidth</code> of layout; the content pre-slides in sync
+        (ContentTransform, SplitView_themeresources.xaml:345-348) over the 0.2s/0.1s inline curves.</li><li><b>CompactOverlay / CompactInline</b> — closed leaves a <code>compactPaneLength</code> (48) rail: the SAME pane,
+        clipped to the rail (a clip-reveal, never a resize — core SplitView.cpp:343-377).</li></ul>
+
+        State is caller-owned (<code class="paramref">isPaneOpen</code> is a prop, the WinUI <code>IsPaneOpen</code> DP): wire
+        <code class="paramref">setIsPaneOpen</code> so light dismiss can write the close back. PaneOpening/PaneOpened/
+        PaneClosing(cancelable on light dismiss)/PaneClosed mirror the WinUI events (XCPTypesAutoGen SplitView.cs:82-96).
+  example: []
+  syntax:
+    content: public static class SplitView
+    content.vb: Public Module SplitView
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.MemberwiseClone
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.SplitView.PartPane
+  commentId: F:FluentGpu.Controls.SplitView.PartPane
+  id: PartPane
+  parent: FluentGpu.Controls.SplitView
+  langs:
+  - csharp
+  - vb
+  name: PartPane
+  nameWithType: SplitView.PartPane
+  fullName: FluentGpu.Controls.SplitView.PartPane
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartPane
+    path: ../../src/FluentGpu.Controls/SplitView.cs
+    startLine: 64
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The pane surface (WinUI PaneRoot's inner Border) — mounted while the pane is open OR while a compact
+        rail shows. Owned: Width (always the full OpenPaneLength — the compact rail CLIPS it), OnRealized (the
+        focus-contract handle capture, chained), Children (the pane content slot).
+  example: []
+  syntax:
+    content: public const string PartPane = "Pane"
+    return:
+      type: System.String
+    content.vb: Public Const PartPane As String = "Pane"
+- uid: FluentGpu.Controls.SplitView.PartContent
+  commentId: F:FluentGpu.Controls.SplitView.PartContent
+  id: PartContent
+  parent: FluentGpu.Controls.SplitView
+  langs:
+  - csharp
+  - vb
+  name: PartContent
+  nameWithType: SplitView.PartContent
+  fullName: FluentGpu.Controls.SplitView.PartContent
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartContent
+    path: ../../src/FluentGpu.Controls/SplitView.cs
+    startLine: 67
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The flexible content area (WinUI ContentRoot). Owned: Animate (the inline content pre-slide),
+        Children (the content slot).
+  example: []
+  syntax:
+    content: public const string PartContent = "Content"
+    return:
+      type: System.String
+    content.vb: Public Const PartContent As String = "Content"
+- uid: FluentGpu.Controls.SplitView.Create(FluentGpu.Dsl.Element,FluentGpu.Dsl.Element,System.Single,System.Boolean,FluentGpu.Controls.SplitViewDisplayMode,FluentGpu.Controls.SplitViewPanePlacement,System.Single,System.Action{System.Boolean},System.Action,System.Action,System.Action{FluentGpu.Controls.SplitViewPaneClosingArgs},System.Action,FluentGpu.Dsl.TemplateParts)
+  commentId: M:FluentGpu.Controls.SplitView.Create(FluentGpu.Dsl.Element,FluentGpu.Dsl.Element,System.Single,System.Boolean,FluentGpu.Controls.SplitViewDisplayMode,FluentGpu.Controls.SplitViewPanePlacement,System.Single,System.Action{System.Boolean},System.Action,System.Action,System.Action{FluentGpu.Controls.SplitViewPaneClosingArgs},System.Action,FluentGpu.Dsl.TemplateParts)
+  id: Create(FluentGpu.Dsl.Element,FluentGpu.Dsl.Element,System.Single,System.Boolean,FluentGpu.Controls.SplitViewDisplayMode,FluentGpu.Controls.SplitViewPanePlacement,System.Single,System.Action{System.Boolean},System.Action,System.Action,System.Action{FluentGpu.Controls.SplitViewPaneClosingArgs},System.Action,FluentGpu.Dsl.TemplateParts)
+  parent: FluentGpu.Controls.SplitView
+  langs:
+  - csharp
+  - vb
+  name: Create(Element, Element, float, bool, SplitViewDisplayMode, SplitViewPanePlacement, float, Action<bool>?, Action?, Action?, Action<SplitViewPaneClosingArgs>?, Action?, TemplateParts?)
+  nameWithType: SplitView.Create(Element, Element, float, bool, SplitViewDisplayMode, SplitViewPanePlacement, float, Action<bool>?, Action?, Action?, Action<SplitViewPaneClosingArgs>?, Action?, TemplateParts?)
+  fullName: FluentGpu.Controls.SplitView.Create(FluentGpu.Dsl.Element, FluentGpu.Dsl.Element, float, bool, FluentGpu.Controls.SplitViewDisplayMode, FluentGpu.Controls.SplitViewPanePlacement, float, System.Action<bool>?, System.Action?, System.Action?, System.Action<FluentGpu.Controls.SplitViewPaneClosingArgs>?, System.Action?, FluentGpu.Dsl.TemplateParts?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/SplitView.cs
+    startLine: 96
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  example: []
+  syntax:
+    content: public static Element Create(Element pane, Element content, float paneWidth = 320, bool isPaneOpen = false, SplitViewDisplayMode displayMode = SplitViewDisplayMode.Overlay, SplitViewPanePlacement panePlacement = SplitViewPanePlacement.Left, float compactPaneLength = 48, Action<bool>? setIsPaneOpen = null, Action? onPaneOpening = null, Action? onPaneOpened = null, Action<SplitViewPaneClosingArgs>? onPaneClosing = null, Action? onPaneClosed = null, TemplateParts? parts = null)
+    parameters:
+    - id: pane
+      type: FluentGpu.Dsl.Element
+      description: The pane content (WinUI <code>SplitView.Pane</code>).
+    - id: content
+      type: FluentGpu.Dsl.Element
+      description: The main content (WinUI <code>SplitView.Content</code>).
+    - id: paneWidth
+      type: System.Single
+      description: >-
+        WinUI <code>OpenPaneLength</code> — default 320 (SplitViewOpenPaneThemeLength,
+            SplitView_themeresources.xaml:5).
+    - id: isPaneOpen
+      type: System.Boolean
+      description: >-
+        WinUI <code>IsPaneOpen</code> — CLR default false (XCPTypesAutoGen SplitView.cs:58-60;
+            PaneRoot starts Collapsed, SplitView_themeresources.xaml:700).
+    - id: displayMode
+      type: FluentGpu.Controls.SplitViewDisplayMode
+      description: Default Overlay (the WinUI DP default — SplitView_Partial.cpp:136, :446).
+    - id: panePlacement
+      type: FluentGpu.Controls.SplitViewPanePlacement
+    - id: compactPaneLength
+      type: System.Single
+      description: >-
+        WinUI <code>CompactPaneLength</code> — default 48 (SplitViewCompactPaneThemeLength,
+            SplitView_themeresources.xaml:6).
+    - id: setIsPaneOpen
+      type: System.Action{System.Boolean}
+      description: >-
+        Write-back for the caller-owned open state — light dismiss (content click,
+            Escape, host resize) closes through this. Null ⇒ light dismiss is inert (state cannot be flipped).
+    - id: onPaneOpening
+      type: System.Action
+    - id: onPaneOpened
+      type: System.Action
+    - id: onPaneClosing
+      type: System.Action{FluentGpu.Controls.SplitViewPaneClosingArgs}
+      description: >-
+        Cancelable on light dismiss only; an app-initiated close (the caller flipping
+            <code class="paramref">isPaneOpen</code>) raises it but ignores Cancel (core SplitView.cpp:432-456).
+    - id: onPaneClosed
+      type: System.Action
+    - id: parts
+      type: FluentGpu.Dsl.TemplateParts
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Create(pane As Element, content As Element, paneWidth As Single = 320, isPaneOpen As Boolean = False, displayMode As SplitViewDisplayMode = SplitViewDisplayMode.Overlay, panePlacement As SplitViewPanePlacement = SplitViewPanePlacement.Left, compactPaneLength As Single = 48, setIsPaneOpen As Action(Of Boolean) = Nothing, onPaneOpening As Action = Nothing, onPaneOpened As Action = Nothing, onPaneClosing As Action(Of SplitViewPaneClosingArgs) = Nothing, onPaneClosed As Action = Nothing, parts As TemplateParts = Nothing) As Element
+  overload: FluentGpu.Controls.SplitView.Create*
+  nameWithType.vb: SplitView.Create(Element, Element, Single, Boolean, SplitViewDisplayMode, SplitViewPanePlacement, Single, Action(Of Boolean), Action, Action, Action(Of SplitViewPaneClosingArgs), Action, TemplateParts)
+  fullName.vb: FluentGpu.Controls.SplitView.Create(FluentGpu.Dsl.Element, FluentGpu.Dsl.Element, Single, Boolean, FluentGpu.Controls.SplitViewDisplayMode, FluentGpu.Controls.SplitViewPanePlacement, Single, System.Action(Of Boolean), System.Action, System.Action, System.Action(Of FluentGpu.Controls.SplitViewPaneClosingArgs), System.Action, FluentGpu.Dsl.TemplateParts)
+  name.vb: Create(Element, Element, Single, Boolean, SplitViewDisplayMode, SplitViewPanePlacement, Single, Action(Of Boolean), Action, Action, Action(Of SplitViewPaneClosingArgs), Action, TemplateParts)
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.MemberwiseClone
+  commentId: M:System.Object.MemberwiseClone
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  name: MemberwiseClone()
+  nameWithType: object.MemberwiseClone()
+  fullName: object.MemberwiseClone()
+  nameWithType.vb: Object.MemberwiseClone()
+  fullName.vb: Object.MemberwiseClone()
+  spec.csharp:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Controls.SplitView.Create*
+  commentId: Overload:FluentGpu.Controls.SplitView.Create
+  href: FluentGpu.Controls.SplitView.html#FluentGpu_Controls_SplitView_Create_FluentGpu_Dsl_Element_FluentGpu_Dsl_Element_System_Single_System_Boolean_FluentGpu_Controls_SplitViewDisplayMode_FluentGpu_Controls_SplitViewPanePlacement_System_Single_System_Action_System_Boolean__System_Action_System_Action_System_Action_FluentGpu_Controls_SplitViewPaneClosingArgs__System_Action_FluentGpu_Dsl_TemplateParts_
+  name: Create
+  nameWithType: SplitView.Create
+  fullName: FluentGpu.Controls.SplitView.Create
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Controls.SplitViewDisplayMode
+  commentId: T:FluentGpu.Controls.SplitViewDisplayMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.SplitViewDisplayMode.html
+  name: SplitViewDisplayMode
+  nameWithType: SplitViewDisplayMode
+  fullName: FluentGpu.Controls.SplitViewDisplayMode
+- uid: FluentGpu.Controls.SplitViewPanePlacement
+  commentId: T:FluentGpu.Controls.SplitViewPanePlacement
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.SplitViewPanePlacement.html
+  name: SplitViewPanePlacement
+  nameWithType: SplitViewPanePlacement
+  fullName: FluentGpu.Controls.SplitViewPanePlacement
+- uid: System.Action{System.Boolean}
+  commentId: T:System.Action{System.Boolean}
+  parent: System
+  definition: System.Action`1
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<bool>
+  nameWithType: Action<bool>
+  fullName: System.Action<bool>
+  nameWithType.vb: Action(Of Boolean)
+  fullName.vb: System.Action(Of Boolean)
+  name.vb: Action(Of Boolean)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+- uid: System.Action
+  commentId: T:System.Action
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action
+  name: Action
+  nameWithType: Action
+  fullName: System.Action
+- uid: System.Action{FluentGpu.Controls.SplitViewPaneClosingArgs}
+  commentId: T:System.Action{FluentGpu.Controls.SplitViewPaneClosingArgs}
+  parent: System
+  definition: System.Action`1
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<SplitViewPaneClosingArgs>
+  nameWithType: Action<SplitViewPaneClosingArgs>
+  fullName: System.Action<FluentGpu.Controls.SplitViewPaneClosingArgs>
+  nameWithType.vb: Action(Of SplitViewPaneClosingArgs)
+  fullName.vb: System.Action(Of FluentGpu.Controls.SplitViewPaneClosingArgs)
+  name.vb: Action(Of SplitViewPaneClosingArgs)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: FluentGpu.Controls.SplitViewPaneClosingArgs
+    name: SplitViewPaneClosingArgs
+    href: FluentGpu.Controls.SplitViewPaneClosingArgs.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.SplitViewPaneClosingArgs
+    name: SplitViewPaneClosingArgs
+    href: FluentGpu.Controls.SplitViewPaneClosingArgs.html
+  - name: )
+- uid: FluentGpu.Dsl.TemplateParts
+  commentId: T:FluentGpu.Dsl.TemplateParts
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.TemplateParts.html
+  name: TemplateParts
+  nameWithType: TemplateParts
+  fullName: FluentGpu.Dsl.TemplateParts
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: System.Action`1
+  commentId: T:System.Action`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<T>
+  nameWithType: Action<T>
+  fullName: System.Action<T>
+  nameWithType.vb: Action(Of T)
+  fullName.vb: System.Action(Of T)
+  name.vb: Action(Of T)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )

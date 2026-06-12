@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Namespace FluentGpu.Input | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Namespace FluentGpu.Input | FluentGpu Developer Docs ">
+      
+      
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="ManagedReference">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="FluentGpu.Input">
+
+  <h1 id="FluentGpu_Input" data-uid="FluentGpu.Input" class="text-break">Namespace FluentGpu.Input</h1>
+  <div class="markdown level0 summary"></div>
+  <div class="markdown level0 conceptual"></div>
+  <div class="markdown level0 remarks"></div>
+
+    <h3 id="classes">
+Classes
+</h3>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Input.DragController.html">DragController</a></dt>
+      <dd><p>The drag-reorder gesture engine (E5). A left press on (or inside) a <code>CanDrag</code> node ARMS a candidate; pointer
+travel outside the drag box PROMOTES it from a click to a drag (the dispatcher then suppresses the click and routes
+every move here — capture semantics). The promoted drag draws its visual on the dragged node itself: a parent-space
+<code>LocalTransform</code> translate + 0.8 opacity + a flyout-class shadow
+(WinUI <code>ListViewItemDragThemeOpacity</code> = 0.80 — microsoft-ui-xaml controls\dev\CommonStyles\ListViewItem_themeresources.xaml:7),
+and the node stops hit-testing so drop-target queries see THROUGH the moving visual.</p>
+<p>Threshold: the Windows drag box is <code>SM_CXDRAG</code>/<code>SM_CYDRAG</code> (4px default), tested per-axis
+(<code>dx &gt; maxDx || dy &gt; maxDy</code> — microsoft-ui-xaml dxaml\xcp\dxaml\lib\ListViewBaseItem_Partial.cpp:1864-1878).
+WinUI's list items double it (LISTVIEWBASEITEM_MOUSE_DRAG_THRESHOLD_MULTIPLIER = 2.0, same file :54); this engine
+uses the 4px base box per plan E5, matching <a class="xref" href="FluentGpu.Input.InputDispatcher.html#FluentGpu_Input_InputDispatcher_ClickSlopPx">ClickSlopPx</a>.</p>
+<p>Axis-aware arena-lite (promotion-time arbitration): the item's reorder axis is its PARENT container's main axis
+(row → horizontal item-drag). A gesture whose dominant axis is PERPENDICULAR to that, with a scrollable ancestor
+that actually overflows along the gesture axis, yields to the pan (vertical pan over a scrollable beats a
+horizontal item-drag) — the WinUI manipulation-arena outcome for a tab strip inside a scrolling page.</p>
+<p>Drop-settle rides the existing FLIP pipeline: <code>Complete</code> restores the resting visuals and reports
+(draggedRect → restingRect) through <a class="xref" href="FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_OnSettle">OnSettle</a>; the host wires that to
+<code>AnimEngine.AnimateBounds</code>, so the seeded position spring is retargeted velocity-continuously by the same
+commit's <code>ApplyProjections</code> when the app's <code>OnDragCompleted</code> handler reorders the collection — displaced
+siblings and the dropped item all animate through the one layout-transition path (reorder hints come free).</p>
+<p>Mid-drag live reorder rides the same pipeline: when the consumer re-projects the children ORDER at the
+dwell-committed target (<code>ReorderList.ProjectOrder</code>), displaced siblings FLIP to their new slots while
+<a class="xref" href="FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_Move_FluentGpu_Foundation_Point2_FluentGpu_Foundation_KeyModifiers_System_UInt32_">Move(Point2, KeyModifiers, uint)</a> RE-ANCHORS the pointer-held visual — it strips the translate it last applied to find the node's
+CURRENT resting origin, then aims at (grab origin + gesture delta), so a slot move under the pointer (or an
+ancestor scrolling) never jumps the visual (the WinUI outcome: the dragged item tracks the pointer while
+<code>MoveItemsForLiveReorder</code> shifts the rest — ListViewBase_Partial_Reorder.cpp:2254). The drag visuals are
+re-asserted on every move because a mid-drag commit's patch restores the authored opacity/shadow/hit-test
+(Reconciler ApplyBox writes them unconditionally).</p>
+<p>GHOST (E5-L2): while a drag is active the lifted node carries <a class="xref" href="FluentGpu.Foundation.NodeFlags.html#FluentGpu_Foundation_NodeFlags_DragGhost">DragGhost</a> and is published as
+<a class="xref" href="FluentGpu.Scene.SceneStore.html#FluentGpu_Scene_SceneStore_DragGhost">DragGhost</a> — the recorder excludes it from the clipped main pass and re-walks its subtree
+in an UNCLIPPED top band emitted last (mirroring the orphan pass), so the visual escapes every ancestor scissor (a
+row dragged out of a clipped list keeps drawing) and paints above overlays — the Flutter/rbd ghost layer.</p>
+<p>Spring-lag follow (the rbd feel): the PRESENTED translate eases toward the gesture target with a critically-damped
+spring (<a class="xref" href="FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_FollowOmega">FollowOmega</a>) instead of pinning rigidly — 0-alloc per move/tick. It engages only when the
+platform delivers real timestamps (consecutive non-zero <code>TimestampMs</code>); 0-stamp gestures (the headless
+default) snap presented == target, keeping every position assertion deterministic. <a class="xref" href="FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_SpringFollow">SpringFollow</a>
+false disables it outright. The host advances in-between-move easing (and the pointer-pin while an edge
+auto-scroll moves the resting origin under a still pointer) via <a class="xref" href="FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_Tick_System_Single_">Tick(float)</a>.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Input.DragDropContext.html">DragDropContext</a></dt>
+      <dd><p>L2 of the drag-drop stack (plan E5; user ruling 2026-06-10: deliberately NOT WinUI's OLE
+<code>DataPackage</code>/<code>DoDragDrop</code> modal loop — the Flutter Draggable/DragTarget + react-beautiful-dnd context +
+SwiftUI draggable/dropDestination model instead; the frame loop STAYS LIVE for the whole gesture). Layered on the
+L1 <a class="xref" href="FluentGpu.Input.DragController.html">DragController</a> gesture:</p>
+<p>• A <code>BoxEl.Draggable</code> (<a class="xref" href="FluentGpu.Foundation.DragSource.html">DragSource</a>: a string <code>Kind</code> discriminator + a payload factory) marks
+a node a typed drag source. When the L1 press promotes past the drag box, the dispatcher calls
+<a class="xref" href="FluentGpu.Input.DragDropContext.html#FluentGpu_Input_DragDropContext_TryBegin_FluentGpu_Foundation_NodeHandle_FluentGpu_Foundation_Point2_FluentGpu_Foundation_KeyModifiers_FluentGpu_Foundation_PointerKind_">TryBegin(NodeHandle, Point2, KeyModifiers, PointerKind)</a> — the nearest enabled DragSource up the chain opens THE session and its
+<a class="xref" href="FluentGpu.Foundation.DragSource.html#FluentGpu_Foundation_DragSource_PayloadFactory">PayloadFactory</a> resolves ONCE (cold gesture edge; never per-move).
+• A <code>BoxEl.DropTarget</code> (<a class="xref" href="FluentGpu.Foundation.DropTargetSpec.html">DropTargetSpec</a>) makes ANY surface a candidate receiver. Per pointer move
+the dispatcher hands <a class="xref" href="FluentGpu.Input.DragDropContext.html#FluentGpu_Input_DragDropContext_Move_FluentGpu_Foundation_NodeHandle_FluentGpu_Foundation_Point2_System_Single_System_Single_FluentGpu_Foundation_KeyModifiers_">Move(NodeHandle, Point2, float, float, KeyModifiers)</a> the hit-test chain under the pointer; the nearest enabled target whose
+<code>AcceptKinds</code> contains the session's Kind becomes <a class="xref" href="FluentGpu.Input.DragDropContext.html#FluentGpu_Input_DragDropContext_OverTarget">OverTarget</a> (a non-accepting target never
+blocks an accepting ancestor — the Flutter DragTarget pass-through). The dragged subtree can never self-target:
+L1 already cleared its <code>HitTestVisible</code>, so hit-testing sees THROUGH the moving visual.
+• Enter/Leave fire on target transitions, Over on every move while inside, Drop on release over an accepting
+target (<a class="xref" href="FluentGpu.Input.DragDropContext.html#FluentGpu_Input_DragDropContext_TryDrop_FluentGpu_Foundation_Point2_FluentGpu_Foundation_KeyModifiers_System_Boolean__">TryDrop(Point2, KeyModifiers, out bool)</a> — fired BEFORE the L1 completion so the target reads the live session). The ONE
+mutable <a class="xref" href="FluentGpu.Foundation.DragSession.html">DragSession</a> instance is reused for the whole gesture (0 steady-state alloc per move);
+handlers copy what they keep.</p>
+<p>Edge auto-scroll (the rbd/WinUI &quot;drag near the viewport edge keeps scrolling&quot; behavior) is engine-level here so
+every drag gets it: while a session is live, the pointer entering the hot zone of the nearest OVERFLOWING
+scrollable ancestor arms a proportional scroll velocity the host drives via <a class="xref" href="FluentGpu.Input.DragDropContext.html#FluentGpu_Input_DragDropContext_Tick_System_Single_">Tick(float)</a>. Constants and
+behavior are WinUI's (microsoft-ui-xaml dxaml\xcp\dxaml\lib\ListViewBase_Partial_Reorder.cpp): a 100px edge band
+(:39 LISTVIEWBASE_EDGE_SCROLL_EDGE_WIDTH_PX), speed varying LINEARLY from 1500 px/s at the edge to 150 px/s at the
+band's inner rim (:42-47), a 50ms delay-start with instant velocity updates once running (:40, :1749-1753), the
+start-edge tried before the end-edge (:1660-1707), and scrolling suppressed when already pinned to that boundary
+(:1686-1690, :1718-1722).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Input.InputDispatcher.html">InputDispatcher</a></dt>
+      <dd><p>Phase 2 (input dispatch): hit-tests the committed scene and routes pointer + keyboard. Pointer down→up over the
+same node fires the click handler and focuses the nearest focusable self-or-ancestor (a WinUI IsTabStop=False part
+never takes pointer focus; nothing focusable in the chain → focus unchanged); keyboard routes to the focused node and bubbles up ancestors
+(Handled stops it); Tab moves focus through focusable nodes; Enter/Space activates a focused clickable (the
+&quot;one declaration, three modalities&quot; contract). The full engine adds tunnel(Preview), gesture arena, XY-focus.</p>
+</dd>
+    </dl>
+    <h3 id="enums">
+Enums
+</h3>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Input.FocusDirection.html">FocusDirection</a></dt>
+      <dd><p>Directional focus movement for roving/XY keyboard navigation (arrow keys in lists, grids, menus).</p>
+</dd>
+    </dl>
+
+
+</article>
+
+
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

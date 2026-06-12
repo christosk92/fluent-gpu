@@ -1,0 +1,1087 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.RichTextBlock
+  commentId: T:FluentGpu.Controls.RichTextBlock
+  id: RichTextBlock
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.RichTextBlock.Article(System.String,System.Collections.Generic.IReadOnlyList{System.String})
+  - FluentGpu.Controls.RichTextBlock.Article(System.String,System.Collections.Generic.IReadOnlyList{System.String},FluentGpu.Controls.RichTextBlock.Options@)
+  - FluentGpu.Controls.RichTextBlock.Bold(System.String)
+  - FluentGpu.Controls.RichTextBlock.Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Foundation.TextSpan[]})
+  - FluentGpu.Controls.RichTextBlock.Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Foundation.TextSpan[]},FluentGpu.Controls.RichTextBlock.Options@)
+  - FluentGpu.Controls.RichTextBlock.Create(System.Collections.Generic.IReadOnlyList{System.String})
+  - FluentGpu.Controls.RichTextBlock.Create(System.Collections.Generic.IReadOnlyList{System.String},FluentGpu.Controls.RichTextBlock.Options@)
+  - FluentGpu.Controls.RichTextBlock.Hyperlink(System.String,System.Action)
+  - FluentGpu.Controls.RichTextBlock.Paragraph(FluentGpu.Foundation.TextSpan[],System.Boolean,FluentGpu.Foundation.ColorF)
+  - FluentGpu.Controls.RichTextBlock.Run(System.String)
+  langs:
+  - csharp
+  - vb
+  name: RichTextBlock
+  nameWithType: RichTextBlock
+  fullName: FluentGpu.Controls.RichTextBlock
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RichTextBlock.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RichTextBlock
+    path: ../../src/FluentGpu.Controls/RichTextBlock.cs
+    startLine: 24
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>RichTextBlock</code> equivalent: read-only, multi-paragraph rich text laid out as a vertical column of
+
+    paragraphs. Each paragraph is a <xref href="FluentGpu.Dsl.SpanTextEl" data-throw-if-not-resolved="false"></xref> — an array of typed inline runs (the WinUI
+
+    Run/Bold/Hyperlink inline model, RichTextBlock.g.h:63 get_Blocks) that shapes as ONE wrapped flow (rtb-01).
+
+
+    <p><b>Selection (rtb-02):</b> ON by default — IsTextSelectionEnabled=TRUE by default on CRichTextBlock
+
+    (RichTextBlock.cpp:1730); mouse drag selects (word on double-click, all on triple), Ctrl+C copies through the
+
+    clipboard seam (TextSelectionManager.cpp:30-41), the highlight reuses the editor's selection brushes
+
+    (TextControlSelectionHighlightColor ≡ the system accent, TextSelectionManager.cpp:52-56) and the I-beam shows
+
+    while selectable. <xref href="FluentGpu.Controls.RichTextBlock.Options.SelectionHighlightColor" data-throw-if-not-resolved="false"></xref> overrides the brush per control (api-04 —
+
+    TextBlock.cpp:266/330 SelectionHighlightColor). Honest scope: selection is PER PARAGRAPH (the drag clamps to the
+
+    paragraph it anchored in); WinUI's cross-paragraph selection arrives with the block-collection pass.</p>
+
+
+    <p><b>Hyperlinks:</b> <xref href="FluentGpu.Controls.RichTextBlock.Hyperlink(System.String%2cSystem.Action)" data-throw-if-not-resolved="false"></xref> spans get the WinUI inline-Hyperlink treatment — accent
+
+    foreground (HyperlinkForeground = AccentTextFillColorPrimary, generic.xaml:1120-1122), underline, the Hand cursor
+
+    over the span's laid rects and OnClick on release (SetCursor(MouseCursorHand), RichTextBlock.cpp:2995).</p>
+  example: []
+  syntax:
+    content: public static class RichTextBlock
+    content.vb: Public Module RichTextBlock
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.MemberwiseClone
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.RichTextBlock.Run(System.String)
+  commentId: M:FluentGpu.Controls.RichTextBlock.Run(System.String)
+  id: Run(System.String)
+  parent: FluentGpu.Controls.RichTextBlock
+  langs:
+  - csharp
+  - vb
+  name: Run(string)
+  nameWithType: RichTextBlock.Run(string)
+  fullName: FluentGpu.Controls.RichTextBlock.Run(string)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RichTextBlock.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Run
+    path: ../../src/FluentGpu.Controls/RichTextBlock.cs
+    startLine: 42
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: A plain run inheriting the paragraph style (WinUI <code>Run</code>).
+  example: []
+  syntax:
+    content: public static TextSpan Run(string text)
+    parameters:
+    - id: text
+      type: System.String
+    return:
+      type: FluentGpu.Foundation.TextSpan
+    content.vb: Public Shared Function Run(text As String) As TextSpan
+  overload: FluentGpu.Controls.RichTextBlock.Run*
+  nameWithType.vb: RichTextBlock.Run(String)
+  fullName.vb: FluentGpu.Controls.RichTextBlock.Run(String)
+  name.vb: Run(String)
+- uid: FluentGpu.Controls.RichTextBlock.Bold(System.String)
+  commentId: M:FluentGpu.Controls.RichTextBlock.Bold(System.String)
+  id: Bold(System.String)
+  parent: FluentGpu.Controls.RichTextBlock
+  langs:
+  - csharp
+  - vb
+  name: Bold(string)
+  nameWithType: RichTextBlock.Bold(string)
+  fullName: FluentGpu.Controls.RichTextBlock.Bold(string)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RichTextBlock.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Bold
+    path: ../../src/FluentGpu.Controls/RichTextBlock.cs
+    startLine: 46
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A SemiBold run — the WinUI <code>Bold</code> inline maps onto the type ramp's strong weight
+        (BaseTextBlockStyle FontWeight=SemiBold, TextBlock_themeresources.xaml:13).
+  example: []
+  syntax:
+    content: public static TextSpan Bold(string text)
+    parameters:
+    - id: text
+      type: System.String
+    return:
+      type: FluentGpu.Foundation.TextSpan
+    content.vb: Public Shared Function Bold(text As String) As TextSpan
+  overload: FluentGpu.Controls.RichTextBlock.Bold*
+  nameWithType.vb: RichTextBlock.Bold(String)
+  fullName.vb: FluentGpu.Controls.RichTextBlock.Bold(String)
+  name.vb: Bold(String)
+- uid: FluentGpu.Controls.RichTextBlock.Hyperlink(System.String,System.Action)
+  commentId: M:FluentGpu.Controls.RichTextBlock.Hyperlink(System.String,System.Action)
+  id: Hyperlink(System.String,System.Action)
+  parent: FluentGpu.Controls.RichTextBlock
+  langs:
+  - csharp
+  - vb
+  name: Hyperlink(string, Action)
+  nameWithType: RichTextBlock.Hyperlink(string, Action)
+  fullName: FluentGpu.Controls.RichTextBlock.Hyperlink(string, System.Action)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RichTextBlock.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Hyperlink
+    path: ../../src/FluentGpu.Controls/RichTextBlock.cs
+    startLine: 52
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    An inline hyperlink (WinUI <code>Hyperlink</code>): accent foreground (HyperlinkForeground =
+        AccentTextFillColorPrimary, generic.xaml:1120-1122) + underline + the engine Hand cursor over the span's laid
+        rects, firing <code class="paramref">onClick</code> on click (RichTextBlock.cpp:2995-3001). No italic variant: the
+        shaper has no style axis yet (faces resolve by family+weight).
+  example: []
+  syntax:
+    content: public static TextSpan Hyperlink(string text, Action onClick)
+    parameters:
+    - id: text
+      type: System.String
+    - id: onClick
+      type: System.Action
+    return:
+      type: FluentGpu.Foundation.TextSpan
+    content.vb: Public Shared Function Hyperlink(text As String, onClick As Action) As TextSpan
+  overload: FluentGpu.Controls.RichTextBlock.Hyperlink*
+  nameWithType.vb: RichTextBlock.Hyperlink(String, Action)
+  fullName.vb: FluentGpu.Controls.RichTextBlock.Hyperlink(String, System.Action)
+  name.vb: Hyperlink(String, Action)
+- uid: FluentGpu.Controls.RichTextBlock.Paragraph(FluentGpu.Foundation.TextSpan[],System.Boolean,FluentGpu.Foundation.ColorF)
+  commentId: M:FluentGpu.Controls.RichTextBlock.Paragraph(FluentGpu.Foundation.TextSpan[],System.Boolean,FluentGpu.Foundation.ColorF)
+  id: Paragraph(FluentGpu.Foundation.TextSpan[],System.Boolean,FluentGpu.Foundation.ColorF)
+  parent: FluentGpu.Controls.RichTextBlock
+  langs:
+  - csharp
+  - vb
+  name: Paragraph(TextSpan[], bool, ColorF)
+  nameWithType: RichTextBlock.Paragraph(TextSpan[], bool, ColorF)
+  fullName: FluentGpu.Controls.RichTextBlock.Paragraph(FluentGpu.Foundation.TextSpan[], bool, FluentGpu.Foundation.ColorF)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RichTextBlock.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Paragraph
+    path: ../../src/FluentGpu.Controls/RichTextBlock.cs
+    startLine: 57
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    One rich paragraph from inline runs — body type (14px primary, wrapping), selection per
+        <code class="paramref">isTextSelectionEnabled</code> (the control default is on; see <xref href="FluentGpu.Controls.RichTextBlock.Options" data-throw-if-not-resolved="false"></xref>).
+  example: []
+  syntax:
+    content: public static SpanTextEl Paragraph(TextSpan[] spans, bool isTextSelectionEnabled = true, ColorF selectionHighlightColor = default)
+    parameters:
+    - id: spans
+      type: FluentGpu.Foundation.TextSpan[]
+    - id: isTextSelectionEnabled
+      type: System.Boolean
+    - id: selectionHighlightColor
+      type: FluentGpu.Foundation.ColorF
+    return:
+      type: FluentGpu.Dsl.SpanTextEl
+    content.vb: Public Shared Function Paragraph(spans As TextSpan(), isTextSelectionEnabled As Boolean = True, selectionHighlightColor As ColorF = Nothing) As SpanTextEl
+  overload: FluentGpu.Controls.RichTextBlock.Paragraph*
+  nameWithType.vb: RichTextBlock.Paragraph(TextSpan(), Boolean, ColorF)
+  fullName.vb: FluentGpu.Controls.RichTextBlock.Paragraph(FluentGpu.Foundation.TextSpan(), Boolean, FluentGpu.Foundation.ColorF)
+  name.vb: Paragraph(TextSpan(), Boolean, ColorF)
+- uid: FluentGpu.Controls.RichTextBlock.Create(System.Collections.Generic.IReadOnlyList{System.String})
+  commentId: M:FluentGpu.Controls.RichTextBlock.Create(System.Collections.Generic.IReadOnlyList{System.String})
+  id: Create(System.Collections.Generic.IReadOnlyList{System.String})
+  parent: FluentGpu.Controls.RichTextBlock
+  langs:
+  - csharp
+  - vb
+  name: Create(IReadOnlyList<string>)
+  nameWithType: RichTextBlock.Create(IReadOnlyList<string>)
+  fullName: FluentGpu.Controls.RichTextBlock.Create(System.Collections.Generic.IReadOnlyList<string>)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RichTextBlock.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/RichTextBlock.cs
+    startLine: 72
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A column of body paragraphs (14px, primary text), 10px between paragraphs, capped at 560px wide.
+        Source-compatible with the pre-inline-model API; each paragraph is now a selectable single-run
+        <xref href="FluentGpu.Dsl.SpanTextEl" data-throw-if-not-resolved="false"></xref> (RichTextBlock selection default-on, RichTextBlock.cpp:1730).
+  example: []
+  syntax:
+    content: public static BoxEl Create(IReadOnlyList<string> paragraphs)
+    parameters:
+    - id: paragraphs
+      type: System.Collections.Generic.IReadOnlyList{System.String}
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Create(paragraphs As IReadOnlyList(Of String)) As BoxEl
+  overload: FluentGpu.Controls.RichTextBlock.Create*
+  nameWithType.vb: RichTextBlock.Create(IReadOnlyList(Of String))
+  fullName.vb: FluentGpu.Controls.RichTextBlock.Create(System.Collections.Generic.IReadOnlyList(Of String))
+  name.vb: Create(IReadOnlyList(Of String))
+- uid: FluentGpu.Controls.RichTextBlock.Create(System.Collections.Generic.IReadOnlyList{System.String},FluentGpu.Controls.RichTextBlock.Options@)
+  commentId: M:FluentGpu.Controls.RichTextBlock.Create(System.Collections.Generic.IReadOnlyList{System.String},FluentGpu.Controls.RichTextBlock.Options@)
+  id: Create(System.Collections.Generic.IReadOnlyList{System.String},FluentGpu.Controls.RichTextBlock.Options@)
+  parent: FluentGpu.Controls.RichTextBlock
+  langs:
+  - csharp
+  - vb
+  name: Create(IReadOnlyList<string>, in Options)
+  nameWithType: RichTextBlock.Create(IReadOnlyList<string>, in RichTextBlock.Options)
+  fullName: FluentGpu.Controls.RichTextBlock.Create(System.Collections.Generic.IReadOnlyList<string>, in FluentGpu.Controls.RichTextBlock.Options)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RichTextBlock.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/RichTextBlock.cs
+    startLine: 74
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static BoxEl Create(IReadOnlyList<string> paragraphs, in RichTextBlock.Options options)
+    parameters:
+    - id: paragraphs
+      type: System.Collections.Generic.IReadOnlyList{System.String}
+    - id: options
+      type: FluentGpu.Controls.RichTextBlock.Options
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Create(paragraphs As IReadOnlyList(Of String), options As RichTextBlock.Options) As BoxEl
+  overload: FluentGpu.Controls.RichTextBlock.Create*
+  nameWithType.vb: RichTextBlock.Create(IReadOnlyList(Of String), RichTextBlock.Options)
+  fullName.vb: FluentGpu.Controls.RichTextBlock.Create(System.Collections.Generic.IReadOnlyList(Of String), FluentGpu.Controls.RichTextBlock.Options)
+  name.vb: Create(IReadOnlyList(Of String), Options)
+- uid: FluentGpu.Controls.RichTextBlock.Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Foundation.TextSpan[]})
+  commentId: M:FluentGpu.Controls.RichTextBlock.Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Foundation.TextSpan[]})
+  id: Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Foundation.TextSpan[]})
+  parent: FluentGpu.Controls.RichTextBlock
+  langs:
+  - csharp
+  - vb
+  name: Create(IReadOnlyList<TextSpan[]>)
+  nameWithType: RichTextBlock.Create(IReadOnlyList<TextSpan[]>)
+  fullName: FluentGpu.Controls.RichTextBlock.Create(System.Collections.Generic.IReadOnlyList<FluentGpu.Foundation.TextSpan[]>)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RichTextBlock.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/RichTextBlock.cs
+    startLine: 84
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A column of RICH paragraphs — each an array of inline runs (mixed weights/colors/hyperlinks) that
+        wraps as one flow (rtb-01).
+  example: []
+  syntax:
+    content: public static BoxEl Create(IReadOnlyList<TextSpan[]> paragraphs)
+    parameters:
+    - id: paragraphs
+      type: System.Collections.Generic.IReadOnlyList{FluentGpu.Foundation.TextSpan[]}
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Create(paragraphs As IReadOnlyList(Of TextSpan())) As BoxEl
+  overload: FluentGpu.Controls.RichTextBlock.Create*
+  nameWithType.vb: RichTextBlock.Create(IReadOnlyList(Of TextSpan()))
+  fullName.vb: FluentGpu.Controls.RichTextBlock.Create(System.Collections.Generic.IReadOnlyList(Of FluentGpu.Foundation.TextSpan()))
+  name.vb: Create(IReadOnlyList(Of TextSpan()))
+- uid: FluentGpu.Controls.RichTextBlock.Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Foundation.TextSpan[]},FluentGpu.Controls.RichTextBlock.Options@)
+  commentId: M:FluentGpu.Controls.RichTextBlock.Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Foundation.TextSpan[]},FluentGpu.Controls.RichTextBlock.Options@)
+  id: Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Foundation.TextSpan[]},FluentGpu.Controls.RichTextBlock.Options@)
+  parent: FluentGpu.Controls.RichTextBlock
+  langs:
+  - csharp
+  - vb
+  name: Create(IReadOnlyList<TextSpan[]>, in Options)
+  nameWithType: RichTextBlock.Create(IReadOnlyList<TextSpan[]>, in RichTextBlock.Options)
+  fullName: FluentGpu.Controls.RichTextBlock.Create(System.Collections.Generic.IReadOnlyList<FluentGpu.Foundation.TextSpan[]>, in FluentGpu.Controls.RichTextBlock.Options)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RichTextBlock.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/RichTextBlock.cs
+    startLine: 86
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static BoxEl Create(IReadOnlyList<TextSpan[]> paragraphs, in RichTextBlock.Options options)
+    parameters:
+    - id: paragraphs
+      type: System.Collections.Generic.IReadOnlyList{FluentGpu.Foundation.TextSpan[]}
+    - id: options
+      type: FluentGpu.Controls.RichTextBlock.Options
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Create(paragraphs As IReadOnlyList(Of TextSpan()), options As RichTextBlock.Options) As BoxEl
+  overload: FluentGpu.Controls.RichTextBlock.Create*
+  nameWithType.vb: RichTextBlock.Create(IReadOnlyList(Of TextSpan()), RichTextBlock.Options)
+  fullName.vb: FluentGpu.Controls.RichTextBlock.Create(System.Collections.Generic.IReadOnlyList(Of FluentGpu.Foundation.TextSpan()), FluentGpu.Controls.RichTextBlock.Options)
+  name.vb: Create(IReadOnlyList(Of TextSpan()), Options)
+- uid: FluentGpu.Controls.RichTextBlock.Article(System.String,System.Collections.Generic.IReadOnlyList{System.String})
+  commentId: M:FluentGpu.Controls.RichTextBlock.Article(System.String,System.Collections.Generic.IReadOnlyList{System.String})
+  id: Article(System.String,System.Collections.Generic.IReadOnlyList{System.String})
+  parent: FluentGpu.Controls.RichTextBlock
+  langs:
+  - csharp
+  - vb
+  name: Article(string, IReadOnlyList<string>)
+  nameWithType: RichTextBlock.Article(string, IReadOnlyList<string>)
+  fullName: FluentGpu.Controls.RichTextBlock.Article(string, System.Collections.Generic.IReadOnlyList<string>)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RichTextBlock.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Article
+    path: ../../src/FluentGpu.Controls/RichTextBlock.cs
+    startLine: 95
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'A titled rich-text block: a bold 20px heading followed by the body paragraphs (source-compatible).'
+  example: []
+  syntax:
+    content: public static BoxEl Article(string heading, IReadOnlyList<string> paragraphs)
+    parameters:
+    - id: heading
+      type: System.String
+    - id: paragraphs
+      type: System.Collections.Generic.IReadOnlyList{System.String}
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Article(heading As String, paragraphs As IReadOnlyList(Of String)) As BoxEl
+  overload: FluentGpu.Controls.RichTextBlock.Article*
+  nameWithType.vb: RichTextBlock.Article(String, IReadOnlyList(Of String))
+  fullName.vb: FluentGpu.Controls.RichTextBlock.Article(String, System.Collections.Generic.IReadOnlyList(Of String))
+  name.vb: Article(String, IReadOnlyList(Of String))
+- uid: FluentGpu.Controls.RichTextBlock.Article(System.String,System.Collections.Generic.IReadOnlyList{System.String},FluentGpu.Controls.RichTextBlock.Options@)
+  commentId: M:FluentGpu.Controls.RichTextBlock.Article(System.String,System.Collections.Generic.IReadOnlyList{System.String},FluentGpu.Controls.RichTextBlock.Options@)
+  id: Article(System.String,System.Collections.Generic.IReadOnlyList{System.String},FluentGpu.Controls.RichTextBlock.Options@)
+  parent: FluentGpu.Controls.RichTextBlock
+  langs:
+  - csharp
+  - vb
+  name: Article(string, IReadOnlyList<string>, in Options)
+  nameWithType: RichTextBlock.Article(string, IReadOnlyList<string>, in RichTextBlock.Options)
+  fullName: FluentGpu.Controls.RichTextBlock.Article(string, System.Collections.Generic.IReadOnlyList<string>, in FluentGpu.Controls.RichTextBlock.Options)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RichTextBlock.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Article
+    path: ../../src/FluentGpu.Controls/RichTextBlock.cs
+    startLine: 97
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static BoxEl Article(string heading, IReadOnlyList<string> paragraphs, in RichTextBlock.Options options)
+    parameters:
+    - id: heading
+      type: System.String
+    - id: paragraphs
+      type: System.Collections.Generic.IReadOnlyList{System.String}
+    - id: options
+      type: FluentGpu.Controls.RichTextBlock.Options
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Article(heading As String, paragraphs As IReadOnlyList(Of String), options As RichTextBlock.Options) As BoxEl
+  overload: FluentGpu.Controls.RichTextBlock.Article*
+  nameWithType.vb: RichTextBlock.Article(String, IReadOnlyList(Of String), RichTextBlock.Options)
+  fullName.vb: FluentGpu.Controls.RichTextBlock.Article(String, System.Collections.Generic.IReadOnlyList(Of String), FluentGpu.Controls.RichTextBlock.Options)
+  name.vb: Article(String, IReadOnlyList(Of String), Options)
+references:
+- uid: FluentGpu.Dsl.SpanTextEl
+  commentId: T:FluentGpu.Dsl.SpanTextEl
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.SpanTextEl.html
+  name: SpanTextEl
+  nameWithType: SpanTextEl
+  fullName: FluentGpu.Dsl.SpanTextEl
+- uid: FluentGpu.Controls.RichTextBlock.Options.SelectionHighlightColor
+  commentId: P:FluentGpu.Controls.RichTextBlock.Options.SelectionHighlightColor
+  href: FluentGpu.Controls.RichTextBlock.Options.html#FluentGpu_Controls_RichTextBlock_Options_SelectionHighlightColor
+  name: SelectionHighlightColor
+  nameWithType: RichTextBlock.Options.SelectionHighlightColor
+  fullName: FluentGpu.Controls.RichTextBlock.Options.SelectionHighlightColor
+- uid: FluentGpu.Controls.RichTextBlock.Hyperlink(System.String,System.Action)
+  commentId: M:FluentGpu.Controls.RichTextBlock.Hyperlink(System.String,System.Action)
+  isExternal: true
+  href: FluentGpu.Controls.RichTextBlock.html#FluentGpu_Controls_RichTextBlock_Hyperlink_System_String_System_Action_
+  name: Hyperlink(string, Action)
+  nameWithType: RichTextBlock.Hyperlink(string, Action)
+  fullName: FluentGpu.Controls.RichTextBlock.Hyperlink(string, System.Action)
+  nameWithType.vb: RichTextBlock.Hyperlink(String, Action)
+  fullName.vb: FluentGpu.Controls.RichTextBlock.Hyperlink(String, System.Action)
+  name.vb: Hyperlink(String, Action)
+  spec.csharp:
+  - uid: FluentGpu.Controls.RichTextBlock.Hyperlink(System.String,System.Action)
+    name: Hyperlink
+    href: FluentGpu.Controls.RichTextBlock.html#FluentGpu_Controls_RichTextBlock_Hyperlink_System_String_System_Action_
+  - name: (
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: ','
+  - name: " "
+  - uid: System.Action
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.RichTextBlock.Hyperlink(System.String,System.Action)
+    name: Hyperlink
+    href: FluentGpu.Controls.RichTextBlock.html#FluentGpu_Controls_RichTextBlock_Hyperlink_System_String_System_Action_
+  - name: (
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: ','
+  - name: " "
+  - uid: System.Action
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action
+  - name: )
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.MemberwiseClone
+  commentId: M:System.Object.MemberwiseClone
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  name: MemberwiseClone()
+  nameWithType: object.MemberwiseClone()
+  fullName: object.MemberwiseClone()
+  nameWithType.vb: Object.MemberwiseClone()
+  fullName.vb: Object.MemberwiseClone()
+  spec.csharp:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Controls.RichTextBlock.Run*
+  commentId: Overload:FluentGpu.Controls.RichTextBlock.Run
+  href: FluentGpu.Controls.RichTextBlock.html#FluentGpu_Controls_RichTextBlock_Run_System_String_
+  name: Run
+  nameWithType: RichTextBlock.Run
+  fullName: FluentGpu.Controls.RichTextBlock.Run
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Foundation.TextSpan
+  commentId: T:FluentGpu.Foundation.TextSpan
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.TextSpan.html
+  name: TextSpan
+  nameWithType: TextSpan
+  fullName: FluentGpu.Foundation.TextSpan
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Controls.RichTextBlock.Bold*
+  commentId: Overload:FluentGpu.Controls.RichTextBlock.Bold
+  href: FluentGpu.Controls.RichTextBlock.html#FluentGpu_Controls_RichTextBlock_Bold_System_String_
+  name: Bold
+  nameWithType: RichTextBlock.Bold
+  fullName: FluentGpu.Controls.RichTextBlock.Bold
+- uid: FluentGpu.Controls.RichTextBlock.Hyperlink*
+  commentId: Overload:FluentGpu.Controls.RichTextBlock.Hyperlink
+  href: FluentGpu.Controls.RichTextBlock.html#FluentGpu_Controls_RichTextBlock_Hyperlink_System_String_System_Action_
+  name: Hyperlink
+  nameWithType: RichTextBlock.Hyperlink
+  fullName: FluentGpu.Controls.RichTextBlock.Hyperlink
+- uid: System.Action
+  commentId: T:System.Action
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action
+  name: Action
+  nameWithType: Action
+  fullName: System.Action
+- uid: FluentGpu.Controls.RichTextBlock.Options
+  commentId: T:FluentGpu.Controls.RichTextBlock.Options
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.RichTextBlock.html
+  name: RichTextBlock.Options
+  nameWithType: RichTextBlock.Options
+  fullName: FluentGpu.Controls.RichTextBlock.Options
+  spec.csharp:
+  - uid: FluentGpu.Controls.RichTextBlock
+    name: RichTextBlock
+    href: FluentGpu.Controls.RichTextBlock.html
+  - name: .
+  - uid: FluentGpu.Controls.RichTextBlock.Options
+    name: Options
+    href: FluentGpu.Controls.RichTextBlock.Options.html
+  spec.vb:
+  - uid: FluentGpu.Controls.RichTextBlock
+    name: RichTextBlock
+    href: FluentGpu.Controls.RichTextBlock.html
+  - name: .
+  - uid: FluentGpu.Controls.RichTextBlock.Options
+    name: Options
+    href: FluentGpu.Controls.RichTextBlock.Options.html
+- uid: FluentGpu.Controls.RichTextBlock.Paragraph*
+  commentId: Overload:FluentGpu.Controls.RichTextBlock.Paragraph
+  href: FluentGpu.Controls.RichTextBlock.html#FluentGpu_Controls_RichTextBlock_Paragraph_FluentGpu_Foundation_TextSpan___System_Boolean_FluentGpu_Foundation_ColorF_
+  name: Paragraph
+  nameWithType: RichTextBlock.Paragraph
+  fullName: FluentGpu.Controls.RichTextBlock.Paragraph
+- uid: FluentGpu.Foundation.TextSpan[]
+  isExternal: true
+  href: FluentGpu.Foundation.TextSpan.html
+  name: TextSpan[]
+  nameWithType: TextSpan[]
+  fullName: FluentGpu.Foundation.TextSpan[]
+  nameWithType.vb: TextSpan()
+  fullName.vb: FluentGpu.Foundation.TextSpan()
+  name.vb: TextSpan()
+  spec.csharp:
+  - uid: FluentGpu.Foundation.TextSpan
+    name: TextSpan
+    href: FluentGpu.Foundation.TextSpan.html
+  - name: '['
+  - name: ']'
+  spec.vb:
+  - uid: FluentGpu.Foundation.TextSpan
+    name: TextSpan
+    href: FluentGpu.Foundation.TextSpan.html
+  - name: (
+  - name: )
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Controls.RichTextBlock.Create*
+  commentId: Overload:FluentGpu.Controls.RichTextBlock.Create
+  href: FluentGpu.Controls.RichTextBlock.html#FluentGpu_Controls_RichTextBlock_Create_System_Collections_Generic_IReadOnlyList_System_String__
+  name: Create
+  nameWithType: RichTextBlock.Create
+  fullName: FluentGpu.Controls.RichTextBlock.Create
+- uid: System.Collections.Generic.IReadOnlyList{System.String}
+  commentId: T:System.Collections.Generic.IReadOnlyList{System.String}
+  parent: System.Collections.Generic
+  definition: System.Collections.Generic.IReadOnlyList`1
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<string>
+  nameWithType: IReadOnlyList<string>
+  fullName: System.Collections.Generic.IReadOnlyList<string>
+  nameWithType.vb: IReadOnlyList(Of String)
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of String)
+  name.vb: IReadOnlyList(Of String)
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+- uid: FluentGpu.Dsl.BoxEl
+  commentId: T:FluentGpu.Dsl.BoxEl
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.BoxEl.html
+  name: BoxEl
+  nameWithType: BoxEl
+  fullName: FluentGpu.Dsl.BoxEl
+- uid: System.Collections.Generic.IReadOnlyList`1
+  commentId: T:System.Collections.Generic.IReadOnlyList`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<T>
+  nameWithType: IReadOnlyList<T>
+  fullName: System.Collections.Generic.IReadOnlyList<T>
+  nameWithType.vb: IReadOnlyList(Of T)
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of T)
+  name.vb: IReadOnlyList(Of T)
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Collections.Generic
+  commentId: N:System.Collections.Generic
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System.Collections.Generic
+  nameWithType: System.Collections.Generic
+  fullName: System.Collections.Generic
+  spec.csharp:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+  spec.vb:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+- uid: System.Collections.Generic.IReadOnlyList{FluentGpu.Foundation.TextSpan[]}
+  commentId: T:System.Collections.Generic.IReadOnlyList{FluentGpu.Foundation.TextSpan[]}
+  parent: System.Collections.Generic
+  definition: System.Collections.Generic.IReadOnlyList`1
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<TextSpan[]>
+  nameWithType: IReadOnlyList<TextSpan[]>
+  fullName: System.Collections.Generic.IReadOnlyList<FluentGpu.Foundation.TextSpan[]>
+  nameWithType.vb: IReadOnlyList(Of TextSpan())
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of FluentGpu.Foundation.TextSpan())
+  name.vb: IReadOnlyList(Of TextSpan())
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - uid: FluentGpu.Foundation.TextSpan
+    name: TextSpan
+    href: FluentGpu.Foundation.TextSpan.html
+  - name: '['
+  - name: ']'
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.TextSpan
+    name: TextSpan
+    href: FluentGpu.Foundation.TextSpan.html
+  - name: (
+  - name: )
+  - name: )
+- uid: FluentGpu.Controls.RichTextBlock.Article*
+  commentId: Overload:FluentGpu.Controls.RichTextBlock.Article
+  href: FluentGpu.Controls.RichTextBlock.html#FluentGpu_Controls_RichTextBlock_Article_System_String_System_Collections_Generic_IReadOnlyList_System_String__
+  name: Article
+  nameWithType: RichTextBlock.Article
+  fullName: FluentGpu.Controls.RichTextBlock.Article

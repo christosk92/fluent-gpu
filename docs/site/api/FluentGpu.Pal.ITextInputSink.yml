@@ -1,0 +1,333 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Pal.ITextInputSink
+  commentId: T:FluentGpu.Pal.ITextInputSink
+  id: ITextInputSink
+  parent: FluentGpu.Pal
+  children:
+  - FluentGpu.Pal.ITextInputSink.OnCompositionCommit(System.ReadOnlySpan{System.Char})
+  - FluentGpu.Pal.ITextInputSink.OnCompositionEnd
+  - FluentGpu.Pal.ITextInputSink.OnCompositionStart
+  - FluentGpu.Pal.ITextInputSink.OnCompositionUpdate(System.ReadOnlySpan{System.Char},System.Int32,System.ReadOnlySpan{FluentGpu.Pal.ImeClause})
+  langs:
+  - csharp
+  - vb
+  name: ITextInputSink
+  nameWithType: ITextInputSink
+  fullName: FluentGpu.Pal.ITextInputSink
+  type: Interface
+  source:
+    remote:
+      path: src/FluentGpu.Pal/TextInput.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ITextInputSink
+    path: ../../src/FluentGpu.Pal/TextInput.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: >-
+    Receives IME composition events from the platform (the focused editor registers as the sink through the input
+
+    router). Composition TEXT cannot ride the POD <xref href="FluentGpu.Pal.InputEventRing" data-throw-if-not-resolved="false"></xref> (strings) — the platform invokes the
+
+    sink directly on the UI thread during the message pump; the typing edge is allowed bounded Gen0.
+  example: []
+  syntax:
+    content: public interface ITextInputSink
+    content.vb: Public Interface ITextInputSink
+- uid: FluentGpu.Pal.ITextInputSink.OnCompositionStart
+  commentId: M:FluentGpu.Pal.ITextInputSink.OnCompositionStart
+  id: OnCompositionStart
+  parent: FluentGpu.Pal.ITextInputSink
+  langs:
+  - csharp
+  - vb
+  name: OnCompositionStart()
+  nameWithType: ITextInputSink.OnCompositionStart()
+  fullName: FluentGpu.Pal.ITextInputSink.OnCompositionStart()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal/TextInput.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnCompositionStart
+    path: ../../src/FluentGpu.Pal/TextInput.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: void OnCompositionStart()
+    content.vb: Sub OnCompositionStart()
+  overload: FluentGpu.Pal.ITextInputSink.OnCompositionStart*
+- uid: FluentGpu.Pal.ITextInputSink.OnCompositionUpdate(System.ReadOnlySpan{System.Char},System.Int32,System.ReadOnlySpan{FluentGpu.Pal.ImeClause})
+  commentId: M:FluentGpu.Pal.ITextInputSink.OnCompositionUpdate(System.ReadOnlySpan{System.Char},System.Int32,System.ReadOnlySpan{FluentGpu.Pal.ImeClause})
+  id: OnCompositionUpdate(System.ReadOnlySpan{System.Char},System.Int32,System.ReadOnlySpan{FluentGpu.Pal.ImeClause})
+  parent: FluentGpu.Pal.ITextInputSink
+  langs:
+  - csharp
+  - vb
+  name: OnCompositionUpdate(ReadOnlySpan<char>, int, ReadOnlySpan<ImeClause>)
+  nameWithType: ITextInputSink.OnCompositionUpdate(ReadOnlySpan<char>, int, ReadOnlySpan<ImeClause>)
+  fullName: FluentGpu.Pal.ITextInputSink.OnCompositionUpdate(System.ReadOnlySpan<char>, int, System.ReadOnlySpan<FluentGpu.Pal.ImeClause>)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal/TextInput.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnCompositionUpdate
+    path: ../../src/FluentGpu.Pal/TextInput.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: >-
+    The in-flight (uncommitted) composition changed: full current text + caret position inside it +
+        the clause segmentation for underline rendering.
+  example: []
+  syntax:
+    content: void OnCompositionUpdate(ReadOnlySpan<char> text, int caret, ReadOnlySpan<ImeClause> clauses)
+    parameters:
+    - id: text
+      type: System.ReadOnlySpan{System.Char}
+    - id: caret
+      type: System.Int32
+    - id: clauses
+      type: System.ReadOnlySpan{FluentGpu.Pal.ImeClause}
+    content.vb: Sub OnCompositionUpdate(text As ReadOnlySpan(Of Char), caret As Integer, clauses As ReadOnlySpan(Of ImeClause))
+  overload: FluentGpu.Pal.ITextInputSink.OnCompositionUpdate*
+  nameWithType.vb: ITextInputSink.OnCompositionUpdate(ReadOnlySpan(Of Char), Integer, ReadOnlySpan(Of ImeClause))
+  fullName.vb: FluentGpu.Pal.ITextInputSink.OnCompositionUpdate(System.ReadOnlySpan(Of Char), Integer, System.ReadOnlySpan(Of FluentGpu.Pal.ImeClause))
+  name.vb: OnCompositionUpdate(ReadOnlySpan(Of Char), Integer, ReadOnlySpan(Of ImeClause))
+- uid: FluentGpu.Pal.ITextInputSink.OnCompositionCommit(System.ReadOnlySpan{System.Char})
+  commentId: M:FluentGpu.Pal.ITextInputSink.OnCompositionCommit(System.ReadOnlySpan{System.Char})
+  id: OnCompositionCommit(System.ReadOnlySpan{System.Char})
+  parent: FluentGpu.Pal.ITextInputSink
+  langs:
+  - csharp
+  - vb
+  name: OnCompositionCommit(ReadOnlySpan<char>)
+  nameWithType: ITextInputSink.OnCompositionCommit(ReadOnlySpan<char>)
+  fullName: FluentGpu.Pal.ITextInputSink.OnCompositionCommit(System.ReadOnlySpan<char>)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal/TextInput.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnCompositionCommit
+    path: ../../src/FluentGpu.Pal/TextInput.cs
+    startLine: 24
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: The composition committed this final text (insert it; the composition display is torn down).
+  example: []
+  syntax:
+    content: void OnCompositionCommit(ReadOnlySpan<char> text)
+    parameters:
+    - id: text
+      type: System.ReadOnlySpan{System.Char}
+    content.vb: Sub OnCompositionCommit(text As ReadOnlySpan(Of Char))
+  overload: FluentGpu.Pal.ITextInputSink.OnCompositionCommit*
+  nameWithType.vb: ITextInputSink.OnCompositionCommit(ReadOnlySpan(Of Char))
+  fullName.vb: FluentGpu.Pal.ITextInputSink.OnCompositionCommit(System.ReadOnlySpan(Of Char))
+  name.vb: OnCompositionCommit(ReadOnlySpan(Of Char))
+- uid: FluentGpu.Pal.ITextInputSink.OnCompositionEnd
+  commentId: M:FluentGpu.Pal.ITextInputSink.OnCompositionEnd
+  id: OnCompositionEnd
+  parent: FluentGpu.Pal.ITextInputSink
+  langs:
+  - csharp
+  - vb
+  name: OnCompositionEnd()
+  nameWithType: ITextInputSink.OnCompositionEnd()
+  fullName: FluentGpu.Pal.ITextInputSink.OnCompositionEnd()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal/TextInput.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnCompositionEnd
+    path: ../../src/FluentGpu.Pal/TextInput.cs
+    startLine: 25
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: void OnCompositionEnd()
+    content.vb: Sub OnCompositionEnd()
+  overload: FluentGpu.Pal.ITextInputSink.OnCompositionEnd*
+references:
+- uid: FluentGpu.Pal.InputEventRing
+  commentId: T:FluentGpu.Pal.InputEventRing
+  parent: FluentGpu.Pal
+  href: FluentGpu.Pal.InputEventRing.html
+  name: InputEventRing
+  nameWithType: InputEventRing
+  fullName: FluentGpu.Pal.InputEventRing
+- uid: FluentGpu.Pal
+  commentId: N:FluentGpu.Pal
+  href: FluentGpu.html
+  name: FluentGpu.Pal
+  nameWithType: FluentGpu.Pal
+  fullName: FluentGpu.Pal
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+- uid: FluentGpu.Pal.ITextInputSink.OnCompositionStart*
+  commentId: Overload:FluentGpu.Pal.ITextInputSink.OnCompositionStart
+  href: FluentGpu.Pal.ITextInputSink.html#FluentGpu_Pal_ITextInputSink_OnCompositionStart
+  name: OnCompositionStart
+  nameWithType: ITextInputSink.OnCompositionStart
+  fullName: FluentGpu.Pal.ITextInputSink.OnCompositionStart
+- uid: FluentGpu.Pal.ITextInputSink.OnCompositionUpdate*
+  commentId: Overload:FluentGpu.Pal.ITextInputSink.OnCompositionUpdate
+  href: FluentGpu.Pal.ITextInputSink.html#FluentGpu_Pal_ITextInputSink_OnCompositionUpdate_System_ReadOnlySpan_System_Char__System_Int32_System_ReadOnlySpan_FluentGpu_Pal_ImeClause__
+  name: OnCompositionUpdate
+  nameWithType: ITextInputSink.OnCompositionUpdate
+  fullName: FluentGpu.Pal.ITextInputSink.OnCompositionUpdate
+- uid: System.ReadOnlySpan{System.Char}
+  commentId: T:System.ReadOnlySpan{System.Char}
+  parent: System
+  definition: System.ReadOnlySpan`1
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<char>
+  nameWithType: ReadOnlySpan<char>
+  fullName: System.ReadOnlySpan<char>
+  nameWithType.vb: ReadOnlySpan(Of Char)
+  fullName.vb: System.ReadOnlySpan(Of Char)
+  name.vb: ReadOnlySpan(Of Char)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - uid: System.Char
+    name: char
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.char
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Char
+    name: Char
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.char
+  - name: )
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: System.ReadOnlySpan{FluentGpu.Pal.ImeClause}
+  commentId: T:System.ReadOnlySpan{FluentGpu.Pal.ImeClause}
+  parent: System
+  definition: System.ReadOnlySpan`1
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<ImeClause>
+  nameWithType: ReadOnlySpan<ImeClause>
+  fullName: System.ReadOnlySpan<FluentGpu.Pal.ImeClause>
+  nameWithType.vb: ReadOnlySpan(Of ImeClause)
+  fullName.vb: System.ReadOnlySpan(Of FluentGpu.Pal.ImeClause)
+  name.vb: ReadOnlySpan(Of ImeClause)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - uid: FluentGpu.Pal.ImeClause
+    name: ImeClause
+    href: FluentGpu.Pal.ImeClause.html
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Pal.ImeClause
+    name: ImeClause
+    href: FluentGpu.Pal.ImeClause.html
+  - name: )
+- uid: System.ReadOnlySpan`1
+  commentId: T:System.ReadOnlySpan`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<T>
+  nameWithType: ReadOnlySpan<T>
+  fullName: System.ReadOnlySpan<T>
+  nameWithType.vb: ReadOnlySpan(Of T)
+  fullName.vb: System.ReadOnlySpan(Of T)
+  name.vb: ReadOnlySpan(Of T)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Pal.ITextInputSink.OnCompositionCommit*
+  commentId: Overload:FluentGpu.Pal.ITextInputSink.OnCompositionCommit
+  href: FluentGpu.Pal.ITextInputSink.html#FluentGpu_Pal_ITextInputSink_OnCompositionCommit_System_ReadOnlySpan_System_Char__
+  name: OnCompositionCommit
+  nameWithType: ITextInputSink.OnCompositionCommit
+  fullName: FluentGpu.Pal.ITextInputSink.OnCompositionCommit
+- uid: FluentGpu.Pal.ITextInputSink.OnCompositionEnd*
+  commentId: Overload:FluentGpu.Pal.ITextInputSink.OnCompositionEnd
+  href: FluentGpu.Pal.ITextInputSink.html#FluentGpu_Pal_ITextInputSink_OnCompositionEnd
+  name: OnCompositionEnd
+  nameWithType: ITextInputSink.OnCompositionEnd
+  fullName: FluentGpu.Pal.ITextInputSink.OnCompositionEnd

@@ -1,0 +1,532 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.StringId
+  commentId: T:FluentGpu.Foundation.StringId
+  id: StringId
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.StringId.#ctor(System.Int32)
+  - FluentGpu.Foundation.StringId.Empty
+  - FluentGpu.Foundation.StringId.IsEmpty
+  - FluentGpu.Foundation.StringId.Value
+  langs:
+  - csharp
+  - vb
+  name: StringId
+  nameWithType: StringId
+  fullName: FluentGpu.Foundation.StringId
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/StringTable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StringId
+    path: ../../src/FluentGpu.Foundation/StringTable.cs
+    startLine: 6
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: 4-byte interned string id. Id 0 = empty. No <xref href="System.String" data-throw-if-not-resolved="false"></xref> reaches the paint path.
+  example: []
+  syntax:
+    content: 'public readonly record struct StringId : IEquatable<StringId>'
+    content.vb: Public Structure StringId Implements IEquatable(Of StringId)
+  implements:
+  - System.IEquatable{FluentGpu.Foundation.StringId}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Foundation.StringId.#ctor(System.Int32)
+  commentId: M:FluentGpu.Foundation.StringId.#ctor(System.Int32)
+  id: '#ctor(System.Int32)'
+  parent: FluentGpu.Foundation.StringId
+  langs:
+  - csharp
+  - vb
+  name: StringId(int)
+  nameWithType: StringId.StringId(int)
+  fullName: FluentGpu.Foundation.StringId.StringId(int)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/StringTable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/StringTable.cs
+    startLine: 6
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: 4-byte interned string id. Id 0 = empty. No <xref href="System.String" data-throw-if-not-resolved="false"></xref> reaches the paint path.
+  example: []
+  syntax:
+    content: public StringId(int Value)
+    parameters:
+    - id: Value
+      type: System.Int32
+    content.vb: Public Sub New(Value As Integer)
+  overload: FluentGpu.Foundation.StringId.#ctor*
+  nameWithType.vb: StringId.New(Integer)
+  fullName.vb: FluentGpu.Foundation.StringId.New(Integer)
+  name.vb: New(Integer)
+- uid: FluentGpu.Foundation.StringId.Value
+  commentId: P:FluentGpu.Foundation.StringId.Value
+  id: Value
+  parent: FluentGpu.Foundation.StringId
+  langs:
+  - csharp
+  - vb
+  name: Value
+  nameWithType: StringId.Value
+  fullName: FluentGpu.Foundation.StringId.Value
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/StringTable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Value
+    path: ../../src/FluentGpu.Foundation/StringTable.cs
+    startLine: 6
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public int Value { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property Value As Integer
+  overload: FluentGpu.Foundation.StringId.Value*
+- uid: FluentGpu.Foundation.StringId.IsEmpty
+  commentId: P:FluentGpu.Foundation.StringId.IsEmpty
+  id: IsEmpty
+  parent: FluentGpu.Foundation.StringId
+  langs:
+  - csharp
+  - vb
+  name: IsEmpty
+  nameWithType: StringId.IsEmpty
+  fullName: FluentGpu.Foundation.StringId.IsEmpty
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/StringTable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsEmpty
+    path: ../../src/FluentGpu.Foundation/StringTable.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public bool IsEmpty { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property IsEmpty As Boolean
+  overload: FluentGpu.Foundation.StringId.IsEmpty*
+- uid: FluentGpu.Foundation.StringId.Empty
+  commentId: P:FluentGpu.Foundation.StringId.Empty
+  id: Empty
+  parent: FluentGpu.Foundation.StringId
+  langs:
+  - csharp
+  - vb
+  name: Empty
+  nameWithType: StringId.Empty
+  fullName: FluentGpu.Foundation.StringId.Empty
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/StringTable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Empty
+    path: ../../src/FluentGpu.Foundation/StringTable.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public static StringId Empty { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.StringId
+    content.vb: Public Shared ReadOnly Property Empty As StringId
+  overload: FluentGpu.Foundation.StringId.Empty*
+references:
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.IEquatable{FluentGpu.Foundation.StringId}
+  commentId: T:System.IEquatable{FluentGpu.Foundation.StringId}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<StringId>
+  nameWithType: IEquatable<StringId>
+  fullName: System.IEquatable<FluentGpu.Foundation.StringId>
+  nameWithType.vb: IEquatable(Of StringId)
+  fullName.vb: System.IEquatable(Of FluentGpu.Foundation.StringId)
+  name.vb: IEquatable(Of StringId)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Foundation.StringId
+    name: StringId
+    href: FluentGpu.Foundation.StringId.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.StringId
+    name: StringId
+    href: FluentGpu.Foundation.StringId.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Foundation.StringId.#ctor*
+  commentId: Overload:FluentGpu.Foundation.StringId.#ctor
+  href: FluentGpu.Foundation.StringId.html#FluentGpu_Foundation_StringId__ctor_System_Int32_
+  name: StringId
+  nameWithType: StringId.StringId
+  fullName: FluentGpu.Foundation.StringId.StringId
+  nameWithType.vb: StringId.New
+  fullName.vb: FluentGpu.Foundation.StringId.New
+  name.vb: New
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Foundation.StringId.Value*
+  commentId: Overload:FluentGpu.Foundation.StringId.Value
+  href: FluentGpu.Foundation.StringId.html#FluentGpu_Foundation_StringId_Value
+  name: Value
+  nameWithType: StringId.Value
+  fullName: FluentGpu.Foundation.StringId.Value
+- uid: FluentGpu.Foundation.StringId.IsEmpty*
+  commentId: Overload:FluentGpu.Foundation.StringId.IsEmpty
+  href: FluentGpu.Foundation.StringId.html#FluentGpu_Foundation_StringId_IsEmpty
+  name: IsEmpty
+  nameWithType: StringId.IsEmpty
+  fullName: FluentGpu.Foundation.StringId.IsEmpty
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Foundation.StringId.Empty*
+  commentId: Overload:FluentGpu.Foundation.StringId.Empty
+  href: FluentGpu.Foundation.StringId.html#FluentGpu_Foundation_StringId_Empty
+  name: Empty
+  nameWithType: StringId.Empty
+  fullName: FluentGpu.Foundation.StringId.Empty
+- uid: FluentGpu.Foundation.StringId
+  commentId: T:FluentGpu.Foundation.StringId
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.StringId.html
+  name: StringId
+  nameWithType: StringId
+  fullName: FluentGpu.Foundation.StringId

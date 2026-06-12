@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Design canon (the architecture source of truth) | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Design canon (the architecture source of truth) | FluentGpu Developer Docs ">
+      
+      
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="../toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/docs/site/design/index.md/#L1">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+
+      <div class="content">
+        <div class="actionbar">
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="">
+<h1 id="design-canon-the-architecture-source-of-truth">Design canon (the architecture source of truth)</h1>
+
+<p>This page is a <strong>bridge</strong>, not a spec. The architecture canon — every binding contract, DrawList opcode shape, seam
+definition, scene column, hook, and threading rule — lives in the <code>design/</code> tree at the repository root, <strong>not</strong> on this
+site. This page tells you what is in there, the order to read it in, who owns what, and the one rule for changing a
+canonical value. It deliberately restates none of those contracts: it links to them.</p>
+<p>The split is the whole point. These DocFX pages are the <strong>working developer view</strong> — how to use the engine
+(<a href="../app-authors/index.html">app authors</a>) and where to change its internals
+(<a href="../engine-contributors/index.html">engine contributors</a>). The <code>design/</code> corpus is the <strong>authority</strong>. When a usage page
+on this site and a design doc disagree, <strong>the design doc wins</strong>, and the usage page is the bug. When two design docs
+disagree, <a href="../../../design/SPEC-INDEX.md"><code>SPEC-INDEX.md</code></a> wins. That ladder is the subject of this page.</p>
+<div class="NOTE">
+<h5>Note</h5>
+<p>The links below point into the repository tree. The <code>design/</code> corpus is read <strong>in the repo</strong> — it is not built into
+this site (the site builds only <code>docs/site/**</code> plus the generated API reference; see <a href="../docfx.json"><code>docfx.json</code></a>).
+Follow these links on GitHub or in your local checkout.</p>
+</div>
+<div class="IMPORTANT">
+<h5>Important</h5>
+<p>If you are <em>building an app</em>, you almost never need this page — start at
+<a href="../app-authors/index.html">Building apps with FluentGpu</a>. This page is for <strong>engine contributors</strong> changing internals,
+and for anyone who needs to know which doc is authoritative for a given contract before they touch it.</p>
+</div>
+<h2 id="what-lives-in-design-vs-here-canonical-contracts-vs-usage-docs">What lives in <code>design/</code> vs here (canonical contracts vs usage docs)</h2>
+<p>Two trees, two jobs, one direction of authority.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th><code>design/</code> (repo root)</th>
+<th><code>docs/site/**</code> (this site) + <code>docs/guide/**</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>What it is</strong></td>
+<td>The architecture <strong>canon</strong> — binding contracts, struct/opcode shapes, seam definitions, scene columns, the threading model, the 18 subsystem designs-of-record.</td>
+<td>The <strong>working view</strong> — task-oriented, source-grounded usage and contributor docs.</td>
+</tr>
+<tr>
+<td><strong>Authoritative for</strong></td>
+<td>Cross-cutting contracts and every shared artifact's <em>single owner</em>.</td>
+<td>Nothing canonical. It <em>cites</em> the canon (and the source) rather than re-litigating it.</td>
+</tr>
+<tr>
+<td><strong>Form</strong></td>
+<td>Markdown specs + the <a href="../../../design/check-canon.ps1"><code>check-canon.ps1</code></a> drift gate. Canon-gated.</td>
+<td>DocFX site pages + the developer guide. Verified by the headless harness, not the canon gate.</td>
+</tr>
+<tr>
+<td><strong>When they disagree</strong></td>
+<td><strong>Wins.</strong> A usage doc that contradicts it is wrong.</td>
+<td>Loses to <code>design/</code>; loses to the source. The as-built reactive model in particular is owned by <a href="../../../design/subsystems/reconciler-hooks.md"><code>reconciler-hooks.md</code> §0bis</a>.</td>
+</tr>
+<tr>
+<td><strong>Edit discipline</strong></td>
+<td>Single-owner: define an artifact in its owner; everywhere else <em>reference</em> it. Adding a contract means registering it in <code>SPEC-INDEX.md</code> §2 <strong>and</strong> the ownership map first.</td>
+<td>Same single-owner spirit: link into the canon, do not duplicate a struct shape or an enum.</td>
+</tr>
+</tbody>
+</table>
+<p>The rule that keeps this honest is <strong>single-owner</strong>: every shared artifact (an opcode shape, a scene column, a seam, a
+hook, a source generator, an assembly) is defined in exactly <strong>one</strong> design doc and referenced everywhere else. The #1
+review finding on this codebase, every time, is the same artifact defined two ways in two docs — which is exactly the
+drift the canon gate and reviews catch. Honor it on both sides of the split.</p>
+<h2 id="read-order-readme--spec-index--subsystemsreadme">Read order: README → SPEC-INDEX → subsystems/README</h2>
+<p>You do <strong>not</strong> read the whole corpus before a change. The entry path is three docs, then the one subsystem
+design-of-record for the area you are touching:</p>
+<ol>
+<li><strong><a href="../../../design/README.md"><code>design/README.md</code></a></strong> — the digestible full overview. The stack, the principles, the
+reuse strategy, the end-to-end Button-click data flow, and the minimum vertical slice. Read this first; it is the map.</li>
+<li><strong><a href="../../../design/SPEC-INDEX.md"><code>design/SPEC-INDEX.md</code></a></strong> — the <strong>precedence authority</strong>. For every cross-cutting
+contract it names the <em>one</em> owning doc and states the current canonical value inline, so you never discover a
+supersession by reading three docs. Consult it before any cross-cutting edit.</li>
+<li><strong><a href="../../../design/subsystems/README.md"><code>design/subsystems/README.md</code></a></strong> — the <strong>contract-ownership map</strong>: every
+DrawList opcode, RHI method, PAL seam, hook, source generator, scene column, and assembly maps to its one
+authoritative doc. It also carries the implementer's 15-step reading order (§3) if you want the full tour.</li>
+</ol>
+<p>Then go deep in the <strong>owning subsystem doc</strong> for what you are changing — and only that one. The engine-contributor pages
+on this site link out to the owning subsystem doc from each topic, so you can navigate from &quot;the file I'm editing&quot; to
+&quot;the contract that governs it&quot; without reading everything.</p>
+<h2 id="the-precedence-ladder-spec-index-is-the-authority-when-two-docs-disagree">The precedence ladder (SPEC-INDEX is the authority when two docs disagree)</h2>
+<p>The corpus is large (~26 docs, ~16k lines) and several docs each historically called themselves &quot;authoritative&quot; or
+&quot;design-of-record.&quot; <a href="../../../design/SPEC-INDEX.md"><code>SPEC-INDEX.md</code> §1</a> resolves that with a strict ladder. Each
+contract in its §2 table has <strong>exactly one owner</strong> — that owner wins regardless of generic order. For anything <em>not</em> in
+the table, conflicts resolve in this order (higher wins):</p>
+<ol>
+<li><strong><code>SPEC-INDEX.md</code></strong> — the canonical value.</li>
+<li><strong><code>hardened-v1-plan.md</code></strong> — threading, safety posture, build order. Its §7 amendment checklist is canonical <em>even
+where</em> <code>architecture-spec.md</code> / <code>foundations.md</code> still print the lean single-thread form (those carry a
+<code>⊳ Canonical threading model</code> banner pointing here).</li>
+<li><strong><code>dotnet10-csharp14-zero-alloc.md</code> §4</strong> — the COM ruling.</li>
+<li><strong>The subsystem design-of-record docs</strong> — deep design <em>within</em> the rulings above.</li>
+<li><strong><code>architecture-spec.md</code></strong> — the end-to-end integrating narrative; canonical owner of the handle byte layout, the
+color/DPI contract, and the frame-phase <em>shape</em>.</li>
+<li><strong><code>foundations.md</code></strong> — the shared vocabulary. Where it conflicts with anything above, the above wins.</li>
+<li><strong><code>README.md</code></strong> — the digest. Never authoritative over a deeper doc.</li>
+</ol>
+<p>The practical consequence: a doc can be locally &quot;out of date&quot; on purpose. The single-thread 13-phase loop printed in
+<code>architecture-spec.md</code> §4.8 and <code>foundations.md</code> §6 is <strong>build-order step 1</strong>, not the shipping topology — the canonical
+model is the render-thread seam in <code>hardened-v1-plan.md</code> §2. Those older sections carry the <code>⊳</code> banner instead of being
+rewritten, and <code>SPEC-INDEX.md</code> is what tells you which form is live. Trust the ladder, not the nearest paragraph.</p>
+<h2 id="the-contract-ownership-map-every-opcodeseamhookcolumn-has-one-owner">The contract-ownership map (every opcode/seam/hook/column has one owner)</h2>
+<p><a href="../../../design/subsystems/README.md"><code>subsystems/README.md</code> §2</a> is the <strong>ownership map</strong> — the operational half of the
+single-owner rule. It assigns every shared artifact to its one authority doc, in seven tables:</p>
+<ul>
+<li><strong>§2.1 DrawList opcodes</strong> — the <em>encoding framework</em> (the <code>DrawCmd</code> header, the byte arenas, the parallel <code>ulong[]</code>
+sortkey array, the opcode enum, the clean-span+epoch rule) is owned by
+<a href="../../../design/subsystems/scene-memory.md"><code>scene-memory.md</code></a>; each opcode's <em>payload struct shape</em> is owned by
+<a href="../../../design/subsystems/gpu-renderer.md"><code>gpu-renderer.md</code></a>. A few opcodes split emit/consume across two docs
+(e.g. <code>DrawGlyphRunCmd</code> is <em>emitted</em> by <a href="../../../design/subsystems/text.md"><code>text.md</code></a>, <em>consumed</em> by
+<code>gpu-renderer.md</code>).</li>
+<li><strong>§2.2 RHI methods</strong> and <strong>§2.3 PAL seams</strong> — the seam shapes and the leaf internals (owned by
+<a href="../../../design/subsystems/pal-rhi.md"><code>pal-rhi.md</code></a>), with their consumers cross-listed.</li>
+<li><strong>§2.4 Hooks</strong> — every hook (the signals core <code>UseSignal</code>/<code>UseComputed</code>, the React-shaped <code>UseState</code>/<code>UseEffect</code>/…,
+and the feature hooks) to its semantics owner.</li>
+<li><strong>§2.5 Source generators &amp; analyzers</strong> — <code>ElementTypeId</code>, modifiers, <code>DiffProps</code>, <code>HookDeps</code>, theme blobs, the COM
+generators, the <code>WGPU####</code> analyzers.</li>
+<li><strong>§2.6 New assemblies</strong> and <strong>§2.7 other cross-cutting artifacts</strong> — including the SoA column layout, the color
+contract, the lane/update-queue, the Suspense boundary, the external-store contract, and the footprint ratchet.</li>
+</ul>
+<p>Why it matters for an editor: <strong>change the artifact in its owner, reference it everywhere else.</strong> If you need to change
+a DrawList opcode's payload, you change it in <code>gpu-renderer.md</code> and the enum registration in <code>scene-memory.md</code> — not in
+the three docs that <em>use</em> it. Restating a struct shape or an enum anywhere else is the drift the gate is built to catch.</p>
+<p>The code-side mirror of this map (subsystem → the one <code>src/</code> <strong>file</strong> that owns it, with the <code>src/</code> types) lives on this
+site at the <a href="../engine-contributors/contributor-map.html">Contributor Map</a>. Use both: the ownership map routes a
+<em>contract</em> to its owning doc; the contributor map routes a <em>code change</em> to its owning file.</p>
+<h2 id="the-big-picture-docs-the-parts-you-cant-infer-from-one-subsystem">The big-picture docs (the parts you can't infer from one subsystem)</h2>
+<p>Some of the architecture only exists across several docs — it can't be read out of any single subsystem. Start here for
+the whole-engine view:</p>
+<ul>
+<li><strong><a href="../../../design/architecture-spec.md"><code>architecture-spec.md</code></a></strong> — the exhaustive, authoritative spec: the 13-phase
+frame loop, the SoA <code>SceneStore</code> (the retained RenderNode tree the reconciler patches), the DrawList POD command
+stream, the assembly graph, the click→repaint walkthrough, the risk register, and the minimum vertical slice (which
+doubles as the architecture's acceptance test). Canonical owner of the handle byte layout, the color/DPI contract, and
+the frame-phase shape.</li>
+<li><strong><a href="../../../design/foundations.md"><code>foundations.md</code></a></strong> — the shared vocabulary everything else assumes: the
+generational <code>Handle</code> (<code>{u32 Index, u32 Gen}</code>), the four allocators (<code>SlabAllocator</code>/<code>ArenaAllocator</code>/<code>ObjectPool</code>/
+<code>HandleTable</code>), <code>StringId</code> interning, the <code>SceneStore</code> SoA columns, the PAL/RHI/Text seams, the frame lifecycle, and
+the acyclic-assembly invariants. Nothing below it makes sense without it.</li>
+<li><strong><a href="../../../design/hardened-v1-plan.md"><code>hardened-v1-plan.md</code></a></strong> — how the parallel render-thread seam, generated-and-
+confined COM, vetted tessellation, the no-cliff arenas, and the validation spine fold into v1 <em>safe-by-construction</em>.
+It owns the <strong>canonical threading model</strong> (§2) and carries the honest safety-by-construction ledger (§3) and the build
+order that ships single-thread-correct first and flips parallelism on only behind a green race gate (§6).</li>
+<li><strong><a href="../../../design/budgets.md"><code>budgets.md</code></a></strong> — the consolidated runtime resource budgets: every native/GPU/bandwidth
+budget, eviction policy, and failure behavior in one table.</li>
+<li><strong><a href="../../../design/macos-debt-ledger.md"><code>macos-debt-ledger.md</code></a></strong> — the consolidated cross-platform debt: every
+Windows-specific decision, its macOS (Metal/CoreText/Cocoa) plan, and a Designed/Deferred/Unaddressed status.</li>
+</ul>
+<p>Two more carry the project's <em>honesty discipline</em> and are worth knowing exist:
+<a href="../../../design/winui-painpoints-assessment.md"><code>winui-painpoints-assessment.md</code></a> is the honest scorecard for &quot;does
+this actually fix WinUI's GC pressure / slow UI thread / slowness?&quot;, and
+<a href="../../../design/core-fundamentals-gap-analysis.md"><code>core-fundamentals-gap-analysis.md</code></a> tracks what the core was missing
+versus React/Flutter/Compose/SwiftUI/Solid — now all folded into CORE with no v2 deferral. The driving workload the whole
+engine is sized against is in <a href="../../../design/app-requirements-waveemusic.md"><code>app-requirements-waveemusic.md</code></a>.</p>
+<h2 id="the-subsystem-design-of-record-docs">The subsystem design-of-record docs</h2>
+<p>The per-subsystem designs live under <a href="../../../design/subsystems/README.md"><code>design/subsystems/</code></a> — each one full,
+current, cross-referenced, and the <strong>sole authority</strong> for its area (the <code>§2</code> ownership map decides exactly which area).
+The authoritative listing, one line per doc, is the table in
+<a href="../../../design/subsystems/README.md"><code>subsystems/README.md</code> §1</a> — read that for the canonical set and each doc's
+one-line charter (the corpus's own digest gives a slightly different round number in a couple of places, so trust the
+table, not a count). Grouped by role:</p>
+<p><strong>Core engine</strong> — the pipeline the harness exercises end to end:</p>
+<ul>
+<li><a href="../../../design/subsystems/pal-rhi.md"><code>pal-rhi.md</code></a> — the PAL/RHI seams, the <code>Rhi.D3D12</code> and <code>Pal.Windows</code> leaves,
+the DXGI flip-model + multi-visual DComp present tree, and the staging/bucket-pool mechanism.</li>
+<li><a href="../../../design/subsystems/scene-memory.md"><code>scene-memory.md</code></a> — the SoA <code>SceneStore</code>, the DrawList encoding
+framework, the opcode enum, the three dirty axes + arena worklist, and the clean-span+epoch rule.</li>
+<li><a href="../../../design/subsystems/layout.md"><code>layout.md</code></a> — the incremental Yoga/Flex + Grid engines, the measure/arrange
+passes, the scroll-ownership split, and the virtualization layout participant.</li>
+<li><a href="../../../design/subsystems/gpu-renderer.md"><code>gpu-renderer.md</code></a> — the batched 2D renderer: every opcode's payload
+shape, the SortKey layout + batch-break rules, the HLSL shader set, the color contract, the clip/AA ladder.</li>
+<li><a href="../../../design/subsystems/text.md"><code>text.md</code></a> — itemize/shape/font/raster/atlas/layout, <code>GlyphKey</code>/<code>PackedGlyph</code>,
+<code>DrawGlyphRunCmd</code> emission, the R8+BGRA atlas + eviction, and the DWrite leaf.</li>
+<li><a href="../../../design/subsystems/reconciler-hooks.md"><code>reconciler-hooks.md</code></a> — the reconciler + keyed-LIS child diff, the
+hook cells, <code>DepKey</code>/<code>GcDepTable</code>, effect timing, the 3-signal memo skip, <strong>the <code>Prop&lt;T&gt;</code> reactive prop surface</strong>, and
+the as-built signals-first model (§0bis). This is the as-built reactivity owner the site's usage docs defer to.</li>
+<li><a href="../../../design/subsystems/dsl-aot.md"><code>dsl-aot.md</code></a> — the <code>Element</code> record + modifier surface, the source generators,
+the <code>WgpuAnalyzer</code>, and the root AOT/build baseline + footprint ratchet.</li>
+<li><a href="../../../design/subsystems/input-a11y.md"><code>input-a11y.md</code></a> — input/focus/IME/hit-testing/UIA, the gesture arena, the
+overlay/portal manager, the cursor seam, and the <code>DrawFocusRingCmd</code> emission.</li>
+</ul>
+<p><strong>Feature layers</strong> (WaveeMusic-driven): <a href="../../../design/subsystems/media-pipeline.md"><code>media-pipeline.md</code></a>,
+<a href="../../../design/subsystems/theming.md"><code>theming.md</code></a>, <a href="../../../design/subsystems/virtualization.md"><code>virtualization.md</code></a>,
+<a href="../../../design/subsystems/backdrop-effects-animation.md"><code>backdrop-effects-animation.md</code></a>, and the host-window backdrop
+in <a href="../../../design/subsystems/window-backdrop-mica.md"><code>window-backdrop-mica.md</code></a>.</p>
+<p><strong>Hardening</strong>: <a href="../../../design/subsystems/threading-render-seam.md"><code>threading-render-seam.md</code></a> (the canonical 3-thread
+topology), <a href="../../../design/subsystems/com-interop.md"><code>com-interop.md</code></a> (generated/confined/gated COM), and
+<a href="../../../design/subsystems/validation.md"><code>validation.md</code></a> (the spikes + per-PR gates + the public <code>FluentGpu.Testing</code>
+harness).</p>
+<p><strong>Control kit + devtools</strong>: <a href="../../../design/subsystems/controls.md"><code>controls.md</code></a> (the accessible-by-default control
+kit — pure composition, adds no opcode/column/seam/hook) and
+<a href="../../../design/subsystems/devtools.md"><code>devtools.md</code></a> (the dev-only, release-trimmed inspector).</p>
+<h2 id="the-binding-contracts-not-to-re-litigate">The binding contracts not to re-litigate</h2>
+<p>A handful of decisions are <strong>load-bearing and settled</strong> — they are in <a href="../../../design/SPEC-INDEX.md"><code>SPEC-INDEX.md</code> §2</a>
+with their one owner, and the <a href="../../../design/check-canon.ps1"><code>check-canon.ps1</code></a> gate fails the build if a superseded
+form of one reappears in the live tree. Do not silently change these in a subsystem doc; change them the canonical way
+(next section). The current canonical values (read the SPEC-INDEX row for the exact wording and the owner):</p>
+<ul>
+<li><strong>Handle layout</strong> — <code>Handle = {u32 Index, u32 Gen}</code>, 8 bytes; generation is <strong>32-bit</strong>, bumped on alloc <em>and</em> free
+(ABA defense). Kind is <strong>not</strong> packed into the bits — it lives on the zero-cost typed wrapper as a
+<code>[Conditional(&quot;DEBUG&quot;)]</code> assert. (The old <code>{index32, gen24, kind8}</code> form is superseded.) <em>Owner:</em>
+<code>architecture-spec.md</code> §4.1.</li>
+<li><strong>Tiered COM dispatch</strong> — hand-vtable <code>calli</code> on the per-frame hot path + any CCW invoked inside the frame loop;
+<code>[GeneratedComInterface]</code>/<code>[GeneratedComClass]</code> (source-gen, AOT-recommended) for <em>all</em> cold/warm COM (UIA, TSF, OLE,
+DWrite setup). <code>ComWrappers</code> is rejected on the <strong>hot path only</strong>. (The blanket &quot;no ComWrappers anywhere / hand-vtable
+both directions&quot; rule is superseded.) <em>Owner:</em> <code>dotnet10-csharp14-zero-alloc.md</code> §4 + <code>com-interop.md</code>.</li>
+<li><strong>Threading / render-thread seam</strong> — a <strong>PUBLISH(13a)</strong> phase splits the loop; record/batch/submit/present run on a
+dedicated render thread reading an immutable <code>SceneFrame</code>; <strong>the render thread owns every <code>ComPtr</code></strong> and the UI thread
+owns no GPU object. The single-thread 13-phase loop is build-order step 1, not the shipping topology. <em>Owner:</em>
+<code>hardened-v1-plan.md</code> §2 + <code>threading-render-seam.md</code> §14.</li>
+<li><strong>Quarantine constant</strong> — <code>QUARANTINE = RenderInFlightDepth</code> (compile-asserted, <strong>consume-gated</strong>: reclaim a freed
+slot only when <code>_lastConsumedSeq &gt; freedSeq</code>), with <code>+1</code> slack. <code>0</code> in single-thread step 1. (The literal <code>2</code> is
+superseded.) <em>Owner:</em> <code>threading-render-seam.md</code>.</li>
+<li><strong><code>DepKey</code></strong> — a <strong>pure-scalar blittable 16-byte struct</strong>; GC-ref deps go through a side <code>GcDepTable</code> compared by
+<code>ReferenceEquals</code>. (A <code>[FieldOffset]</code> union overlapping a GC ref with a scalar is <strong>illegal CLR layout</strong> —
+<code>TypeLoadException</code>.) <em>Owner:</em> <code>reconciler-hooks.md</code>.</li>
+<li><strong>Color / coordinate / DPI</strong> — brush color = straight-alpha sRGB <code>float4</code> → renderer converts to linear-premultiplied
+at shader input; swapchain <code>BGRA8_UNORM</code> buffer + <code>BGRA8_UNORM_SRGB</code> RTV (blend/resolve linear, hardware sRGB on
+write), output premultiplied; <strong>text gamma is a deliberate exception</strong>; DPI applied once at layout→world; <code>Bounds</code> is
+node-LOCAL. <em>Owner:</em> <code>foundations.md</code> P8 + <code>architecture-spec.md</code> §1.3 bet 4 (color owner: <code>gpu-renderer.md</code>).</li>
+<li><strong>Zero-alloc phases</strong> — <strong>0 managed allocations in the per-frame paint phases (6–13)</strong>; clean-span reuse is valid iff
+every referenced handle <code>IsLive</code> ∧ realization content-epoch unchanged ∧ baked-geometry hash unchanged, through the
+single <code>Mutate()</code> chokepoint. <em>Owners:</em> <code>dsl-aot.md</code> (budgets) + <code>scene-memory.md</code>/<code>gpu-renderer.md</code>/<code>reconciler-hooks.md</code>
+(clean-span rule).</li>
+<li><strong><code>Prop&lt;T&gt;</code> reactive prop surface</strong> — exactly <strong>one</strong> <code>Prop&lt;T&gt;</code> per bindable channel (e.g. <code>BoxEl.Transform/Opacity/ Fill</code>, <code>TextEl.Text/Color</code>, <code>ImageEl.Source/Placeholder</code>), accepting a static <code>T</code>, a <code>Func&lt;T&gt;</code> thunk (<code>Prop.Of(...)</code>
+for inline lambdas), or a concrete signal; bind wiring is <strong>mount-only</strong>. (The dual static + <code>*Bind</code> surface is
+superseded — a <code>*Bind</code> spelling reappearing live is a gate violation.) <em>Owner:</em> <code>reconciler-hooks.md</code> §0bis +
+<code>dsl-aot.md</code>.</li>
+</ul>
+<p>The matching <strong>honesty discipline</strong> is part of the canon and edits must preserve it — these are <em>truths, not gaps to
+&quot;fix&quot;</em>: it is <strong>near-zero-allocation</strong> (not &quot;zero&quot; — zero per-frame managed allocation only on phases 6–13, bounded Gen0
+at the reconcile/render edge); slowness is <strong>decoupled, not invincible</strong> (a sustained GPU stall still bounds back to the
+UI thread); and <strong>production safety == CI coverage</strong> (every debug guard is <code>[Conditional]</code>-erased from the shipping
+NativeAOT binary, so a hazard not under a green gate is unguarded at runtime). Do not dress up
+<a href="../../../design/winui-painpoints-assessment.md"><code>winui-painpoints-assessment.md</code></a>.</p>
+<h2 id="how-to-change-a-canonical-value-spec-index-first-then-the-owner-then-the-gate">How to change a canonical value (SPEC-INDEX first, then the owner, then the gate)</h2>
+<p>Changing a settled contract is a deliberate, ordered operation — not an in-place edit of whichever doc you happened to
+have open. The sequence (from <a href="../../../design/SPEC-INDEX.md"><code>SPEC-INDEX.md</code> §4</a> and the project working rules):</p>
+<ol>
+<li><p><strong>Edit <a href="../../../design/SPEC-INDEX.md"><code>SPEC-INDEX.md</code></a> §2 first</strong> — update the canonical value in the owning row. This
+is the value of record; nothing else is authoritative until this changes.</p>
+</li>
+<li><p><strong>Then edit the owning doc</strong> named in that row (and only that doc's definition of the artifact — leave the references
+elsewhere as references).</p>
+</li>
+<li><p><strong>If you are superseding a value</strong>, also add a rule to <a href="../../../design/check-canon.ps1"><code>check-canon.ps1</code></a> that
+fails on the <em>old</em> token, and <strong>move the superseded doc to <a href="../../../design/archive/"><code>design/archive/</code></a></strong> (the gate
+excludes <code>archive/</code>). To intentionally mention a superseded form in live prose (e.g. to explain the correction), put
+<code>&lt;!-- canon-allow: &lt;reason&gt; --&gt;</code> on that line.</p>
+</li>
+<li><p><strong>Adding a <em>new</em> cross-cutting contract</strong> (not changing an existing one) means registering a §2 row with its single
+owner <strong>and</strong> adding it to the <a href="../../../design/subsystems/README.md">ownership map</a> <em>before</em> two docs can disagree
+about it.</p>
+</li>
+<li><p><strong>Run the drift gate</strong> and confirm it exits 0:</p>
+<pre><code class="lang-powershell">powershell -File design/check-canon.ps1                  # exit 0 = clean   (or: pwsh design/check-canon.ps1)
+</code></pre>
+<p>It fails the build if a known-stale/superseded token reappears anywhere in the <strong>live</strong> design tree
+(<code>design/archive/</code> is excluded). It is design-time only — it does not touch <code>src/</code>.</p>
+</li>
+</ol>
+<p>Two scopes, two gates, kept distinct. The canon gate above runs only for <strong><code>design/</code></strong> edits. A <strong>source</strong> change is
+verified by the headless harness, not the canon gate:</p>
+<pre><code class="lang-bash">dotnet build src/FluentGpu.VerticalSlice                 # clean build first
+dotnet run   --project src/FluentGpu.VerticalSlice       # expect: ALL CHECKS PASSED
+</code></pre>
+<p>Most contributions touch one or the other; a change that edits both runs both. The docs-side half of the single-owner
+discipline (how <em>these</em> pages cite the canon instead of duplicating it) is described in
+<a href="../docs-contributing.html">Contributing to the Docs</a>.</p>
+<hr>
+<p><strong>Next:</strong> <a href="../../../design/README.md"><code>design/README.md</code></a> to start the corpus ·
+<a href="../../../design/SPEC-INDEX.md"><code>SPEC-INDEX.md</code></a> for the precedence ladder + canonical values ·
+<a href="../../../design/subsystems/README.md"><code>subsystems/README.md</code></a> for the contract-ownership map and the implementer
+reading order · <a href="../engine-contributors/contributor-map.html">Contributor Map</a> for the code-side
+subsystem → owning-<code>src/</code>-file routing · <a href="../engine-contributors/index.html">Engine Contributors</a> for the working
+internals walkthrough.</p>
+
+</article>
+
+
+        <div class="next-article d-print-none border-top" id="nextArticle"></div>
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

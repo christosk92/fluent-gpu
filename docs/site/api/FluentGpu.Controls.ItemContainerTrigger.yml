@@ -1,0 +1,273 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.ItemContainerTrigger
+  commentId: T:FluentGpu.Controls.ItemContainerTrigger
+  id: ItemContainerTrigger
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.ItemContainerTrigger.DoubleTap
+  - FluentGpu.Controls.ItemContainerTrigger.EnterKey
+  - FluentGpu.Controls.ItemContainerTrigger.SpaceKey
+  - FluentGpu.Controls.ItemContainerTrigger.Tap
+  langs:
+  - csharp
+  - vb
+  name: ItemContainerTrigger
+  nameWithType: ItemContainerTrigger
+  fullName: FluentGpu.Controls.ItemContainerTrigger
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemContainer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ItemContainerTrigger
+    path: ../../src/FluentGpu.Controls/ItemContainer.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    How the user interacted with an <xref href="FluentGpu.Controls.ItemContainer" data-throw-if-not-resolved="false"></xref> — the WinUI
+        <code>ItemContainerInteractionTrigger</code> subset the engine surfaces (ItemContainer.idl:17-26; PointerPressed/
+        PointerReleased collapse into <xref href="FluentGpu.Controls.ItemContainerTrigger.Tap" data-throw-if-not-resolved="false"></xref> here — see <xref href="FluentGpu.Controls.ItemContainer.Build(FluentGpu.Dsl.Element%2cSystem.Boolean%2cSystem.Action%7bSystem.Boolean%7d%2cSystem.Boolean%2cSystem.Nullable%7bFluentGpu.Foundation.CornerRadius4%7d)" data-throw-if-not-resolved="false"></xref> remarks).
+  example: []
+  syntax:
+    content: 'public enum ItemContainerTrigger : byte'
+    content.vb: Public Enum ItemContainerTrigger As Byte
+- uid: FluentGpu.Controls.ItemContainerTrigger.Tap
+  commentId: F:FluentGpu.Controls.ItemContainerTrigger.Tap
+  id: Tap
+  parent: FluentGpu.Controls.ItemContainerTrigger
+  langs:
+  - csharp
+  - vb
+  name: Tap
+  nameWithType: ItemContainerTrigger.Tap
+  fullName: FluentGpu.Controls.ItemContainerTrigger.Tap
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemContainer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Tap
+    path: ../../src/FluentGpu.Controls/ItemContainer.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Tap = 0
+    return:
+      type: FluentGpu.Controls.ItemContainerTrigger
+- uid: FluentGpu.Controls.ItemContainerTrigger.DoubleTap
+  commentId: F:FluentGpu.Controls.ItemContainerTrigger.DoubleTap
+  id: DoubleTap
+  parent: FluentGpu.Controls.ItemContainerTrigger
+  langs:
+  - csharp
+  - vb
+  name: DoubleTap
+  nameWithType: ItemContainerTrigger.DoubleTap
+  fullName: FluentGpu.Controls.ItemContainerTrigger.DoubleTap
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemContainer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DoubleTap
+    path: ../../src/FluentGpu.Controls/ItemContainer.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: DoubleTap = 1
+    return:
+      type: FluentGpu.Controls.ItemContainerTrigger
+- uid: FluentGpu.Controls.ItemContainerTrigger.EnterKey
+  commentId: F:FluentGpu.Controls.ItemContainerTrigger.EnterKey
+  id: EnterKey
+  parent: FluentGpu.Controls.ItemContainerTrigger
+  langs:
+  - csharp
+  - vb
+  name: EnterKey
+  nameWithType: ItemContainerTrigger.EnterKey
+  fullName: FluentGpu.Controls.ItemContainerTrigger.EnterKey
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemContainer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: EnterKey
+    path: ../../src/FluentGpu.Controls/ItemContainer.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: EnterKey = 2
+    return:
+      type: FluentGpu.Controls.ItemContainerTrigger
+- uid: FluentGpu.Controls.ItemContainerTrigger.SpaceKey
+  commentId: F:FluentGpu.Controls.ItemContainerTrigger.SpaceKey
+  id: SpaceKey
+  parent: FluentGpu.Controls.ItemContainerTrigger
+  langs:
+  - csharp
+  - vb
+  name: SpaceKey
+  nameWithType: ItemContainerTrigger.SpaceKey
+  fullName: FluentGpu.Controls.ItemContainerTrigger.SpaceKey
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemContainer.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpaceKey
+    path: ../../src/FluentGpu.Controls/ItemContainer.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: SpaceKey = 3
+    return:
+      type: FluentGpu.Controls.ItemContainerTrigger
+references:
+- uid: FluentGpu.Controls.ItemContainer
+  commentId: T:FluentGpu.Controls.ItemContainer
+  href: FluentGpu.Controls.ItemContainer.html
+  name: ItemContainer
+  nameWithType: ItemContainer
+  fullName: FluentGpu.Controls.ItemContainer
+- uid: FluentGpu.Controls.ItemContainerTrigger.Tap
+  commentId: F:FluentGpu.Controls.ItemContainerTrigger.Tap
+  href: FluentGpu.Controls.ItemContainerTrigger.html#FluentGpu_Controls_ItemContainerTrigger_Tap
+  name: Tap
+  nameWithType: ItemContainerTrigger.Tap
+  fullName: FluentGpu.Controls.ItemContainerTrigger.Tap
+- uid: FluentGpu.Controls.ItemContainer.Build(FluentGpu.Dsl.Element,System.Boolean,System.Action{System.Boolean},System.Boolean,System.Nullable{FluentGpu.Foundation.CornerRadius4})
+  commentId: M:FluentGpu.Controls.ItemContainer.Build(FluentGpu.Dsl.Element,System.Boolean,System.Action{System.Boolean},System.Boolean,System.Nullable{FluentGpu.Foundation.CornerRadius4})
+  isExternal: true
+  href: FluentGpu.Controls.ItemContainer.html#FluentGpu_Controls_ItemContainer_Build_FluentGpu_Dsl_Element_System_Boolean_System_Action_System_Boolean__System_Boolean_System_Nullable_FluentGpu_Foundation_CornerRadius4__
+  name: Build(Element, bool, Action<bool>, bool, CornerRadius4?)
+  nameWithType: ItemContainer.Build(Element, bool, Action<bool>, bool, CornerRadius4?)
+  fullName: FluentGpu.Controls.ItemContainer.Build(FluentGpu.Dsl.Element, bool, System.Action<bool>, bool, FluentGpu.Foundation.CornerRadius4?)
+  nameWithType.vb: ItemContainer.Build(Element, Boolean, Action(Of Boolean), Boolean, CornerRadius4?)
+  fullName.vb: FluentGpu.Controls.ItemContainer.Build(FluentGpu.Dsl.Element, Boolean, System.Action(Of Boolean), Boolean, FluentGpu.Foundation.CornerRadius4?)
+  name.vb: Build(Element, Boolean, Action(Of Boolean), Boolean, CornerRadius4?)
+  spec.csharp:
+  - uid: FluentGpu.Controls.ItemContainer.Build(FluentGpu.Dsl.Element,System.Boolean,System.Action{System.Boolean},System.Boolean,System.Nullable{FluentGpu.Foundation.CornerRadius4})
+    name: Build
+    href: FluentGpu.Controls.ItemContainer.html#FluentGpu_Controls_ItemContainer_Build_FluentGpu_Dsl_Element_System_Boolean_System_Action_System_Boolean__System_Boolean_System_Nullable_FluentGpu_Foundation_CornerRadius4__
+  - name: (
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Foundation.CornerRadius4
+    name: CornerRadius4
+    href: FluentGpu.Foundation.CornerRadius4.html
+  - name: '?'
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.ItemContainer.Build(FluentGpu.Dsl.Element,System.Boolean,System.Action{System.Boolean},System.Boolean,System.Nullable{FluentGpu.Foundation.CornerRadius4})
+    name: Build
+    href: FluentGpu.Controls.ItemContainer.html#FluentGpu_Controls_ItemContainer_Build_FluentGpu_Dsl_Element_System_Boolean_System_Action_System_Boolean__System_Boolean_System_Nullable_FluentGpu_Foundation_CornerRadius4__
+  - name: (
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Foundation.CornerRadius4
+    name: CornerRadius4
+    href: FluentGpu.Foundation.CornerRadius4.html
+  - name: '?'
+  - name: )
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.ItemContainerTrigger
+  commentId: T:FluentGpu.Controls.ItemContainerTrigger
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ItemContainerTrigger.html
+  name: ItemContainerTrigger
+  nameWithType: ItemContainerTrigger
+  fullName: FluentGpu.Controls.ItemContainerTrigger

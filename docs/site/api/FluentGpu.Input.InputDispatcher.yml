@@ -1,0 +1,2029 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Input.InputDispatcher
+  commentId: T:FluentGpu.Input.InputDispatcher
+  id: InputDispatcher
+  parent: FluentGpu.Input
+  children:
+  - FluentGpu.Input.InputDispatcher.#ctor(FluentGpu.Scene.SceneStore)
+  - FluentGpu.Input.InputDispatcher.ClickSlopPx
+  - FluentGpu.Input.InputDispatcher.Clipboard
+  - FluentGpu.Input.InputDispatcher.Dispatch(System.ReadOnlySpan{FluentGpu.Pal.InputEvent})
+  - FluentGpu.Input.InputDispatcher.DoubleClickMs
+  - FluentGpu.Input.InputDispatcher.Drag
+  - FluentGpu.Input.InputDispatcher.DragDrop
+  - FluentGpu.Input.InputDispatcher.FirstFocusableIn(FluentGpu.Foundation.NodeHandle)
+  - FluentGpu.Input.InputDispatcher.Focused
+  - FluentGpu.Input.InputDispatcher.Fonts
+  - FluentGpu.Input.InputDispatcher.HitTest(FluentGpu.Foundation.Point2)
+  - FluentGpu.Input.InputDispatcher.LastFocusableIn(FluentGpu.Foundation.NodeHandle)
+  - FluentGpu.Input.InputDispatcher.MoveFocus(System.Boolean)
+  - FluentGpu.Input.InputDispatcher.MoveFocusArrow(FluentGpu.Input.FocusDirection)
+  - FluentGpu.Input.InputDispatcher.NextFocusableIn(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.NodeHandle,System.Boolean)
+  - FluentGpu.Input.InputDispatcher.OnCursorChanged
+  - FluentGpu.Input.InputDispatcher.OnHoverChanged
+  - FluentGpu.Input.InputDispatcher.OnKeyPreview
+  - FluentGpu.Input.InputDispatcher.OnPressChanged
+  - FluentGpu.Input.InputDispatcher.OnRepeatArmed
+  - FluentGpu.Input.InputDispatcher.OnRepeatPaused
+  - FluentGpu.Input.InputDispatcher.OnRepeatReleased
+  - FluentGpu.Input.InputDispatcher.OnRepeatResumed
+  - FluentGpu.Input.InputDispatcher.OnScrollArmed
+  - FluentGpu.Input.InputDispatcher.OnScrollHover
+  - FluentGpu.Input.InputDispatcher.OnScrollLeave
+  - FluentGpu.Input.InputDispatcher.OnWindowActivationChanged
+  - FluentGpu.Input.InputDispatcher.OnWindowBlur
+  - FluentGpu.Input.InputDispatcher.PopFocusScope
+  - FluentGpu.Input.InputDispatcher.PushFocusScope(FluentGpu.Foundation.NodeHandle)
+  - FluentGpu.Input.InputDispatcher.RemoveFocusScope(FluentGpu.Foundation.NodeHandle)
+  - FluentGpu.Input.InputDispatcher.RequestRerender
+  - FluentGpu.Input.InputDispatcher.SetFocus(FluentGpu.Foundation.NodeHandle,System.Boolean)
+  - FluentGpu.Input.InputDispatcher.SmoothScroll
+  langs:
+  - csharp
+  - vb
+  name: InputDispatcher
+  nameWithType: InputDispatcher
+  fullName: FluentGpu.Input.InputDispatcher
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InputDispatcher
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    Phase 2 (input dispatch): hit-tests the committed scene and routes pointer + keyboard. Pointer down→up over the
+
+    same node fires the click handler and focuses the nearest focusable self-or-ancestor (a WinUI IsTabStop=False part
+
+    never takes pointer focus; nothing focusable in the chain → focus unchanged); keyboard routes to the focused node and bubbles up ancestors
+
+    (Handled stops it); Tab moves focus through focusable nodes; Enter/Space activates a focused clickable (the
+
+    "one declaration, three modalities" contract). The full engine adds tunnel(Preview), gesture arena, XY-focus.
+  example: []
+  syntax:
+    content: public sealed class InputDispatcher
+    content.vb: Public NotInheritable Class InputDispatcher
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Input.InputDispatcher.ClickSlopPx
+  commentId: F:FluentGpu.Input.InputDispatcher.ClickSlopPx
+  id: ClickSlopPx
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: ClickSlopPx
+  nameWithType: InputDispatcher.ClickSlopPx
+  fullName: FluentGpu.Input.InputDispatcher.ClickSlopPx
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ClickSlopPx
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 49
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  syntax:
+    content: public const float ClickSlopPx = 4
+    return:
+      type: System.Single
+    content.vb: Public Const ClickSlopPx As Single = 4
+- uid: FluentGpu.Input.InputDispatcher.DoubleClickMs
+  commentId: F:FluentGpu.Input.InputDispatcher.DoubleClickMs
+  id: DoubleClickMs
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: DoubleClickMs
+  nameWithType: InputDispatcher.DoubleClickMs
+  fullName: FluentGpu.Input.InputDispatcher.DoubleClickMs
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DoubleClickMs
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 50
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  syntax:
+    content: public const uint DoubleClickMs = 500
+    return:
+      type: System.UInt32
+    content.vb: Public Const DoubleClickMs As UInteger = 500
+- uid: FluentGpu.Input.InputDispatcher.#ctor(FluentGpu.Scene.SceneStore)
+  commentId: M:FluentGpu.Input.InputDispatcher.#ctor(FluentGpu.Scene.SceneStore)
+  id: '#ctor(FluentGpu.Scene.SceneStore)'
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: InputDispatcher(SceneStore)
+  nameWithType: InputDispatcher.InputDispatcher(SceneStore)
+  fullName: FluentGpu.Input.InputDispatcher.InputDispatcher(FluentGpu.Scene.SceneStore)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 57
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  syntax:
+    content: public InputDispatcher(SceneStore scene)
+    parameters:
+    - id: scene
+      type: FluentGpu.Scene.SceneStore
+    content.vb: Public Sub New(scene As SceneStore)
+  overload: FluentGpu.Input.InputDispatcher.#ctor*
+  nameWithType.vb: InputDispatcher.New(SceneStore)
+  fullName.vb: FluentGpu.Input.InputDispatcher.New(FluentGpu.Scene.SceneStore)
+  name.vb: New(SceneStore)
+- uid: FluentGpu.Input.InputDispatcher.Focused
+  commentId: P:FluentGpu.Input.InputDispatcher.Focused
+  id: Focused
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: Focused
+  nameWithType: InputDispatcher.Focused
+  fullName: FluentGpu.Input.InputDispatcher.Focused
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Focused
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 64
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  syntax:
+    content: public NodeHandle Focused { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Public ReadOnly Property Focused As NodeHandle
+  overload: FluentGpu.Input.InputDispatcher.Focused*
+- uid: FluentGpu.Input.InputDispatcher.Drag
+  commentId: P:FluentGpu.Input.InputDispatcher.Drag
+  id: Drag
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: Drag
+  nameWithType: InputDispatcher.Drag
+  fullName: FluentGpu.Input.InputDispatcher.Drag
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Drag
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 69
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    The drag-reorder gesture engine (E5-L1): armed by a press on a <code>CanDrag</code> chain, promoted past the
+        4px drag box, owning the pointer until release/Escape. Constructed with the dispatcher so every host gets
+        item-drag without wiring; the host hooks <xref href="FluentGpu.Input.DragController.OnSettle" data-throw-if-not-resolved="false"></xref> for the FLIP drop-glide.
+  example: []
+  syntax:
+    content: public DragController Drag { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Input.DragController
+    content.vb: Public ReadOnly Property Drag As DragController
+  overload: FluentGpu.Input.InputDispatcher.Drag*
+- uid: FluentGpu.Input.InputDispatcher.DragDrop
+  commentId: P:FluentGpu.Input.InputDispatcher.DragDrop
+  id: DragDrop
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: DragDrop
+  nameWithType: InputDispatcher.DragDrop
+  fullName: FluentGpu.Input.InputDispatcher.DragDrop
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DragDrop
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 75
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    The typed drag-drop context (E5-L2, the Flutter Draggable/DragTarget + rbd model): a promoted L1 drag
+        whose chain carries a <code>BoxEl.Draggable</code> opens THE <xref href="FluentGpu.Foundation.DragSession" data-throw-if-not-resolved="false"></xref> here; per move the nearest
+        accepting <code>BoxEl.DropTarget</code> under the pointer gets Enter/Over/Leave, release over it gets OnDrop, and
+        the engine edge auto-scroll arms when the pointer drags near an overflowing viewport's edge (host-ticked).
+  example: []
+  syntax:
+    content: public DragDropContext DragDrop { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Input.DragDropContext
+    content.vb: Public ReadOnly Property DragDrop As DragDropContext
+  overload: FluentGpu.Input.InputDispatcher.DragDrop*
+- uid: FluentGpu.Input.InputDispatcher.RequestRerender
+  commentId: P:FluentGpu.Input.InputDispatcher.RequestRerender
+  id: RequestRerender
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: RequestRerender
+  nameWithType: InputDispatcher.RequestRerender
+  fullName: FluentGpu.Input.InputDispatcher.RequestRerender
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RequestRerender
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 88
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: 'Set by the host: a virtual list crossing an item boundary on scroll requests the next render.'
+  example: []
+  syntax:
+    content: public Action RequestRerender { get; set; }
+    parameters: []
+    return:
+      type: System.Action
+    content.vb: Public Property RequestRerender As Action
+  overload: FluentGpu.Input.InputDispatcher.RequestRerender*
+- uid: FluentGpu.Input.InputDispatcher.OnHoverChanged
+  commentId: F:FluentGpu.Input.InputDispatcher.OnHoverChanged
+  id: OnHoverChanged
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: OnHoverChanged
+  nameWithType: InputDispatcher.OnHoverChanged
+  fullName: FluentGpu.Input.InputDispatcher.OnHoverChanged
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnHoverChanged
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 92
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    Set by the host: notified when a node gains/loses hover or press, so the interaction animator can ease
+        the brush transition (kept as delegates to keep Input decoupled from the Animation assembly).
+  example: []
+  syntax:
+    content: public Action<NodeHandle, bool>? OnHoverChanged
+    return:
+      type: System.Action{FluentGpu.Foundation.NodeHandle,System.Boolean}
+    content.vb: Public OnHoverChanged As Action(Of NodeHandle, Boolean)
+- uid: FluentGpu.Input.InputDispatcher.OnPressChanged
+  commentId: F:FluentGpu.Input.InputDispatcher.OnPressChanged
+  id: OnPressChanged
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: OnPressChanged
+  nameWithType: InputDispatcher.OnPressChanged
+  fullName: FluentGpu.Input.InputDispatcher.OnPressChanged
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnPressChanged
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 93
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  syntax:
+    content: public Action<NodeHandle, bool>? OnPressChanged
+    return:
+      type: System.Action{FluentGpu.Foundation.NodeHandle,System.Boolean}
+    content.vb: Public OnPressChanged As Action(Of NodeHandle, Boolean)
+- uid: FluentGpu.Input.InputDispatcher.SmoothScroll
+  commentId: F:FluentGpu.Input.InputDispatcher.SmoothScroll
+  id: SmoothScroll
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: SmoothScroll
+  nameWithType: InputDispatcher.SmoothScroll
+  fullName: FluentGpu.Input.InputDispatcher.SmoothScroll
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SmoothScroll
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 97
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    When true, a wheel sets the scroll TARGET and the ScrollAnimator eases the offset (momentum/inertia +
+        auto-hiding scrollbars). When false, the offset jumps immediately (the deterministic default for tests).
+  example: []
+  syntax:
+    content: public bool SmoothScroll
+    return:
+      type: System.Boolean
+    content.vb: Public SmoothScroll As Boolean
+- uid: FluentGpu.Input.InputDispatcher.OnScrollArmed
+  commentId: F:FluentGpu.Input.InputDispatcher.OnScrollArmed
+  id: OnScrollArmed
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: OnScrollArmed
+  nameWithType: InputDispatcher.OnScrollArmed
+  fullName: FluentGpu.Input.InputDispatcher.OnScrollArmed
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnScrollArmed
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 99
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: 'Set by the host: arm a viewport in the ScrollAnimator after a smooth-scroll wheel (decouples Input from Animation).'
+  example: []
+  syntax:
+    content: public Action<NodeHandle>? OnScrollArmed
+    return:
+      type: System.Action{FluentGpu.Foundation.NodeHandle}
+    content.vb: Public OnScrollArmed As Action(Of NodeHandle)
+- uid: FluentGpu.Input.InputDispatcher.OnScrollHover
+  commentId: F:FluentGpu.Input.InputDispatcher.OnScrollHover
+  id: OnScrollHover
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: OnScrollHover
+  nameWithType: InputDispatcher.OnScrollHover
+  fullName: FluentGpu.Input.InputDispatcher.OnScrollHover
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnScrollHover
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 101
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: 'Set by the host: pointer is over a scrollable viewport → reveal its auto-hiding scrollbar.'
+  example: []
+  syntax:
+    content: public Action<NodeHandle, bool>? OnScrollHover
+    return:
+      type: System.Action{FluentGpu.Foundation.NodeHandle,System.Boolean}
+    content.vb: Public OnScrollHover As Action(Of NodeHandle, Boolean)
+- uid: FluentGpu.Input.InputDispatcher.OnScrollLeave
+  commentId: F:FluentGpu.Input.InputDispatcher.OnScrollLeave
+  id: OnScrollLeave
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: OnScrollLeave
+  nameWithType: InputDispatcher.OnScrollLeave
+  fullName: FluentGpu.Input.InputDispatcher.OnScrollLeave
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnScrollLeave
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 102
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  syntax:
+    content: public Action<NodeHandle>? OnScrollLeave
+    return:
+      type: System.Action{FluentGpu.Foundation.NodeHandle}
+    content.vb: Public OnScrollLeave As Action(Of NodeHandle)
+- uid: FluentGpu.Input.InputDispatcher.OnRepeatArmed
+  commentId: F:FluentGpu.Input.InputDispatcher.OnRepeatArmed
+  id: OnRepeatArmed
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: OnRepeatArmed
+  nameWithType: InputDispatcher.OnRepeatArmed
+  fullName: FluentGpu.Input.InputDispatcher.OnRepeatArmed
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnRepeatArmed
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 105
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: 'Set by the host: a RepeatButton was pressed (held) / released — drives the RepeatTicker auto-repeat.'
+  example: []
+  syntax:
+    content: public Action<NodeHandle>? OnRepeatArmed
+    return:
+      type: System.Action{FluentGpu.Foundation.NodeHandle}
+    content.vb: Public OnRepeatArmed As Action(Of NodeHandle)
+- uid: FluentGpu.Input.InputDispatcher.OnRepeatReleased
+  commentId: F:FluentGpu.Input.InputDispatcher.OnRepeatReleased
+  id: OnRepeatReleased
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: OnRepeatReleased
+  nameWithType: InputDispatcher.OnRepeatReleased
+  fullName: FluentGpu.Input.InputDispatcher.OnRepeatReleased
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnRepeatReleased
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 106
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  syntax:
+    content: public Action<NodeHandle>? OnRepeatReleased
+    return:
+      type: System.Action{FluentGpu.Foundation.NodeHandle}
+    content.vb: Public OnRepeatReleased As Action(Of NodeHandle)
+- uid: FluentGpu.Input.InputDispatcher.OnRepeatPaused
+  commentId: F:FluentGpu.Input.InputDispatcher.OnRepeatPaused
+  id: OnRepeatPaused
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: OnRepeatPaused
+  nameWithType: InputDispatcher.OnRepeatPaused
+  fullName: FluentGpu.Input.InputDispatcher.OnRepeatPaused
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnRepeatPaused
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 110
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    Set by the host: the held pointer left / re-entered the armed repeat node — the ticker pauses off-node
+        and resumes with a FRESH initial delay on re-entry, never an immediate re-fire (RepeatButton_Partial.cpp:530-574).
+        Both are idempotent per move.
+  example: []
+  syntax:
+    content: public Action<NodeHandle>? OnRepeatPaused
+    return:
+      type: System.Action{FluentGpu.Foundation.NodeHandle}
+    content.vb: Public OnRepeatPaused As Action(Of NodeHandle)
+- uid: FluentGpu.Input.InputDispatcher.OnRepeatResumed
+  commentId: F:FluentGpu.Input.InputDispatcher.OnRepeatResumed
+  id: OnRepeatResumed
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: OnRepeatResumed
+  nameWithType: InputDispatcher.OnRepeatResumed
+  fullName: FluentGpu.Input.InputDispatcher.OnRepeatResumed
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnRepeatResumed
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 111
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  syntax:
+    content: public Action<NodeHandle>? OnRepeatResumed
+    return:
+      type: System.Action{FluentGpu.Foundation.NodeHandle}
+    content.vb: Public OnRepeatResumed As Action(Of NodeHandle)
+- uid: FluentGpu.Input.InputDispatcher.OnKeyPreview
+  commentId: F:FluentGpu.Input.InputDispatcher.OnKeyPreview
+  id: OnKeyPreview
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: OnKeyPreview
+  nameWithType: InputDispatcher.OnKeyPreview
+  fullName: FluentGpu.Input.InputDispatcher.OnKeyPreview
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnKeyPreview
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 115
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    Set by the host: a global key preview run before focus routing (returns true = consumed). Lets a tree-level
+        concern (an open overlay/flyout) intercept Escape regardless of where focus is, without stealing focus.
+  example: []
+  syntax:
+    content: public Func<int, bool>? OnKeyPreview
+    return:
+      type: System.Func{System.Int32,System.Boolean}
+    content.vb: Public OnKeyPreview As Func(Of Integer, Boolean)
+- uid: FluentGpu.Input.InputDispatcher.OnWindowBlur
+  commentId: F:FluentGpu.Input.InputDispatcher.OnWindowBlur
+  id: OnWindowBlur
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: OnWindowBlur
+  nameWithType: InputDispatcher.OnWindowBlur
+  fullName: FluentGpu.Input.InputDispatcher.OnWindowBlur
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnWindowBlur
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 119
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    Raised when the window loses activation: pressed/hover/drag state has been cleared; the host closes
+        light-dismiss overlays here (WinUI window-deactivation dismiss).
+  example: []
+  syntax:
+    content: public Action? OnWindowBlur
+    return:
+      type: System.Action
+    content.vb: Public OnWindowBlur As Action
+- uid: FluentGpu.Input.InputDispatcher.OnWindowActivationChanged
+  commentId: F:FluentGpu.Input.InputDispatcher.OnWindowActivationChanged
+  id: OnWindowActivationChanged
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: OnWindowActivationChanged
+  nameWithType: InputDispatcher.OnWindowActivationChanged
+  fullName: FluentGpu.Input.InputDispatcher.OnWindowActivationChanged
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnWindowActivationChanged
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 123
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    Raised on window activation/placement changes (WindowFocus, WindowBlur, WindowStateChanged): the host
+        bumps the titlebar-chrome epoch signal here so a custom TitleBar re-renders (dimming / max↔restore glyph).
+  example: []
+  syntax:
+    content: public Action? OnWindowActivationChanged
+    return:
+      type: System.Action
+    content.vb: Public OnWindowActivationChanged As Action
+- uid: FluentGpu.Input.InputDispatcher.OnCursorChanged
+  commentId: F:FluentGpu.Input.InputDispatcher.OnCursorChanged
+  id: OnCursorChanged
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: OnCursorChanged
+  nameWithType: InputDispatcher.OnCursorChanged
+  fullName: FluentGpu.Input.InputDispatcher.OnCursorChanged
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnCursorChanged
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 126
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: Raised when the resolved hover cursor changes — the host wires this to <code>IPlatformWindow.SetCursor</code>.
+  example: []
+  syntax:
+    content: public Action<CursorId>? OnCursorChanged
+    return:
+      type: System.Action{FluentGpu.Foundation.CursorId}
+    content.vb: Public OnCursorChanged As Action(Of CursorId)
+- uid: FluentGpu.Input.InputDispatcher.Fonts
+  commentId: P:FluentGpu.Input.InputDispatcher.Fonts
+  id: Fonts
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: Fonts
+  nameWithType: InputDispatcher.Fonts
+  fullName: FluentGpu.Input.InputDispatcher.Fonts
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Fonts
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 131
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    Text seam for the read-only selection/hyperlink gestures (point↔index hit-testing + selection rects —
+        the SAME editor queries EditableText drives). Null falls back to <xref href="FluentGpu.Text.TextSeam.Default" data-throw-if-not-resolved="false"></xref> (set by the
+        font-system constructors), so hosts that predate this seam still get selection without wiring.
+  example: []
+  syntax:
+    content: public IFontSystem? Fonts { get; set; }
+    parameters: []
+    return:
+      type: FluentGpu.Text.IFontSystem
+    content.vb: Public Property Fonts As IFontSystem
+  overload: FluentGpu.Input.InputDispatcher.Fonts*
+- uid: FluentGpu.Input.InputDispatcher.Clipboard
+  commentId: P:FluentGpu.Input.InputDispatcher.Clipboard
+  id: Clipboard
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: Clipboard
+  nameWithType: InputDispatcher.Clipboard
+  fullName: FluentGpu.Input.InputDispatcher.Clipboard
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Clipboard
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 135
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    Clipboard seam for Ctrl+C over a read-only selection (WinUI TextSelectionManager::CopySelectionToClipboard,
+        TextSelectionManager.cpp:30-41). Set by the host; null = copy is a no-op.
+  example: []
+  syntax:
+    content: public IClipboard? Clipboard { get; set; }
+    parameters: []
+    return:
+      type: FluentGpu.Pal.IClipboard
+    content.vb: Public Property Clipboard As IClipboard
+  overload: FluentGpu.Input.InputDispatcher.Clipboard*
+- uid: FluentGpu.Input.InputDispatcher.PushFocusScope(FluentGpu.Foundation.NodeHandle)
+  commentId: M:FluentGpu.Input.InputDispatcher.PushFocusScope(FluentGpu.Foundation.NodeHandle)
+  id: PushFocusScope(FluentGpu.Foundation.NodeHandle)
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: PushFocusScope(NodeHandle)
+  nameWithType: InputDispatcher.PushFocusScope(NodeHandle)
+  fullName: FluentGpu.Input.InputDispatcher.PushFocusScope(FluentGpu.Foundation.NodeHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PushFocusScope
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 139
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: "Push a focus scope: Tab/Shift+Tab and arrow focus stay within <code class=\"paramref\">root</code>'s subtree until popped."
+  example: []
+  syntax:
+    content: public void PushFocusScope(NodeHandle root)
+    parameters:
+    - id: root
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Public Sub PushFocusScope(root As NodeHandle)
+  overload: FluentGpu.Input.InputDispatcher.PushFocusScope*
+- uid: FluentGpu.Input.InputDispatcher.PopFocusScope
+  commentId: M:FluentGpu.Input.InputDispatcher.PopFocusScope
+  id: PopFocusScope
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: PopFocusScope()
+  nameWithType: InputDispatcher.PopFocusScope()
+  fullName: FluentGpu.Input.InputDispatcher.PopFocusScope()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PopFocusScope
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 140
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  syntax:
+    content: public void PopFocusScope()
+    content.vb: Public Sub PopFocusScope()
+  overload: FluentGpu.Input.InputDispatcher.PopFocusScope*
+- uid: FluentGpu.Input.InputDispatcher.RemoveFocusScope(FluentGpu.Foundation.NodeHandle)
+  commentId: M:FluentGpu.Input.InputDispatcher.RemoveFocusScope(FluentGpu.Foundation.NodeHandle)
+  id: RemoveFocusScope(FluentGpu.Foundation.NodeHandle)
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: RemoveFocusScope(NodeHandle)
+  nameWithType: InputDispatcher.RemoveFocusScope(NodeHandle)
+  fullName: FluentGpu.Input.InputDispatcher.RemoveFocusScope(FluentGpu.Foundation.NodeHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RemoveFocusScope
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 143
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    Remove the focus scope for <code class="paramref">root</code> wherever it sits in the stack (overlays can close
+        out of stack order - popping blindly could drop another live trap).
+  example: []
+  syntax:
+    content: public void RemoveFocusScope(NodeHandle root)
+    parameters:
+    - id: root
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Public Sub RemoveFocusScope(root As NodeHandle)
+  overload: FluentGpu.Input.InputDispatcher.RemoveFocusScope*
+- uid: FluentGpu.Input.InputDispatcher.Dispatch(System.ReadOnlySpan{FluentGpu.Pal.InputEvent})
+  commentId: M:FluentGpu.Input.InputDispatcher.Dispatch(System.ReadOnlySpan{FluentGpu.Pal.InputEvent})
+  id: Dispatch(System.ReadOnlySpan{FluentGpu.Pal.InputEvent})
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: Dispatch(ReadOnlySpan<InputEvent>)
+  nameWithType: InputDispatcher.Dispatch(ReadOnlySpan<InputEvent>)
+  fullName: FluentGpu.Input.InputDispatcher.Dispatch(System.ReadOnlySpan<FluentGpu.Pal.InputEvent>)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Dispatch
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 158
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  syntax:
+    content: public int Dispatch(ReadOnlySpan<InputEvent> events)
+    parameters:
+    - id: events
+      type: System.ReadOnlySpan{FluentGpu.Pal.InputEvent}
+    return:
+      type: System.Int32
+    content.vb: Public Function Dispatch(events As ReadOnlySpan(Of InputEvent)) As Integer
+  overload: FluentGpu.Input.InputDispatcher.Dispatch*
+  nameWithType.vb: InputDispatcher.Dispatch(ReadOnlySpan(Of InputEvent))
+  fullName.vb: FluentGpu.Input.InputDispatcher.Dispatch(System.ReadOnlySpan(Of FluentGpu.Pal.InputEvent))
+  name.vb: Dispatch(ReadOnlySpan(Of InputEvent))
+- uid: FluentGpu.Input.InputDispatcher.MoveFocus(System.Boolean)
+  commentId: M:FluentGpu.Input.InputDispatcher.MoveFocus(System.Boolean)
+  id: MoveFocus(System.Boolean)
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: MoveFocus(bool)
+  nameWithType: InputDispatcher.MoveFocus(bool)
+  fullName: FluentGpu.Input.InputDispatcher.MoveFocus(bool)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MoveFocus
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 1135
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    Move focus to the next/previous focusable node in tab order (TabIndex, then document order; cycles).
+        Constrained to the active focus scope when one is pushed (dialog/flyout focus trap).
+  example: []
+  syntax:
+    content: public void MoveFocus(bool forward)
+    parameters:
+    - id: forward
+      type: System.Boolean
+    content.vb: Public Sub MoveFocus(forward As Boolean)
+  overload: FluentGpu.Input.InputDispatcher.MoveFocus*
+  nameWithType.vb: InputDispatcher.MoveFocus(Boolean)
+  fullName.vb: FluentGpu.Input.InputDispatcher.MoveFocus(Boolean)
+  name.vb: MoveFocus(Boolean)
+- uid: FluentGpu.Input.InputDispatcher.MoveFocusArrow(FluentGpu.Input.FocusDirection)
+  commentId: M:FluentGpu.Input.InputDispatcher.MoveFocusArrow(FluentGpu.Input.FocusDirection)
+  id: MoveFocusArrow(FluentGpu.Input.FocusDirection)
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: MoveFocusArrow(FocusDirection)
+  nameWithType: InputDispatcher.MoveFocusArrow(FocusDirection)
+  fullName: FluentGpu.Input.InputDispatcher.MoveFocusArrow(FluentGpu.Input.FocusDirection)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MoveFocusArrow
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 1150
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    Directional (arrow/XY) focus movement: from the focused node, pick the nearest focusable in
+        <code class="paramref">dir</code> (primary-axis distance dominates; cross-axis breaks ties). For roving lists/grids.
+  example: []
+  syntax:
+    content: public void MoveFocusArrow(FocusDirection dir)
+    parameters:
+    - id: dir
+      type: FluentGpu.Input.FocusDirection
+    content.vb: Public Sub MoveFocusArrow(dir As FocusDirection)
+  overload: FluentGpu.Input.InputDispatcher.MoveFocusArrow*
+- uid: FluentGpu.Input.InputDispatcher.FirstFocusableIn(FluentGpu.Foundation.NodeHandle)
+  commentId: M:FluentGpu.Input.InputDispatcher.FirstFocusableIn(FluentGpu.Foundation.NodeHandle)
+  id: FirstFocusableIn(FluentGpu.Foundation.NodeHandle)
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: FirstFocusableIn(NodeHandle)
+  nameWithType: InputDispatcher.FirstFocusableIn(NodeHandle)
+  fullName: FluentGpu.Input.InputDispatcher.FirstFocusableIn(FluentGpu.Foundation.NodeHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FirstFocusableIn
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 1185
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: First focusable within <code class="paramref">root</code>'s subtree (tab order) — for focus-trap entry / menus.
+  example: []
+  syntax:
+    content: public NodeHandle FirstFocusableIn(NodeHandle root)
+    parameters:
+    - id: root
+      type: FluentGpu.Foundation.NodeHandle
+    return:
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Public Function FirstFocusableIn(root As NodeHandle) As NodeHandle
+  overload: FluentGpu.Input.InputDispatcher.FirstFocusableIn*
+- uid: FluentGpu.Input.InputDispatcher.LastFocusableIn(FluentGpu.Foundation.NodeHandle)
+  commentId: M:FluentGpu.Input.InputDispatcher.LastFocusableIn(FluentGpu.Foundation.NodeHandle)
+  id: LastFocusableIn(FluentGpu.Foundation.NodeHandle)
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: LastFocusableIn(NodeHandle)
+  nameWithType: InputDispatcher.LastFocusableIn(NodeHandle)
+  fullName: FluentGpu.Input.InputDispatcher.LastFocusableIn(FluentGpu.Foundation.NodeHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LastFocusableIn
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 1194
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: Last focusable within <code class="paramref">root</code>'s subtree (tab order) — for Shift-Tab focus-trap wrap.
+  example: []
+  syntax:
+    content: public NodeHandle LastFocusableIn(NodeHandle root)
+    parameters:
+    - id: root
+      type: FluentGpu.Foundation.NodeHandle
+    return:
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Public Function LastFocusableIn(root As NodeHandle) As NodeHandle
+  overload: FluentGpu.Input.InputDispatcher.LastFocusableIn*
+- uid: FluentGpu.Input.InputDispatcher.NextFocusableIn(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.NodeHandle,System.Boolean)
+  commentId: M:FluentGpu.Input.InputDispatcher.NextFocusableIn(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.NodeHandle,System.Boolean)
+  id: NextFocusableIn(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.NodeHandle,System.Boolean)
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: NextFocusableIn(NodeHandle, NodeHandle, bool)
+  nameWithType: InputDispatcher.NextFocusableIn(NodeHandle, NodeHandle, bool)
+  fullName: FluentGpu.Input.InputDispatcher.NextFocusableIn(FluentGpu.Foundation.NodeHandle, FluentGpu.Foundation.NodeHandle, bool)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NextFocusableIn
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 1203
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: Next/previous focusable within <code class="paramref">root</code>, cycling — roving-tabindex within a list/menu/overlay.
+  example: []
+  syntax:
+    content: public NodeHandle NextFocusableIn(NodeHandle root, NodeHandle current, bool forward = true)
+    parameters:
+    - id: root
+      type: FluentGpu.Foundation.NodeHandle
+    - id: current
+      type: FluentGpu.Foundation.NodeHandle
+    - id: forward
+      type: System.Boolean
+    return:
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Public Function NextFocusableIn(root As NodeHandle, current As NodeHandle, forward As Boolean = True) As NodeHandle
+  overload: FluentGpu.Input.InputDispatcher.NextFocusableIn*
+  nameWithType.vb: InputDispatcher.NextFocusableIn(NodeHandle, NodeHandle, Boolean)
+  fullName.vb: FluentGpu.Input.InputDispatcher.NextFocusableIn(FluentGpu.Foundation.NodeHandle, FluentGpu.Foundation.NodeHandle, Boolean)
+  name.vb: NextFocusableIn(NodeHandle, NodeHandle, Boolean)
+- uid: FluentGpu.Input.InputDispatcher.SetFocus(FluentGpu.Foundation.NodeHandle,System.Boolean)
+  commentId: M:FluentGpu.Input.InputDispatcher.SetFocus(FluentGpu.Foundation.NodeHandle,System.Boolean)
+  id: SetFocus(FluentGpu.Foundation.NodeHandle,System.Boolean)
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: SetFocus(NodeHandle, bool)
+  nameWithType: InputDispatcher.SetFocus(NodeHandle, bool)
+  fullName: FluentGpu.Input.InputDispatcher.SetFocus(FluentGpu.Foundation.NodeHandle, bool)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SetFocus
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 1236
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    Move focus. <code class="paramref">visual</code> = show the focus ring (keyboard/Tab); pointer focus passes false.
+        Focus-visual transitions mark the affected nodes PaintDirty and request a frame — the ring is paint state.
+        When focus actually MOVES, the old node's <code>OnFocusChanged</code> handler fires with false and the new node's with
+        true (WinUI LostFocus → GotFocus order), AFTER all flag updates — so a GotFocus handler can read
+        <xref href="FluentGpu.Foundation.NodeFlags.FocusVisual" data-throw-if-not-resolved="false"></xref> to distinguish keyboard focus (select-all) from pointer focus.
+  example: []
+  syntax:
+    content: public void SetFocus(NodeHandle node, bool visual = false)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    - id: visual
+      type: System.Boolean
+    content.vb: Public Sub SetFocus(node As NodeHandle, visual As Boolean = False)
+  overload: FluentGpu.Input.InputDispatcher.SetFocus*
+  nameWithType.vb: InputDispatcher.SetFocus(NodeHandle, Boolean)
+  fullName.vb: FluentGpu.Input.InputDispatcher.SetFocus(FluentGpu.Foundation.NodeHandle, Boolean)
+  name.vb: SetFocus(NodeHandle, Boolean)
+- uid: FluentGpu.Input.InputDispatcher.HitTest(FluentGpu.Foundation.Point2)
+  commentId: M:FluentGpu.Input.InputDispatcher.HitTest(FluentGpu.Foundation.Point2)
+  id: HitTest(FluentGpu.Foundation.Point2)
+  parent: FluentGpu.Input.InputDispatcher
+  langs:
+  - csharp
+  - vb
+  name: HitTest(Point2)
+  nameWithType: InputDispatcher.HitTest(Point2)
+  fullName: FluentGpu.Input.InputDispatcher.HitTest(FluentGpu.Foundation.Point2)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Input/InputDispatcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HitTest
+    path: ../../src/FluentGpu.Input/InputDispatcher.cs
+    startLine: 1383
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  syntax:
+    content: public NodeHandle HitTest(Point2 p)
+    parameters:
+    - id: p
+      type: FluentGpu.Foundation.Point2
+    return:
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Public Function HitTest(p As Point2) As NodeHandle
+  overload: FluentGpu.Input.InputDispatcher.HitTest*
+references:
+- uid: FluentGpu.Input
+  commentId: N:FluentGpu.Input
+  href: FluentGpu.html
+  name: FluentGpu.Input
+  nameWithType: FluentGpu.Input
+  fullName: FluentGpu.Input
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Input
+    name: Input
+    href: FluentGpu.Input.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Input
+    name: Input
+    href: FluentGpu.Input.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System.UInt32
+  commentId: T:System.UInt32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.uint32
+  name: uint
+  nameWithType: uint
+  fullName: uint
+  nameWithType.vb: UInteger
+  fullName.vb: UInteger
+  name.vb: UInteger
+- uid: FluentGpu.Input.InputDispatcher.#ctor*
+  commentId: Overload:FluentGpu.Input.InputDispatcher.#ctor
+  href: FluentGpu.Input.InputDispatcher.html#FluentGpu_Input_InputDispatcher__ctor_FluentGpu_Scene_SceneStore_
+  name: InputDispatcher
+  nameWithType: InputDispatcher.InputDispatcher
+  fullName: FluentGpu.Input.InputDispatcher.InputDispatcher
+  nameWithType.vb: InputDispatcher.New
+  fullName.vb: FluentGpu.Input.InputDispatcher.New
+  name.vb: New
+- uid: FluentGpu.Scene.SceneStore
+  commentId: T:FluentGpu.Scene.SceneStore
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.SceneStore.html
+  name: SceneStore
+  nameWithType: SceneStore
+  fullName: FluentGpu.Scene.SceneStore
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: FluentGpu.Input.InputDispatcher.Focused*
+  commentId: Overload:FluentGpu.Input.InputDispatcher.Focused
+  href: FluentGpu.Input.InputDispatcher.html#FluentGpu_Input_InputDispatcher_Focused
+  name: Focused
+  nameWithType: InputDispatcher.Focused
+  fullName: FluentGpu.Input.InputDispatcher.Focused
+- uid: FluentGpu.Foundation.NodeHandle
+  commentId: T:FluentGpu.Foundation.NodeHandle
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.NodeHandle.html
+  name: NodeHandle
+  nameWithType: NodeHandle
+  fullName: FluentGpu.Foundation.NodeHandle
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Input.DragController.OnSettle
+  commentId: F:FluentGpu.Input.DragController.OnSettle
+  href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_OnSettle
+  name: OnSettle
+  nameWithType: DragController.OnSettle
+  fullName: FluentGpu.Input.DragController.OnSettle
+- uid: FluentGpu.Input.InputDispatcher.Drag*
+  commentId: Overload:FluentGpu.Input.InputDispatcher.Drag
+  href: FluentGpu.Input.InputDispatcher.html#FluentGpu_Input_InputDispatcher_Drag
+  name: Drag
+  nameWithType: InputDispatcher.Drag
+  fullName: FluentGpu.Input.InputDispatcher.Drag
+- uid: FluentGpu.Input.DragController
+  commentId: T:FluentGpu.Input.DragController
+  parent: FluentGpu.Input
+  href: FluentGpu.Input.DragController.html
+  name: DragController
+  nameWithType: DragController
+  fullName: FluentGpu.Input.DragController
+- uid: FluentGpu.Foundation.DragSession
+  commentId: T:FluentGpu.Foundation.DragSession
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.DragSession.html
+  name: DragSession
+  nameWithType: DragSession
+  fullName: FluentGpu.Foundation.DragSession
+- uid: FluentGpu.Input.InputDispatcher.DragDrop*
+  commentId: Overload:FluentGpu.Input.InputDispatcher.DragDrop
+  href: FluentGpu.Input.InputDispatcher.html#FluentGpu_Input_InputDispatcher_DragDrop
+  name: DragDrop
+  nameWithType: InputDispatcher.DragDrop
+  fullName: FluentGpu.Input.InputDispatcher.DragDrop
+- uid: FluentGpu.Input.DragDropContext
+  commentId: T:FluentGpu.Input.DragDropContext
+  parent: FluentGpu.Input
+  href: FluentGpu.Input.DragDropContext.html
+  name: DragDropContext
+  nameWithType: DragDropContext
+  fullName: FluentGpu.Input.DragDropContext
+- uid: FluentGpu.Input.InputDispatcher.RequestRerender*
+  commentId: Overload:FluentGpu.Input.InputDispatcher.RequestRerender
+  href: FluentGpu.Input.InputDispatcher.html#FluentGpu_Input_InputDispatcher_RequestRerender
+  name: RequestRerender
+  nameWithType: InputDispatcher.RequestRerender
+  fullName: FluentGpu.Input.InputDispatcher.RequestRerender
+- uid: System.Action
+  commentId: T:System.Action
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action
+  name: Action
+  nameWithType: Action
+  fullName: System.Action
+- uid: System.Action{FluentGpu.Foundation.NodeHandle,System.Boolean}
+  commentId: T:System.Action{FluentGpu.Foundation.NodeHandle,System.Boolean}
+  parent: System
+  definition: System.Action`2
+  href: https://learn.microsoft.com/dotnet/api/system.action-2
+  name: Action<NodeHandle, bool>
+  nameWithType: Action<NodeHandle, bool>
+  fullName: System.Action<FluentGpu.Foundation.NodeHandle, bool>
+  nameWithType.vb: Action(Of NodeHandle, Boolean)
+  fullName.vb: System.Action(Of FluentGpu.Foundation.NodeHandle, Boolean)
+  name.vb: Action(Of NodeHandle, Boolean)
+  spec.csharp:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: <
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+- uid: System.Action`2
+  commentId: T:System.Action`2
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-2
+  name: Action<T1, T2>
+  nameWithType: Action<T1, T2>
+  fullName: System.Action<T1, T2>
+  nameWithType.vb: Action(Of T1, T2)
+  fullName.vb: System.Action(Of T1, T2)
+  name.vb: Action(Of T1, T2)
+  spec.csharp:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: <
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: )
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: System.Action{FluentGpu.Foundation.NodeHandle}
+  commentId: T:System.Action{FluentGpu.Foundation.NodeHandle}
+  parent: System
+  definition: System.Action`1
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<NodeHandle>
+  nameWithType: Action<NodeHandle>
+  fullName: System.Action<FluentGpu.Foundation.NodeHandle>
+  nameWithType.vb: Action(Of NodeHandle)
+  fullName.vb: System.Action(Of FluentGpu.Foundation.NodeHandle)
+  name.vb: Action(Of NodeHandle)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: )
+- uid: System.Action`1
+  commentId: T:System.Action`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<T>
+  nameWithType: Action<T>
+  fullName: System.Action<T>
+  nameWithType.vb: Action(Of T)
+  fullName.vb: System.Action(Of T)
+  name.vb: Action(Of T)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Func{System.Int32,System.Boolean}
+  commentId: T:System.Func{System.Int32,System.Boolean}
+  parent: System
+  definition: System.Func`2
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<int, bool>
+  nameWithType: Func<int, bool>
+  fullName: System.Func<int, bool>
+  nameWithType.vb: Func(Of Integer, Boolean)
+  fullName.vb: System.Func(Of Integer, Boolean)
+  name.vb: Func(Of Integer, Boolean)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+- uid: System.Func`2
+  commentId: T:System.Func`2
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<T, TResult>
+  nameWithType: Func<T, TResult>
+  fullName: System.Func<T, TResult>
+  nameWithType.vb: Func(Of T, TResult)
+  fullName.vb: System.Func(Of T, TResult)
+  name.vb: Func(Of T, TResult)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - name: T
+  - name: ','
+  - name: " "
+  - name: TResult
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: ','
+  - name: " "
+  - name: TResult
+  - name: )
+- uid: System.Action{FluentGpu.Foundation.CursorId}
+  commentId: T:System.Action{FluentGpu.Foundation.CursorId}
+  parent: System
+  definition: System.Action`1
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<CursorId>
+  nameWithType: Action<CursorId>
+  fullName: System.Action<FluentGpu.Foundation.CursorId>
+  nameWithType.vb: Action(Of CursorId)
+  fullName.vb: System.Action(Of FluentGpu.Foundation.CursorId)
+  name.vb: Action(Of CursorId)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: FluentGpu.Foundation.CursorId
+    name: CursorId
+    href: FluentGpu.Foundation.CursorId.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.CursorId
+    name: CursorId
+    href: FluentGpu.Foundation.CursorId.html
+  - name: )
+- uid: FluentGpu.Text.TextSeam.Default
+  commentId: F:FluentGpu.Text.TextSeam.Default
+  href: FluentGpu.Text.TextSeam.html#FluentGpu_Text_TextSeam_Default
+  name: Default
+  nameWithType: TextSeam.Default
+  fullName: FluentGpu.Text.TextSeam.Default
+- uid: FluentGpu.Input.InputDispatcher.Fonts*
+  commentId: Overload:FluentGpu.Input.InputDispatcher.Fonts
+  href: FluentGpu.Input.InputDispatcher.html#FluentGpu_Input_InputDispatcher_Fonts
+  name: Fonts
+  nameWithType: InputDispatcher.Fonts
+  fullName: FluentGpu.Input.InputDispatcher.Fonts
+- uid: FluentGpu.Text.IFontSystem
+  commentId: T:FluentGpu.Text.IFontSystem
+  parent: FluentGpu.Text
+  href: FluentGpu.Text.IFontSystem.html
+  name: IFontSystem
+  nameWithType: IFontSystem
+  fullName: FluentGpu.Text.IFontSystem
+- uid: FluentGpu.Text
+  commentId: N:FluentGpu.Text
+  href: FluentGpu.html
+  name: FluentGpu.Text
+  nameWithType: FluentGpu.Text
+  fullName: FluentGpu.Text
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+- uid: FluentGpu.Input.InputDispatcher.Clipboard*
+  commentId: Overload:FluentGpu.Input.InputDispatcher.Clipboard
+  href: FluentGpu.Input.InputDispatcher.html#FluentGpu_Input_InputDispatcher_Clipboard
+  name: Clipboard
+  nameWithType: InputDispatcher.Clipboard
+  fullName: FluentGpu.Input.InputDispatcher.Clipboard
+- uid: FluentGpu.Pal.IClipboard
+  commentId: T:FluentGpu.Pal.IClipboard
+  parent: FluentGpu.Pal
+  href: FluentGpu.Pal.IClipboard.html
+  name: IClipboard
+  nameWithType: IClipboard
+  fullName: FluentGpu.Pal.IClipboard
+- uid: FluentGpu.Pal
+  commentId: N:FluentGpu.Pal
+  href: FluentGpu.html
+  name: FluentGpu.Pal
+  nameWithType: FluentGpu.Pal
+  fullName: FluentGpu.Pal
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+- uid: FluentGpu.Input.InputDispatcher.PushFocusScope*
+  commentId: Overload:FluentGpu.Input.InputDispatcher.PushFocusScope
+  href: FluentGpu.Input.InputDispatcher.html#FluentGpu_Input_InputDispatcher_PushFocusScope_FluentGpu_Foundation_NodeHandle_
+  name: PushFocusScope
+  nameWithType: InputDispatcher.PushFocusScope
+  fullName: FluentGpu.Input.InputDispatcher.PushFocusScope
+- uid: FluentGpu.Input.InputDispatcher.PopFocusScope*
+  commentId: Overload:FluentGpu.Input.InputDispatcher.PopFocusScope
+  href: FluentGpu.Input.InputDispatcher.html#FluentGpu_Input_InputDispatcher_PopFocusScope
+  name: PopFocusScope
+  nameWithType: InputDispatcher.PopFocusScope
+  fullName: FluentGpu.Input.InputDispatcher.PopFocusScope
+- uid: FluentGpu.Input.InputDispatcher.RemoveFocusScope*
+  commentId: Overload:FluentGpu.Input.InputDispatcher.RemoveFocusScope
+  href: FluentGpu.Input.InputDispatcher.html#FluentGpu_Input_InputDispatcher_RemoveFocusScope_FluentGpu_Foundation_NodeHandle_
+  name: RemoveFocusScope
+  nameWithType: InputDispatcher.RemoveFocusScope
+  fullName: FluentGpu.Input.InputDispatcher.RemoveFocusScope
+- uid: FluentGpu.Input.InputDispatcher.Dispatch*
+  commentId: Overload:FluentGpu.Input.InputDispatcher.Dispatch
+  href: FluentGpu.Input.InputDispatcher.html#FluentGpu_Input_InputDispatcher_Dispatch_System_ReadOnlySpan_FluentGpu_Pal_InputEvent__
+  name: Dispatch
+  nameWithType: InputDispatcher.Dispatch
+  fullName: FluentGpu.Input.InputDispatcher.Dispatch
+- uid: System.ReadOnlySpan{FluentGpu.Pal.InputEvent}
+  commentId: T:System.ReadOnlySpan{FluentGpu.Pal.InputEvent}
+  parent: System
+  definition: System.ReadOnlySpan`1
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<InputEvent>
+  nameWithType: ReadOnlySpan<InputEvent>
+  fullName: System.ReadOnlySpan<FluentGpu.Pal.InputEvent>
+  nameWithType.vb: ReadOnlySpan(Of InputEvent)
+  fullName.vb: System.ReadOnlySpan(Of FluentGpu.Pal.InputEvent)
+  name.vb: ReadOnlySpan(Of InputEvent)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - uid: FluentGpu.Pal.InputEvent
+    name: InputEvent
+    href: FluentGpu.Pal.InputEvent.html
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Pal.InputEvent
+    name: InputEvent
+    href: FluentGpu.Pal.InputEvent.html
+  - name: )
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: System.ReadOnlySpan`1
+  commentId: T:System.ReadOnlySpan`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<T>
+  nameWithType: ReadOnlySpan<T>
+  fullName: System.ReadOnlySpan<T>
+  nameWithType.vb: ReadOnlySpan(Of T)
+  fullName.vb: System.ReadOnlySpan(Of T)
+  name.vb: ReadOnlySpan(Of T)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Input.InputDispatcher.MoveFocus*
+  commentId: Overload:FluentGpu.Input.InputDispatcher.MoveFocus
+  href: FluentGpu.Input.InputDispatcher.html#FluentGpu_Input_InputDispatcher_MoveFocus_System_Boolean_
+  name: MoveFocus
+  nameWithType: InputDispatcher.MoveFocus
+  fullName: FluentGpu.Input.InputDispatcher.MoveFocus
+- uid: FluentGpu.Input.InputDispatcher.MoveFocusArrow*
+  commentId: Overload:FluentGpu.Input.InputDispatcher.MoveFocusArrow
+  href: FluentGpu.Input.InputDispatcher.html#FluentGpu_Input_InputDispatcher_MoveFocusArrow_FluentGpu_Input_FocusDirection_
+  name: MoveFocusArrow
+  nameWithType: InputDispatcher.MoveFocusArrow
+  fullName: FluentGpu.Input.InputDispatcher.MoveFocusArrow
+- uid: FluentGpu.Input.FocusDirection
+  commentId: T:FluentGpu.Input.FocusDirection
+  parent: FluentGpu.Input
+  href: FluentGpu.Input.FocusDirection.html
+  name: FocusDirection
+  nameWithType: FocusDirection
+  fullName: FluentGpu.Input.FocusDirection
+- uid: FluentGpu.Input.InputDispatcher.FirstFocusableIn*
+  commentId: Overload:FluentGpu.Input.InputDispatcher.FirstFocusableIn
+  href: FluentGpu.Input.InputDispatcher.html#FluentGpu_Input_InputDispatcher_FirstFocusableIn_FluentGpu_Foundation_NodeHandle_
+  name: FirstFocusableIn
+  nameWithType: InputDispatcher.FirstFocusableIn
+  fullName: FluentGpu.Input.InputDispatcher.FirstFocusableIn
+- uid: FluentGpu.Input.InputDispatcher.LastFocusableIn*
+  commentId: Overload:FluentGpu.Input.InputDispatcher.LastFocusableIn
+  href: FluentGpu.Input.InputDispatcher.html#FluentGpu_Input_InputDispatcher_LastFocusableIn_FluentGpu_Foundation_NodeHandle_
+  name: LastFocusableIn
+  nameWithType: InputDispatcher.LastFocusableIn
+  fullName: FluentGpu.Input.InputDispatcher.LastFocusableIn
+- uid: FluentGpu.Input.InputDispatcher.NextFocusableIn*
+  commentId: Overload:FluentGpu.Input.InputDispatcher.NextFocusableIn
+  href: FluentGpu.Input.InputDispatcher.html#FluentGpu_Input_InputDispatcher_NextFocusableIn_FluentGpu_Foundation_NodeHandle_FluentGpu_Foundation_NodeHandle_System_Boolean_
+  name: NextFocusableIn
+  nameWithType: InputDispatcher.NextFocusableIn
+  fullName: FluentGpu.Input.InputDispatcher.NextFocusableIn
+- uid: FluentGpu.Foundation.NodeFlags.FocusVisual
+  commentId: F:FluentGpu.Foundation.NodeFlags.FocusVisual
+  href: FluentGpu.Foundation.NodeFlags.html#FluentGpu_Foundation_NodeFlags_FocusVisual
+  name: FocusVisual
+  nameWithType: NodeFlags.FocusVisual
+  fullName: FluentGpu.Foundation.NodeFlags.FocusVisual
+- uid: FluentGpu.Input.InputDispatcher.SetFocus*
+  commentId: Overload:FluentGpu.Input.InputDispatcher.SetFocus
+  href: FluentGpu.Input.InputDispatcher.html#FluentGpu_Input_InputDispatcher_SetFocus_FluentGpu_Foundation_NodeHandle_System_Boolean_
+  name: SetFocus
+  nameWithType: InputDispatcher.SetFocus
+  fullName: FluentGpu.Input.InputDispatcher.SetFocus
+- uid: FluentGpu.Input.InputDispatcher.HitTest*
+  commentId: Overload:FluentGpu.Input.InputDispatcher.HitTest
+  href: FluentGpu.Input.InputDispatcher.html#FluentGpu_Input_InputDispatcher_HitTest_FluentGpu_Foundation_Point2_
+  name: HitTest
+  nameWithType: InputDispatcher.HitTest
+  fullName: FluentGpu.Input.InputDispatcher.HitTest
+- uid: FluentGpu.Foundation.Point2
+  commentId: T:FluentGpu.Foundation.Point2
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Point2.html
+  name: Point2
+  nameWithType: Point2
+  fullName: FluentGpu.Foundation.Point2

@@ -1,0 +1,1491 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Class EditableText | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Class EditableText | FluentGpu Developer Docs ">
+      
+      <meta name="description" content="The WinUI-parity text editor every text control composes (TextBox/PasswordBox/NumberBox/AutoSuggestBox/editable ComboBox/ColorPicker), built on  (document + caret/selection/undo) and the  editor queries (hit-test / caret metrics / range rects — the SAME layout pipeline the renderer draws with). Document ↔ signal. The caller-visible  stays the single source of truth: a user edit mutates the core document and then makes ONE text.Value write (TextBind updates just the text node — no component re-render per keystroke); an external/programmatic signal write is folded back into the document by the TextBind evaluation (core.ResetText, reason = ). An IME composition is the one sanctioned divergence: the PROVISIONAL text lives in the document (so it renders, with clause underlines) but the signal updates only on commit. Rendering. Caret/selection/IME decorations are retained scene state ( + the pooled rect slab on the editor&#39;s TEXT node), replayed by the recorder — never composed elements. All geometry this control writes (caret X, selection/underline rects) is in RAW text-node-local (document-space) coordinates; the caret-follow -ScrollX is applied ONCE, as the text node&#39;s wrapper transform (a TransformBind reading a FloatSignal — the compositor-bypass idiom), so the recorder&#39;s world transform shifts glyphs and decorations together.  mirrors the applied offset for tests/IME math. Focus. Focus state is engine-driven ( — WinUI GotFocus/LostFocus): gained → arm the caret blinker + IME (sink + editable) + capture the Escape-revert snapshot; keyboard (Tab) focus additionally selects all (pointer focus keeps the press-placed caret). Lost → disarm blinker/IME; the selection STATE is kept but its visuals hide (SelectionActive off). Enter fires  and KEEPS focus (WinUI); Escape reverts to the focus-time snapshot, fires , and blurs (the established engine contract that NumberBox/ComboBox/ColorPicker rely on). Deviations (documented, not hidden):  gates INSERTIONS (typing, paste, IME commit, newline); deletions and undo/redo are not cancelable (WinUI fires it for every change). A  that rewrites the value replaces the whole document as one undo step with the caret at the end. Drag after a double-click extends by character, not by word. IME clause underlines sit at the line bottom (face-metric underline placement arrives with the DirectWrite decoration work). Focused border. WinUI&#39;s Focused state swaps BorderBrush to TextControlElevationBorderFocusedBrush (the accent-bottom-stop gradient) with BorderThickness 1,1,1,2 (TextBox_themeresources.xaml, the Focused VisualState ~lines 295–304 + the brush definition ~48–66). Visually that is a neutral 1px ring whose BOTTOM edge reads as a 2px accent bar. We keep the neutral Tok.ControlElevationBorder ring in every state and draw the separate 2px accent bottom bar while focused — the same pixels without double-drawing an accent gradient under an accent bar.">
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/new/feat/prop-unification/apiSpec/new?filename=FluentGpu_Controls_EditableText.md&amp;value=---%0Auid%3A%20FluentGpu.Controls.EditableText%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="ManagedReference">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="FluentGpu.Controls.EditableText">
+
+
+
+  <h1 id="FluentGpu_Controls_EditableText" data-uid="FluentGpu.Controls.EditableText" class="text-break">
+Class EditableText  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L56"><i class="bi bi-code-slash"></i></a>
+  </h1>
+
+  <div class="facts text-secondary">
+    <dl><dt>Namespace</dt><dd><a class="xref" href="FluentGpu.html">FluentGpu</a>.<a class="xref" href="FluentGpu.Controls.html">Controls</a></dd></dl>
+  <dl><dt>Assembly</dt><dd>FluentGpu.Controls.dll</dd></dl>
+  </div>
+
+  <div class="markdown summary"><p>The WinUI-parity text editor every text control composes (TextBox/PasswordBox/NumberBox/AutoSuggestBox/editable
+ComboBox/ColorPicker), built on <a class="xref" href="FluentGpu.Text.TextEditCore.html">TextEditCore</a> (document + caret/selection/undo) and the
+<a class="xref" href="FluentGpu.Text.IFontSystem.html">IFontSystem</a> editor queries (hit-test / caret metrics / range rects — the SAME layout pipeline the
+renderer draws with).</p>
+<p><b>Document ↔ signal.</b> The caller-visible <a class="xref" href="FluentGpu.Signals.Signal-1.html">Signal&lt;T&gt;</a> stays the single source of truth: a user
+edit mutates the core document and then makes ONE <code>text.Value</code> write (TextBind updates just the text node — no
+component re-render per keystroke); an external/programmatic signal write is folded back into the document by the
+TextBind evaluation (<code>core.ResetText</code>, reason = <a class="xref" href="FluentGpu.Controls.TextChangeReason.html#FluentGpu_Controls_TextChangeReason_ProgrammaticChange">ProgrammaticChange</a>). An IME
+composition is the one sanctioned divergence: the PROVISIONAL text lives in the document (so it renders, with clause
+underlines) but the signal updates only on commit.</p>
+<p><b>Rendering.</b> Caret/selection/IME decorations are retained scene state (<a class="xref" href="FluentGpu.Scene.TextEditState.html">TextEditState</a> + the
+pooled rect slab on the editor's TEXT node), replayed by the recorder — never composed elements. All geometry this
+control writes (caret X, selection/underline rects) is in RAW text-node-local (document-space) coordinates; the
+caret-follow <code>-ScrollX</code> is applied ONCE, as the text node's wrapper transform (a <code>TransformBind</code> reading a
+FloatSignal — the compositor-bypass idiom), so the recorder's world transform shifts glyphs and decorations together.
+<a class="xref" href="FluentGpu.Scene.TextEditState.html#FluentGpu_Scene_TextEditState_ScrollX">ScrollX</a> mirrors the applied offset for tests/IME math.</p>
+<p><b>Focus.</b> Focus state is engine-driven (<a class="xref" href="FluentGpu.Dsl.BoxEl.html#FluentGpu_Dsl_BoxEl_OnFocusChanged">OnFocusChanged</a> — WinUI GotFocus/LostFocus):
+gained → arm the caret blinker + IME (sink + editable) + capture the Escape-revert snapshot; keyboard (Tab) focus
+additionally selects all (pointer focus keeps the press-placed caret). Lost → disarm blinker/IME; the selection
+STATE is kept but its visuals hide (SelectionActive off). Enter fires <a class="xref" href="FluentGpu.Controls.EditableText.html#FluentGpu_Controls_EditableText_OnCommit">OnCommit</a> and KEEPS focus
+(WinUI); Escape reverts to the focus-time snapshot, fires <a class="xref" href="FluentGpu.Controls.EditableText.html#FluentGpu_Controls_EditableText_OnCancel">OnCancel</a>, and blurs (the established
+engine contract that NumberBox/ComboBox/ColorPicker rely on).</p>
+<p><b>Deviations (documented, not hidden):</b> <a class="xref" href="FluentGpu.Controls.EditableText.html#FluentGpu_Controls_EditableText_BeforeTextChanging">BeforeTextChanging</a> gates INSERTIONS (typing, paste,
+IME commit, newline); deletions and undo/redo are not cancelable (WinUI fires it for every change). A
+<a class="xref" href="FluentGpu.Controls.EditableText.html#FluentGpu_Controls_EditableText_Sanitize">Sanitize</a> that rewrites the value replaces the whole document as one undo step with the caret at the
+end. Drag after a double-click extends by character, not by word. IME clause underlines sit at the line bottom
+(face-metric underline placement arrives with the DirectWrite decoration work).</p>
+<p><b>Focused border.</b> WinUI's Focused state swaps BorderBrush to <code>TextControlElevationBorderFocusedBrush</code>
+(the accent-bottom-stop gradient) with BorderThickness 1,1,1,2 (TextBox_themeresources.xaml, the Focused
+VisualState ~lines 295–304 + the brush definition ~48–66). Visually that is a neutral 1px ring whose BOTTOM edge
+reads as a 2px accent bar. We keep the neutral <code>Tok.ControlElevationBorder</code> ring in every state and draw the
+separate 2px accent bottom bar while focused — the same pixels without double-drawing an accent gradient under an
+accent bar.</p>
+</div>
+  <div class="markdown conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public sealed class EditableText : Component</code></pre>
+  </div>
+
+
+
+
+  <dl class="typelist inheritance">
+    <dt>Inheritance</dt>
+    <dd>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></div>
+      <div><a class="xref" href="FluentGpu.Hooks.Component.html">Component</a></div>
+      <div><span class="xref">EditableText</span></div>
+    </dd>
+  </dl>
+
+
+
+  <dl class="typelist inheritedMembers">
+    <dt>Inherited Members</dt>
+    <dd>
+    <div>
+      <a class="xref" href="FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Context">Component.Context</a>
+    </div>
+    <div>
+      <a class="xref" href="FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RunsOnce">Component.RunsOnce</a>
+    </div>
+    <div>
+      <a class="xref" href="FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks">Component.RenderWithHooks()</a>
+    </div>
+    <div>
+      <a class="xref" href="FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount">Component.Unmount()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)">object.Equals(object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)">object.Equals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gethashcode">object.GetHashCode()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gettype">object.GetType()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.referenceequals">object.ReferenceEquals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.tostring">object.ToString()</a>
+    </div>
+  </dd></dl>
+
+  <dl class="typelist extensionMethods">
+    <dt>Extension Methods</dt>
+    <dd>
+  <div>
+      <a class="xref" href="FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_">MotionHooks.UseEntrance(Component, float, object?)</a>
+  </div>
+  <div>
+      <a class="xref" href="FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_">MotionHooks.UseHoverScale(Component, bool, float)</a>
+  </div>
+  </dd></dl>
+
+
+
+
+
+  <h2 class="section" id="fields">Fields
+</h2>
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_AcceptsReturn" data-uid="FluentGpu.Controls.EditableText.AcceptsReturn">
+  AcceptsReturn
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L124"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Multi-line: Enter inserts '\r' (Ctrl+Enter commits), Up/Down/Page navigate lines, text wraps.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool AcceptsReturn</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_BeforeTextChanging" data-uid="FluentGpu.Controls.EditableText.BeforeTextChanging">
+  BeforeTextChanging
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L147"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Cancelable insert gate (WinUI <code>BeforeTextChanging</code>): receives the PROPOSED full text; return false
+to reject. Gates typing/paste/IME-commit/newline (deletions and undo are not cancelable here).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Func&lt;string, bool&gt;? BeforeTextChanging</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_CaretColor" data-uid="FluentGpu.Controls.EditableText.CaretColor">
+  CaretColor
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L92"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public ColorF CaretColor</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Foundation.ColorF.html">ColorF</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_Chromeless" data-uid="FluentGpu.Controls.EditableText.Chromeless">
+  Chromeless
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L138"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Chromeless composition mode — the WinUI editable-ComboBox TextBox part. In that template ONE Background
+border spans both grid columns (ComboBox_themeresources.xaml:571, <code>Grid.ColumnSpan=&quot;2&quot;</code>) and the TextBox part
+mounts INSIDE it with <code>BorderBrush=&quot;Transparent&quot;</code> + <code>Style=ComboBoxTextBoxStyle</code> (:580, :770–813).
+True ⇒ this control paints NO chrome of its own: no resting fill, no 1px elevation border, no corner rounding,
+and no focused 2px accent bottom bar (the COMPOSER's outer box owns all of those). Caret/selection/IME/padding
+and focus behavior stay intact, and the part keeps ONLY the WinUI TextControl interaction fills it paints inside
+the shared border (ComboBoxTextBoxStyle PointerOver/Focused, ComboBox_themeresources.xaml:786–803): hover =
+TextControlBackgroundPointerOver = ControlFillColorSecondary (TextBox_themeresources.xaml:24/:131), focused =
+TextControlBackgroundFocused = ControlFillColorInputActive (:25/:132). Default false — TextBox/PasswordBox/
+NumberBox/AutoSuggestBox keep their full chrome.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool Chromeless</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_DisabledForeground" data-uid="FluentGpu.Controls.EditableText.DisabledForeground">
+  DisabledForeground
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L91"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public ColorF DisabledForeground</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Foundation.ColorF.html">ColorF</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_FontSize" data-uid="FluentGpu.Controls.EditableText.FontSize">
+  FontSize
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L87"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float FontSize</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_Foreground" data-uid="FluentGpu.Controls.EditableText.Foreground">
+  Foreground
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L88"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public ColorF Foreground</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Foundation.ColorF.html">ColorF</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_Height" data-uid="FluentGpu.Controls.EditableText.Height">
+  Height
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L86"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float Height</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_Initial" data-uid="FluentGpu.Controls.EditableText.Initial">
+  Initial
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L80"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public string Initial</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_IsEnabled" data-uid="FluentGpu.Controls.EditableText.IsEnabled">
+  IsEnabled
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L94"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool IsEnabled</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_IsReadOnly" data-uid="FluentGpu.Controls.EditableText.IsReadOnly">
+  IsReadOnly
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L122"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Read-only field: caret/selection/copy work, mutations no-op (WinUI <code>IsReadOnly</code>).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool IsReadOnly</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_Mask" data-uid="FluentGpu.Controls.EditableText.Mask">
+  Mask
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L95"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool Mask</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_MaskChar" data-uid="FluentGpu.Controls.EditableText.MaskChar">
+  MaskChar
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L97"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Mask display character (WinUI <code>PasswordBox.PasswordChar</code>, default '●' U+25CF).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public char MaskChar</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.char">char</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_MaxLength" data-uid="FluentGpu.Controls.EditableText.MaxLength">
+  MaxLength
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L120"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Maximum length in UTF-16 code units; 0 = unlimited (WinUI <code>MaxLength</code>).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int MaxLength</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_OnCancel" data-uid="FluentGpu.Controls.EditableText.OnCancel">
+  OnCancel
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L82"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Action? OnCancel</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action">Action</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_OnCommit" data-uid="FluentGpu.Controls.EditableText.OnCommit">
+  OnCommit
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L81"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Action&lt;string&gt;? OnCommit</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action-1">Action</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_OnFocusChanged" data-uid="FluentGpu.Controls.EditableText.OnFocusChanged">
+  OnFocusChanged
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L83"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Action&lt;bool&gt;? OnFocusChanged</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action-1">Action</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_OnSelectionChanged" data-uid="FluentGpu.Controls.EditableText.OnSelectionChanged">
+  OnSelectionChanged
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L158"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Selection changed: (start, length) in UTF-16 document indices (WinUI <code>SelectionChanged</code>).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Action&lt;int, int&gt;? OnSelectionChanged</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action-2">Action</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_OnTextChanged" data-uid="FluentGpu.Controls.EditableText.OnTextChanged">
+  OnTextChanged
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L150"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Fired AFTER the signal write on every text change (user or programmatic); read
+<a class="xref" href="FluentGpu.Controls.EditableText.html#FluentGpu_Controls_EditableText_LastChangeReason">LastChangeReason</a> for the WinUI change reason.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Action&lt;string&gt;? OnTextChanged</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action-1">Action</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_PartDeleteButton" data-uid="FluentGpu.Controls.EditableText.PartDeleteButton">
+  PartDeleteButton
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L73"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The ✕ clear button (WinUI DeleteButton), mounted while focused ∧ non-empty. Owned: OnClick (the
+clear-keep-focus mechanics), TabStop (false — pointer focus must resolve to the field), Role.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartDeleteButton = &quot;DeleteButton&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_PartLane" data-uid="FluentGpu.Controls.EditableText.PartLane">
+  PartLane
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L67"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The padded, clipping content viewport (WinUI ContentElement). Owned: ClipToBounds (the caret-follow
+crop), Children (the scroller wrapper carrying the −ScrollX TransformBind + the caret/IME text node),
+OnRealized (chained). Padding IS stylable here — the public path the internal LanePadding composer seam maps to.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartLane = &quot;Lane&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_PartRoot" data-uid="FluentGpu.Controls.EditableText.PartRoot">
+  PartRoot
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L63"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The focusable field-chrome root (WinUI BorderElement). Owned: OnFocusChanged/OnKeyDown/OnCharInput/
+OnPointerPressed/OnDrag (the edit mechanics), IsEnabled, Focusable, Role, ZStack, Children, OnRealized
+(chained). The state fills/border/corners are recomputed per render BEFORE the modifier — restyle freely.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartRoot = &quot;Root&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_PartText" data-uid="FluentGpu.Controls.EditableText.PartText">
+  PartText
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L70"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The visible text run (a TextEl — use <code>Parts.Set&lt;TextEl&gt;(PartText, …)</code>). Owned: TextBind/
+ColorBind (the document/placeholder display), Wrap + Width (the AcceptsReturn wrap mechanics).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartText = &quot;Text&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_Parts" data-uid="FluentGpu.Controls.EditableText.Parts">
+  Parts
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L76"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Lightweight per-part styling (CSS ::part): modifiers keyed by the <code>PartXxx</code> consts; see
+<a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a> for the contract.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public TemplateParts? Parts</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_Placeholder" data-uid="FluentGpu.Controls.EditableText.Placeholder">
+  Placeholder
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L93"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public string Placeholder</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_Revealed" data-uid="FluentGpu.Controls.EditableText.Revealed">
+  Revealed
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L100"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>PasswordBox Peek/Visible: show the REAL text while keeping the <a class="xref" href="FluentGpu.Controls.EditableText.html#FluentGpu_Controls_EditableText_Mask">Mask</a> password semantics
+(copy/cut stay blocked — WinUI never allows copying out of a PasswordBox, revealed or not).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool Revealed</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_RightAffix" data-uid="FluentGpu.Controls.EditableText.RightAffix">
+  RightAffix
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L106"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Optional right-edge affix (PasswordBox reveal &quot;eye&quot;, NumberBox spin column). Laid out at the right of the
+field, stretched to the inner height; the text area grows to fill the rest. When set, it REPLACES the WinUI
+DeleteButton lane (in WinUI the spin/reveal buttons take the affix slot instead of the delete button).
+Composers that mount/unmount the affix on a LIVE instance must go through <a class="xref" href="FluentGpu.Dsl.Element.html">SetRightAffix(Element)</a> —
+a bare field write does not re-render the field.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Element? RightAffix</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.Element.html">Element</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_Sanitize" data-uid="FluentGpu.Controls.EditableText.Sanitize">
+  Sanitize
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L84"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Func&lt;string, string&gt;? Sanitize</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_ShowDeleteButton" data-uid="FluentGpu.Controls.EditableText.ShowDeleteButton">
+  ShowDeleteButton
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L127"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Show the WinUI TextBox DeleteButton (✕, glyph E894) while focused ∧ non-empty (single-line, no Mask,
+not read-only, and only when no <a class="xref" href="FluentGpu.Controls.EditableText.html#FluentGpu_Controls_EditableText_RightAffix">RightAffix</a> occupies the lane). TextBox passes true.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool ShowDeleteButton</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_Text" data-uid="FluentGpu.Controls.EditableText.Text">
+  Text
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L79"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Signal&lt;string&gt;? Text</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Signals.Signal-1.html">Signal</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_EditableText_Width" data-uid="FluentGpu.Controls.EditableText.Width">
+  Width
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L85"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float Width</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+  <h2 class="section" id="properties">Properties
+</h2>
+
+
+  <a id="FluentGpu_Controls_EditableText_Core_" data-uid="FluentGpu.Controls.EditableText.Core*"></a>
+
+  <h3 id="FluentGpu_Controls_EditableText_Core" data-uid="FluentGpu.Controls.EditableText.Core">
+  Core
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L163"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The editing state machine — the honest selection/caret/undo surface (<code>SelectionStart</code>,
+<code>CanUndo</code>, <code>UndoDepth</code>…). Reads are free; for programmatic mutations prefer the wrappers below so the
+scene visuals resync.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public TextEditCore Core { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Text.TextEditCore.html">TextEditCore</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_EditableText_LastChangeReason_" data-uid="FluentGpu.Controls.EditableText.LastChangeReason*"></a>
+
+  <h3 id="FluentGpu_Controls_EditableText_LastChangeReason" data-uid="FluentGpu.Controls.EditableText.LastChangeReason">
+  LastChangeReason
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L152"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The reason of the most recent text change (valid inside/after <a class="xref" href="FluentGpu.Controls.EditableText.html#FluentGpu_Controls_EditableText_OnTextChanged">OnTextChanged</a>).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public TextChangeReason LastChangeReason { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Controls.TextChangeReason.html">TextChangeReason</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_EditableText_LastEditWasDeletion_" data-uid="FluentGpu.Controls.EditableText.LastEditWasDeletion*"></a>
+
+  <h3 id="FluentGpu_Controls_EditableText_LastEditWasDeletion" data-uid="FluentGpu.Controls.EditableText.LastEditWasDeletion">
+  LastEditWasDeletion
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L156"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>True when the most recent USER edit removed text (Backspace/Delete/word-delete/cut/clear) — the
+editable ComboBox restricts its search to exact matches on deletions so auto-complete cannot fight backspacing
+(ComboBox_Partial.cpp:4098–4106 keys this off VK_BACK).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool LastEditWasDeletion { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_EditableText_SelectedText_" data-uid="FluentGpu.Controls.EditableText.SelectedText*"></a>
+
+  <h3 id="FluentGpu_Controls_EditableText_SelectedText" data-uid="FluentGpu.Controls.EditableText.SelectedText">
+  SelectedText
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L166"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public string SelectedText { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_EditableText_SelectionLength_" data-uid="FluentGpu.Controls.EditableText.SelectionLength*"></a>
+
+  <h3 id="FluentGpu_Controls_EditableText_SelectionLength" data-uid="FluentGpu.Controls.EditableText.SelectionLength">
+  SelectionLength
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L165"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int SelectionLength { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_EditableText_SelectionStart_" data-uid="FluentGpu.Controls.EditableText.SelectionStart*"></a>
+
+  <h3 id="FluentGpu_Controls_EditableText_SelectionStart" data-uid="FluentGpu.Controls.EditableText.SelectionStart">
+  SelectionStart
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L164"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int SelectionStart { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <h2 class="section" id="methods">Methods
+</h2>
+
+
+  <a id="FluentGpu_Controls_EditableText_Render_" data-uid="FluentGpu.Controls.EditableText.Render*"></a>
+
+  <h3 id="FluentGpu_Controls_EditableText_Render" data-uid="FluentGpu.Controls.EditableText.Render">
+  Render()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L231"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public override Element Render()</code></pre>
+  </div>
+
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.Element.html">Element</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_EditableText_Select_" data-uid="FluentGpu.Controls.EditableText.Select*"></a>
+
+  <h3 id="FluentGpu_Controls_EditableText_Select_System_Int32_System_Int32_" data-uid="FluentGpu.Controls.EditableText.Select(System.Int32,System.Int32)">
+  Select(int, int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L167"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void Select(int start, int length)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>start</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>length</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_EditableText_SelectAll_" data-uid="FluentGpu.Controls.EditableText.SelectAll*"></a>
+
+  <h3 id="FluentGpu_Controls_EditableText_SelectAll" data-uid="FluentGpu.Controls.EditableText.SelectAll">
+  SelectAll()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/EditableText.cs/#L168"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void SelectAll()</code></pre>
+  </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+</article>
+
+
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

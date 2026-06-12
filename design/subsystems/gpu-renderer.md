@@ -9,8 +9,8 @@
 > synthesis* section at the end lists every amendment.
 
 **Primary assembly:** `FluentGpu.Render` (portable C# math + POD + RHI/Text/PAL interface calls).
-**Leaf impl:** `FluentGpu.Rhi.D3D12` (Windows-only; ComPtr/D3D12/DXGI/DComp). **New collaborators:**
-`FluentGpu.Media` (image/video residency, portable), leaf `Media.Codecs.Wic`, `FluentGpu.Theme`
+**Leaf impl:** `FluentGpu.Windows` (D3D12/ folder; Windows-only; ComPtr/D3D12/DXGI/DComp). **New collaborators:**
+`FluentGpu.Media` (image/video residency, portable), leaf `FluentGpu.Windows` (Wic/ folder), `FluentGpu.Theme`
 (brush derivation), `FluentGpu.Validation` (golden/structural gates, `[Conditional]`-erased from ship).
 
 This renderer **runs on the RENDER thread** (phases 8–11) reading an immutable `SceneFrame` snapshot
@@ -66,13 +66,13 @@ residency (`FluentGpu.Media`).
  └────────────────────────────────────┘
 ```
 
-The renderer NEVER touches `ComPtr`, `ID3D12*`, DXGI, or DComp — those live in `Rhi.D3D12`. It speaks
+The renderer NEVER touches `ComPtr`, `ID3D12*`, DXGI, or DComp — those live in `FluentGpu.Windows` (D3D12/ folder). It speaks
 the `FluentGpu.Rhi` interface (POD descs/handles/spans, zero COM) and consumes the DrawList POD stream +
 retained tables. **Portability boundary in one sentence:** everything in `FluentGpu.Render` is portable
-C# math + POD + RHI/Text/PAL interface calls; only `Rhi.D3D12`, `Pal.Windows`, `Text.DirectWrite`, and
+C# math + POD + RHI/Text/PAL interface calls; only `FluentGpu.Windows` (D3D12/, Pal/, DirectWrite/ folders) and
 optional `Effects.D2D1` are Windows-specific leaves (referenced only by `Hosting`).
 
-**ComputeSharp reuse (verified ground truth, unchanged):** seed `Rhi.D3D12` interop by forking
+**ComputeSharp reuse (verified ground truth, unchanged):** seed `FluentGpu.Windows` (D3D12/ folder) interop by forking
 ComputeSharp's D3D12 COM-binding shproj (it has DXGI + device + command-list vtables + `ComPtr<T>` but
 **only compute pipeline state — no graphics PSO / RTV / input-layout / blend / rasterizer descs**); reuse
 **D3D12MA** as-is for all GPU buffers/textures/atlas pages; **author graphics shaders as HLSL+DXC**
@@ -136,7 +136,7 @@ public interface ICommandEncoder {
 }
 ```
 
-`Rhi.D3D12` implements these by adding the missing D3D12 graphics structs/methods over the ComputeSharp
+`FluentGpu.Windows` (D3D12/ folder) implements these by adding the missing D3D12 graphics structs/methods over the ComputeSharp
 seed. The interface is the exact substitution point for a future `Rhi.Metal` leaf
 (`MTLRenderPipelineState`/`MTLRenderCommandEncoder`/`CAMetalLayer`).
 
@@ -657,7 +657,7 @@ PopLayer  → EndRenderPass → (optional IEffectRunner on layerRT) →
   through a PushLayer + an `IEffectRunner` blend kernel** (read dst, composite in shader). `OQ-2`: v1 ships
   the separable set + Overlay.
 - **Window Mica/Acrylic = PAL, not our pixels** (WaveeMusic): `IBackdropSource.SetWindowBackdrop(...)`
-  (`Pal.Windows` → `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE)` or a DComp backdrop sibling visual
+  (`FluentGpu.Windows` Pal/ → `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE)` or a DComp backdrop sibling visual
   **below** our visual). Our root clears transparent (premul 0); DWM composes Mica through. **Zero renderer
   change.** HC → opaque fill. macOS → `NSVisualEffectView`.
 - **In-app live Acrylic** (toast/add-to-playlist sampling content behind) = a backdrop layer that samples
@@ -670,7 +670,7 @@ PopLayer  → EndRenderPass → (optional IEffectRunner on layerRT) →
 child visual** via `IVideoPresenter` (PAL → DComp; POD `VideoSurfaceId`):
 
 ```csharp
-public interface IVideoPresenter {            // PAL seam; Pal.Windows → DComp
+public interface IVideoPresenter {            // PAL seam; FluentGpu.Windows Pal/ → DComp
     VideoSurfaceId CreateSurface(in VideoSurfaceDesc d);
     void Place(VideoSurfaceId id, in RectPx deviceRect, float opacity, int z);
     void SetVisible(VideoSurfaceId id, bool on);  void Destroy(VideoSurfaceId id);
@@ -757,7 +757,7 @@ it and draws a placeholder quad while `State != Resident` (see the record step b
   80 draw calls" target. **Residency + packing + `AcquireAtlasPage` are owned by `media-pipeline.md`;** the
   renderer only consumes the resolved page/UV at batch time (above).
 - **Upload (P13):** the RHI delta `CopyBufferToTexture(staging, dst, region)` via a **dedicated MB-sized
-  texture-staging ring** in `Rhi.D3D12` (fence-gated reset — **NOT** the instance `UploadRing`). Textures
+  texture-staging ring** in `FluentGpu.Windows` (D3D12/ folder) (fence-gated reset — **NOT** the instance `UploadRing`). Textures
   come from a **startup-allocated per-bucket pool**; P13 only does `CopyBufferToTexture` into a recycled
   bucket texture + `ContentEpoch++`. **`CreateTexture` NEVER runs in phases 6–13 steady state** (it
   allocates a `HandleTable` slot + a `ComPtr` root) — it is cold-path pool growth only. Upload is
@@ -901,7 +901,7 @@ transpiler** (compute/D2D1-only).
 | `shapes_common.hlsli` | — | shared `sdRoundRect`, `erf_approx`, gradient eval, gamma, brush select |
 
 ```
-*.hlsl ──DXC(-T vs_6_0/ps_6_0 -Fo)──► *.dxil ──┐  (Windows: source-gen'd byte[] const in Rhi.D3D12)
+*.hlsl ──DXC(-T vs_6_0/ps_6_0 -Fo)──► *.dxil ──┐  (Windows: source-gen'd byte[] const in FluentGpu.Windows D3D12/)
        └─DXC(-spirv)──► *.spv ──SPIRV-Cross──► *.metal (future Rhi.Metal)
 ```
 - Bytecode **embedded as source-gen'd `byte[]` const** (NativeAOT-friendly — no runtime compile, no
@@ -982,10 +982,10 @@ batcher, OverlapGrid, SortKey, instance packing, tessellator, damage accumulator
 gradient bake, image-resolve, all math (`Affine2D`, SDF parameterization), shader *source* (HLSL → cross-
 compiled). Speaks only RHI/Text/PAL interfaces + POD DrawList.
 
-**Windows leaves (Hosting-only):** `Rhi.D3D12` (ComPtr/D3D12/DXGI/**DComp multi-visual present**/D3D12MA/
-RTV/DSV/PSO cache/DXIL/`Present1`/`CopyBufferToTexture`/texture-staging ring); `Pal.Windows`
+**Windows leaves (Hosting-only):** `FluentGpu.Windows` D3D12/ (ComPtr/D3D12/DXGI/**DComp multi-visual present**/D3D12MA/
+RTV/DSV/PSO cache/DXIL/`Present1`/`CopyBufferToTexture`/texture-staging ring); `FluentGpu.Windows` Pal/
 (HWND/swapchain surface/`ISystemColors`/`IBackdropSource` Mica/`IVideoPresenter` DComp sibling visual);
-`Text.DirectWrite` (glyph raster into the portable atlas); optional `Effects.D2D1`.
+`FluentGpu.Windows` DirectWrite/ (glyph raster into the portable atlas); optional `Effects.D2D1`.
 
 **To add Metal:** implement `Rhi.Metal` (`MTLDevice`/`MTLRenderCommandEncoder`/`MTLRenderPipelineState`/
 `CAMetalLayer` present + child layers for video), `Text.CoreText` (same atlas), `Effects.Metal` (MPS for

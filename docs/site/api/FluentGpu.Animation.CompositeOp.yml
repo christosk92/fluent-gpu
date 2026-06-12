@@ -1,0 +1,141 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Animation.CompositeOp
+  commentId: T:FluentGpu.Animation.CompositeOp
+  id: CompositeOp
+  parent: FluentGpu.Animation
+  children:
+  - FluentGpu.Animation.CompositeOp.Accumulate
+  - FluentGpu.Animation.CompositeOp.Add
+  - FluentGpu.Animation.CompositeOp.Replace
+  langs:
+  - csharp
+  - vb
+  name: CompositeOp
+  nameWithType: CompositeOp
+  fullName: FluentGpu.Animation.CompositeOp
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CompositeOp
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: How a track combines with other tracks on the same channel (CSS animation-composition).
+  example: []
+  syntax:
+    content: 'public enum CompositeOp : byte'
+    content.vb: Public Enum CompositeOp As Byte
+- uid: FluentGpu.Animation.CompositeOp.Replace
+  commentId: F:FluentGpu.Animation.CompositeOp.Replace
+  id: Replace
+  parent: FluentGpu.Animation.CompositeOp
+  langs:
+  - csharp
+  - vb
+  name: Replace
+  nameWithType: CompositeOp.Replace
+  fullName: FluentGpu.Animation.CompositeOp.Replace
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Replace
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: Replace = 0
+    return:
+      type: FluentGpu.Animation.CompositeOp
+- uid: FluentGpu.Animation.CompositeOp.Add
+  commentId: F:FluentGpu.Animation.CompositeOp.Add
+  id: Add
+  parent: FluentGpu.Animation.CompositeOp
+  langs:
+  - csharp
+  - vb
+  name: Add
+  nameWithType: CompositeOp.Add
+  fullName: FluentGpu.Animation.CompositeOp.Add
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Add
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: Add = 1
+    return:
+      type: FluentGpu.Animation.CompositeOp
+- uid: FluentGpu.Animation.CompositeOp.Accumulate
+  commentId: F:FluentGpu.Animation.CompositeOp.Accumulate
+  id: Accumulate
+  parent: FluentGpu.Animation.CompositeOp
+  langs:
+  - csharp
+  - vb
+  name: Accumulate
+  nameWithType: CompositeOp.Accumulate
+  fullName: FluentGpu.Animation.CompositeOp.Accumulate
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Accumulate
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: Accumulate = 2
+    return:
+      type: FluentGpu.Animation.CompositeOp
+references:
+- uid: FluentGpu.Animation
+  commentId: N:FluentGpu.Animation
+  href: FluentGpu.html
+  name: FluentGpu.Animation
+  nameWithType: FluentGpu.Animation
+  fullName: FluentGpu.Animation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Animation
+    name: Animation
+    href: FluentGpu.Animation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Animation
+    name: Animation
+    href: FluentGpu.Animation.html
+- uid: FluentGpu.Animation.CompositeOp
+  commentId: T:FluentGpu.Animation.CompositeOp
+  parent: FluentGpu.Animation
+  href: FluentGpu.Animation.CompositeOp.html
+  name: CompositeOp
+  nameWithType: CompositeOp
+  fullName: FluentGpu.Animation.CompositeOp

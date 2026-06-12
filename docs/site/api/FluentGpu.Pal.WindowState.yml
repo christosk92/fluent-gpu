@@ -1,0 +1,155 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Pal.WindowState
+  commentId: T:FluentGpu.Pal.WindowState
+  id: WindowState
+  parent: FluentGpu.Pal
+  children:
+  - FluentGpu.Pal.WindowState.Maximized
+  - FluentGpu.Pal.WindowState.Minimized
+  - FluentGpu.Pal.WindowState.Normal
+  langs:
+  - csharp
+  - vb
+  name: WindowState
+  nameWithType: WindowState
+  fullName: FluentGpu.Pal.WindowState
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: WindowState
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: Window placement, surfaced for custom-titlebar chrome (<xref href="FluentGpu.Pal.IPlatformWindow.State" data-throw-if-not-resolved="false"></xref>).
+  example: []
+  syntax:
+    content: 'public enum WindowState : byte'
+    content.vb: Public Enum WindowState As Byte
+- uid: FluentGpu.Pal.WindowState.Normal
+  commentId: F:FluentGpu.Pal.WindowState.Normal
+  id: Normal
+  parent: FluentGpu.Pal.WindowState
+  langs:
+  - csharp
+  - vb
+  name: Normal
+  nameWithType: WindowState.Normal
+  fullName: FluentGpu.Pal.WindowState.Normal
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Normal
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: Normal = 0
+    return:
+      type: FluentGpu.Pal.WindowState
+- uid: FluentGpu.Pal.WindowState.Maximized
+  commentId: F:FluentGpu.Pal.WindowState.Maximized
+  id: Maximized
+  parent: FluentGpu.Pal.WindowState
+  langs:
+  - csharp
+  - vb
+  name: Maximized
+  nameWithType: WindowState.Maximized
+  fullName: FluentGpu.Pal.WindowState.Maximized
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Maximized
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: Maximized = 1
+    return:
+      type: FluentGpu.Pal.WindowState
+- uid: FluentGpu.Pal.WindowState.Minimized
+  commentId: F:FluentGpu.Pal.WindowState.Minimized
+  id: Minimized
+  parent: FluentGpu.Pal.WindowState
+  langs:
+  - csharp
+  - vb
+  name: Minimized
+  nameWithType: WindowState.Minimized
+  fullName: FluentGpu.Pal.WindowState.Minimized
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Minimized
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: Minimized = 2
+    return:
+      type: FluentGpu.Pal.WindowState
+references:
+- uid: FluentGpu.Pal.IPlatformWindow.State
+  commentId: P:FluentGpu.Pal.IPlatformWindow.State
+  parent: FluentGpu.Pal.IPlatformWindow
+  href: FluentGpu.Pal.IPlatformWindow.html#FluentGpu_Pal_IPlatformWindow_State
+  name: State
+  nameWithType: IPlatformWindow.State
+  fullName: FluentGpu.Pal.IPlatformWindow.State
+- uid: FluentGpu.Pal
+  commentId: N:FluentGpu.Pal
+  href: FluentGpu.html
+  name: FluentGpu.Pal
+  nameWithType: FluentGpu.Pal
+  fullName: FluentGpu.Pal
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+- uid: FluentGpu.Pal.IPlatformWindow
+  commentId: T:FluentGpu.Pal.IPlatformWindow
+  parent: FluentGpu.Pal
+  href: FluentGpu.Pal.IPlatformWindow.html
+  name: IPlatformWindow
+  nameWithType: IPlatformWindow
+  fullName: FluentGpu.Pal.IPlatformWindow
+- uid: FluentGpu.Pal.WindowState
+  commentId: T:FluentGpu.Pal.WindowState
+  parent: FluentGpu.Pal
+  href: FluentGpu.Pal.WindowState.html
+  name: WindowState
+  nameWithType: WindowState
+  fullName: FluentGpu.Pal.WindowState

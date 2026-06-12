@@ -1,0 +1,118 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.LineStacking
+  commentId: T:FluentGpu.Foundation.LineStacking
+  id: LineStacking
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.LineStacking.BlockLineHeight
+  - FluentGpu.Foundation.LineStacking.MaxHeight
+  langs:
+  - csharp
+  - vb
+  name: LineStacking
+  nameWithType: LineStacking
+  fullName: FluentGpu.Foundation.LineStacking
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/TextLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LineStacking
+    path: ../../src/FluentGpu.Foundation/TextLayout.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    How an explicit LineHeight interacts with the font-natural line box (mirrors WinUI LineStackingStrategy;
+        BaselineToBaseline is not modeled). MaxHeight — the WinUI BaseTextBlockStyle default
+        (TextBlock_themeresources.xaml:16) — makes the line advance max(font-natural, LineHeight); BlockLineHeight makes
+        the line advance exactly LineHeight (lines may visually overlap when smaller than natural).
+  example: []
+  syntax:
+    content: 'public enum LineStacking : byte'
+    content.vb: Public Enum LineStacking As Byte
+- uid: FluentGpu.Foundation.LineStacking.MaxHeight
+  commentId: F:FluentGpu.Foundation.LineStacking.MaxHeight
+  id: MaxHeight
+  parent: FluentGpu.Foundation.LineStacking
+  langs:
+  - csharp
+  - vb
+  name: MaxHeight
+  nameWithType: LineStacking.MaxHeight
+  fullName: FluentGpu.Foundation.LineStacking.MaxHeight
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/TextLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MaxHeight
+    path: ../../src/FluentGpu.Foundation/TextLayout.cs
+    startLine: 25
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: MaxHeight = 0
+    return:
+      type: FluentGpu.Foundation.LineStacking
+- uid: FluentGpu.Foundation.LineStacking.BlockLineHeight
+  commentId: F:FluentGpu.Foundation.LineStacking.BlockLineHeight
+  id: BlockLineHeight
+  parent: FluentGpu.Foundation.LineStacking
+  langs:
+  - csharp
+  - vb
+  name: BlockLineHeight
+  nameWithType: LineStacking.BlockLineHeight
+  fullName: FluentGpu.Foundation.LineStacking.BlockLineHeight
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/TextLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BlockLineHeight
+    path: ../../src/FluentGpu.Foundation/TextLayout.cs
+    startLine: 26
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: BlockLineHeight = 1
+    return:
+      type: FluentGpu.Foundation.LineStacking
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Foundation.LineStacking
+  commentId: T:FluentGpu.Foundation.LineStacking
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.LineStacking.html
+  name: LineStacking
+  nameWithType: LineStacking
+  fullName: FluentGpu.Foundation.LineStacking

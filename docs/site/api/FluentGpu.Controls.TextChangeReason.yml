@@ -1,0 +1,149 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.TextChangeReason
+  commentId: T:FluentGpu.Controls.TextChangeReason
+  id: TextChangeReason
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.TextChangeReason.ProgrammaticChange
+  - FluentGpu.Controls.TextChangeReason.SuggestionChosen
+  - FluentGpu.Controls.TextChangeReason.UserInput
+  langs:
+  - csharp
+  - vb
+  name: TextChangeReason
+  nameWithType: TextChangeReason
+  fullName: FluentGpu.Controls.TextChangeReason
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/EditableText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextChangeReason
+    path: ../../src/FluentGpu.Controls/EditableText.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Why the field's text changed — the WinUI <code>AutoSuggestionBoxTextChangeReason</code> shape, surfaced through
+        <xref href="FluentGpu.Controls.EditableText.LastChangeReason" data-throw-if-not-resolved="false"></xref> so AutoSuggestBox/ComboBox can split user edits from programmatic writes.
+  example: []
+  syntax:
+    content: 'public enum TextChangeReason : byte'
+    content.vb: Public Enum TextChangeReason As Byte
+- uid: FluentGpu.Controls.TextChangeReason.UserInput
+  commentId: F:FluentGpu.Controls.TextChangeReason.UserInput
+  id: UserInput
+  parent: FluentGpu.Controls.TextChangeReason
+  langs:
+  - csharp
+  - vb
+  name: UserInput
+  nameWithType: TextChangeReason.UserInput
+  fullName: FluentGpu.Controls.TextChangeReason.UserInput
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/EditableText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UserInput
+    path: ../../src/FluentGpu.Controls/EditableText.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: UserInput = 0
+    return:
+      type: FluentGpu.Controls.TextChangeReason
+- uid: FluentGpu.Controls.TextChangeReason.ProgrammaticChange
+  commentId: F:FluentGpu.Controls.TextChangeReason.ProgrammaticChange
+  id: ProgrammaticChange
+  parent: FluentGpu.Controls.TextChangeReason
+  langs:
+  - csharp
+  - vb
+  name: ProgrammaticChange
+  nameWithType: TextChangeReason.ProgrammaticChange
+  fullName: FluentGpu.Controls.TextChangeReason.ProgrammaticChange
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/EditableText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ProgrammaticChange
+    path: ../../src/FluentGpu.Controls/EditableText.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: ProgrammaticChange = 1
+    return:
+      type: FluentGpu.Controls.TextChangeReason
+- uid: FluentGpu.Controls.TextChangeReason.SuggestionChosen
+  commentId: F:FluentGpu.Controls.TextChangeReason.SuggestionChosen
+  id: SuggestionChosen
+  parent: FluentGpu.Controls.TextChangeReason
+  langs:
+  - csharp
+  - vb
+  name: SuggestionChosen
+  nameWithType: TextChangeReason.SuggestionChosen
+  fullName: FluentGpu.Controls.TextChangeReason.SuggestionChosen
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/EditableText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SuggestionChosen
+    path: ../../src/FluentGpu.Controls/EditableText.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: SuggestionChosen = 2
+    return:
+      type: FluentGpu.Controls.TextChangeReason
+references:
+- uid: FluentGpu.Controls.EditableText.LastChangeReason
+  commentId: P:FluentGpu.Controls.EditableText.LastChangeReason
+  href: FluentGpu.Controls.EditableText.html#FluentGpu_Controls_EditableText_LastChangeReason
+  name: LastChangeReason
+  nameWithType: EditableText.LastChangeReason
+  fullName: FluentGpu.Controls.EditableText.LastChangeReason
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.TextChangeReason
+  commentId: T:FluentGpu.Controls.TextChangeReason
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.TextChangeReason.html
+  name: TextChangeReason
+  nameWithType: TextChangeReason
+  fullName: FluentGpu.Controls.TextChangeReason

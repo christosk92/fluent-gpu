@@ -1,0 +1,782 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Text.DirectWrite.DWriteTextShaper
+  commentId: T:FluentGpu.Text.DirectWrite.DWriteTextShaper
+  id: DWriteTextShaper
+  parent: FluentGpu.Text.DirectWrite
+  children:
+  - FluentGpu.Text.DirectWrite.DWriteTextShaper.#ctor(TerraFX.Interop.DirectX.IDWriteFactory*)
+  - FluentGpu.Text.DirectWrite.DWriteTextShaper.Dispose
+  - FluentGpu.Text.DirectWrite.DWriteTextShaper.SelfTest
+  - FluentGpu.Text.DirectWrite.DWriteTextShaper.Shape(System.Char*,System.Int32,System.Int32,TerraFX.Interop.DirectX.IDWriteFontFace*,System.Single,System.UInt16,System.Byte,System.Boolean)
+  langs:
+  - csharp
+  - vb
+  name: DWriteTextShaper
+  nameWithType: DWriteTextShaper
+  fullName: FluentGpu.Text.DirectWrite.DWriteTextShaper
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Text.DirectWrite/DWriteTextShaper.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DWriteTextShaper
+    path: ../../src/FluentGpu.Text.DirectWrite/DWriteTextShaper.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Text.DirectWrite
+  namespace: FluentGpu.Text.DirectWrite
+  summary: >-
+    DirectWrite glyph shaper (text.md §4.4): turns one itemized run (single face + script + direction) into positioned
+
+    glyphs via <code>IDWriteTextAnalyzer.GetGlyphs</code> + <code>GetGlyphPlacements</code> — real cluster/ligature/kerning/RTL
+
+    shaping, not per-char design advances. Advances come out in DIP (GetGlyphPlacements is given the DIP em size).
+
+    Scratch buffers are grown and reused; <xref href="FluentGpu.Text.DirectWrite.DWriteTextShaper.Shape(System.Char*%2cSystem.Int32%2cSystem.Int32%2cTerraFX.Interop.DirectX.IDWriteFontFace*%2cSystem.Single%2cSystem.UInt16%2cSystem.Byte%2cSystem.Boolean)" data-throw-if-not-resolved="false"></xref> returns a span into the reused output buffer (valid until
+
+    the next call). COM via TerraFX raw pointers.
+  example: []
+  syntax:
+    content: 'public sealed class DWriteTextShaper : IDisposable'
+    content.vb: Public NotInheritable Class DWriteTextShaper Implements IDisposable
+  inheritance:
+  - System.Object
+  implements:
+  - System.IDisposable
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Text.DirectWrite.DWriteTextShaper.#ctor(TerraFX.Interop.DirectX.IDWriteFactory*)
+  commentId: M:FluentGpu.Text.DirectWrite.DWriteTextShaper.#ctor(TerraFX.Interop.DirectX.IDWriteFactory*)
+  id: '#ctor(TerraFX.Interop.DirectX.IDWriteFactory*)'
+  parent: FluentGpu.Text.DirectWrite.DWriteTextShaper
+  langs:
+  - csharp
+  - vb
+  name: DWriteTextShaper(IDWriteFactory*)
+  nameWithType: DWriteTextShaper.DWriteTextShaper(IDWriteFactory*)
+  fullName: FluentGpu.Text.DirectWrite.DWriteTextShaper.DWriteTextShaper(TerraFX.Interop.DirectX.IDWriteFactory*)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Text.DirectWrite/DWriteTextShaper.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Text.DirectWrite/DWriteTextShaper.cs
+    startLine: 29
+  assemblies:
+  - FluentGpu.Text.DirectWrite
+  namespace: FluentGpu.Text.DirectWrite
+  syntax:
+    content: public DWriteTextShaper(IDWriteFactory* factory = null)
+    parameters:
+    - id: factory
+      type: TerraFX.Interop.DirectX.IDWriteFactory*
+    content.vb: Public Sub New(factory As IDWriteFactory* = Nothing)
+  overload: FluentGpu.Text.DirectWrite.DWriteTextShaper.#ctor*
+  nameWithType.vb: DWriteTextShaper.New(IDWriteFactory*)
+  fullName.vb: FluentGpu.Text.DirectWrite.DWriteTextShaper.New(TerraFX.Interop.DirectX.IDWriteFactory*)
+  name.vb: New(IDWriteFactory*)
+- uid: FluentGpu.Text.DirectWrite.DWriteTextShaper.Shape(System.Char*,System.Int32,System.Int32,TerraFX.Interop.DirectX.IDWriteFontFace*,System.Single,System.UInt16,System.Byte,System.Boolean)
+  commentId: M:FluentGpu.Text.DirectWrite.DWriteTextShaper.Shape(System.Char*,System.Int32,System.Int32,TerraFX.Interop.DirectX.IDWriteFontFace*,System.Single,System.UInt16,System.Byte,System.Boolean)
+  id: Shape(System.Char*,System.Int32,System.Int32,TerraFX.Interop.DirectX.IDWriteFontFace*,System.Single,System.UInt16,System.Byte,System.Boolean)
+  parent: FluentGpu.Text.DirectWrite.DWriteTextShaper
+  langs:
+  - csharp
+  - vb
+  name: Shape(char*, int, int, IDWriteFontFace*, float, ushort, byte, bool)
+  nameWithType: DWriteTextShaper.Shape(char*, int, int, IDWriteFontFace*, float, ushort, byte, bool)
+  fullName: FluentGpu.Text.DirectWrite.DWriteTextShaper.Shape(char*, int, int, TerraFX.Interop.DirectX.IDWriteFontFace*, float, ushort, byte, bool)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text.DirectWrite/DWriteTextShaper.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Shape
+    path: ../../src/FluentGpu.Text.DirectWrite/DWriteTextShaper.cs
+    startLine: 45
+  assemblies:
+  - FluentGpu.Text.DirectWrite
+  namespace: FluentGpu.Text.DirectWrite
+  summary: >-
+    Shape [start, start+length) of <code class="paramref">text</code> with the given face/script/direction at
+        <code class="paramref">size</code> DIP. Returns the shaped glyphs (logical order) in a reused buffer.
+  example: []
+  syntax:
+    content: public ReadOnlySpan<GlyphPlacement> Shape(char* text, int start, int length, IDWriteFontFace* face, float size, ushort scriptId, byte shapes, bool rtl)
+    parameters:
+    - id: text
+      type: System.Char*
+    - id: start
+      type: System.Int32
+    - id: length
+      type: System.Int32
+    - id: face
+      type: TerraFX.Interop.DirectX.IDWriteFontFace*
+    - id: size
+      type: System.Single
+    - id: scriptId
+      type: System.UInt16
+    - id: shapes
+      type: System.Byte
+    - id: rtl
+      type: System.Boolean
+    return:
+      type: System.ReadOnlySpan{FluentGpu.Text.GlyphPlacement}
+    content.vb: Public Function Shape(text As Char*, start As Integer, length As Integer, face As IDWriteFontFace*, size As Single, scriptId As UShort, shapes As Byte, rtl As Boolean) As ReadOnlySpan(Of GlyphPlacement)
+  overload: FluentGpu.Text.DirectWrite.DWriteTextShaper.Shape*
+  nameWithType.vb: DWriteTextShaper.Shape(Char*, Integer, Integer, IDWriteFontFace*, Single, UShort, Byte, Boolean)
+  fullName.vb: FluentGpu.Text.DirectWrite.DWriteTextShaper.Shape(Char*, Integer, Integer, TerraFX.Interop.DirectX.IDWriteFontFace*, Single, UShort, Byte, Boolean)
+  name.vb: Shape(Char*, Integer, Integer, IDWriteFontFace*, Single, UShort, Byte, Boolean)
+- uid: FluentGpu.Text.DirectWrite.DWriteTextShaper.SelfTest
+  commentId: M:FluentGpu.Text.DirectWrite.DWriteTextShaper.SelfTest
+  id: SelfTest
+  parent: FluentGpu.Text.DirectWrite.DWriteTextShaper
+  langs:
+  - csharp
+  - vb
+  name: SelfTest()
+  nameWithType: DWriteTextShaper.SelfTest()
+  fullName: FluentGpu.Text.DirectWrite.DWriteTextShaper.SelfTest()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text.DirectWrite/DWriteTextShaper.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SelfTest
+    path: ../../src/FluentGpu.Text.DirectWrite/DWriteTextShaper.cs
+    startLine: 97
+  assemblies:
+  - FluentGpu.Text.DirectWrite
+  namespace: FluentGpu.Text.DirectWrite
+  summary: >-
+    Smoke test (Windows only): shape Latin + an Arabic run and print gids/advances. Proves the shaping
+        COM round-trip (GetGlyphs/GetGlyphPlacements) works and ligatures/marks collapse.
+  example: []
+  syntax:
+    content: public static void SelfTest()
+    content.vb: Public Shared Sub SelfTest()
+  overload: FluentGpu.Text.DirectWrite.DWriteTextShaper.SelfTest*
+- uid: FluentGpu.Text.DirectWrite.DWriteTextShaper.Dispose
+  commentId: M:FluentGpu.Text.DirectWrite.DWriteTextShaper.Dispose
+  id: Dispose
+  parent: FluentGpu.Text.DirectWrite.DWriteTextShaper
+  langs:
+  - csharp
+  - vb
+  name: Dispose()
+  nameWithType: DWriteTextShaper.Dispose()
+  fullName: FluentGpu.Text.DirectWrite.DWriteTextShaper.Dispose()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text.DirectWrite/DWriteTextShaper.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Dispose
+    path: ../../src/FluentGpu.Text.DirectWrite/DWriteTextShaper.cs
+    startLine: 139
+  assemblies:
+  - FluentGpu.Text.DirectWrite
+  namespace: FluentGpu.Text.DirectWrite
+  summary: Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.
+  example: []
+  syntax:
+    content: public void Dispose()
+    content.vb: Public Sub Dispose()
+  overload: FluentGpu.Text.DirectWrite.DWriteTextShaper.Dispose*
+  implements:
+  - System.IDisposable.Dispose
+references:
+- uid: FluentGpu.Text.DirectWrite.DWriteTextShaper.Shape(System.Char*,System.Int32,System.Int32,TerraFX.Interop.DirectX.IDWriteFontFace*,System.Single,System.UInt16,System.Byte,System.Boolean)
+  commentId: M:FluentGpu.Text.DirectWrite.DWriteTextShaper.Shape(System.Char*,System.Int32,System.Int32,TerraFX.Interop.DirectX.IDWriteFontFace*,System.Single,System.UInt16,System.Byte,System.Boolean)
+  isExternal: true
+  href: FluentGpu.Text.DirectWrite.DWriteTextShaper.html#FluentGpu_Text_DirectWrite_DWriteTextShaper_Shape_System_Char__System_Int32_System_Int32_TerraFX_Interop_DirectX_IDWriteFontFace__System_Single_System_UInt16_System_Byte_System_Boolean_
+  name: Shape(char*, int, int, IDWriteFontFace*, float, ushort, byte, bool)
+  nameWithType: DWriteTextShaper.Shape(char*, int, int, IDWriteFontFace*, float, ushort, byte, bool)
+  fullName: FluentGpu.Text.DirectWrite.DWriteTextShaper.Shape(char*, int, int, TerraFX.Interop.DirectX.IDWriteFontFace*, float, ushort, byte, bool)
+  nameWithType.vb: DWriteTextShaper.Shape(Char*, Integer, Integer, IDWriteFontFace*, Single, UShort, Byte, Boolean)
+  fullName.vb: FluentGpu.Text.DirectWrite.DWriteTextShaper.Shape(Char*, Integer, Integer, TerraFX.Interop.DirectX.IDWriteFontFace*, Single, UShort, Byte, Boolean)
+  name.vb: Shape(Char*, Integer, Integer, IDWriteFontFace*, Single, UShort, Byte, Boolean)
+  spec.csharp:
+  - uid: FluentGpu.Text.DirectWrite.DWriteTextShaper.Shape(System.Char*,System.Int32,System.Int32,TerraFX.Interop.DirectX.IDWriteFontFace*,System.Single,System.UInt16,System.Byte,System.Boolean)
+    name: Shape
+    href: FluentGpu.Text.DirectWrite.DWriteTextShaper.html#FluentGpu_Text_DirectWrite_DWriteTextShaper_Shape_System_Char__System_Int32_System_Int32_TerraFX_Interop_DirectX_IDWriteFontFace__System_Single_System_UInt16_System_Byte_System_Boolean_
+  - name: (
+  - uid: System.Char
+    name: char
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.char
+  - name: '*'
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: TerraFX.Interop.DirectX.IDWriteFontFace
+    name: IDWriteFontFace
+    isExternal: true
+  - name: '*'
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.UInt16
+    name: ushort
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.uint16
+  - name: ','
+  - name: " "
+  - uid: System.Byte
+    name: byte
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.byte
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Text.DirectWrite.DWriteTextShaper.Shape(System.Char*,System.Int32,System.Int32,TerraFX.Interop.DirectX.IDWriteFontFace*,System.Single,System.UInt16,System.Byte,System.Boolean)
+    name: Shape
+    href: FluentGpu.Text.DirectWrite.DWriteTextShaper.html#FluentGpu_Text_DirectWrite_DWriteTextShaper_Shape_System_Char__System_Int32_System_Int32_TerraFX_Interop_DirectX_IDWriteFontFace__System_Single_System_UInt16_System_Byte_System_Boolean_
+  - name: (
+  - uid: System.Char
+    name: Char
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.char
+  - name: '*'
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: TerraFX.Interop.DirectX.IDWriteFontFace
+    name: IDWriteFontFace
+    isExternal: true
+  - name: '*'
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.UInt16
+    name: UShort
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.uint16
+  - name: ','
+  - name: " "
+  - uid: System.Byte
+    name: Byte
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.byte
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+- uid: FluentGpu.Text.DirectWrite
+  commentId: N:FluentGpu.Text.DirectWrite
+  href: FluentGpu.html
+  name: FluentGpu.Text.DirectWrite
+  nameWithType: FluentGpu.Text.DirectWrite
+  fullName: FluentGpu.Text.DirectWrite
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+  - name: .
+  - uid: FluentGpu.Text.DirectWrite
+    name: DirectWrite
+    href: FluentGpu.Text.DirectWrite.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+  - name: .
+  - uid: FluentGpu.Text.DirectWrite
+    name: DirectWrite
+    href: FluentGpu.Text.DirectWrite.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.IDisposable
+  commentId: T:System.IDisposable
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.idisposable
+  name: IDisposable
+  nameWithType: IDisposable
+  fullName: System.IDisposable
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Text.DirectWrite.DWriteTextShaper.#ctor*
+  commentId: Overload:FluentGpu.Text.DirectWrite.DWriteTextShaper.#ctor
+  href: FluentGpu.Text.DirectWrite.DWriteTextShaper.html#FluentGpu_Text_DirectWrite_DWriteTextShaper__ctor_TerraFX_Interop_DirectX_IDWriteFactory__
+  name: DWriteTextShaper
+  nameWithType: DWriteTextShaper.DWriteTextShaper
+  fullName: FluentGpu.Text.DirectWrite.DWriteTextShaper.DWriteTextShaper
+  nameWithType.vb: DWriteTextShaper.New
+  fullName.vb: FluentGpu.Text.DirectWrite.DWriteTextShaper.New
+  name.vb: New
+- uid: TerraFX.Interop.DirectX.IDWriteFactory*
+  isExternal: true
+  name: IDWriteFactory*
+  nameWithType: IDWriteFactory*
+  fullName: TerraFX.Interop.DirectX.IDWriteFactory*
+  spec.csharp:
+  - uid: TerraFX.Interop.DirectX.IDWriteFactory
+    name: IDWriteFactory
+    isExternal: true
+  - name: '*'
+  spec.vb:
+  - uid: TerraFX.Interop.DirectX.IDWriteFactory
+    name: IDWriteFactory
+    isExternal: true
+  - name: '*'
+- uid: FluentGpu.Text.DirectWrite.DWriteTextShaper.Shape*
+  commentId: Overload:FluentGpu.Text.DirectWrite.DWriteTextShaper.Shape
+  href: FluentGpu.Text.DirectWrite.DWriteTextShaper.html#FluentGpu_Text_DirectWrite_DWriteTextShaper_Shape_System_Char__System_Int32_System_Int32_TerraFX_Interop_DirectX_IDWriteFontFace__System_Single_System_UInt16_System_Byte_System_Boolean_
+  name: Shape
+  nameWithType: DWriteTextShaper.Shape
+  fullName: FluentGpu.Text.DirectWrite.DWriteTextShaper.Shape
+- uid: System.Char*
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.char
+  name: char*
+  nameWithType: char*
+  fullName: char*
+  nameWithType.vb: Char*
+  fullName.vb: Char*
+  name.vb: Char*
+  spec.csharp:
+  - uid: System.Char
+    name: char
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.char
+  - name: '*'
+  spec.vb:
+  - uid: System.Char
+    name: Char
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.char
+  - name: '*'
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: TerraFX.Interop.DirectX.IDWriteFontFace*
+  isExternal: true
+  name: IDWriteFontFace*
+  nameWithType: IDWriteFontFace*
+  fullName: TerraFX.Interop.DirectX.IDWriteFontFace*
+  spec.csharp:
+  - uid: TerraFX.Interop.DirectX.IDWriteFontFace
+    name: IDWriteFontFace
+    isExternal: true
+  - name: '*'
+  spec.vb:
+  - uid: TerraFX.Interop.DirectX.IDWriteFontFace
+    name: IDWriteFontFace
+    isExternal: true
+  - name: '*'
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System.UInt16
+  commentId: T:System.UInt16
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.uint16
+  name: ushort
+  nameWithType: ushort
+  fullName: ushort
+  nameWithType.vb: UShort
+  fullName.vb: UShort
+  name.vb: UShort
+- uid: System.Byte
+  commentId: T:System.Byte
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.byte
+  name: byte
+  nameWithType: byte
+  fullName: byte
+  nameWithType.vb: Byte
+  fullName.vb: Byte
+  name.vb: Byte
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: System.ReadOnlySpan{FluentGpu.Text.GlyphPlacement}
+  commentId: T:System.ReadOnlySpan{FluentGpu.Text.GlyphPlacement}
+  parent: System
+  definition: System.ReadOnlySpan`1
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<GlyphPlacement>
+  nameWithType: ReadOnlySpan<GlyphPlacement>
+  fullName: System.ReadOnlySpan<FluentGpu.Text.GlyphPlacement>
+  nameWithType.vb: ReadOnlySpan(Of GlyphPlacement)
+  fullName.vb: System.ReadOnlySpan(Of FluentGpu.Text.GlyphPlacement)
+  name.vb: ReadOnlySpan(Of GlyphPlacement)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - uid: FluentGpu.Text.GlyphPlacement
+    name: GlyphPlacement
+    href: FluentGpu.Text.GlyphPlacement.html
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Text.GlyphPlacement
+    name: GlyphPlacement
+    href: FluentGpu.Text.GlyphPlacement.html
+  - name: )
+- uid: System.ReadOnlySpan`1
+  commentId: T:System.ReadOnlySpan`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<T>
+  nameWithType: ReadOnlySpan<T>
+  fullName: System.ReadOnlySpan<T>
+  nameWithType.vb: ReadOnlySpan(Of T)
+  fullName.vb: System.ReadOnlySpan(Of T)
+  name.vb: ReadOnlySpan(Of T)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Text.DirectWrite.DWriteTextShaper.SelfTest*
+  commentId: Overload:FluentGpu.Text.DirectWrite.DWriteTextShaper.SelfTest
+  href: FluentGpu.Text.DirectWrite.DWriteTextShaper.html#FluentGpu_Text_DirectWrite_DWriteTextShaper_SelfTest
+  name: SelfTest
+  nameWithType: DWriteTextShaper.SelfTest
+  fullName: FluentGpu.Text.DirectWrite.DWriteTextShaper.SelfTest
+- uid: FluentGpu.Text.DirectWrite.DWriteTextShaper.Dispose*
+  commentId: Overload:FluentGpu.Text.DirectWrite.DWriteTextShaper.Dispose
+  href: FluentGpu.Text.DirectWrite.DWriteTextShaper.html#FluentGpu_Text_DirectWrite_DWriteTextShaper_Dispose
+  name: Dispose
+  nameWithType: DWriteTextShaper.Dispose
+  fullName: FluentGpu.Text.DirectWrite.DWriteTextShaper.Dispose
+- uid: System.IDisposable.Dispose
+  commentId: M:System.IDisposable.Dispose
+  parent: System.IDisposable
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  name: Dispose()
+  nameWithType: IDisposable.Dispose()
+  fullName: System.IDisposable.Dispose()
+  spec.csharp:
+  - uid: System.IDisposable.Dispose
+    name: Dispose
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.IDisposable.Dispose
+    name: Dispose
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  - name: (
+  - name: )

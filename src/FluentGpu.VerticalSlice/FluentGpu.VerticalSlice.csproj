@@ -6,16 +6,10 @@
     <TieredCompilation>false</TieredCompilation>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
+  <!-- The validation harness runs the PORTABLE path only (Engine's headless backends + the portable control kit).
+       Regression guard: this project's transitive closure must contain NO TerraFX / Windows-backend reference. -->
   <ItemGroup>
-    <ProjectReference Include="..\FluentGpu.Foundation\FluentGpu.Foundation.csproj" />
-    <ProjectReference Include="..\FluentGpu.Dsl\FluentGpu.Dsl.csproj" />
-    <ProjectReference Include="..\FluentGpu.Hooks\FluentGpu.Hooks.csproj" />
+    <ProjectReference Include="..\FluentGpu.Engine\FluentGpu.Engine.csproj" />
     <ProjectReference Include="..\FluentGpu.Controls\FluentGpu.Controls.csproj" />
-    <ProjectReference Include="..\FluentGpu.Text\FluentGpu.Text.csproj" />
-    <ProjectReference Include="..\FluentGpu.Hosting\FluentGpu.Hosting.csproj" />
-    <ProjectReference Include="..\FluentGpu.Media\FluentGpu.Media.csproj" />
-    <ProjectReference Include="..\FluentGpu.Rhi.Headless\FluentGpu.Rhi.Headless.csproj" />
-    <ProjectReference Include="..\FluentGpu.Pal.Headless\FluentGpu.Pal.Headless.csproj" />
-    <ProjectReference Include="..\FluentGpu.Text.Headless\FluentGpu.Text.Headless.csproj" />
   </ItemGroup>
 </Project>

@@ -1,0 +1,655 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.DragSession
+  commentId: T:FluentGpu.Foundation.DragSession
+  id: DragSession
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.DragSession.Effect
+  - FluentGpu.Foundation.DragSession.Kind
+  - FluentGpu.Foundation.DragSession.Mods
+  - FluentGpu.Foundation.DragSession.OverTarget
+  - FluentGpu.Foundation.DragSession.Payload
+  - FluentGpu.Foundation.DragSession.Pointer
+  - FluentGpu.Foundation.DragSession.Position
+  - FluentGpu.Foundation.DragSession.Source
+  - FluentGpu.Foundation.DragSession.VelocityX
+  - FluentGpu.Foundation.DragSession.VelocityY
+  langs:
+  - csharp
+  - vb
+  name: DragSession
+  nameWithType: DragSession
+  fullName: FluentGpu.Foundation.DragSession
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DragSession
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 187
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    THE live drag session (E5-L2): ONE mutable instance owned by <code>Input.DragDropContext</code>, opened when an L1 drag
+
+    promotes on a chain carrying a <xref href="FluentGpu.Foundation.DragSource" data-throw-if-not-resolved="false"></xref> (payload resolved once), updated per pointer move, handed
+
+    to every <xref href="FluentGpu.Foundation.DropTargetSpec" data-throw-if-not-resolved="false"></xref> handler, and cleared (incl. the Payload GC edge) when the gesture ends.
+
+    Handlers copy what they keep — never hold the reference across gestures.
+  example: []
+  syntax:
+    content: public sealed class DragSession
+    content.vb: Public NotInheritable Class DragSession
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Foundation.DragSession.Payload
+  commentId: F:FluentGpu.Foundation.DragSession.Payload
+  id: Payload
+  parent: FluentGpu.Foundation.DragSession
+  langs:
+  - csharp
+  - vb
+  name: Payload
+  nameWithType: DragSession.Payload
+  fullName: FluentGpu.Foundation.DragSession.Payload
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Payload
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 190
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: The typed payload (resolved once at promotion from <xref href="FluentGpu.Foundation.DragSource.PayloadFactory" data-throw-if-not-resolved="false"></xref>).
+  example: []
+  syntax:
+    content: public object? Payload
+    return:
+      type: System.Object
+    content.vb: Public Payload As Object
+- uid: FluentGpu.Foundation.DragSession.Kind
+  commentId: F:FluentGpu.Foundation.DragSession.Kind
+  id: Kind
+  parent: FluentGpu.Foundation.DragSession
+  langs:
+  - csharp
+  - vb
+  name: Kind
+  nameWithType: DragSession.Kind
+  fullName: FluentGpu.Foundation.DragSession.Kind
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Kind
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 192
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: The source's kind discriminator (accept tests are string compares, never casts).
+  example: []
+  syntax:
+    content: public string Kind
+    return:
+      type: System.String
+    content.vb: Public Kind As String
+- uid: FluentGpu.Foundation.DragSession.Position
+  commentId: F:FluentGpu.Foundation.DragSession.Position
+  id: Position
+  parent: FluentGpu.Foundation.DragSession
+  langs:
+  - csharp
+  - vb
+  name: Position
+  nameWithType: DragSession.Position
+  fullName: FluentGpu.Foundation.DragSession.Position
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Position
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 194
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Pointer position, window space.
+  example: []
+  syntax:
+    content: public Point2 Position
+    return:
+      type: FluentGpu.Foundation.Point2
+    content.vb: Public Position As Point2
+- uid: FluentGpu.Foundation.DragSession.VelocityX
+  commentId: F:FluentGpu.Foundation.DragSession.VelocityX
+  id: VelocityX
+  parent: FluentGpu.Foundation.DragSession
+  langs:
+  - csharp
+  - vb
+  name: VelocityX
+  nameWithType: DragSession.VelocityX
+  fullName: FluentGpu.Foundation.DragSession.VelocityX
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: VelocityX
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 196
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Smoothed pointer velocity (px/s, ~50ms EMA — the L1 gesture's velocity).
+  example: []
+  syntax:
+    content: public float VelocityX
+    return:
+      type: System.Single
+    content.vb: Public VelocityX As Single
+- uid: FluentGpu.Foundation.DragSession.VelocityY
+  commentId: F:FluentGpu.Foundation.DragSession.VelocityY
+  id: VelocityY
+  parent: FluentGpu.Foundation.DragSession
+  langs:
+  - csharp
+  - vb
+  name: VelocityY
+  nameWithType: DragSession.VelocityY
+  fullName: FluentGpu.Foundation.DragSession.VelocityY
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: VelocityY
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 196
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Smoothed pointer velocity (px/s, ~50ms EMA — the L1 gesture's velocity).
+  example: []
+  syntax:
+    content: public float VelocityY
+    return:
+      type: System.Single
+    content.vb: Public VelocityY As Single
+- uid: FluentGpu.Foundation.DragSession.Source
+  commentId: F:FluentGpu.Foundation.DragSession.Source
+  id: Source
+  parent: FluentGpu.Foundation.DragSession
+  langs:
+  - csharp
+  - vb
+  name: Source
+  nameWithType: DragSession.Source
+  fullName: FluentGpu.Foundation.DragSession.Source
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Source
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 198
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: The node carrying the matched <xref href="FluentGpu.Foundation.DragSource" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: public NodeHandle Source
+    return:
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Public Source As NodeHandle
+- uid: FluentGpu.Foundation.DragSession.OverTarget
+  commentId: F:FluentGpu.Foundation.DragSession.OverTarget
+  id: OverTarget
+  parent: FluentGpu.Foundation.DragSession
+  langs:
+  - csharp
+  - vb
+  name: OverTarget
+  nameWithType: DragSession.OverTarget
+  fullName: FluentGpu.Foundation.DragSession.OverTarget
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OverTarget
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 200
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: The accepting target currently under the pointer (Null when over nothing that accepts).
+  example: []
+  syntax:
+    content: public NodeHandle OverTarget
+    return:
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Public OverTarget As NodeHandle
+- uid: FluentGpu.Foundation.DragSession.Effect
+  commentId: F:FluentGpu.Foundation.DragSession.Effect
+  id: Effect
+  parent: FluentGpu.Foundation.DragSession
+  langs:
+  - csharp
+  - vb
+  name: Effect
+  nameWithType: DragSession.Effect
+  fullName: FluentGpu.Foundation.DragSession.Effect
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Effect
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 202
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: 'Advisory effect (engine: Move while over an accepting target, None otherwise; targets may refine).'
+  example: []
+  syntax:
+    content: public DropEffect Effect
+    return:
+      type: FluentGpu.Foundation.DropEffect
+    content.vb: Public Effect As DropEffect
+- uid: FluentGpu.Foundation.DragSession.Mods
+  commentId: F:FluentGpu.Foundation.DragSession.Mods
+  id: Mods
+  parent: FluentGpu.Foundation.DragSession
+  langs:
+  - csharp
+  - vb
+  name: Mods
+  nameWithType: DragSession.Mods
+  fullName: FluentGpu.Foundation.DragSession.Mods
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Mods
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 203
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public KeyModifiers Mods
+    return:
+      type: FluentGpu.Foundation.KeyModifiers
+    content.vb: Public Mods As KeyModifiers
+- uid: FluentGpu.Foundation.DragSession.Pointer
+  commentId: F:FluentGpu.Foundation.DragSession.Pointer
+  id: Pointer
+  parent: FluentGpu.Foundation.DragSession
+  langs:
+  - csharp
+  - vb
+  name: Pointer
+  nameWithType: DragSession.Pointer
+  fullName: FluentGpu.Foundation.DragSession.Pointer
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Pointer
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 204
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public PointerKind Pointer
+    return:
+      type: FluentGpu.Foundation.PointerKind
+    content.vb: Public Pointer As PointerKind
+references:
+- uid: FluentGpu.Foundation.DragSource
+  commentId: T:FluentGpu.Foundation.DragSource
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.DragSource.html
+  name: DragSource
+  nameWithType: DragSource
+  fullName: FluentGpu.Foundation.DragSource
+- uid: FluentGpu.Foundation.DropTargetSpec
+  commentId: T:FluentGpu.Foundation.DropTargetSpec
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.DropTargetSpec.html
+  name: DropTargetSpec
+  nameWithType: DropTargetSpec
+  fullName: FluentGpu.Foundation.DropTargetSpec
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Foundation.DragSource.PayloadFactory
+  commentId: P:FluentGpu.Foundation.DragSource.PayloadFactory
+  href: FluentGpu.Foundation.DragSource.html#FluentGpu_Foundation_DragSource_PayloadFactory
+  name: PayloadFactory
+  nameWithType: DragSource.PayloadFactory
+  fullName: FluentGpu.Foundation.DragSource.PayloadFactory
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Foundation.Point2
+  commentId: T:FluentGpu.Foundation.Point2
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Point2.html
+  name: Point2
+  nameWithType: Point2
+  fullName: FluentGpu.Foundation.Point2
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.NodeHandle
+  commentId: T:FluentGpu.Foundation.NodeHandle
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.NodeHandle.html
+  name: NodeHandle
+  nameWithType: NodeHandle
+  fullName: FluentGpu.Foundation.NodeHandle
+- uid: FluentGpu.Foundation.DropEffect
+  commentId: T:FluentGpu.Foundation.DropEffect
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.DropEffect.html
+  name: DropEffect
+  nameWithType: DropEffect
+  fullName: FluentGpu.Foundation.DropEffect
+- uid: FluentGpu.Foundation.KeyModifiers
+  commentId: T:FluentGpu.Foundation.KeyModifiers
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.KeyModifiers.html
+  name: KeyModifiers
+  nameWithType: KeyModifiers
+  fullName: FluentGpu.Foundation.KeyModifiers
+- uid: FluentGpu.Foundation.PointerKind
+  commentId: T:FluentGpu.Foundation.PointerKind
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.PointerKind.html
+  name: PointerKind
+  nameWithType: PointerKind
+  fullName: FluentGpu.Foundation.PointerKind

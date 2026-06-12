@@ -1,0 +1,143 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.SwipeBehaviorOnInvoked
+  commentId: T:FluentGpu.Controls.SwipeBehaviorOnInvoked
+  id: SwipeBehaviorOnInvoked
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.SwipeBehaviorOnInvoked.Auto
+  - FluentGpu.Controls.SwipeBehaviorOnInvoked.Close
+  - FluentGpu.Controls.SwipeBehaviorOnInvoked.RemainOpen
+  langs:
+  - csharp
+  - vb
+  name: SwipeBehaviorOnInvoked
+  nameWithType: SwipeBehaviorOnInvoked
+  fullName: FluentGpu.Controls.SwipeBehaviorOnInvoked
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SwipeControl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SwipeBehaviorOnInvoked
+    path: ../../src/FluentGpu.Controls/SwipeControl.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>SwipeBehaviorOnInvoked</code> (SwipeControl.idl:11-16). Auto and Close both close the control after
+        the invoke (SwipeItem::InvokeSwipe closes on Close OR Auto — SwipeItem.cpp:40-45); RemainOpen keeps it revealed.
+  example: []
+  syntax:
+    content: 'public enum SwipeBehaviorOnInvoked : byte'
+    content.vb: Public Enum SwipeBehaviorOnInvoked As Byte
+- uid: FluentGpu.Controls.SwipeBehaviorOnInvoked.Auto
+  commentId: F:FluentGpu.Controls.SwipeBehaviorOnInvoked.Auto
+  id: Auto
+  parent: FluentGpu.Controls.SwipeBehaviorOnInvoked
+  langs:
+  - csharp
+  - vb
+  name: Auto
+  nameWithType: SwipeBehaviorOnInvoked.Auto
+  fullName: FluentGpu.Controls.SwipeBehaviorOnInvoked.Auto
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SwipeControl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Auto
+    path: ../../src/FluentGpu.Controls/SwipeControl.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Auto = 0
+    return:
+      type: FluentGpu.Controls.SwipeBehaviorOnInvoked
+- uid: FluentGpu.Controls.SwipeBehaviorOnInvoked.Close
+  commentId: F:FluentGpu.Controls.SwipeBehaviorOnInvoked.Close
+  id: Close
+  parent: FluentGpu.Controls.SwipeBehaviorOnInvoked
+  langs:
+  - csharp
+  - vb
+  name: Close
+  nameWithType: SwipeBehaviorOnInvoked.Close
+  fullName: FluentGpu.Controls.SwipeBehaviorOnInvoked.Close
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SwipeControl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Close
+    path: ../../src/FluentGpu.Controls/SwipeControl.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Close = 1
+    return:
+      type: FluentGpu.Controls.SwipeBehaviorOnInvoked
+- uid: FluentGpu.Controls.SwipeBehaviorOnInvoked.RemainOpen
+  commentId: F:FluentGpu.Controls.SwipeBehaviorOnInvoked.RemainOpen
+  id: RemainOpen
+  parent: FluentGpu.Controls.SwipeBehaviorOnInvoked
+  langs:
+  - csharp
+  - vb
+  name: RemainOpen
+  nameWithType: SwipeBehaviorOnInvoked.RemainOpen
+  fullName: FluentGpu.Controls.SwipeBehaviorOnInvoked.RemainOpen
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SwipeControl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RemainOpen
+    path: ../../src/FluentGpu.Controls/SwipeControl.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: RemainOpen = 2
+    return:
+      type: FluentGpu.Controls.SwipeBehaviorOnInvoked
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.SwipeBehaviorOnInvoked
+  commentId: T:FluentGpu.Controls.SwipeBehaviorOnInvoked
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.SwipeBehaviorOnInvoked.html
+  name: SwipeBehaviorOnInvoked
+  nameWithType: SwipeBehaviorOnInvoked
+  fullName: FluentGpu.Controls.SwipeBehaviorOnInvoked

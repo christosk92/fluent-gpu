@@ -1,0 +1,540 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.ObjectPool`1
+  commentId: T:FluentGpu.Foundation.ObjectPool`1
+  id: ObjectPool`1
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.ObjectPool`1.#ctor(System.Func{`0},System.Action{`0},System.Int32)
+  - FluentGpu.Foundation.ObjectPool`1.Rent
+  - FluentGpu.Foundation.ObjectPool`1.Return(`0)
+  langs:
+  - csharp
+  - vb
+  name: ObjectPool<T>
+  nameWithType: ObjectPool<T>
+  fullName: FluentGpu.Foundation.ObjectPool<T>
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Allocators.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ObjectPool
+    path: ../../src/FluentGpu.Foundation/Allocators.cs
+    startLine: 103
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Edge-only recycle pool for managed objects (Component / RenderContext). Cap-bounded.
+  example: []
+  syntax:
+    content: 'public sealed class ObjectPool<T> where T : class'
+    typeParameters:
+    - id: T
+    content.vb: Public NotInheritable Class ObjectPool(Of T As Class)
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+  nameWithType.vb: ObjectPool(Of T)
+  fullName.vb: FluentGpu.Foundation.ObjectPool(Of T)
+  name.vb: ObjectPool(Of T)
+- uid: FluentGpu.Foundation.ObjectPool`1.#ctor(System.Func{`0},System.Action{`0},System.Int32)
+  commentId: M:FluentGpu.Foundation.ObjectPool`1.#ctor(System.Func{`0},System.Action{`0},System.Int32)
+  id: '#ctor(System.Func{`0},System.Action{`0},System.Int32)'
+  parent: FluentGpu.Foundation.ObjectPool`1
+  langs:
+  - csharp
+  - vb
+  name: ObjectPool(Func<T>, Action<T>?, int)
+  nameWithType: ObjectPool<T>.ObjectPool(Func<T>, Action<T>?, int)
+  fullName: FluentGpu.Foundation.ObjectPool<T>.ObjectPool(System.Func<T>, System.Action<T>?, int)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Allocators.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/Allocators.cs
+    startLine: 110
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public ObjectPool(Func<T> factory, Action<T>? reset = null, int cap = 32)
+    parameters:
+    - id: factory
+      type: System.Func{{T}}
+    - id: reset
+      type: System.Action{{T}}
+    - id: cap
+      type: System.Int32
+    content.vb: Public Sub New(factory As Func(Of T), reset As Action(Of T) = Nothing, cap As Integer = 32)
+  overload: FluentGpu.Foundation.ObjectPool`1.#ctor*
+  nameWithType.vb: ObjectPool(Of T).New(Func(Of T), Action(Of T), Integer)
+  fullName.vb: FluentGpu.Foundation.ObjectPool(Of T).New(System.Func(Of T), System.Action(Of T), Integer)
+  name.vb: New(Func(Of T), Action(Of T), Integer)
+- uid: FluentGpu.Foundation.ObjectPool`1.Rent
+  commentId: M:FluentGpu.Foundation.ObjectPool`1.Rent
+  id: Rent
+  parent: FluentGpu.Foundation.ObjectPool`1
+  langs:
+  - csharp
+  - vb
+  name: Rent()
+  nameWithType: ObjectPool<T>.Rent()
+  fullName: FluentGpu.Foundation.ObjectPool<T>.Rent()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Allocators.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Rent
+    path: ../../src/FluentGpu.Foundation/Allocators.cs
+    startLine: 117
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public T Rent()
+    return:
+      type: '{T}'
+    content.vb: Public Function Rent() As T
+  overload: FluentGpu.Foundation.ObjectPool`1.Rent*
+  nameWithType.vb: ObjectPool(Of T).Rent()
+  fullName.vb: FluentGpu.Foundation.ObjectPool(Of T).Rent()
+- uid: FluentGpu.Foundation.ObjectPool`1.Return(`0)
+  commentId: M:FluentGpu.Foundation.ObjectPool`1.Return(`0)
+  id: Return(`0)
+  parent: FluentGpu.Foundation.ObjectPool`1
+  langs:
+  - csharp
+  - vb
+  name: Return(T)
+  nameWithType: ObjectPool<T>.Return(T)
+  fullName: FluentGpu.Foundation.ObjectPool<T>.Return(T)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Allocators.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Return
+    path: ../../src/FluentGpu.Foundation/Allocators.cs
+    startLine: 119
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public void Return(T item)
+    parameters:
+    - id: item
+      type: '{T}'
+    content.vb: Public Sub [Return](item As T)
+  overload: FluentGpu.Foundation.ObjectPool`1.Return*
+  nameWithType.vb: ObjectPool(Of T).Return(T)
+  fullName.vb: FluentGpu.Foundation.ObjectPool(Of T).Return(T)
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Foundation.ObjectPool`1.#ctor*
+  commentId: Overload:FluentGpu.Foundation.ObjectPool`1.#ctor
+  href: FluentGpu.Foundation.ObjectPool-1.html#FluentGpu_Foundation_ObjectPool_1__ctor_System_Func__0__System_Action__0__System_Int32_
+  name: ObjectPool
+  nameWithType: ObjectPool<T>.ObjectPool
+  fullName: FluentGpu.Foundation.ObjectPool<T>.ObjectPool
+  nameWithType.vb: ObjectPool(Of T).New
+  fullName.vb: FluentGpu.Foundation.ObjectPool(Of T).New
+  name.vb: New
+- uid: System.Func{{T}}
+  commentId: T:System.Func{`0}
+  parent: System
+  definition: System.Func`1
+  href: https://learn.microsoft.com/dotnet/api/system.func-1
+  name: Func<T>
+  nameWithType: Func<T>
+  fullName: System.Func<T>
+  nameWithType.vb: Func(Of T)
+  fullName.vb: System.Func(Of T)
+  name.vb: Func(Of T)
+  spec.csharp:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Action{{T}}
+  commentId: T:System.Action{``0}
+  parent: System
+  definition: System.Action`1
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<T>
+  nameWithType: Action<T>
+  fullName: System.Action<T>
+  nameWithType.vb: Action(Of T)
+  fullName.vb: System.Action(Of T)
+  name.vb: Action(Of T)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: System.Func`1
+  commentId: T:System.Func`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.func-1
+  name: Func<TResult>
+  nameWithType: Func<TResult>
+  fullName: System.Func<TResult>
+  nameWithType.vb: Func(Of TResult)
+  fullName.vb: System.Func(Of TResult)
+  name.vb: Func(Of TResult)
+  spec.csharp:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: <
+  - name: TResult
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: TResult
+  - name: )
+- uid: System.Action`1
+  commentId: T:System.Action`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<T>
+  nameWithType: Action<T>
+  fullName: System.Action<T>
+  nameWithType.vb: Action(Of T)
+  fullName.vb: System.Action(Of T)
+  name.vb: Action(Of T)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Foundation.ObjectPool`1.Rent*
+  commentId: Overload:FluentGpu.Foundation.ObjectPool`1.Rent
+  href: FluentGpu.Foundation.ObjectPool-1.html#FluentGpu_Foundation_ObjectPool_1_Rent
+  name: Rent
+  nameWithType: ObjectPool<T>.Rent
+  fullName: FluentGpu.Foundation.ObjectPool<T>.Rent
+  nameWithType.vb: ObjectPool(Of T).Rent
+  fullName.vb: FluentGpu.Foundation.ObjectPool(Of T).Rent
+- uid: '{T}'
+  commentId: '!:T'
+  definition: T
+  name: T
+  nameWithType: T
+  fullName: T
+- uid: T
+  name: T
+  nameWithType: T
+  fullName: T
+- uid: FluentGpu.Foundation.ObjectPool`1.Return*
+  commentId: Overload:FluentGpu.Foundation.ObjectPool`1.Return
+  href: FluentGpu.Foundation.ObjectPool-1.html#FluentGpu_Foundation_ObjectPool_1_Return__0_
+  name: Return
+  nameWithType: ObjectPool<T>.Return
+  fullName: FluentGpu.Foundation.ObjectPool<T>.Return
+  nameWithType.vb: ObjectPool(Of T).Return
+  fullName.vb: FluentGpu.Foundation.ObjectPool(Of T).Return

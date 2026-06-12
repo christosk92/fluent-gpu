@@ -1,0 +1,1124 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Scene.ScrollState
+  commentId: T:FluentGpu.Scene.ScrollState
+  id: ScrollState
+  parent: FluentGpu.Scene
+  children:
+  - FluentGpu.Scene.ScrollState.AnchorIndex
+  - FluentGpu.Scene.ScrollState.AnchorKey
+  - FluentGpu.Scene.ScrollState.AnchorViewportDelta
+  - FluentGpu.Scene.ScrollState.ContentH
+  - FluentGpu.Scene.ScrollState.ContentNode
+  - FluentGpu.Scene.ScrollState.ContentSized
+  - FluentGpu.Scene.ScrollState.ContentW
+  - FluentGpu.Scene.ScrollState.Default
+  - FluentGpu.Scene.ScrollState.ExpandT
+  - FluentGpu.Scene.ScrollState.ExtentTableRef
+  - FluentGpu.Scene.ScrollState.FadeT
+  - FluentGpu.Scene.ScrollState.FirstRealized
+  - FluentGpu.Scene.ScrollState.IdleMs
+  - FluentGpu.Scene.ScrollState.ItemCount
+  - FluentGpu.Scene.ScrollState.LastRealized
+  - FluentGpu.Scene.ScrollState.Layout
+  - FluentGpu.Scene.ScrollState.OffsetX
+  - FluentGpu.Scene.ScrollState.OffsetY
+  - FluentGpu.Scene.ScrollState.Orientation
+  - FluentGpu.Scene.ScrollState.Overscan
+  - FluentGpu.Scene.ScrollState.PointerOver
+  - FluentGpu.Scene.ScrollState.PointerOverScrollbar
+  - FluentGpu.Scene.ScrollState.TargetX
+  - FluentGpu.Scene.ScrollState.TargetY
+  - FluentGpu.Scene.ScrollState.ViewportH
+  - FluentGpu.Scene.ScrollState.ViewportW
+  langs:
+  - csharp
+  - vb
+  name: ScrollState
+  nameWithType: ScrollState
+  fullName: FluentGpu.Scene.ScrollState
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ScrollState
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 160
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    Scroll + virtualization state for a viewport node (marked <code>NodeFlags.Scrollable</code>). There are O(viewports)
+
+    of these — not one per node — so the store keeps them in a sparse side-table keyed by node index, not a parallel
+
+    column. Ownership (layout.md §6 / architecture-spec §5.5): <b>Input</b> owns <code>Offset*</code> (clamped to the
+
+    published content); <b>Layout</b> publishes <code>Content*</code>/<code>Viewport*</code>; the <b>virtualizer</b> owns the
+
+    <code>Item*</code> / realized-range / anchor fields. Scroll is layout-free: the <code>-ScrollOffset</code> translation is the
+
+    <xref href="FluentGpu.Scene.ScrollState.ContentNode" data-throw-if-not-resolved="false"></xref>'s <code>LocalTransform</code>, never a relayout.
+  example: []
+  syntax:
+    content: public struct ScrollState
+    content.vb: Public Structure ScrollState
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Scene.ScrollState.OffsetX
+  commentId: F:FluentGpu.Scene.ScrollState.OffsetX
+  id: OffsetX
+  parent: FluentGpu.Scene.ScrollState
+  langs:
+  - csharp
+  - vb
+  name: OffsetX
+  nameWithType: ScrollState.OffsetX
+  fullName: FluentGpu.Scene.ScrollState.OffsetX
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffsetX
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 162
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float OffsetX
+    return:
+      type: System.Single
+    content.vb: Public OffsetX As Single
+- uid: FluentGpu.Scene.ScrollState.OffsetY
+  commentId: F:FluentGpu.Scene.ScrollState.OffsetY
+  id: OffsetY
+  parent: FluentGpu.Scene.ScrollState
+  langs:
+  - csharp
+  - vb
+  name: OffsetY
+  nameWithType: ScrollState.OffsetY
+  fullName: FluentGpu.Scene.ScrollState.OffsetY
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffsetY
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 162
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float OffsetY
+    return:
+      type: System.Single
+    content.vb: Public OffsetY As Single
+- uid: FluentGpu.Scene.ScrollState.TargetX
+  commentId: F:FluentGpu.Scene.ScrollState.TargetX
+  id: TargetX
+  parent: FluentGpu.Scene.ScrollState
+  langs:
+  - csharp
+  - vb
+  name: TargetX
+  nameWithType: ScrollState.TargetX
+  fullName: FluentGpu.Scene.ScrollState.TargetX
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TargetX
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 163
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float TargetX
+    return:
+      type: System.Single
+    content.vb: Public TargetX As Single
+- uid: FluentGpu.Scene.ScrollState.TargetY
+  commentId: F:FluentGpu.Scene.ScrollState.TargetY
+  id: TargetY
+  parent: FluentGpu.Scene.ScrollState
+  langs:
+  - csharp
+  - vb
+  name: TargetY
+  nameWithType: ScrollState.TargetY
+  fullName: FluentGpu.Scene.ScrollState.TargetY
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TargetY
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 163
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float TargetY
+    return:
+      type: System.Single
+    content.vb: Public TargetY As Single
+- uid: FluentGpu.Scene.ScrollState.ContentW
+  commentId: F:FluentGpu.Scene.ScrollState.ContentW
+  id: ContentW
+  parent: FluentGpu.Scene.ScrollState
+  langs:
+  - csharp
+  - vb
+  name: ContentW
+  nameWithType: ScrollState.ContentW
+  fullName: FluentGpu.Scene.ScrollState.ContentW
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ContentW
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 164
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float ContentW
+    return:
+      type: System.Single
+    content.vb: Public ContentW As Single
+- uid: FluentGpu.Scene.ScrollState.ContentH
+  commentId: F:FluentGpu.Scene.ScrollState.ContentH
+  id: ContentH
+  parent: FluentGpu.Scene.ScrollState
+  langs:
+  - csharp
+  - vb
+  name: ContentH
+  nameWithType: ScrollState.ContentH
+  fullName: FluentGpu.Scene.ScrollState.ContentH
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ContentH
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 164
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float ContentH
+    return:
+      type: System.Single
+    content.vb: Public ContentH As Single
+- uid: FluentGpu.Scene.ScrollState.ViewportW
+  commentId: F:FluentGpu.Scene.ScrollState.ViewportW
+  id: ViewportW
+  parent: FluentGpu.Scene.ScrollState
+  langs:
+  - csharp
+  - vb
+  name: ViewportW
+  nameWithType: ScrollState.ViewportW
+  fullName: FluentGpu.Scene.ScrollState.ViewportW
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ViewportW
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 165
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float ViewportW
+    return:
+      type: System.Single
+    content.vb: Public ViewportW As Single
+- uid: FluentGpu.Scene.ScrollState.ViewportH
+  commentId: F:FluentGpu.Scene.ScrollState.ViewportH
+  id: ViewportH
+  parent: FluentGpu.Scene.ScrollState
+  langs:
+  - csharp
+  - vb
+  name: ViewportH
+  nameWithType: ScrollState.ViewportH
+  fullName: FluentGpu.Scene.ScrollState.ViewportH
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ViewportH
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 165
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float ViewportH
+    return:
+      type: System.Single
+    content.vb: Public ViewportH As Single
+- uid: FluentGpu.Scene.ScrollState.Orientation
+  commentId: F:FluentGpu.Scene.ScrollState.Orientation
+  id: Orientation
+  parent: FluentGpu.Scene.ScrollState
+  langs:
+  - csharp
+  - vb
+  name: Orientation
+  nameWithType: ScrollState.Orientation
+  fullName: FluentGpu.Scene.ScrollState.Orientation
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Orientation
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 166
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public byte Orientation
+    return:
+      type: System.Byte
+    content.vb: Public Orientation As Byte
+- uid: FluentGpu.Scene.ScrollState.ContentSized
+  commentId: F:FluentGpu.Scene.ScrollState.ContentSized
+  id: ContentSized
+  parent: FluentGpu.Scene.ScrollState
+  langs:
+  - csharp
+  - vb
+  name: ContentSized
+  nameWithType: ScrollState.ContentSized
+  fullName: FluentGpu.Scene.ScrollState.ContentSized
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ContentSized
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 167
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public bool ContentSized
+    return:
+      type: System.Boolean
+    content.vb: Public ContentSized As Boolean
+- uid: FluentGpu.Scene.ScrollState.FadeT
+  commentId: F:FluentGpu.Scene.ScrollState.FadeT
+  id: FadeT
+  parent: FluentGpu.Scene.ScrollState
+  langs:
+  - csharp
+  - vb
+  name: FadeT
+  nameWithType: ScrollState.FadeT
+  fullName: FluentGpu.Scene.ScrollState.FadeT
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FadeT
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 168
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float FadeT
+    return:
+      type: System.Single
+    content.vb: Public FadeT As Single
+- uid: FluentGpu.Scene.ScrollState.ExpandT
+  commentId: F:FluentGpu.Scene.ScrollState.ExpandT
+  id: ExpandT
+  parent: FluentGpu.Scene.ScrollState
+  langs:
+  - csharp
+  - vb
+  name: ExpandT
+  nameWithType: ScrollState.ExpandT
+  fullName: FluentGpu.Scene.ScrollState.ExpandT
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ExpandT
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 169
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float ExpandT
+    return:
+      type: System.Single
+    content.vb: Public ExpandT As Single
+- uid: FluentGpu.Scene.ScrollState.IdleMs
+  commentId: F:FluentGpu.Scene.ScrollState.IdleMs
+  id: IdleMs
+  parent: FluentGpu.Scene.ScrollState
+  langs:
+  - csharp
+  - vb
+  name: IdleMs
+  nameWithType: ScrollState.IdleMs
+  fullName: FluentGpu.Scene.ScrollState.IdleMs
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IdleMs
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 170
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float IdleMs
+    return:
+      type: System.Single
+    content.vb: Public IdleMs As Single
+- uid: FluentGpu.Scene.ScrollState.PointerOver
+  commentId: F:FluentGpu.Scene.ScrollState.PointerOver
+  id: PointerOver
+  parent: FluentGpu.Scene.ScrollState
+  langs:
+  - csharp
+  - vb
+  name: PointerOver
+  nameWithType: ScrollState.PointerOver
+  fullName: FluentGpu.Scene.ScrollState.PointerOver
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PointerOver
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 171
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public bool PointerOver
+    return:
+      type: System.Boolean
+    content.vb: Public PointerOver As Boolean
+- uid: FluentGpu.Scene.ScrollState.PointerOverScrollbar
+  commentId: F:FluentGpu.Scene.ScrollState.PointerOverScrollbar
+  id: PointerOverScrollbar
+  parent: FluentGpu.Scene.ScrollState
+  langs:
+  - csharp
+  - vb
+  name: PointerOverScrollbar
+  nameWithType: ScrollState.PointerOverScrollbar
+  fullName: FluentGpu.Scene.ScrollState.PointerOverScrollbar
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PointerOverScrollbar
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 172
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public bool PointerOverScrollbar
+    return:
+      type: System.Boolean
+    content.vb: Public PointerOverScrollbar As Boolean
+- uid: FluentGpu.Scene.ScrollState.ItemCount
+  commentId: F:FluentGpu.Scene.ScrollState.ItemCount
+  id: ItemCount
+  parent: FluentGpu.Scene.ScrollState
+  langs:
+  - csharp
+  - vb
+  name: ItemCount
+  nameWithType: ScrollState.ItemCount
+  fullName: FluentGpu.Scene.ScrollState.ItemCount
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ItemCount
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 175
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public int ItemCount
+    return:
+      type: System.Int32
+    content.vb: Public ItemCount As Integer
+- uid: FluentGpu.Scene.ScrollState.Layout
+  commentId: F:FluentGpu.Scene.ScrollState.Layout
+  id: Layout
+  parent: FluentGpu.Scene.ScrollState
+  langs:
+  - csharp
+  - vb
+  name: Layout
+  nameWithType: ScrollState.Layout
+  fullName: FluentGpu.Scene.ScrollState.Layout
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Layout
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 176
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public IVirtualLayout? Layout
+    return:
+      type: FluentGpu.Scene.IVirtualLayout
+    content.vb: Public Layout As IVirtualLayout
+- uid: FluentGpu.Scene.ScrollState.Overscan
+  commentId: F:FluentGpu.Scene.ScrollState.Overscan
+  id: Overscan
+  parent: FluentGpu.Scene.ScrollState
+  langs:
+  - csharp
+  - vb
+  name: Overscan
+  nameWithType: ScrollState.Overscan
+  fullName: FluentGpu.Scene.ScrollState.Overscan
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Overscan
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 178
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public int Overscan
+    return:
+      type: System.Int32
+    content.vb: Public Overscan As Integer
+- uid: FluentGpu.Scene.ScrollState.FirstRealized
+  commentId: F:FluentGpu.Scene.ScrollState.FirstRealized
+  id: FirstRealized
+  parent: FluentGpu.Scene.ScrollState
+  langs:
+  - csharp
+  - vb
+  name: FirstRealized
+  nameWithType: ScrollState.FirstRealized
+  fullName: FluentGpu.Scene.ScrollState.FirstRealized
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FirstRealized
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 179
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public int FirstRealized
+    return:
+      type: System.Int32
+    content.vb: Public FirstRealized As Integer
+- uid: FluentGpu.Scene.ScrollState.LastRealized
+  commentId: F:FluentGpu.Scene.ScrollState.LastRealized
+  id: LastRealized
+  parent: FluentGpu.Scene.ScrollState
+  langs:
+  - csharp
+  - vb
+  name: LastRealized
+  nameWithType: ScrollState.LastRealized
+  fullName: FluentGpu.Scene.ScrollState.LastRealized
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LastRealized
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 179
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public int LastRealized
+    return:
+      type: System.Int32
+    content.vb: Public LastRealized As Integer
+- uid: FluentGpu.Scene.ScrollState.ExtentTableRef
+  commentId: F:FluentGpu.Scene.ScrollState.ExtentTableRef
+  id: ExtentTableRef
+  parent: FluentGpu.Scene.ScrollState
+  langs:
+  - csharp
+  - vb
+  name: ExtentTableRef
+  nameWithType: ScrollState.ExtentTableRef
+  fullName: FluentGpu.Scene.ScrollState.ExtentTableRef
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ExtentTableRef
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 180
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public int ExtentTableRef
+    return:
+      type: System.Int32
+    content.vb: Public ExtentTableRef As Integer
+- uid: FluentGpu.Scene.ScrollState.ContentNode
+  commentId: F:FluentGpu.Scene.ScrollState.ContentNode
+  id: ContentNode
+  parent: FluentGpu.Scene.ScrollState
+  langs:
+  - csharp
+  - vb
+  name: ContentNode
+  nameWithType: ScrollState.ContentNode
+  fullName: FluentGpu.Scene.ScrollState.ContentNode
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ContentNode
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 181
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public NodeHandle ContentNode
+    return:
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Public ContentNode As NodeHandle
+- uid: FluentGpu.Scene.ScrollState.AnchorIndex
+  commentId: F:FluentGpu.Scene.ScrollState.AnchorIndex
+  id: AnchorIndex
+  parent: FluentGpu.Scene.ScrollState
+  langs:
+  - csharp
+  - vb
+  name: AnchorIndex
+  nameWithType: ScrollState.AnchorIndex
+  fullName: FluentGpu.Scene.ScrollState.AnchorIndex
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AnchorIndex
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 184
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public int AnchorIndex
+    return:
+      type: System.Int32
+    content.vb: Public AnchorIndex As Integer
+- uid: FluentGpu.Scene.ScrollState.AnchorKey
+  commentId: F:FluentGpu.Scene.ScrollState.AnchorKey
+  id: AnchorKey
+  parent: FluentGpu.Scene.ScrollState
+  langs:
+  - csharp
+  - vb
+  name: AnchorKey
+  nameWithType: ScrollState.AnchorKey
+  fullName: FluentGpu.Scene.ScrollState.AnchorKey
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AnchorKey
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 185
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public StringId AnchorKey
+    return:
+      type: FluentGpu.Foundation.StringId
+    content.vb: Public AnchorKey As StringId
+- uid: FluentGpu.Scene.ScrollState.AnchorViewportDelta
+  commentId: F:FluentGpu.Scene.ScrollState.AnchorViewportDelta
+  id: AnchorViewportDelta
+  parent: FluentGpu.Scene.ScrollState
+  langs:
+  - csharp
+  - vb
+  name: AnchorViewportDelta
+  nameWithType: ScrollState.AnchorViewportDelta
+  fullName: FluentGpu.Scene.ScrollState.AnchorViewportDelta
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AnchorViewportDelta
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 186
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float AnchorViewportDelta
+    return:
+      type: System.Single
+    content.vb: Public AnchorViewportDelta As Single
+- uid: FluentGpu.Scene.ScrollState.Default
+  commentId: P:FluentGpu.Scene.ScrollState.Default
+  id: Default
+  parent: FluentGpu.Scene.ScrollState
+  langs:
+  - csharp
+  - vb
+  name: Default
+  nameWithType: ScrollState.Default
+  fullName: FluentGpu.Scene.ScrollState.Default
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Default
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 188
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public static ScrollState Default { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Scene.ScrollState
+    content.vb: Public Shared ReadOnly Property [Default] As ScrollState
+  overload: FluentGpu.Scene.ScrollState.Default*
+references:
+- uid: FluentGpu.Scene.ScrollState.ContentNode
+  commentId: F:FluentGpu.Scene.ScrollState.ContentNode
+  href: FluentGpu.Scene.ScrollState.html#FluentGpu_Scene_ScrollState_ContentNode
+  name: ContentNode
+  nameWithType: ScrollState.ContentNode
+  fullName: FluentGpu.Scene.ScrollState.ContentNode
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System.Byte
+  commentId: T:System.Byte
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.byte
+  name: byte
+  nameWithType: byte
+  fullName: byte
+  nameWithType.vb: Byte
+  fullName.vb: Byte
+  name.vb: Byte
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Scene.IVirtualLayout
+  commentId: T:FluentGpu.Scene.IVirtualLayout
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.IVirtualLayout.html
+  name: IVirtualLayout
+  nameWithType: IVirtualLayout
+  fullName: FluentGpu.Scene.IVirtualLayout
+- uid: FluentGpu.Foundation.NodeHandle
+  commentId: T:FluentGpu.Foundation.NodeHandle
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.NodeHandle.html
+  name: NodeHandle
+  nameWithType: NodeHandle
+  fullName: FluentGpu.Foundation.NodeHandle
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Foundation.StringId
+  commentId: T:FluentGpu.Foundation.StringId
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.StringId.html
+  name: StringId
+  nameWithType: StringId
+  fullName: FluentGpu.Foundation.StringId
+- uid: FluentGpu.Scene.ScrollState.Default*
+  commentId: Overload:FluentGpu.Scene.ScrollState.Default
+  href: FluentGpu.Scene.ScrollState.html#FluentGpu_Scene_ScrollState_Default
+  name: Default
+  nameWithType: ScrollState.Default
+  fullName: FluentGpu.Scene.ScrollState.Default
+- uid: FluentGpu.Scene.ScrollState
+  commentId: T:FluentGpu.Scene.ScrollState
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ScrollState.html
+  name: ScrollState
+  nameWithType: ScrollState
+  fullName: FluentGpu.Scene.ScrollState

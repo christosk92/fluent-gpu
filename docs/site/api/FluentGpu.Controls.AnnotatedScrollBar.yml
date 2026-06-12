@@ -1,0 +1,1149 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.AnnotatedScrollBar
+  commentId: T:FluentGpu.Controls.AnnotatedScrollBar
+  id: AnnotatedScrollBar
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.AnnotatedScrollBar.Create(System.Collections.Generic.IReadOnlyList{System.ValueTuple{System.String,System.Single}},FluentGpu.Signals.Signal{System.Single},System.Action{System.Single,FluentGpu.Controls.AnnotatedScrollBarScrollKind},System.Single,System.Single,System.Func{System.Single,System.Boolean},System.Func{System.Single,System.String},FluentGpu.Dsl.TemplateParts)
+  - FluentGpu.Controls.AnnotatedScrollBar.Create(System.Collections.Generic.IReadOnlyList{System.ValueTuple{System.String,System.Single}},System.Single,FluentGpu.Dsl.TemplateParts)
+  - FluentGpu.Controls.AnnotatedScrollBar.Create(System.Collections.Generic.IReadOnlyList{System.ValueTuple{System.String,System.Single}},System.Single,System.Action{System.Single,FluentGpu.Controls.AnnotatedScrollBarScrollKind},System.Single,System.Single,System.Func{System.Single,System.Boolean},System.Func{System.Single,System.String},FluentGpu.Dsl.TemplateParts)
+  - FluentGpu.Controls.AnnotatedScrollBar.PartGhost
+  - FluentGpu.Controls.AnnotatedScrollBar.PartLabels
+  - FluentGpu.Controls.AnnotatedScrollBar.PartRail
+  - FluentGpu.Controls.AnnotatedScrollBar.PartThumb
+  - FluentGpu.Controls.AnnotatedScrollBar.PartTip
+  langs:
+  - csharp
+  - vb
+  name: AnnotatedScrollBar
+  nameWithType: AnnotatedScrollBar
+  fullName: FluentGpu.Controls.AnnotatedScrollBar
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AnnotatedScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AnnotatedScrollBar
+    path: ../../src/FluentGpu.Controls/AnnotatedScrollBar.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>AnnotatedScrollBar</code> (controls\dev\AnnotatedScrollBar) — the jump-list rail: a column of right-aligned
+
+    labels beside a thin accent thumb, with CLICK-TO-JUMP on the rail, thumb drag, and repeat-hold increment/decrement
+
+    buttons. Template facts (AnnotatedScrollBar.xaml + _themeresources.xaml; the _perf2026 variant differs only in
+
+    storyboard→setter form, identical values):
+
+    • Control MinWidth = LabelsGridMinWidth 44 (xaml:4, :37) — the control hugs ~44 unless its host stretches it.
+
+    • Root grid rows: increment RepeatButton on TOP (glyph EDDB, HorizontalAlignment=Right — xaml:31-39), the
+      vertical grid (star), decrement RepeatButton on the BOTTOM (glyph EDDC — xaml:94-102).
+    • Thumb = 30×3 @ r1.5 (ThumbWidth :36 / ThumbHeight :35 / ThumbCornerRadius :41), VerticalThumbBrush =
+      AccentFillColorDefault (:11/:21), HorizontalAlignment=Right + VerticalAlignment=Top at the scroll position
+      (xaml:84-92).
+    • Ghost thumb = same geometry in AccentFillColorDisabled (PART_VerticalThumbGhost xaml:74-83) — the hover preview
+      of where a rail click would land.
+    • PART_LabelsGrid: HorizontalAlignment=Center, MinWidth 44, transparent background (xaml:41-45); the
+      LabelTemplate is a right-aligned BodyTextBlockStyle TextBlock (14px Normal — TextBlock_themeresources.xaml:4/:23)
+      with Margin 0,-5,0,-2 (xaml:8-19).
+    • PART_ToolTipRail: a 1px right-aligned tooltip anchor rail (xaml:46) whose ToolTip is Placement=Top,
+      MaxWidth 360 / MinHeight 40 (:38/:39), BaseTextBlockStyle content (14px SemiBold) — modeled by
+      <code>detailLabel</code>: the resolved text floats in a chip above the pointer (the DetailLabelRequested seam).
+    • ScrollButtonStyle: MinWidth/MinHeight 16 (:43-44), FontSize 8 (:40/:51), CornerRadius = ControlCornerRadius 4
+      (:49), background SubtleFillColorTransparent in EVERY state (:5; the :56-87 visual states recolor ONLY the
+      foreground: TextFillColorPrimary → Secondary hover → Tertiary pressed → Disabled, :6-9), IsTabStop=False
+      (xaml:37/:100) — each steps by <code>SmallChange</code> (default ViewportSize / ratio —
+      AnnotatedScrollBar.cpp:484-489 EnsureSmallChangeValue).
+    • Rail click / drag / buttons raise <code>Scrolling</code> with the offset + kind, CANCELABLE
+      (AnnotatedScrollBarScrollingEventArgs.Cancel; cpp:960+ RaiseScrolling) — modeled by the
+      <code>onScrolling</code> filter returning false to cancel.
+    ENGINE SEMANTIC (the bug this file once had): inside a ZStack, children land at the LEFT edge and
+
+    <code>AlignSelf</code> is the VERTICAL overlay placement — RIGHT alignment therefore uses a full-width row wrapper
+
+    (<code>Direction=0, Justify=FlexJustify.End</code>) per overlay part, never <code>AlignSelf</code>.
+
+    Thumb position rides a <code>TransformBind</code> on the position signal (compositor-instant, no re-render).
+  example: []
+  syntax:
+    content: public static class AnnotatedScrollBar
+    content.vb: Public Module AnnotatedScrollBar
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.MemberwiseClone
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.AnnotatedScrollBar.PartLabels
+  commentId: F:FluentGpu.Controls.AnnotatedScrollBar.PartLabels
+  id: PartLabels
+  parent: FluentGpu.Controls.AnnotatedScrollBar
+  langs:
+  - csharp
+  - vb
+  name: PartLabels
+  nameWithType: AnnotatedScrollBar.PartLabels
+  fullName: FluentGpu.Controls.AnnotatedScrollBar.PartLabels
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AnnotatedScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartLabels
+    path: ../../src/FluentGpu.Controls/AnnotatedScrollBar.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The labels grid (WinUI PART_LabelsGrid). Owned: Key, Children (the annotations slot — restructure
+        via the annotations list, restyle via this part).
+  example: []
+  syntax:
+    content: public const string PartLabels = "asb-labels"
+    return:
+      type: System.String
+    content.vb: Public Const PartLabels As String = "asb-labels"
+- uid: FluentGpu.Controls.AnnotatedScrollBar.PartRail
+  commentId: F:FluentGpu.Controls.AnnotatedScrollBar.PartRail
+  id: PartRail
+  parent: FluentGpu.Controls.AnnotatedScrollBar
+  langs:
+  - csharp
+  - vb
+  name: PartRail
+  nameWithType: AnnotatedScrollBar.PartRail
+  fullName: FluentGpu.Controls.AnnotatedScrollBar.PartRail
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AnnotatedScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartRail
+    path: ../../src/FluentGpu.Controls/AnnotatedScrollBar.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'The 1px right-aligned tooltip anchor rail row (WinUI PART_ToolTipRail). Owned: Key.'
+  example: []
+  syntax:
+    content: public const string PartRail = "asb-rail"
+    return:
+      type: System.String
+    content.vb: Public Const PartRail As String = "asb-rail"
+- uid: FluentGpu.Controls.AnnotatedScrollBar.PartGhost
+  commentId: F:FluentGpu.Controls.AnnotatedScrollBar.PartGhost
+  id: PartGhost
+  parent: FluentGpu.Controls.AnnotatedScrollBar
+  langs:
+  - csharp
+  - vb
+  name: PartGhost
+  nameWithType: AnnotatedScrollBar.PartGhost
+  fullName: FluentGpu.Controls.AnnotatedScrollBar.PartGhost
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AnnotatedScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartGhost
+    path: ../../src/FluentGpu.Controls/AnnotatedScrollBar.cs
+    startLine: 56
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The hover-preview ghost-thumb row (WinUI PART_VerticalThumbGhost; mounted only while hovering).
+        Owned: Key — the hover-tracking OffsetY is stock per-render placement a modifier sees and may override.
+  example: []
+  syntax:
+    content: public const string PartGhost = "asb-ghost"
+    return:
+      type: System.String
+    content.vb: Public Const PartGhost As String = "asb-ghost"
+- uid: FluentGpu.Controls.AnnotatedScrollBar.PartTip
+  commentId: F:FluentGpu.Controls.AnnotatedScrollBar.PartTip
+  id: PartTip
+  parent: FluentGpu.Controls.AnnotatedScrollBar
+  langs:
+  - csharp
+  - vb
+  name: PartTip
+  nameWithType: AnnotatedScrollBar.PartTip
+  fullName: FluentGpu.Controls.AnnotatedScrollBar.PartTip
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AnnotatedScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartTip
+    path: ../../src/FluentGpu.Controls/AnnotatedScrollBar.cs
+    startLine: 59
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The hover detail-chip row (WinUI PART_DetailLabelToolTip; mounted while hovering with a
+        detailLabel). Owned: Key — same OffsetY note as <xref href="FluentGpu.Controls.AnnotatedScrollBar.PartGhost" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: public const string PartTip = "asb-tip"
+    return:
+      type: System.String
+    content.vb: Public Const PartTip As String = "asb-tip"
+- uid: FluentGpu.Controls.AnnotatedScrollBar.PartThumb
+  commentId: F:FluentGpu.Controls.AnnotatedScrollBar.PartThumb
+  id: PartThumb
+  parent: FluentGpu.Controls.AnnotatedScrollBar
+  langs:
+  - csharp
+  - vb
+  name: PartThumb
+  nameWithType: AnnotatedScrollBar.PartThumb
+  fullName: FluentGpu.Controls.AnnotatedScrollBar.PartThumb
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AnnotatedScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartThumb
+    path: ../../src/FluentGpu.Controls/AnnotatedScrollBar.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The live accent-thumb row (WinUI PART_VerticalThumb). Owned: Key, TransformBind (the
+        compositor-bound scroll position).
+  example: []
+  syntax:
+    content: public const string PartThumb = "asb-thumb"
+    return:
+      type: System.String
+    content.vb: Public Const PartThumb As String = "asb-thumb"
+- uid: FluentGpu.Controls.AnnotatedScrollBar.Create(System.Collections.Generic.IReadOnlyList{System.ValueTuple{System.String,System.Single}},System.Single,FluentGpu.Dsl.TemplateParts)
+  commentId: M:FluentGpu.Controls.AnnotatedScrollBar.Create(System.Collections.Generic.IReadOnlyList{System.ValueTuple{System.String,System.Single}},System.Single,FluentGpu.Dsl.TemplateParts)
+  id: Create(System.Collections.Generic.IReadOnlyList{System.ValueTuple{System.String,System.Single}},System.Single,FluentGpu.Dsl.TemplateParts)
+  parent: FluentGpu.Controls.AnnotatedScrollBar
+  langs:
+  - csharp
+  - vb
+  name: Create(IReadOnlyList<(string Label, float Position01)>, float, TemplateParts?)
+  nameWithType: AnnotatedScrollBar.Create(IReadOnlyList<(string Label, float Position01)>, float, TemplateParts?)
+  fullName: FluentGpu.Controls.AnnotatedScrollBar.Create(System.Collections.Generic.IReadOnlyList<(string Label, float Position01)>, float, FluentGpu.Dsl.TemplateParts?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AnnotatedScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/AnnotatedScrollBar.cs
+    startLine: 76
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Static/legacy surface (kept source-compatible): annotations as (label, 0..1 position) with no
+        callbacks — renders the full anatomy inert at position 0.2 (the original demo shape).
+  example: []
+  syntax:
+    content: public static Element Create(IReadOnlyList<(string Label, float Position01)> annotations, float height = 280, TemplateParts? parts = null)
+    parameters:
+    - id: annotations
+      type: System.Collections.Generic.IReadOnlyList{System.ValueTuple{System.String,System.Single}}
+    - id: height
+      type: System.Single
+    - id: parts
+      type: FluentGpu.Dsl.TemplateParts
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Create(annotations As IReadOnlyList(Of (Label As String, Position01 As Single)), height As Single = 280, parts As TemplateParts = Nothing) As Element
+  overload: FluentGpu.Controls.AnnotatedScrollBar.Create*
+  nameWithType.vb: AnnotatedScrollBar.Create(IReadOnlyList(Of (Label As String, Position01 As Single)), Single, TemplateParts)
+  fullName.vb: FluentGpu.Controls.AnnotatedScrollBar.Create(System.Collections.Generic.IReadOnlyList(Of (Label As String, Position01 As Single)), Single, FluentGpu.Dsl.TemplateParts)
+  name.vb: Create(IReadOnlyList(Of (Label As String, Position01 As Single)), Single, TemplateParts)
+- uid: FluentGpu.Controls.AnnotatedScrollBar.Create(System.Collections.Generic.IReadOnlyList{System.ValueTuple{System.String,System.Single}},System.Single,System.Action{System.Single,FluentGpu.Controls.AnnotatedScrollBarScrollKind},System.Single,System.Single,System.Func{System.Single,System.Boolean},System.Func{System.Single,System.String},FluentGpu.Dsl.TemplateParts)
+  commentId: M:FluentGpu.Controls.AnnotatedScrollBar.Create(System.Collections.Generic.IReadOnlyList{System.ValueTuple{System.String,System.Single}},System.Single,System.Action{System.Single,FluentGpu.Controls.AnnotatedScrollBarScrollKind},System.Single,System.Single,System.Func{System.Single,System.Boolean},System.Func{System.Single,System.String},FluentGpu.Dsl.TemplateParts)
+  id: Create(System.Collections.Generic.IReadOnlyList{System.ValueTuple{System.String,System.Single}},System.Single,System.Action{System.Single,FluentGpu.Controls.AnnotatedScrollBarScrollKind},System.Single,System.Single,System.Func{System.Single,System.Boolean},System.Func{System.Single,System.String},FluentGpu.Dsl.TemplateParts)
+  parent: FluentGpu.Controls.AnnotatedScrollBar
+  langs:
+  - csharp
+  - vb
+  name: Create(IReadOnlyList<(string Label, float Position01)>, float, Action<float, AnnotatedScrollBarScrollKind>?, float, float, Func<float, bool>?, Func<float, string>?, TemplateParts?)
+  nameWithType: AnnotatedScrollBar.Create(IReadOnlyList<(string Label, float Position01)>, float, Action<float, AnnotatedScrollBarScrollKind>?, float, float, Func<float, bool>?, Func<float, string>?, TemplateParts?)
+  fullName: FluentGpu.Controls.AnnotatedScrollBar.Create(System.Collections.Generic.IReadOnlyList<(string Label, float Position01)>, float, System.Action<float, FluentGpu.Controls.AnnotatedScrollBarScrollKind>?, float, float, System.Func<float, bool>?, System.Func<float, string>?, FluentGpu.Dsl.TemplateParts?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AnnotatedScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/AnnotatedScrollBar.cs
+    startLine: 81
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The interactive control with a FROZEN position (component props freeze at mount — use the
+        <code>Signal&lt;float&gt;</code> overload below for a live, app-controlled position).
+  example: []
+  syntax:
+    content: public static Element Create(IReadOnlyList<(string Label, float Position01)> annotations, float position01, Action<float, AnnotatedScrollBarScrollKind>? onScroll, float height = 280, float smallChange01 = 0.05, Func<float, bool>? onScrolling = null, Func<float, string>? detailLabel = null, TemplateParts? parts = null)
+    parameters:
+    - id: annotations
+      type: System.Collections.Generic.IReadOnlyList{System.ValueTuple{System.String,System.Single}}
+    - id: position01
+      type: System.Single
+    - id: onScroll
+      type: System.Action{System.Single,FluentGpu.Controls.AnnotatedScrollBarScrollKind}
+    - id: height
+      type: System.Single
+    - id: smallChange01
+      type: System.Single
+    - id: onScrolling
+      type: System.Func{System.Single,System.Boolean}
+    - id: detailLabel
+      type: System.Func{System.Single,System.String}
+    - id: parts
+      type: FluentGpu.Dsl.TemplateParts
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Create(annotations As IReadOnlyList(Of (Label As String, Position01 As Single)), position01 As Single, onScroll As Action(Of Single, AnnotatedScrollBarScrollKind), height As Single = 280, smallChange01 As Single = 0.05, onScrolling As Func(Of Single, Boolean) = Nothing, detailLabel As Func(Of Single, String) = Nothing, parts As TemplateParts = Nothing) As Element
+  overload: FluentGpu.Controls.AnnotatedScrollBar.Create*
+  nameWithType.vb: AnnotatedScrollBar.Create(IReadOnlyList(Of (Label As String, Position01 As Single)), Single, Action(Of Single, AnnotatedScrollBarScrollKind), Single, Single, Func(Of Single, Boolean), Func(Of Single, String), TemplateParts)
+  fullName.vb: FluentGpu.Controls.AnnotatedScrollBar.Create(System.Collections.Generic.IReadOnlyList(Of (Label As String, Position01 As Single)), Single, System.Action(Of Single, FluentGpu.Controls.AnnotatedScrollBarScrollKind), Single, Single, System.Func(Of Single, Boolean), System.Func(Of Single, String), FluentGpu.Dsl.TemplateParts)
+  name.vb: Create(IReadOnlyList(Of (Label As String, Position01 As Single)), Single, Action(Of Single, AnnotatedScrollBarScrollKind), Single, Single, Func(Of Single, Boolean), Func(Of Single, String), TemplateParts)
+- uid: FluentGpu.Controls.AnnotatedScrollBar.Create(System.Collections.Generic.IReadOnlyList{System.ValueTuple{System.String,System.Single}},FluentGpu.Signals.Signal{System.Single},System.Action{System.Single,FluentGpu.Controls.AnnotatedScrollBarScrollKind},System.Single,System.Single,System.Func{System.Single,System.Boolean},System.Func{System.Single,System.String},FluentGpu.Dsl.TemplateParts)
+  commentId: M:FluentGpu.Controls.AnnotatedScrollBar.Create(System.Collections.Generic.IReadOnlyList{System.ValueTuple{System.String,System.Single}},FluentGpu.Signals.Signal{System.Single},System.Action{System.Single,FluentGpu.Controls.AnnotatedScrollBarScrollKind},System.Single,System.Single,System.Func{System.Single,System.Boolean},System.Func{System.Single,System.String},FluentGpu.Dsl.TemplateParts)
+  id: Create(System.Collections.Generic.IReadOnlyList{System.ValueTuple{System.String,System.Single}},FluentGpu.Signals.Signal{System.Single},System.Action{System.Single,FluentGpu.Controls.AnnotatedScrollBarScrollKind},System.Single,System.Single,System.Func{System.Single,System.Boolean},System.Func{System.Single,System.String},FluentGpu.Dsl.TemplateParts)
+  parent: FluentGpu.Controls.AnnotatedScrollBar
+  langs:
+  - csharp
+  - vb
+  name: Create(IReadOnlyList<(string Label, float Position01)>, Signal<float>, Action<float, AnnotatedScrollBarScrollKind>?, float, float, Func<float, bool>?, Func<float, string>?, TemplateParts?)
+  nameWithType: AnnotatedScrollBar.Create(IReadOnlyList<(string Label, float Position01)>, Signal<float>, Action<float, AnnotatedScrollBarScrollKind>?, float, float, Func<float, bool>?, Func<float, string>?, TemplateParts?)
+  fullName: FluentGpu.Controls.AnnotatedScrollBar.Create(System.Collections.Generic.IReadOnlyList<(string Label, float Position01)>, FluentGpu.Signals.Signal<float>, System.Action<float, FluentGpu.Controls.AnnotatedScrollBarScrollKind>?, float, float, System.Func<float, bool>?, System.Func<float, string>?, FluentGpu.Dsl.TemplateParts?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AnnotatedScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/AnnotatedScrollBar.cs
+    startLine: 100
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The interactive control. <code class="paramref">position01</code> is the normalized scroll position signal (0..1) —
+
+    writes move the thumb compositor-instantly; <code class="paramref">onScroll</code> receives every user scroll
+
+    (new position, kind); <code class="paramref">onScrolling</code> (optional) may return false to CANCEL a scroll (the WinUI
+
+    Scrolling.Cancel seam); <code class="paramref">smallChange01</code> is the button step (default 0.05 — the SmallChange
+
+    auto-value stands in for viewport/ratio, cpp:484-489); <code class="paramref">detailLabel</code> resolves the hover chip
+
+    text from a position; <code class="paramref">parts</code> = per-part styling keyed by the <code>PartXxx</code> consts (see
+
+    <xref href="FluentGpu.Dsl.TemplateParts" data-throw-if-not-resolved="false"></xref> for the contract).
+  example: []
+  syntax:
+    content: public static Element Create(IReadOnlyList<(string Label, float Position01)> annotations, Signal<float> position01, Action<float, AnnotatedScrollBarScrollKind>? onScroll, float height = 280, float smallChange01 = 0.05, Func<float, bool>? onScrolling = null, Func<float, string>? detailLabel = null, TemplateParts? parts = null)
+    parameters:
+    - id: annotations
+      type: System.Collections.Generic.IReadOnlyList{System.ValueTuple{System.String,System.Single}}
+    - id: position01
+      type: FluentGpu.Signals.Signal{System.Single}
+    - id: onScroll
+      type: System.Action{System.Single,FluentGpu.Controls.AnnotatedScrollBarScrollKind}
+    - id: height
+      type: System.Single
+    - id: smallChange01
+      type: System.Single
+    - id: onScrolling
+      type: System.Func{System.Single,System.Boolean}
+    - id: detailLabel
+      type: System.Func{System.Single,System.String}
+    - id: parts
+      type: FluentGpu.Dsl.TemplateParts
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Create(annotations As IReadOnlyList(Of (Label As String, Position01 As Single)), position01 As Signal(Of Single), onScroll As Action(Of Single, AnnotatedScrollBarScrollKind), height As Single = 280, smallChange01 As Single = 0.05, onScrolling As Func(Of Single, Boolean) = Nothing, detailLabel As Func(Of Single, String) = Nothing, parts As TemplateParts = Nothing) As Element
+  overload: FluentGpu.Controls.AnnotatedScrollBar.Create*
+  nameWithType.vb: AnnotatedScrollBar.Create(IReadOnlyList(Of (Label As String, Position01 As Single)), Signal(Of Single), Action(Of Single, AnnotatedScrollBarScrollKind), Single, Single, Func(Of Single, Boolean), Func(Of Single, String), TemplateParts)
+  fullName.vb: FluentGpu.Controls.AnnotatedScrollBar.Create(System.Collections.Generic.IReadOnlyList(Of (Label As String, Position01 As Single)), FluentGpu.Signals.Signal(Of Single), System.Action(Of Single, FluentGpu.Controls.AnnotatedScrollBarScrollKind), Single, Single, System.Func(Of Single, Boolean), System.Func(Of Single, String), FluentGpu.Dsl.TemplateParts)
+  name.vb: Create(IReadOnlyList(Of (Label As String, Position01 As Single)), Signal(Of Single), Action(Of Single, AnnotatedScrollBarScrollKind), Single, Single, Func(Of Single, Boolean), Func(Of Single, String), TemplateParts)
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.MemberwiseClone
+  commentId: M:System.Object.MemberwiseClone
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  name: MemberwiseClone()
+  nameWithType: object.MemberwiseClone()
+  fullName: object.MemberwiseClone()
+  nameWithType.vb: Object.MemberwiseClone()
+  fullName.vb: Object.MemberwiseClone()
+  spec.csharp:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Controls.AnnotatedScrollBar.PartGhost
+  commentId: F:FluentGpu.Controls.AnnotatedScrollBar.PartGhost
+  href: FluentGpu.Controls.AnnotatedScrollBar.html#FluentGpu_Controls_AnnotatedScrollBar_PartGhost
+  name: PartGhost
+  nameWithType: AnnotatedScrollBar.PartGhost
+  fullName: FluentGpu.Controls.AnnotatedScrollBar.PartGhost
+- uid: FluentGpu.Controls.AnnotatedScrollBar.Create*
+  commentId: Overload:FluentGpu.Controls.AnnotatedScrollBar.Create
+  href: FluentGpu.Controls.AnnotatedScrollBar.html#FluentGpu_Controls_AnnotatedScrollBar_Create_System_Collections_Generic_IReadOnlyList_System_ValueTuple_System_String_System_Single___System_Single_FluentGpu_Dsl_TemplateParts_
+  name: Create
+  nameWithType: AnnotatedScrollBar.Create
+  fullName: FluentGpu.Controls.AnnotatedScrollBar.Create
+- uid: System.Collections.Generic.IReadOnlyList{System.ValueTuple{System.String,System.Single}}
+  commentId: T:System.Collections.Generic.IReadOnlyList{System.ValueTuple{System.String,System.Single}}
+  parent: System.Collections.Generic
+  definition: System.Collections.Generic.IReadOnlyList`1
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<(string Label, float Position01)>
+  nameWithType: IReadOnlyList<(string Label, float Position01)>
+  fullName: System.Collections.Generic.IReadOnlyList<(string Label, float Position01)>
+  nameWithType.vb: IReadOnlyList(Of (Label As String, Position01 As Single))
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of (Label As String, Position01 As Single))
+  name.vb: IReadOnlyList(Of (Label As String, Position01 As Single))
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - name: (
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: " "
+  - uid: System.ValueTuple{System.String,System.Single}.Label
+    name: Label
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple-system.string,system.single-.label
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: " "
+  - uid: System.ValueTuple{System.String,System.Single}.Position01
+    name: Position01
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple-system.string,system.single-.position01
+  - name: )
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: (
+  - uid: System.ValueTuple{System.String,System.Single}.Label
+    name: Label
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple-system.string,system.single-.label
+  - name: " "
+  - name: As
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: ','
+  - name: " "
+  - uid: System.ValueTuple{System.String,System.Single}.Position01
+    name: Position01
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple-system.string,system.single-.position01
+  - name: " "
+  - name: As
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  - name: )
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Dsl.TemplateParts
+  commentId: T:FluentGpu.Dsl.TemplateParts
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.TemplateParts.html
+  name: TemplateParts
+  nameWithType: TemplateParts
+  fullName: FluentGpu.Dsl.TemplateParts
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: System.Collections.Generic.IReadOnlyList`1
+  commentId: T:System.Collections.Generic.IReadOnlyList`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<T>
+  nameWithType: IReadOnlyList<T>
+  fullName: System.Collections.Generic.IReadOnlyList<T>
+  nameWithType.vb: IReadOnlyList(Of T)
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of T)
+  name.vb: IReadOnlyList(Of T)
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Collections.Generic
+  commentId: N:System.Collections.Generic
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System.Collections.Generic
+  nameWithType: System.Collections.Generic
+  fullName: System.Collections.Generic
+  spec.csharp:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+  spec.vb:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: System.Action{System.Single,FluentGpu.Controls.AnnotatedScrollBarScrollKind}
+  commentId: T:System.Action{System.Single,FluentGpu.Controls.AnnotatedScrollBarScrollKind}
+  parent: System
+  definition: System.Action`2
+  href: https://learn.microsoft.com/dotnet/api/system.action-2
+  name: Action<float, AnnotatedScrollBarScrollKind>
+  nameWithType: Action<float, AnnotatedScrollBarScrollKind>
+  fullName: System.Action<float, FluentGpu.Controls.AnnotatedScrollBarScrollKind>
+  nameWithType.vb: Action(Of Single, AnnotatedScrollBarScrollKind)
+  fullName.vb: System.Action(Of Single, FluentGpu.Controls.AnnotatedScrollBarScrollKind)
+  name.vb: Action(Of Single, AnnotatedScrollBarScrollKind)
+  spec.csharp:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: <
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Controls.AnnotatedScrollBarScrollKind
+    name: AnnotatedScrollBarScrollKind
+    href: FluentGpu.Controls.AnnotatedScrollBarScrollKind.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Controls.AnnotatedScrollBarScrollKind
+    name: AnnotatedScrollBarScrollKind
+    href: FluentGpu.Controls.AnnotatedScrollBarScrollKind.html
+  - name: )
+- uid: System.Func{System.Single,System.Boolean}
+  commentId: T:System.Func{System.Single,System.Boolean}
+  parent: System
+  definition: System.Func`2
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<float, bool>
+  nameWithType: Func<float, bool>
+  fullName: System.Func<float, bool>
+  nameWithType.vb: Func(Of Single, Boolean)
+  fullName.vb: System.Func(Of Single, Boolean)
+  name.vb: Func(Of Single, Boolean)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+- uid: System.Func{System.Single,System.String}
+  commentId: T:System.Func{System.Single,System.String}
+  parent: System
+  definition: System.Func`2
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<float, string>
+  nameWithType: Func<float, string>
+  fullName: System.Func<float, string>
+  nameWithType.vb: Func(Of Single, String)
+  fullName.vb: System.Func(Of Single, String)
+  name.vb: Func(Of Single, String)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+- uid: System.Action`2
+  commentId: T:System.Action`2
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-2
+  name: Action<T1, T2>
+  nameWithType: Action<T1, T2>
+  fullName: System.Action<T1, T2>
+  nameWithType.vb: Action(Of T1, T2)
+  fullName.vb: System.Action(Of T1, T2)
+  name.vb: Action(Of T1, T2)
+  spec.csharp:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: <
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: )
+- uid: System.Func`2
+  commentId: T:System.Func`2
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<T, TResult>
+  nameWithType: Func<T, TResult>
+  fullName: System.Func<T, TResult>
+  nameWithType.vb: Func(Of T, TResult)
+  fullName.vb: System.Func(Of T, TResult)
+  name.vb: Func(Of T, TResult)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - name: T
+  - name: ','
+  - name: " "
+  - name: TResult
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: ','
+  - name: " "
+  - name: TResult
+  - name: )
+- uid: FluentGpu.Signals.Signal{System.Single}
+  commentId: T:FluentGpu.Signals.Signal{System.Single}
+  parent: FluentGpu.Signals
+  definition: FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<float>
+  nameWithType: Signal<float>
+  fullName: FluentGpu.Signals.Signal<float>
+  nameWithType.vb: Signal(Of Single)
+  fullName.vb: FluentGpu.Signals.Signal(Of Single)
+  name.vb: Signal(Of Single)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: FluentGpu.Signals.Signal`1
+  commentId: T:FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<T>
+  nameWithType: Signal<T>
+  fullName: FluentGpu.Signals.Signal<T>
+  nameWithType.vb: Signal(Of T)
+  fullName.vb: FluentGpu.Signals.Signal(Of T)
+  name.vb: Signal(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Signals
+  commentId: N:FluentGpu.Signals
+  href: FluentGpu.html
+  name: FluentGpu.Signals
+  nameWithType: FluentGpu.Signals
+  fullName: FluentGpu.Signals
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html

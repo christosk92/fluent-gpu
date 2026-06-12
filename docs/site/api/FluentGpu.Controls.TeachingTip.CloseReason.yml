@@ -1,0 +1,157 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.TeachingTip.CloseReason
+  commentId: T:FluentGpu.Controls.TeachingTip.CloseReason
+  id: TeachingTip.CloseReason
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.TeachingTip.CloseReason.CloseButton
+  - FluentGpu.Controls.TeachingTip.CloseReason.LightDismiss
+  - FluentGpu.Controls.TeachingTip.CloseReason.Programmatic
+  langs:
+  - csharp
+  - vb
+  name: TeachingTip.CloseReason
+  nameWithType: TeachingTip.CloseReason
+  fullName: FluentGpu.Controls.TeachingTip.CloseReason
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CloseReason
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 44
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI <code>TeachingTipCloseReason</code> — surfaced on Closing/Closed.
+  example: []
+  syntax:
+    content: 'public enum TeachingTip.CloseReason : byte'
+    content.vb: Public Enum TeachingTip.CloseReason As Byte
+- uid: FluentGpu.Controls.TeachingTip.CloseReason.CloseButton
+  commentId: F:FluentGpu.Controls.TeachingTip.CloseReason.CloseButton
+  id: CloseButton
+  parent: FluentGpu.Controls.TeachingTip.CloseReason
+  langs:
+  - csharp
+  - vb
+  name: CloseButton
+  nameWithType: TeachingTip.CloseReason.CloseButton
+  fullName: FluentGpu.Controls.TeachingTip.CloseReason.CloseButton
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CloseButton
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 44
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: CloseButton = 0
+    return:
+      type: FluentGpu.Controls.TeachingTip.CloseReason
+- uid: FluentGpu.Controls.TeachingTip.CloseReason.LightDismiss
+  commentId: F:FluentGpu.Controls.TeachingTip.CloseReason.LightDismiss
+  id: LightDismiss
+  parent: FluentGpu.Controls.TeachingTip.CloseReason
+  langs:
+  - csharp
+  - vb
+  name: LightDismiss
+  nameWithType: TeachingTip.CloseReason.LightDismiss
+  fullName: FluentGpu.Controls.TeachingTip.CloseReason.LightDismiss
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LightDismiss
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 44
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: LightDismiss = 1
+    return:
+      type: FluentGpu.Controls.TeachingTip.CloseReason
+- uid: FluentGpu.Controls.TeachingTip.CloseReason.Programmatic
+  commentId: F:FluentGpu.Controls.TeachingTip.CloseReason.Programmatic
+  id: Programmatic
+  parent: FluentGpu.Controls.TeachingTip.CloseReason
+  langs:
+  - csharp
+  - vb
+  name: Programmatic
+  nameWithType: TeachingTip.CloseReason.Programmatic
+  fullName: FluentGpu.Controls.TeachingTip.CloseReason.Programmatic
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Programmatic
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 44
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Programmatic = 2
+    return:
+      type: FluentGpu.Controls.TeachingTip.CloseReason
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.TeachingTip.CloseReason
+  commentId: T:FluentGpu.Controls.TeachingTip.CloseReason
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.TeachingTip.html
+  name: TeachingTip.CloseReason
+  nameWithType: TeachingTip.CloseReason
+  fullName: FluentGpu.Controls.TeachingTip.CloseReason
+  spec.csharp:
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.CloseReason
+    name: CloseReason
+    href: FluentGpu.Controls.TeachingTip.CloseReason.html
+  spec.vb:
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.CloseReason
+    name: CloseReason
+    href: FluentGpu.Controls.TeachingTip.CloseReason.html

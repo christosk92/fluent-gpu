@@ -1,0 +1,556 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.ReorderPayload
+  commentId: T:FluentGpu.Controls.ReorderPayload
+  id: ReorderPayload
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.ReorderPayload.#ctor(FluentGpu.Controls.Reorderable,System.Int32,System.Object)
+  - FluentGpu.Controls.ReorderPayload.Index
+  - FluentGpu.Controls.ReorderPayload.Item
+  - FluentGpu.Controls.ReorderPayload.Owner
+  langs:
+  - csharp
+  - vb
+  name: ReorderPayload
+  nameWithType: ReorderPayload
+  fullName: FluentGpu.Controls.ReorderPayload
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ReorderPayload
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The typed payload <xref href="FluentGpu.Controls.Reorderable" data-throw-if-not-resolved="false"></xref> items carry through the L2 <xref href="FluentGpu.Foundation.DragSession" data-throw-if-not-resolved="false"></xref>:
+        the owning list, the item's ORIGINAL index there, and the app item (<xref href="FluentGpu.Controls.Reorderable.ItemOf" data-throw-if-not-resolved="false"></xref>). Any foreign
+        <code>DropTarget</code> accepting the kind reads <xref href="FluentGpu.Controls.ReorderPayload.Item" data-throw-if-not-resolved="false"></xref> (track row → sidebar playlist).
+  example: []
+  syntax:
+    content: 'public sealed record ReorderPayload : IEquatable<ReorderPayload>'
+    content.vb: Public NotInheritable Class ReorderPayload Implements IEquatable(Of ReorderPayload)
+  inheritance:
+  - System.Object
+  implements:
+  - System.IEquatable{FluentGpu.Controls.ReorderPayload}
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.ReorderPayload.#ctor(FluentGpu.Controls.Reorderable,System.Int32,System.Object)
+  commentId: M:FluentGpu.Controls.ReorderPayload.#ctor(FluentGpu.Controls.Reorderable,System.Int32,System.Object)
+  id: '#ctor(FluentGpu.Controls.Reorderable,System.Int32,System.Object)'
+  parent: FluentGpu.Controls.ReorderPayload
+  langs:
+  - csharp
+  - vb
+  name: ReorderPayload(Reorderable, int, object?)
+  nameWithType: ReorderPayload.ReorderPayload(Reorderable, int, object?)
+  fullName: FluentGpu.Controls.ReorderPayload.ReorderPayload(FluentGpu.Controls.Reorderable, int, object?)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The typed payload <xref href="FluentGpu.Controls.Reorderable" data-throw-if-not-resolved="false"></xref> items carry through the L2 <xref href="FluentGpu.Foundation.DragSession" data-throw-if-not-resolved="false"></xref>:
+        the owning list, the item's ORIGINAL index there, and the app item (<xref href="FluentGpu.Controls.Reorderable.ItemOf" data-throw-if-not-resolved="false"></xref>). Any foreign
+        <code>DropTarget</code> accepting the kind reads <xref href="FluentGpu.Controls.ReorderPayload.Item" data-throw-if-not-resolved="false"></xref> (track row → sidebar playlist).
+  example: []
+  syntax:
+    content: public ReorderPayload(Reorderable Owner, int Index, object? Item)
+    parameters:
+    - id: Owner
+      type: FluentGpu.Controls.Reorderable
+    - id: Index
+      type: System.Int32
+    - id: Item
+      type: System.Object
+    content.vb: Public Sub New(Owner As Reorderable, Index As Integer, Item As Object)
+  overload: FluentGpu.Controls.ReorderPayload.#ctor*
+  nameWithType.vb: ReorderPayload.New(Reorderable, Integer, Object)
+  fullName.vb: FluentGpu.Controls.ReorderPayload.New(FluentGpu.Controls.Reorderable, Integer, Object)
+  name.vb: New(Reorderable, Integer, Object)
+- uid: FluentGpu.Controls.ReorderPayload.Owner
+  commentId: P:FluentGpu.Controls.ReorderPayload.Owner
+  id: Owner
+  parent: FluentGpu.Controls.ReorderPayload
+  langs:
+  - csharp
+  - vb
+  name: Owner
+  nameWithType: ReorderPayload.Owner
+  fullName: FluentGpu.Controls.ReorderPayload.Owner
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Owner
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Reorderable Owner { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.Reorderable
+    content.vb: Public Property Owner As Reorderable
+  overload: FluentGpu.Controls.ReorderPayload.Owner*
+- uid: FluentGpu.Controls.ReorderPayload.Index
+  commentId: P:FluentGpu.Controls.ReorderPayload.Index
+  id: Index
+  parent: FluentGpu.Controls.ReorderPayload
+  langs:
+  - csharp
+  - vb
+  name: Index
+  nameWithType: ReorderPayload.Index
+  fullName: FluentGpu.Controls.ReorderPayload.Index
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Index
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public int Index { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property Index As Integer
+  overload: FluentGpu.Controls.ReorderPayload.Index*
+- uid: FluentGpu.Controls.ReorderPayload.Item
+  commentId: P:FluentGpu.Controls.ReorderPayload.Item
+  id: Item
+  parent: FluentGpu.Controls.ReorderPayload
+  langs:
+  - csharp
+  - vb
+  name: Item
+  nameWithType: ReorderPayload.Item
+  fullName: FluentGpu.Controls.ReorderPayload.Item
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Item
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public object? Item { get; init; }
+    parameters: []
+    return:
+      type: System.Object
+    content.vb: Public Property Item As Object
+  overload: FluentGpu.Controls.ReorderPayload.Item*
+references:
+- uid: FluentGpu.Controls.Reorderable
+  commentId: T:FluentGpu.Controls.Reorderable
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.Reorderable.html
+  name: Reorderable
+  nameWithType: Reorderable
+  fullName: FluentGpu.Controls.Reorderable
+- uid: FluentGpu.Foundation.DragSession
+  commentId: T:FluentGpu.Foundation.DragSession
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.DragSession.html
+  name: DragSession
+  nameWithType: DragSession
+  fullName: FluentGpu.Foundation.DragSession
+- uid: FluentGpu.Controls.Reorderable.ItemOf
+  commentId: F:FluentGpu.Controls.Reorderable.ItemOf
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_ItemOf
+  name: ItemOf
+  nameWithType: Reorderable.ItemOf
+  fullName: FluentGpu.Controls.Reorderable.ItemOf
+- uid: FluentGpu.Controls.ReorderPayload.Item
+  commentId: P:FluentGpu.Controls.ReorderPayload.Item
+  isExternal: true
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.IEquatable{FluentGpu.Controls.ReorderPayload}
+  commentId: T:System.IEquatable{FluentGpu.Controls.ReorderPayload}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<ReorderPayload>
+  nameWithType: IEquatable<ReorderPayload>
+  fullName: System.IEquatable<FluentGpu.Controls.ReorderPayload>
+  nameWithType.vb: IEquatable(Of ReorderPayload)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.ReorderPayload)
+  name.vb: IEquatable(Of ReorderPayload)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.ReorderPayload
+    name: ReorderPayload
+    href: FluentGpu.Controls.ReorderPayload.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.ReorderPayload
+    name: ReorderPayload
+    href: FluentGpu.Controls.ReorderPayload.html
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.ReorderPayload.#ctor*
+  commentId: Overload:FluentGpu.Controls.ReorderPayload.#ctor
+  href: FluentGpu.Controls.ReorderPayload.html#FluentGpu_Controls_ReorderPayload__ctor_FluentGpu_Controls_Reorderable_System_Int32_System_Object_
+  name: ReorderPayload
+  nameWithType: ReorderPayload.ReorderPayload
+  fullName: FluentGpu.Controls.ReorderPayload.ReorderPayload
+  nameWithType.vb: ReorderPayload.New
+  fullName.vb: FluentGpu.Controls.ReorderPayload.New
+  name.vb: New
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Controls.ReorderPayload.Owner*
+  commentId: Overload:FluentGpu.Controls.ReorderPayload.Owner
+  href: FluentGpu.Controls.ReorderPayload.html#FluentGpu_Controls_ReorderPayload_Owner
+  name: Owner
+  nameWithType: ReorderPayload.Owner
+  fullName: FluentGpu.Controls.ReorderPayload.Owner
+- uid: FluentGpu.Controls.ReorderPayload.Index*
+  commentId: Overload:FluentGpu.Controls.ReorderPayload.Index
+  href: FluentGpu.Controls.ReorderPayload.html#FluentGpu_Controls_ReorderPayload_Index
+  name: Index
+  nameWithType: ReorderPayload.Index
+  fullName: FluentGpu.Controls.ReorderPayload.Index
+- uid: FluentGpu.Controls.ReorderPayload.Item*
+  commentId: Overload:FluentGpu.Controls.ReorderPayload.Item
+  href: FluentGpu.Controls.ReorderPayload.html#FluentGpu_Controls_ReorderPayload_Item
+  name: Item
+  nameWithType: ReorderPayload.Item
+  fullName: FluentGpu.Controls.ReorderPayload.Item

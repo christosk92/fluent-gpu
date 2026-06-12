@@ -1,6 +1,6 @@
 # FluentGpu — Subsystem Design: **Text & Glyph (DirectWrite seam + synced lyrics)**
 
-Assemblies: **`FluentGpu.Text`** (portable seam, interface + POD only) · **`FluentGpu.Text.DirectWrite`**
+Assemblies: **`FluentGpu.Text`** (portable seam, interface + POD only) · **`FluentGpu.Windows` (DirectWrite/ folder)**
 (Windows leaf, all COM) · **`FluentGpu.Media.LyricsLayoutEngine`** (portable lyrics composition, in
 `FluentGpu.Media`). Future leaf **`FluentGpu.Text.CoreText`** (macOS) and optional portable
 **`FluentGpu.Text.Unicode`** (UAX #9/#14/#24 tables, deferred to the CoreText milestone).
@@ -63,7 +63,7 @@ the edge into already-formatted `StringId`, preserving no-string-on-paint-path),
  P8     │   (RENDER thread reads only Committed runs; positions are FINAL device-space dest rects, VISUAL order) │
  BATCH ►│ IGlyphAtlas (R8 + BGRA pages) ◄── IGlyphRasterizer (DWrite GlyphRunAnalysis → A8 / color tile)         │
  P9     │   batch-time UV resolve by GlyphKey → one instanced draw per (page, AaMode, clip)                      │
-        └────────────────────────────────────────────── leaf: FluentGpu.Text.DirectWrite (Windows, COM) ────────┘
+        └───────────────────────────────────────── leaf: FluentGpu.Windows (DirectWrite/ folder, Windows, COM) ─────┘
 
  FluentGpu.Media.LyricsLayoutEngine (portable): UseSyncedLyrics → line layout over ITextShaper → cached
    GlyphRunRealization; PER-INSTANCE syllable color written by the phase-7 AnimTrack on the PLAYBACK clock.
@@ -118,14 +118,14 @@ FluentGpu.Render  (owns DrawGlyphRunCmd emission + glyph PSO; calls IGlyphAtlas/
 FluentGpu.Layout  (calls ITextLayoutEngine.Measure via the static YogaMeasureFunc — §8)
 FluentGpu.Media   (LyricsLayoutEngine: composes ITextShaper + GlyphRunRealization; owns UseSyncedLyrics)
         ▲
-FluentGpu.Text.DirectWrite (LEAF; referenced ONLY by Hosting; ALL ComPtr<IDWrite*>, RENDER-THREAD CONFINED)
+FluentGpu.Windows/DirectWrite/ (LEAF; referenced ONLY by Hosting; ALL ComPtr<IDWrite*>, RENDER-THREAD CONFINED)
         └─ references: FluentGpu.Text (implements seam), FluentGpu.Rhi (iface), Foundation
 FluentGpu.SourceGen + FluentGpu.Interop.SourceGen  (build-time: emit DWrite RCW hot-path bindings from
                         dwrite.comabi.json + the thread-confined callee CCW vtables; FGCOM analyzer rules)
 ```
 
 **Invariants honored.** `FluentGpu.Text` contains **zero** Windows/COM types. Every `ComPtr<IDWrite*>`,
-`IDWriteTextAnalyzer`, `IDWriteGlyphRunAnalysis` lives only in `FluentGpu.Text.DirectWrite`, and per
+`IDWriteTextAnalyzer`, `IDWriteGlyphRunAnalysis` lives only in `FluentGpu.Windows` (DirectWrite/ folder), and per
 `hardened-v1-plan.md` §2 **that leaf executes on the render thread** (the sole ComPtr owner). The
 `FluentGpu.Text → FluentGpu.Rhi` (interface) edge is explicit so the atlas can own `TextureHandle` upload
 through `ICommandEncoder.CopyBufferToTexture` (no cycle; `Rhi` is a pure-interface root). All assemblies are
@@ -453,7 +453,7 @@ ShapedRunRef    : {ShapedRunCacheId, GlyphStart, GlyphCount, FaceId, SizePx, Bid
 
 ---
 
-## 4. DirectWrite leaf implementation (`FluentGpu.Text.DirectWrite`)
+## 4. DirectWrite leaf implementation (`FluentGpu.Windows` DirectWrite/ folder)
 
 ### 4.1 COM binding strategy — generated, not hand-typed (the §4.2 ruling)
 
@@ -917,7 +917,7 @@ LyricsBinding UseSyncedLyrics(in LyricsModel lyrics, IPlaybackClock clock);
 
 ## 12. Cross-platform seam boundary — Windows vs portable vs macOS (CoreText)
 
-| Concern | Portable (`FluentGpu.Text`) | Windows (`Text.DirectWrite`) | macOS (`Text.CoreText`) |
+| Concern | Portable (`FluentGpu.Text`) | Windows (`FluentGpu.Windows` DirectWrite/) | macOS (`Text.CoreText`) |
 |---|---|---|---|
 | BiDi (UAX #9) | seam `ITextItemizer`; v1 = DWrite; CoreText milestone = portable `Text.Unicode` | `AnalyzeBidi` (CCW) | portable `Text.Unicode` (shared) |
 | Script (UAX #24) | seam; v1 = DWrite; milestone = portable | `AnalyzeScript` (CCW) | portable `Text.Unicode` |
@@ -1207,15 +1207,15 @@ badge) cannot flow with text. The fix is **object-replacement codepoints (U+FFFC
 
 | Phase | Work | Thread | Assembly |
 |---|---|---|---|
-| 1 pump | atlas `BeginFrame` (LRU clock advance + frame-START eviction sweep, epoch bump) | RENDER | Text.DirectWrite / Text |
+| 1 pump | atlas `BeginFrame` (LRU clock advance + frame-START eviction sweep, epoch bump) | RENDER | FluentGpu.Windows DirectWrite/ / Text |
 | 2 input | selection-drag / caret moves arrive (input-a11y arena, L2) → `ITextDocument.SetSelection`; edge-autoscroll (L11) writes `ScrollOffset` | UI | Input / Text |
 | 4 render | `UseSyncedLyrics` memoizes line layout (shape-on-miss); **`ILocaleFormatter` formats values → `StringId`** at the edge (§18) | UI | Media / Text |
 | 5 reconcile | `WriteLayout` writes the `SelectionState` column (§14) + inline-object reserved advances (§19); edit `OnTextChanged` invalidates affected L1/L2 entries (§16) | UI | Reconciler / Text |
 | 6 layout | `MeasureText` via static `YogaMeasureFunc` → itemize (incl. U+FFFC inline objects) → shape (L1) → wrap (L2) → metrics; `CommitBounds` sets `Committed` | UI | Layout / Text |
 | 7 animation | lyric per-instance color via `AnimTrack.DrivenClock` (playback ms); line-scroll `LocalTransform` | UI | Media |
 | 8 record | `Emit` FINAL device-space glyph runs (VISUAL order) → `DrawGlyphRunCmd`; **`EmitSelection` → `DrawSelectionRectCmd` + caret** UNDER the glyphs (§15); clean spans memcpy (epoch+geometry-hash validated) | RENDER | Render / Text |
-| 9 batch | resolve `GlyphKey`→`PackedGlyph` UVs; coalesce by `(page, AaMode, clip)`; selection quads coalesce as fills; atlas `EndFrame` → batched `CopyBufferToTexture` | RENDER | Render / Text.DirectWrite |
-| 10 submit | glyph PSO draws inside the submitted command list | RENDER | Rhi.D3D12 |
+| 9 batch | resolve `GlyphKey`→`PackedGlyph` UVs; coalesce by `(page, AaMode, clip)`; selection quads coalesce as fills; atlas `EndFrame` → batched `CopyBufferToTexture` | RENDER | Render / FluentGpu.Windows DirectWrite/ |
+| 10 submit | glyph PSO draws inside the submitted command list | RENDER | FluentGpu.Windows D3D12/ |
 | 12 passive | UIA `TextChanged`/`SelectionChanged`/caret events for seq ≤ last-presented (`ITextEditSink` → input-a11y `ITextRangeProvider` notifications) | UI | Input / Text |
 
 ComPtr touches are confined to phases 1/9/10 on the render thread (the sole COM owner). The UI-thread shaping
