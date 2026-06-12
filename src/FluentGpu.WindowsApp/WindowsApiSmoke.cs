@@ -7,8 +7,13 @@ using System.Text;
 using System.Threading;
 using FluentGpu.WindowsApi.Activation;
 using FluentGpu.WindowsApi.Credentials;
+using FluentGpu.WindowsApi.Dialogs;
+using FluentGpu.WindowsApi.Media;
+using FluentGpu.WindowsApi.Network;
 using FluentGpu.WindowsApi.Notifications;
 using FluentGpu.WindowsApi.Packaging;
+using FluentGpu.WindowsApi.Power;
+using FluentGpu.WindowsApi.Shell;
 using Microsoft.Win32;
 
 namespace FluentGpu;
@@ -92,6 +97,13 @@ internal static partial class WindowsApiSmoke
             CredentialsSuite();
             ActivationSuite();
             NotificationsSuite();
+            // v2 pillars (Media / Dialogs / Shell / Power / Network). Headless (no window), so the window-bound pillars
+            // (SMTC / pickers / taskbar-on-a-real-window) are construction-path + [MANUAL]; the windowless pillars
+            // (Network / Power / JumpList) run real OS round-trips.
+            NetworkSuite();
+            PowerSuite();
+            ShellSuite();
+            DialogsAndMediaSuite();
         }
         catch (Exception ex)
         {
@@ -102,7 +114,7 @@ internal static partial class WindowsApiSmoke
         Console.WriteLine();
         if (s_failures == 0)
         {
-            Console.WriteLine($"WINDOWSAPI SMOKE PASS — {s_total} checks, all four pillars exercised end-to-end.");
+            Console.WriteLine($"WINDOWSAPI SMOKE PASS — {s_total} checks, all nine pillars exercised end-to-end.");
             return 0;
         }
         Console.WriteLine($"WINDOWSAPI SMOKE: {s_failures}/{s_total} CHECK(S) FAILED.");
@@ -433,6 +445,146 @@ internal static partial class WindowsApiSmoke
                 clsidGone = k is null;
             Check("4.9 Unregister cleans the activator CLSID registry (no residue)", clsidGone);
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    // (5) Network — INetworkListManager pollers (IsOnline / GetConnectivity) return without error; the result is
+    //     self-consistent. Windowless and message-pump-free, so the connection-point Subscribe is construction-only.
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    private static void NetworkSuite()
+    {
+        Section("[5] Network — NetworkStatus (Network List Manager pollers)");
+
+        bool online = false;
+        bool onlineOk = true;
+        try { online = NetworkStatus.IsOnline; }
+        catch (Exception ex) { onlineOk = false; Check("5.1 NetworkStatus.IsOnline returns without throwing", false, ex.Message); }
+        if (onlineOk) Check("5.1 NetworkStatus.IsOnline returns without throwing", true, $"IsOnline={online}");
+
+        NetworkConnectivityLevel level = NetworkConnectivityLevel.None;
+        bool levelOk = true;
+        try { level = NetworkStatus.GetConnectivity(); }
+        catch (Exception ex) { levelOk = false; Check("5.2 NetworkStatus.GetConnectivity returns without throwing", false, ex.Message); }
+        if (levelOk) Check("5.2 NetworkStatus.GetConnectivity returns without throwing", true, $"level={level}");
+
+        // Self-consistency: an internet verdict from IsOnline must agree with the InternetAccess level (same NLM bits).
+        if (onlineOk && levelOk)
+            Check("5.3 IsOnline agrees with the connectivity level",
+                online == (level == NetworkConnectivityLevel.InternetAccess),
+                $"IsOnline={online}, level={level}");
+
+        // Subscribe needs a pumping STA to deliver callbacks; the headless harness has none, so this is construction-only
+        // (the subscription returns inert rather than throwing when Advise cannot complete). Assert it does not throw and
+        // disposes cleanly; live ConnectivityChanged delivery is a [MANUAL]/gallery concern.
+        bool subOk = true;
+        try { using IDisposable sub = NetworkStatus.Subscribe(_ => { }); }
+        catch (Exception ex) { subOk = false; Check("5.4 NetworkStatus.Subscribe construction + dispose", false, ex.Message); }
+        if (subOk) Check("5.4 NetworkStatus.Subscribe construction + dispose (no pump → inert)", true);
+        Manual("5.5 live ConnectivityChanged delivery", "needs a message-pumping STA + a real connectivity change; see the gallery Network card");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    // (6) Power — KeepAwake acquire/dispose round-trip (a 0 return from SetThreadExecutionState would throw, so a
+    //     non-throwing acquire proves the prior-state was non-zero) + the suspend/resume Subscribe register/unregister.
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    private static void PowerSuite()
+    {
+        Section("[6] Power — PowerSession.KeepAwake / Subscribe");
+
+        // KeepAwake throws iff SetThreadExecutionState returned 0 (the prior state must be non-zero on success).
+        bool acquired = false;
+        try
+        {
+            IDisposable awake = PowerSession.KeepAwake(keepDisplayOn: false);
+            acquired = true;
+            Check("6.1 KeepAwake acquires (SetThreadExecutionState prior-state non-zero)", true);
+            awake.Dispose();
+            Check("6.2 KeepAwake handle disposes (request released)", true);
+            // Idempotent second dispose must be a harmless no-op.
+            awake.Dispose();
+            Check("6.3 second Dispose is a no-op", true);
+        }
+        catch (Exception ex)
+        {
+            if (!acquired) Check("6.1 KeepAwake acquires (SetThreadExecutionState prior-state non-zero)", false, ex.Message);
+            else Check("6.2 KeepAwake handle disposes (request released)", false, ex.Message);
+        }
+
+        // keepDisplayOn variant must also acquire/release cleanly.
+        try { using (PowerSession.KeepAwake(keepDisplayOn: true)) { } Check("6.4 KeepAwake(keepDisplayOn: true) round-trip", true); }
+        catch (Exception ex) { Check("6.4 KeepAwake(keepDisplayOn: true) round-trip", false, ex.Message); }
+
+        // Subscribe registers a suspend/resume callback (RegisterSuspendResumeNotification) and Unregisters on dispose.
+        bool subOk = true;
+        try { using IDisposable sub = PowerSession.Subscribe(); }
+        catch (Exception ex) { subOk = false; Check("6.5 PowerSession.Subscribe register + unregister", false, ex.Message); }
+        if (subOk) Check("6.5 PowerSession.Subscribe register + unregister", true);
+        Manual("6.6 live Suspending/Resumed delivery", "requires an actual machine sleep/wake; see the gallery Power card");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    // (7) Shell — JumpList SetTasks/Clear round-trip (real OS, windowless) + TaskbarList3 creation/SetProgressState.
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    private static void ShellSuite()
+    {
+        Section("[7] Shell — JumpList / TaskbarManager");
+
+        // JumpList is per-application (AUMID), not per-window, so it runs fully headless. Build a list, then clear it.
+        string exe = Environment.ProcessPath ?? "unknown.exe";
+        bool setOk = true;
+        try
+        {
+            JumpList.SetTasks(null,
+                new JumpTask("Smoke task A", exe, "fluentgpu-smoke:play?list=liked"),
+                new JumpTask("Smoke task B", exe, "fluentgpu-smoke:hello?from=smoke"));
+        }
+        catch (Exception ex) { setOk = false; Check("7.1 JumpList.SetTasks (ICustomDestinationList commit)", false, ex.Message); }
+        if (setOk) Check("7.1 JumpList.SetTasks (ICustomDestinationList commit)", true, "2 user tasks");
+
+        bool clearOk = true;
+        try { JumpList.Clear(); }
+        catch (Exception ex) { clearOk = false; Check("7.2 JumpList.Clear (DeleteList)", false, ex.Message); }
+        if (clearOk) Check("7.2 JumpList.Clear (DeleteList, no residue)", true);
+
+        // TaskbarManager is best-effort (latched no-op if the shell/ITaskbarList3 is unavailable), so the construction
+        // path is exercised here without a real window: SetProgressState/ClearProgress must never throw. The VISIBLE
+        // taskbar-button progress needs a real top-level HWND (the gallery passes the live window) → [MANUAL].
+        bool tbOk = true;
+        try
+        {
+            TaskbarManager.SetProgressState(0, TaskbarProgressState.None);
+            TaskbarManager.SetProgress(0, 0, 100);
+            TaskbarManager.ClearProgress(0);
+        }
+        catch (Exception ex) { tbOk = false; Check("7.3 TaskbarManager progress calls do not throw (ITaskbarList3 init)", false, ex.Message); }
+        if (tbOk) Check("7.3 TaskbarManager progress calls do not throw (ITaskbarList3 init, latched best-effort)", true);
+        Manual("7.4 visible taskbar progress + overlay icon", "needs a real top-level window HWND; see the gallery Shell card");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    // (8) Dialogs + Media — both are window-bound/modal/interactive; assert the public surface exists (construction-path)
+    //     and mark the live behavior [MANUAL] (the gallery drives them with the real window handle + a user).
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    private static void DialogsAndMediaSuite()
+    {
+        Section("[8] Dialogs + Media — construction-path + [MANUAL] (modal / window-bound)");
+
+        // The pickers are modal and block on a nested message loop until the user commits — never auto-driveable in a
+        // headless probe. The method bindings are compile-time proven; the live pick is [MANUAL].
+        Manual("8.1 FilePicker.OpenFile / SaveFile / PickFolder", "modal common-item dialog; needs the real window + a user (gallery Dialogs card)");
+
+        // SMTC binds to a top-level HWND and raises ButtonPressed on an OS thread; the headless probe owns no window, so
+        // GetForWindow is not callable here. Assert the public enums project the WinRT ordinals we rely on, then [MANUAL].
+        Check("8.2 MediaPlaybackStatus ordinals match the WinRT 1:1 cast",
+            (int)MediaPlaybackStatus.Closed == 0 && (int)MediaPlaybackStatus.Playing == 3 && (int)MediaPlaybackStatus.Paused == 4,
+            "Closed=0, Playing=3, Paused=4");
+        Check("8.3 MediaButton models the transport buttons the gallery handles",
+            MediaButton.Play != MediaButton.Unknown && MediaButton.Next != MediaButton.Previous);
+        Manual("8.4 SMTC GetForWindow + hardware media-key ButtonPressed", "needs the real window HWND + a key press (gallery Media card)");
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────

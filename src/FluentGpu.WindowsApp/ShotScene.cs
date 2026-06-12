@@ -23,6 +23,21 @@ sealed class ShotScene : Component
         // Full-bleed: the whole gallery (regression check), optionally deep-linked to a nav page via "gallery:<navkey>".
         "gallery" => Embed.Comp(() => new GalleryApp()),
         _ when _id.StartsWith("gallery:") => Embed.Comp(() => new GalleryApp { InitialPage = _id.Substring("gallery:".Length) }),
+        // The "Windows APIs" page's below-the-fold pillar cards (Shell / Power / Network), rendered directly so a
+        // top-anchored screenshot can verify them without scrolling the full page (the device-height clamp hides them).
+        "windowsapi-cards" => Embed.Comp(() => new OverlayHost
+        {
+            Child = new BoxEl
+            {
+                Grow = 1, Direction = 1, Fill = PageBg, Gap = 12f, Padding = new Edges4(28, 28, 28, 28),
+                Children =
+                [
+                    Embed.Comp(() => new ShellCard()),
+                    Embed.Comp(() => new PowerCard()),
+                    Embed.Comp(() => new NetworkCard()),
+                ],
+            },
+        }),
         // The REAL flyout through OverlayHost + the open animation (reproduces the live dropdown the user sees).
         "flyout" => Embed.Comp(() => new OverlayHost { Child = new BoxEl { Grow = 1, Fill = PageBg, Children = [Embed.Comp(() => new FlyoutLiveShot())] } }),
         "combobox-open" => OverlayShot(Embed.Comp(() => new ComboBoxOpenShot())),
