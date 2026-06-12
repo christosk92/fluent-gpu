@@ -325,7 +325,6 @@ public sealed record TextEl(Prop<string> Text) : Element
     // Unified channels: Text/Color each take a static value, a Func<T> thunk, or a concrete signal (the positional
     // ctor keeps `new TextEl("hi")` compiling via the string → Prop<string> conversion). Legacy *Bind init-aliases
     // below are deleted by the migration waves.
-    public Func<ColorF>? ColorBind { init { if (value is not null) Color = value; } } // → text color  (PaintDirty)
 
     public float Size { get; init; } = 14f;
     /// <summary>Bold sugar — kept for the many existing call sites; equivalent to <see cref="Weight"/> = 700.

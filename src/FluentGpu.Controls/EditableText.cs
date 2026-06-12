@@ -261,12 +261,14 @@ public sealed class EditableText : Component
         var textEl = new TextEl("")
         {
             Size = FontSize,
-            Color = IsEnabled ? Foreground : DisabledForeground,
+            // No static Color: BindColor OWNS the channel (doc vs placeholder vs disabled — :756 handles IsEnabled),
+            // and a bound channel ignores its static. The pre-unification static here was a hedge against the old
+            // re-render clobber, fixed at the reconciler.
             DisabledColor = DisabledForeground,
             Wrap = AcceptsReturn ? TextWrap.Wrap : TextWrap.NoWrap,
             Width = AcceptsReturn ? MathF.Max(8f, Width - 16f) : float.NaN,   // wrap width = content box (padding 10+6)
             Text = Prop.Of(BindDisplay),
-            ColorBind = BindColor,
+            Color = Prop.Of(BindColor),
         };
         // Parts: restyle the run (font family, size…); the display binds + wrap mechanics always win (caret/hit-test
         // math reads the node's committed TextStyle, so a modifier-changed face flows into the geometry correctly).
@@ -275,7 +277,7 @@ public sealed class EditableText : Component
             Wrap = AcceptsReturn ? TextWrap.Wrap : TextWrap.NoWrap,
             Width = AcceptsReturn ? MathF.Max(8f, Width - 16f) : float.NaN,
             Text = Prop.Of(BindDisplay),
-            ColorBind = BindColor,
+            Color = Prop.Of(BindColor),
         };
 
         // lane (padded, clipping viewport) > scroller (carries the -ScrollX caret-follow transform) > text leaf.

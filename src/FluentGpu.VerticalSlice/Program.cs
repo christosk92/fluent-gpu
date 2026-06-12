@@ -10237,10 +10237,12 @@ static class Slice
                         new BoxEl { Width = 40, BorderWidth = proof, Height = Prop.Of(() => h.Value), OnRealized = nh => nH = nh },
                         new BoxEl { Width = 40, Height = 10, BorderWidth = proof, TransformBind = () => Affine2D.Translation(tx.Value, 0f), OnRealized = nh => nT = nh },
                         new BoxEl { OnRealized = nh => wTxt = nh, Children = [ new TextEl("") { Underline = (r & 1) == 1, Text = Prop.Of(() => txt.Value) } ] },
-                        new BoxEl { OnRealized = nh => wCol = nh, Children = [ new TextEl("c") { Underline = (r & 1) == 1, ColorBind = () => col.Value } ] },
+                        new BoxEl { OnRealized = nh => wCol = nh, Children = [ new TextEl("c") { Underline = (r & 1) == 1, Color = Prop.Of(() => col.Value) } ] },
                         new BoxEl { OnRealized = nh => wImg = nh, Children = [ new ImageEl { Width = 24, Height = 24, PlaceholderBind = () => tint.Value } ] },
-                        // the EditableText shape: a STATIC Color AND a ColorBind on one TextEl — the bind must win
-                        new BoxEl { OnRealized = nh => wCan = nh, Children = [ new TextEl("canary") { Color = Tok.TextPrimary, Underline = (r & 1) == 1, ColorBind = () => canCol.Value } ] },
+                        // the EditableText shape, post-unification: static+bind coexistence on one channel is now a
+                        // COMPILE ERROR (CS1912 duplicate initializer) — the bind owns Color outright; the disabled
+                        // ramp stays on its own DisabledColor field (recorder-composited, a different channel).
+                        new BoxEl { OnRealized = nh => wCan = nh, Children = [ new TextEl("canary") { DisabledColor = Tok.TextDisabled, Underline = (r & 1) == 1, Color = Prop.Of(() => canCol.Value) } ] },
                     },
                 };
             },
@@ -10282,7 +10284,7 @@ static class Slice
             host.Scene.Paint(nCol).TextColor == col.Peek(), $"paint={host.Scene.Paint(nCol).TextColor} want={col.Peek()}");
         Check("prop-net.placeholder bound Placeholder survives an owner re-render",
             host.Scene.Paint(nImg).Fill == tint.Peek(), $"paint={host.Scene.Paint(nImg).Fill}");
-        Check("prop-net.canary static Color + ColorBind on one TextEl: the bind wins across re-renders (EditableText shape)",
+        Check("prop-net.canary bound Color owns the channel outright (static+bind coexistence is now a compile error)",
             host.Scene.Paint(nCan).TextColor == canCol.Peek(), $"paint={host.Scene.Paint(nCan).TextColor} want={canCol.Peek()}");
     }
 
