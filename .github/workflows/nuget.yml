@@ -66,4 +66,11 @@ jobs:
       - name: NuGet push
         if: ${{ startsWith(github.ref, 'refs/tags/v') }}
         shell: pwsh
-        run: dotnet nuget push artifacts/nuget/*.nupkg --source https://api.nuget.org/v3/index.json --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --skip-duplicate
+        run: |
+          # Resolve real paths — PowerShell does not glob-expand *.nupkg for the native dotnet call.
+          $pkgs = Get-ChildItem -Path artifacts/nuget -Filter *.nupkg
+          if (-not $pkgs) { throw 'no .nupkg found to push' }
+          foreach ($p in $pkgs) {
+            dotnet nuget push $p.FullName --source https://api.nuget.org/v3/index.json --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --skip-duplicate
+            if ($LASTEXITCODE -ne 0) { throw "push failed for $($p.Name)" }
+          }
