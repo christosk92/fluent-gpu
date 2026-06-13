@@ -15,6 +15,7 @@ using FluentGpu.WindowsApi.Notifications;
 using FluentGpu.WindowsApi.Packaging;
 using FluentGpu.WindowsApi.Power;
 using FluentGpu.WindowsApi.Shell;
+using FluentGpu.WindowsApi.Storage;
 using static FluentGpu.Dsl.Ui;
 
 // ── The "Windows APIs" gallery page ─────────────────────────────────────────────────────────────────────────────────
@@ -46,10 +47,11 @@ sealed class WindowsApiPage : Component
         UseEffect(() => WindowsApiLive.ResetForNewMount(), WinApiUi.MountOnce);
 
         return GalleryPage.ShellKeyed("windowsapi", "Windows APIs",
-            "FluentGpu.WindowsApi — AOT-clean Win32/WinRT interop behind a small managed surface. Nine pillars, each a " +
+            "FluentGpu.WindowsApi — AOT-clean Win32/WinRT interop behind a small managed surface. Ten pillars, each a " +
             "live demo: toasts, the credential locker, package identity, protocol activation, the System Media Transport " +
-            "Controls, file pickers, taskbar progress + jump lists, keep-awake/suspend-resume, and network connectivity. " +
-            "Every button drives the real OS; the interactive pillars are documented thread- and HWND-affine.",
+            "Controls, file pickers, taskbar progress + jump lists, keep-awake/battery/suspend-resume, network " +
+            "connectivity, app-data storage, and OS file/folder drop. Every button drives the real OS; the interactive " +
+            "pillars are documented thread- and HWND-affine.",
             Embed.Comp(() => new NotificationsCard()),
             Embed.Comp(() => new CredentialsCard()),
             Embed.Comp(() => new PackagingCard()),
@@ -58,7 +60,9 @@ sealed class WindowsApiPage : Component
             Embed.Comp(() => new DialogsCard()),
             Embed.Comp(() => new ShellCard()),
             Embed.Comp(() => new PowerCard()),
-            Embed.Comp(() => new NetworkCard()));
+            Embed.Comp(() => new NetworkCard()),
+            Embed.Comp(() => new StorageCard()),
+            Embed.Comp(() => new FileDropCard()));
     }
 }
 
@@ -242,12 +246,12 @@ sealed class NotificationsCard : Component
             {
                 if (!ToastNotifier.IsSupported) { status.Value = "Toasts disabled (process is elevated)."; statusColor.Value = WinApiUi.Warn; return; }
                 ToastNotifier.Default.Register(ActivatorClsid, "FluentGpu Gallery");
-                string xml = new ToastBuilder()
-                    .AddText(title.Peek())
-                    .AddText(body.Peek())
-                    .AddArgument("source", "gallery")
-                    .BuildXml();
-                bool ok = ToastNotifier.Default.Show(xml);
+                bool ok = Toast.Create()
+                    .Title(title.Peek())
+                    .Body(body.Peek())
+                    .Argument("source", "gallery")
+                    .Tag("gallery-basic")
+                    .ShowVia(ToastNotifier.Default);
                 status.Value = ok ? "Toast shown (S_OK; it auto-expires)." : "Show returned false.";
                 statusColor.Value = ok ? WinApiUi.Ok : WinApiUi.Bad;
             }
@@ -260,14 +264,16 @@ sealed class NotificationsCard : Component
             {
                 if (!ToastNotifier.IsSupported) { status.Value = "Toasts disabled (process is elevated)."; statusColor.Value = WinApiUi.Warn; return; }
                 ToastNotifier.Default.Register(ActivatorClsid, "FluentGpu Gallery");
-                string xml = new ToastBuilder()
-                    .AddText("Action toast")
-                    .AddText("Click a button — its argument round-trips to the Activated event below.")
-                    .AddArgument("source", "gallery")
-                    .AddButton("Play", "action", "play")
-                    .AddButton("Skip", "action", "skip")
-                    .BuildXml();
-                bool ok = ToastNotifier.Default.Show(xml);
+                bool ok = Toast.Create()
+                    .Title("Action toast")
+                    .Body("Click a button — its argument round-trips to the Activated event below.")
+                    .Argument("source", "gallery")
+                    .Button("Play", b => b.Argument("action", "play").Success())
+                    .Button("Skip", b => b.Argument("action", "skip"))
+                    .DismissButton()
+                    .ButtonStyles()
+                    .Tag("gallery-action")
+                    .ShowVia(ToastNotifier.Default);
                 status.Value = ok ? "Action toast shown — click a button." : "Show returned false.";
                 statusColor.Value = ok ? WinApiUi.Ok : WinApiUi.Bad;
             }
@@ -291,18 +297,21 @@ sealed class NotificationsCard : Component
 
         return ControlExample.Build("Toast notifications",
             form,
-            description: "ToastBuilder composes the ToastGeneric XML; ToastNotifier registers the AUMID + activator and Show()s it. The action toast's button argument round-trips to the Activated event (click a button on the banner).",
+            description: "Toast.Create() is a fluent builder — Title/Body/Button/Tag and no XML in sight: ShowVia() builds the ToastGeneric payload, carries the tag, and Show()s it. Buttons take a ToastButton config (icon, Success/Critical style, Dismiss, context-menu). The action toast's button argument round-trips to the Activated event (click a button on the banner). BuildXml() stays the raw escape hatch.",
             output: WinApiUi.OutputPanel(status, WinApiUi.Info, log),
             code: """
-            string xml = new ToastBuilder()
-                .AddText(title).AddText(body)
-                .AddArgument("source", "gallery")
-                .AddButton("Play", "action", "play")
-                .BuildXml();
-
             ToastNotifier.Default.Register(activatorClsid, "FluentGpu Gallery");
             ToastNotifier.Default.Activated += args => Log(args.Argument);
-            ToastNotifier.Default.Show(xml);
+
+            Toast.Create()
+                 .Title(title).Body(body)
+                 .Argument("source", "gallery")
+                 .Button("Play", b => b.Argument("action", "play").Success())
+                 .Button("Skip", b => b.Argument("action", "skip"))
+                 .DismissButton()
+                 .ButtonStyles()
+                 .Tag("gallery-action")
+                 .ShowVia(ToastNotifier.Default);   // no XML; raw BuildXml() still available
             """);
     }
 }
@@ -531,6 +540,7 @@ sealed class MediaCard : Component
         var status = UseSignal("Not connected. Click Enable SMTC.");
         var statusColor = UseSignal(WinApiUi.Info);
         var log = UseSignal("—");
+        var posSec = UseSignal(60.0);   // F4 timeline scrub position (seconds into a 210s track)
 
         // The SMTC ButtonPressed callback arrives on an OS worker thread → post hops it to the UI thread (engine marshal;
         // wakes the loop, drains next frame, no per-frame re-render).
@@ -575,6 +585,23 @@ sealed class MediaCard : Component
             catch (Exception ex) { status.Value = label + " failed: " + ex.Message; statusColor.Value = WinApiUi.Bad; }
         }
 
+        // F4 — push the timeline (position + track length) so the now-playing flyout / lock screen shows a SCRUB BAR.
+        void PushTimeline()
+        {
+            try
+            {
+                var smtc = WindowsApiLive.Smtc;
+                if (smtc is null) { status.Value = "Enable SMTC first."; statusColor.Value = WinApiUi.Warn; return; }
+                var pos = TimeSpan.FromSeconds(posSec.Peek());
+                var end = TimeSpan.FromSeconds(210);
+                smtc.UpdateTimeline(pos, end);
+                status.Value = $"Timeline pushed — {pos:m\\:ss} / {end:m\\:ss} (scrub bar on the flyout).";
+                statusColor.Value = WinApiUi.Ok;
+                lg.Value!.Add($"timeline: {pos:m\\:ss}/{end:m\\:ss}");
+            }
+            catch (Exception ex) { status.Value = "UpdateTimeline failed: " + ex.Message; statusColor.Value = WinApiUi.Bad; }
+        }
+
         var form = new BoxEl
         {
             Direction = 1, Gap = 12f,
@@ -590,6 +617,8 @@ sealed class MediaCard : Component
                         Button.Accent("Enable SMTC", enable),
                         Button.Standard("Playing", () => SetState(MediaPlaybackStatus.Playing, "Playing")),
                         Button.Standard("Paused", () => SetState(MediaPlaybackStatus.Paused, "Paused")),
+                        Button.Standard("Push timeline", PushTimeline),
+                        Button.Standard("+30s", () => { posSec.Value = Math.Min(210, posSec.Peek() + 30); PushTimeline(); }),
                     ],
                 },
             ],
@@ -597,7 +626,7 @@ sealed class MediaCard : Component
 
         return ControlExample.Build("System Media Transport Controls",
             form,
-            description: "SystemMediaControls.GetForWindow wires this window to the OS media surface (now-playing flyout, lock screen, hardware media keys). Enable it, then press the media keys on your keyboard or headset — each press lands in the log (marshalled off the SMTC worker thread).",
+            description: "SystemMediaControls.GetForWindow wires this window to the OS media surface (now-playing flyout, lock screen, hardware media keys). Enable it, then press the media keys on your keyboard or headset — each press lands in the log (marshalled off the SMTC worker thread). \"Push timeline\" sends the position + track length so the flyout shows a working scrub bar; \"+30s\" advances it.",
             output: WinApiUi.OutputPanel(status, WinApiUi.Info, log),
             code: """
             var smtc = SystemMediaControls.GetForWindow(hwnd);
@@ -606,6 +635,7 @@ sealed class MediaCard : Component
             smtc.SetEnabledButtons(play: true, pause: true, next: true, previous: true);
             smtc.UpdateDisplay("Midnight City", "The Wanderers", albumTitle: "Gallery Sessions");
             smtc.SetPlaybackStatus(MediaPlaybackStatus.Playing);
+            smtc.UpdateTimeline(TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(210));  // scrub bar
             smtc.IsEnabled = true;
             """);
     }
@@ -880,6 +910,23 @@ sealed class PowerCard : Component
             catch (Exception ex) { status.Value = "KeepAwake failed: " + ex.Message; statusColor.Value = WinApiUi.Bad; }
         };
 
+        // F1 — a one-shot power snapshot (GetSystemPowerStatus): AC/DC, battery %, charging, energy saver, est. runtime.
+        Action readPower = () =>
+        {
+            try
+            {
+                PowerStatus p = PowerSession.ReadPower();
+                string batt = p.HasBattery
+                    ? $"{(p.BatteryPercent is int pct ? pct + "%" : "?%")}{(p.IsCharging ? " charging" : "")}" +
+                      (p.RemainingDischarge is { } rd ? $", ~{rd:h\\:mm} left" : "")
+                    : "no battery";
+                status.Value = $"{p.Source} · {batt}{(p.EnergySaverOn ? " · Energy Saver ON" : "")}";
+                statusColor.Value = p.EnergySaverOn ? WinApiUi.Warn : WinApiUi.Ok;
+                lg.Value!.Add($"power: {p.Source} batt={(p.BatteryPercent?.ToString() ?? "—")} saver={p.EnergySaverOn}");
+            }
+            catch (Exception ex) { status.Value = "ReadPower failed: " + ex.Message; statusColor.Value = WinApiUi.Bad; }
+        };
+
         var form = new BoxEl
         {
             Direction = 1, Gap = 12f,
@@ -891,16 +938,21 @@ sealed class PowerCard : Component
                 // status text (a bound Prop) read ACTIVE.
                 ToggleSwitch.Create(awake.Value, toggle, header: "Keep system awake"),
                 Body("Holds a power-availability request (SetThreadExecutionState) for as long as it is on. Suspend/resume broadcasts appear in the log — try sleeping and waking the machine.").Secondary() with { MaxWidth = 460f },
+                new BoxEl { Direction = 0, Gap = 8f, AlignItems = FlexAlign.Center, Children = [Button.Standard("Read power status", readPower)] },
             ],
         };
 
-        return ControlExample.Build("Power — keep awake & suspend/resume",
+        return ControlExample.Build("Power — keep awake, battery snapshot & suspend/resume",
             form,
             output: WinApiUi.OutputPanel(status, WinApiUi.Info, log),
             code: """
             // Hold a keep-awake request for the lifetime of the returned handle:
             IDisposable awake = PowerSession.KeepAwake(keepDisplayOn: false);
             // … later: awake.Dispose();  // allow sleep again
+
+            // A one-shot battery / AC-DC / energy-saver snapshot:
+            PowerStatus p = PowerSession.ReadPower();
+            if (p.HasBattery) Log($"{p.Source} {p.BatteryPercent}%{(p.IsCharging ? " charging" : "")}");
 
             PowerSession.Suspending += () => Log("suspending");
             PowerSession.Resumed    += () => Log("resumed");
@@ -992,6 +1044,125 @@ sealed class NetworkCard : Component
             NetworkConnectivityLevel level = NetworkStatus.GetConnectivity();
 
             using var sub = NetworkStatus.Subscribe(isOnline => PostToUiThread(() => Update(isOnline)));
+            """);
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// (10) Storage — AppDataStore typed Get/Set persisted under HKCU + folders; SettingsStore is the reactive write-through wrap.
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+[SupportedOSPlatform("windows")]
+sealed class StorageCard : Component
+{
+    public override Element Render()
+    {
+        var store = UseRef<AppDataStore?>(null);
+        store.Value ??= AppDataStore.ForUnpackaged("FluentGpu", "Gallery");
+        var note = UseSignal("");
+        var status = UseSignal("Type a note, Save, then Reload (or restart the app) — it persists in HKCU.");
+        var log = UseSignal("—");
+
+        // Load the saved value once on mount (one-shot read; the card seeds the textbox from disk).
+        UseEffect(() => { note.Value = store.Value!.GetString("note", ""); }, WinApiUi.MountOnce);
+
+        Action save = () => { try { store.Value!.SetString("note", note.Peek()); status.Value = "Saved to HKCU."; } catch (Exception ex) { status.Value = "Save failed: " + ex.Message; } };
+        Action reload = () => { try { note.Value = store.Value!.GetString("note", ""); status.Value = "Reloaded from disk."; } catch (Exception ex) { status.Value = "Reload failed: " + ex.Message; } };
+        Action clear = () => { try { store.Value!.Remove("note"); note.Value = ""; status.Value = "Cleared."; } catch (Exception ex) { status.Value = "Clear failed: " + ex.Message; } };
+
+        var form = new BoxEl
+        {
+            Direction = 1, Gap = 12f,
+            Children =
+            [
+                TextBox.Create(header: "Persisted note", text: note, width: 360f),
+                new BoxEl { Direction = 0, Gap = 8f, Wrap = true, AlignItems = FlexAlign.Center, Children = [Button.Accent("Save", save), Button.Standard("Reload", reload), Button.Standard("Clear", clear)] },
+                WinApiUi.Field("Local folder", store.Value!.LocalFolder),
+            ],
+        };
+
+        return ControlExample.Build("App data — settings & folders",
+            form,
+            description: "AppDataStore is the unpackaged ApplicationData analogue: typed Get/Set (String/Bool/Int/Long/Double/Bytes) persisted under HKCU\\Software\\{publisher}\\{product}, plus Local/Cache/Temp folders. SettingsStore wraps it as write-through Signal<T> for one-line persisted bindings.",
+            output: WinApiUi.OutputPanel(status, WinApiUi.Info, log),
+            code: """
+            var store = AppDataStore.ForUnpackaged("FluentGpu", "Gallery");
+            store.SetString("note", text);            // REG_SZ under HKCU
+            string saved = store.GetString("note", "");
+
+            // Or reactive write-through (persists on the next flush — no Save button):
+            var settings = SettingsStore.ForUnpackaged("FluentGpu", "Gallery", runtime);
+            Signal<bool> muted = settings.Bool("muted");   // bind a toggle straight to it
+            """);
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// (11) File drop — the cross-cutting OS file/folder DropTarget (OLE IDropTarget → engine external-drop seam). Drag files
+//      from Explorer onto the zone; OnEnter highlights it, OnDrop lists the paths. DropKinds.Files / FileDropData.
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+sealed class FileDropCard : Component
+{
+    public override Element Render()
+    {
+        var over = UseSignal(false);
+        var files = UseSignal("Drag files or folders from Explorer onto the dashed zone.");
+        var status = UseSignal("Nothing dropped yet.");
+        var count = UseSignal(0);
+
+        // The DropTarget handlers fire on the UI thread (the dispatcher drives them from the Win32 IDropTarget). A
+        // BoxEl.DropTarget accepting DropKinds.Files receives an OS drop exactly like an in-app drag.
+        var zone = new BoxEl
+        {
+            Direction = 1, Gap = 6f, MinWidth = 360f, Height = 132f,
+            AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Padding = Edges4.All(16), Corners = Radii.ControlAll, BorderWidth = 2f,
+            Fill = over.Value ? Tok.SystemFillSuccessBackground : Tok.FillSolidBase,        // ColorF (not a bound channel): reading over.Value during render re-renders the card on hover
+            BorderColor = over.Value ? Tok.SystemFillSuccess : Tok.StrokeCardDefault,
+            DropTarget = new DropTargetSpec(
+                new[] { DropKinds.Files },
+                OnEnter: _ => over.Value = true,
+                OnLeave: _ => over.Value = false,
+                OnDrop: s =>
+                {
+                    over.Value = false;
+                    if (s.Payload is FileDropData d)
+                    {
+                        count.Value = d.Count;
+                        files.Value = d.Count == 0 ? "(empty)" : string.Join("\n", d.Paths);
+                        status.Value = d.Count == 0 ? "Nothing dropped." : $"Dropped {d.Count} path(s)" + (d.AllFolders ? " (all folders)." : ".");
+                    }
+                }),
+            Children =
+            [
+                new TextEl("") { Size = 26f, FontFamily = Theme.IconFont, Color = Prop.Of(() => over.Value ? Tok.SystemFillSuccess : Tok.TextTertiary), Text = Prop.Of(() => over.Value ? "" : "") },
+                new TextEl("") { Size = 13f, Weight = 600, Color = Tok.TextPrimary, Text = Prop.Of(() => over.Value ? "Release to drop" : "Drop files / folders here") },
+            ],
+        };
+
+        var form = new BoxEl
+        {
+            Direction = 1, Gap = 12f,
+            Children =
+            [
+                zone,
+                new TextEl("") { Size = 13f, Color = Tok.TextSecondary, Text = Prop.Of(() => $"{count.Value} item(s)") },
+            ],
+        };
+
+        return ControlExample.Build("File & folder drop",
+            form,
+            description: "A BoxEl.DropTarget that accepts DropKinds.Files receives an OS drag from Explorer through the engine's external-drop seam (OLE IDropTarget → InputHooks → InputDispatcher → DragDropContext). OnEnter/OnLeave/OnDrop fire on the UI thread; the payload is a FileDropData carrying the absolute paths.",
+            output: WinApiUi.OutputPanel(status, WinApiUi.Info, files),
+            code: """
+            new BoxEl {
+                DropTarget = new DropTargetSpec(
+                    new[] { DropKinds.Files },
+                    OnEnter: _ => highlight.Value = true,
+                    OnLeave: _ => highlight.Value = false,
+                    OnDrop:  s => { if (s.Payload is FileDropData d) Handle(d.Paths); }),
+                // …visuals…
+            };
+            // The Windows backend auto-registers the top-level window as an OLE drop target.
             """);
     }
 }

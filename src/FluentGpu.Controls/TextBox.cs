@@ -1,4 +1,5 @@
 using FluentGpu.Dsl;
+using FluentGpu.Forms;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Signals;
@@ -36,12 +37,13 @@ public static class TextBox
         Func<string, bool>? beforeTextChanging = null,
         Action<int, int>? onSelectionChanged = null,
         Action<string>? onCommit = null,
-        Action? onCancel = null)
+        Action? onCancel = null,
+        Field<string>? field = null)
     {
         float w = Math.Max(width, MinWidth);
         float h = Math.Max(height, 32f);         // TextControlThemeMinHeight = 32 (generic.xaml:96)
 
-        Element field = Embed.Comp(() => new EditableText
+        Element editor = Embed.Comp(() => new EditableText
         {
             Placeholder = placeholder, Width = w, Height = h,
             Text = text, MaxLength = maxLength, IsReadOnly = isReadOnly, AcceptsReturn = acceptsReturn,
@@ -55,11 +57,13 @@ public static class TextBox
             OnSelectionChanged = onSelectionChanged,
             OnCommit = onCommit,
             OnCancel = onCancel,
+            // form-validation.md: the editor owns the invalid-border + touched-on-blur; TextBox owns the message row.
+            Field = field?.Binding,
         });
 
-        if (header is null && description is null) return field;
+        if (header is null && description is null && field is null) return editor;
 
-        var stack = new List<Element>(3);
+        var stack = new List<Element>(4);
         if (header is not null)
             // HeaderContentPresenter: Foreground = TextControlHeaderForeground (BaseHigh #FFFFFFFF dark / #FF000000
             // light, generic.xaml:886+207/4132); Disabled → TextControlHeaderForegroundDisabled (BaseMediumLow
@@ -71,13 +75,17 @@ public static class TextBox
                 Color = isEnabled ? Tok.TextControlHeaderForeground : Tok.TextControlHeaderForegroundDisabled,
                 Margin = new Edges4(0, 0, 0, HeaderMargin),
             });
-        stack.Add(field);
+        stack.Add(editor);
         if (description is not null)
             // DescriptionPresenter (TextBox_themeresources.xaml:340): Foreground =
             // SystemControlDescriptionTextForegroundBrush (BaseMedium #99FFFFFF dark / #99000000 light,
             // generic.xaml:327+209/4134); no extra margin in the template (the row sits flush below the field);
             // FontSize inherits ControlContentThemeFontSize = 14.
             stack.Add(new TextEl(description) { Size = 14f, Color = Tok.TextControlDescriptionForeground });
+
+        // form-validation.md: the error message row (shared visual; reveal-animates in, zero space when valid).
+        if (field is { } vf)
+            stack.Add(FieldVisuals.MessageRow(vf.Error));
 
         return new BoxEl { Direction = 1, Children = stack.ToArray() };
     }

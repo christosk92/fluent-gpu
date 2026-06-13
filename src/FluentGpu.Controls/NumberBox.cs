@@ -1,5 +1,6 @@
 using System.Globalization;
 using FluentGpu.Dsl;
+using FluentGpu.Forms;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
@@ -82,6 +83,7 @@ public sealed class NumberBox : Component
     /// evaluator runs instead (operands parse invariantly), mirroring NumberBoxParser::Compute.</summary>
     public Func<string, double?>? Parser;
     public Action<double, double>? OnValueChanged;   // (oldValue, newValue) — WinUI ValueChangedEventArgs
+    public Field<double>? Field;                     // form-validation.md: invalid border + touched-on-blur + message row
     public Style? StyleOverride;
     /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
     /// <see cref="TemplateParts"/> for the contract.</summary>
@@ -134,7 +136,8 @@ public sealed class NumberBox : Component
         bool isWrapEnabled = false, bool acceptsExpression = false,
         string placeholderText = "", string? header = null, string? description = null,
         float width = 120f, Func<double, string>? formatter = null, Action<double, double>? onValueChanged = null,
-        Signal<string>? text = null, Func<string, double?>? parser = null, bool isEnabled = true)
+        Signal<string>? text = null, Func<string, double?>? parser = null, bool isEnabled = true,
+        Field<double>? field = null)
         => Embed.Comp(() => new NumberBox
         {
             Value = value, Initial = initial, Minimum = minimum, Maximum = maximum,
@@ -143,7 +146,7 @@ public sealed class NumberBox : Component
             IsWrapEnabled = isWrapEnabled, AcceptsExpression = acceptsExpression,
             PlaceholderText = placeholderText, Header = header, Description = description,
             Width = width, Formatter = formatter, OnValueChanged = onValueChanged,
-            Text = text, Parser = parser, IsEnabled = isEnabled,
+            Text = text, Parser = parser, IsEnabled = isEnabled, Field = field,
         });
 
     /// <summary>Legacy: an editable numeric field with NO spin buttons (WinUI default). <paramref name="step"/> maps to SmallChange.</summary>
@@ -443,6 +446,7 @@ public sealed class NumberBox : Component
                 OnCommit = _ => ValidateInput(),                       // Enter (KeyUp ValidateInput, NumberBox.cpp:564–568)
                 OnCancel = () => SetText(FormatToText(value.Peek())),  // Escape → UpdateTextToValue (NumberBox.cpp:570–574)
                 OnFocusChanged = OnFocusChanged,
+                Field = Field?.Binding,                                // form-validation.md: invalid border + touched-on-blur
             };
             // External programmatic Text writes validate immediately: OnTextPropertyChanged → UpdateValueToText →
             // ValidateInput (NumberBox.cpp:325–340). Our own SetText writes are guarded out (m_textUpdating-style),
@@ -481,7 +485,7 @@ public sealed class NumberBox : Component
         }
 
         // ── Header / Description wrapper (NumberBox.xaml:113 + :176) ─────────────────────────────────────────────
-        if (Header is null && Description is null) return fieldRow;
+        if (Header is null && Description is null && Field is null) return fieldRow;
 
         var stack = new List<Element>(3);
         if (Header is not null)
@@ -499,6 +503,9 @@ public sealed class NumberBox : Component
             // DescriptionPresenter (NumberBox.xaml:176): SystemControlDescriptionTextForegroundBrush (BaseMedium,
             // generic.xaml:327+209/4134); FontSize inherits 14; no extra margin in the template.
             stack.Add(new TextEl(Description) { Size = 14f, Color = Tok.TextControlDescriptionForeground });
+        // form-validation.md: the error message row (reveal-animated; zero space when valid). NumberBox.ValidationMode
+        // (parse/clamp) is orthogonal — a Field can show "must be ≥ 18" while the mode still clamps the parsed value.
+        if (Field is { } vf) stack.Add(FieldVisuals.MessageRow(vf.Error));
 
         return new BoxEl { Direction = 1, Children = stack.ToArray() };
     }

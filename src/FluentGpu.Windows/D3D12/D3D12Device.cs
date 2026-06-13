@@ -64,10 +64,11 @@ public sealed unsafe class D3D12Device : IGpuDevice
     private readonly List<(RectF Rect, float Radius)> _roundedClipStack = new(16);
     private AcrylicCompositor? _acrylic;
     private OpacityLayerCompositor? _opacity;
-    // Open PushLayer kinds in stream order (acrylic pops are no-ops; opacity pops composite their leased RT), and the
-    // leased (slot, alpha) per open OPACITY group — both reused across frames (0 steady alloc).
+    // Open PushLayer kinds in stream order (acrylic pops are no-ops; opacity + self-blur pops composite their leased
+    // RT), and the leased (slot, alpha, σ) per open OPACITY/BLUR group — both reused across frames (0 steady alloc). A
+    // blur group is an opacity group with Sigma > 0: its RT is separable-Gaussian-blurred before the flat composite.
     private readonly List<int> _layerKinds = new(8);
-    private readonly List<(int Slot, float Alpha)> _opacityGroups = new(4);
+    private readonly List<(int Slot, float Alpha, float Sigma)> _opacityGroups = new(4);
     private GlyphRenderer? _glyphs;
     private ImageTextureStore? _imageTextures;
     private ImagePipeline? _imagePipe;
@@ -836,12 +837,13 @@ public sealed unsafe class D3D12Device : IGpuDevice
                 var L = MemoryMarshal.Read<PushLayerCmd>(drawList.Slice(p2));
                 pos = p2 + Unsafe.SizeOf<PushLayerCmd>();
                 FlushSegment(lw, lh);                       // draw the backdrop-so-far into the current target
-                if (L.Kind == (int)LayerKind.Opacity)
+                if (L.Kind == (int)LayerKind.Opacity || L.Kind == (int)LayerKind.Blur)
                 {
                     // Lease + clear + bind the group RT; scissor state carries over so the subtree clips identically.
+                    // A Blur group carries its σ; on pop the RT is gaussian-blurred before the flat composite.
                     int slot = _opacity.Acquire(_cmdList, _fenceValue + 1);
-                    _opacityGroups.Add((slot, L.GroupAlpha));
-                    _layerKinds.Add((int)LayerKind.Opacity);
+                    _opacityGroups.Add((slot, L.GroupAlpha, L.Kind == (int)LayerKind.Blur ? L.BlurSigma : 0f));
+                    _layerKinds.Add(L.Kind);
                 }
                 else
                 {
@@ -861,12 +863,14 @@ public sealed unsafe class D3D12Device : IGpuDevice
                 pos += sizeof(int) + Unsafe.SizeOf<PopLayerCmd>();
                 int kind = _layerKinds.Count > 0 ? _layerKinds[^1] : (int)LayerKind.Acrylic;
                 if (_layerKinds.Count > 0) _layerKinds.RemoveAt(_layerKinds.Count - 1);
-                if (kind == (int)LayerKind.Opacity && _opacityGroups.Count > 0)
+                if ((kind == (int)LayerKind.Opacity || kind == (int)LayerKind.Blur) && _opacityGroups.Count > 0)
                 {
                     FlushSegment(lw, lh);                   // finish the subtree into the group RT
-                    var (slot, alpha) = _opacityGroups[^1];
+                    var (slot, alpha, sigma) = _opacityGroups[^1];
                     _opacityGroups.RemoveAt(_opacityGroups.Count - 1);
-                    _opacity.BeginRead(_cmdList, slot);
+                    // Self-blur group: gaussian-blur the group RT in place (leaves it readable); else just BeginRead it.
+                    if (kind == (int)LayerKind.Blur && sigma > 0f) _opacity.BlurInPlace(_cmdList, slot, sigma, _fenceValue + 1);
+                    else _opacity.BeginRead(_cmdList, slot);
                     // Composite over the UNDERLYING target: the enclosing group's RT, or the canvas.
                     if (_opacityGroups.Count > 0) _opacity.Bind(_cmdList, _opacityGroups[^1].Slot);
                     else _acrylic.BindCanvas(_cmdList);
@@ -882,9 +886,10 @@ public sealed unsafe class D3D12Device : IGpuDevice
         // Defensive: a malformed stream that left groups open still composites them (full alpha chain preserved).
         while (_opacityGroups.Count > 0)
         {
-            var (slot, alpha) = _opacityGroups[^1];
+            var (slot, alpha, sigma) = _opacityGroups[^1];
             _opacityGroups.RemoveAt(_opacityGroups.Count - 1);
-            _opacity.BeginRead(_cmdList, slot);
+            if (sigma > 0f) _opacity.BlurInPlace(_cmdList, slot, sigma, _fenceValue + 1);
+            else _opacity.BeginRead(_cmdList, slot);
             if (_opacityGroups.Count > 0) _opacity.Bind(_cmdList, _opacityGroups[^1].Slot);
             else _acrylic.BindCanvas(_cmdList);
             _opacity.Composite(_cmdList, slot, alpha);

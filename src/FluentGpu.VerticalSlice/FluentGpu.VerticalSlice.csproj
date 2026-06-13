@@ -11,5 +11,9 @@
   <ItemGroup>
     <ProjectReference Include="..\FluentGpu.Engine\FluentGpu.Engine.csproj" />
     <ProjectReference Include="..\FluentGpu.Controls\FluentGpu.Controls.csproj" />
+    <!-- The [Validatable] source generator (form-validation.md) as an analyzer: emits the Validator<T>[] arrays the
+         ValidationChecks consume. ReferenceOutputAssembly=false → the netstandard2.0 analyzer is never linked into the AOT exe. -->
+    <ProjectReference Include="..\FluentGpu.Validation.SourceGen\FluentGpu.Validation.SourceGen.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 </Project>

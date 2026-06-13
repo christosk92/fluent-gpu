@@ -553,6 +553,8 @@ public sealed class FocusEngine {              // portable; owns its own slabs; 
 }
 ```
 
+**Pointer focus is cleared by an inert-background press (deliberate divergence from WinUI).** A `PointerDown` whose hit node has **no focusable self-or-ancestor** (`NearestFocusable == null`) **and** advertises **no press handlers** (`InteractionInfo.HandlerMask & AnyInteractiveMask == 0`) clears focus via `SetFocus(NodeHandle.Null)` — dropping `_focused`, clearing `Focused|FocusVisual` (the focus ring repaints away), and firing the focused node's bubbling `OnFocusChanged(false)` (edit commit + validate-on-blur + caret hide + SIP dismiss). An **interactive-but-non-focusable** hit is *not* background and KEEPS focus: the light-dismiss/modal scrim (carries `OnClick`/`OnPointerDown` while a popup is open) so a press behind a flyout never clears the field beneath; a scrollbar press (handled before the focus block); an `OnDrag`/`OnPointer`, `CanDrag`, selectable-text, hyperlink, gesture, or wheel part. On **touch/pen** there is one extra exclusion: a press that armed a content-pan candidate over a `Scrollable` viewport is a scroll-gesture start, not a background tap, so it keeps focus (the mouse path has no content-pan and treats an empty-content click as a genuine click-away). Applied at both the mouse and touch press sites. WinUI leaves focus put on a background click; FluentGpu intentionally diverges for intuitive click-away-to-blur.
+
 ### 8.1 Tab order — pinned (folds the open '?')
 
 Reads `FocusNav.{TabIndex, IsTabStop}` (architecture-spec §4.4 column) + `NodeFlags.{Focusable, IsTabStop, FocusScope}`:
@@ -646,6 +648,21 @@ public interface IImeSession {
 
 **TSF = v2 (a major workstream, not a footnote):** `ITextStoreACP2`/TSF requires document lock arbitration, advise sinks, ACP range mapping, and composition mutation that respects the TSF **write-lock state** — explicitly deferred. When it lands it is **`[GeneratedComInterface]` cold COM** (human-timescale), not hand-vtable. macOS uses `NSTextInputClient` behind the same `IImeSession` seam.
 > **Scope of the "TSF v2" deferral (cross-ref `text.md` §16).** What is v2 is the **OS TSF COM-wrapper timeline** only — the `ITextStoreACP2` CCW that forwards OS lock/edit callbacks. The **L1/L3 buffer + selection seam is CORE, not deferred**: the editable transactional `ITextDocument`/commit-lock buffer is owned and fully designed by `text.md` §16 ("FULLY core, not v2"), and the read-side selection/`ITextRangeProvider` geometry (§11.6/§12A) lands in v1. "Editing/TSF v2" never means the buffer+selection contract is postponed.
+
+### 10.1 SIP (software input panel / touch keyboard) trigger seam
+
+The **same per-window text-input seam** (this doc's `IImeSession`; the as-built `IPlatformTextInput.TextInput`) also carries the **SIP** — the OS on-screen keyboard that touch needs and the mouse/IME path never used. Three members fold onto it (defaulted no-ops so a SIP-less backend ignores them):
+
+```csharp
+// added to the per-window text-input seam (alongside Enable / SetCompositionRect / IsComposing):
+bool TryShowTouchKeyboard();                 // request the panel; false = no touch keyboard available (best-effort, never throws)
+bool TryHideTouchKeyboard();                 // dismiss it
+event Action<RectDip>? OccludedRectChanged;  // the panel's covered region in CLIENT DIP (empty rect = hidden) — drives the reflow
+```
+
+- **Windows impl (`FluentGpu.Windows` Pal/, the IME-seam neighbour):** WinRT `Windows.UI.ViewManagement.InputPane`, obtained for the engine HWND through the classic-COM bridge **`IInputPaneInterop::GetForWindow`** (the desktop analogue of `InputPane.GetForCurrentView` — there is no CoreWindow here), then **`InputPane2.TryShow`/`TryHide`** to raise/dismiss it and **`InputPane.OccludedRect` + the `Showing`/`Hiding` events** to feed `OccludedRectChanged`. Activation is `RoGetActivationFactory` over the runtime-class HSTRING; absence (a desktop with no touch keyboard, a denied request) is handled gracefully — `TryShow/Hide` return false, never throw. Per the **com-interop.md cold-path ruling** this is a **hand-vtable `calli` consume** (no `ComWrappers`); the SIP is a cold path (focus transitions, user-rate), so the typing-edge alloc rule does not bind it. All WinRT stays confined to `FluentGpu.Windows`; the portable engine only sees the seam, so the headless slice's TerraFX-free closure is preserved (the headless impl records the show/hide requests and re-fires `OccludedRectChanged` on a test cue).
+- **Trigger policy (engine-side, WinUI-faithful — `InputPaneHandler.cpp`):** the SIP is **shown on (focus gained on an editable text control ∧ the focus-causing input was a TOUCH contact)** and **hidden on focus loss** to a non-editable target. The dispatcher exposes the focus-causing pointer's device class (`LastPointerKind`, tracked on every PointerDown/Move/Up); the host bridges it + the show/hide calls onto the interaction-hooks surface (`§13`), and `EditableText` calls them from its `GotFocus`/`LostFocus` edge (the same edge that arms the caret blinker + IME) — a mouse/Tab focus never raises the panel (WinUI keys it off the focus pointer's type).
+- **Reflow (`OccludedRectChanged` → bring-into-view):** when the panel reports its occluded rect, the host scrolls the **focused editor's caret above the pane** — the WinUI `CInputPaneHandler::Showing` → `EnsureFocusedElementInView` bring-into-view. The dispatcher walks from the focused node to its nearest **vertical** scrollable ancestor and, if the field's bottom edge sits below the pane top, lifts that viewport's offset just enough to clear it (+ a small margin), written through the **shared scroll-write clamp chokepoint** (`§12D` `WriteScrollOffset` → `SetScrollOffset`), so it inherits the offset clamp + virtual re-realize and can never push past the content (a zero/empty rect — the `Hiding` notification — is a no-op, exactly the WinUI `Y == 0 ∧ Height == 0` short-circuit). The clamp contract is untouched; the panel reflow is the same hard-clamped offset write every other driver uses.
 
 ---
 
@@ -813,6 +830,7 @@ public interface IDragDropBackend {
 - Drag source is `IDropSource`/`IDataObject`. Per the COM ruling (§11.1) these OLE interfaces are **cold/warm → `[GeneratedComInterface]`/`[GeneratedComClass]`** (human-timescale; not the per-frame hot path).
 - **Drop feedback** = a transient DrawList overlay (insertion line / hover highlight), same overlay mechanism as the focus rect (§8.4).
 - macOS: `NSPasteboard` / `NSDraggingSource`/`NSDraggingDestination` behind the same seams.
+- **As-built — inbound OS file/folder drop.** The receiving (`RegisterDropTarget`) leg ships as four nullable `InputHooks.ExternalDrag{Enter,Over,Leave}`/`ExternalDrop` delegates (the inbound twin of `OpenUri`; `Hooks/Context.cs`), host-wired in the AppHost ctor onto the `InputHooks.Current.Default` channel to `InputDispatcher.ExternalDrag*`. The Windows backend's `Win32DropTarget` (`[GeneratedComClass]` `IDropTarget` + `RegisterDragDrop`/`RevokeDragDrop`, `FluentGpu.Windows/Interop/`) invokes them on the UI thread during the OLE loop; they open an external `DragSession` on the same `DragDropContext` (`ExternalBegin`, Source = scene root so `PruneDead` keeps it live) so a `BoxEl.DropTarget` accepting `DropKinds.Files` receives Enter/Over/Leave/Drop identically to an in-app drag, payload `FileDropData`. This delegate-seam shape (not the `IDragDropBackend.RegisterDropTarget` interface above) is the as-built; the interface form remains the canonical contract for the macOS port. Gate: `e5dragdrop.ext`.
 
 ---
 

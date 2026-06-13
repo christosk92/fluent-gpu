@@ -1,3 +1,5 @@
+using System.Threading;
+using System.Threading.Tasks;
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -53,6 +55,22 @@ internal sealed class AnimValueCell : HookCell
     public float Current, From, Target, Elapsed;
 }
 
+/// <summary>Backs <see cref="RenderContext.UseLoadable{T}"/> — a persistent per-field async value (the skeleton-loading spine).</summary>
+internal sealed class LoadableCell<T> : HookCell
+{
+    public Loadable<T> Loadable = null!;
+}
+
+/// <summary>Backs <see cref="RenderContext.UseAsyncResource{T}"/>: the loadable + the fetch's CancellationTokenSource,
+/// cancelled on component unmount (IDisposableCell ⇒ RunAllCleanups disposes it) so a back-nav mid-load aborts cleanly.</summary>
+internal sealed class AsyncResourceCell<T> : HookCell, IDisposableCell
+{
+    public Loadable<T> Loadable = null!;
+    public CancellationTokenSource Cts = null!;
+    public bool Started;
+    public void DisposeCell() { try { Cts.Cancel(); } catch { /* already disposed */ } Cts.Dispose(); }
+}
+
 /// <summary>A stable, mutable per-component box that persists across renders (the React <c>useRef</c> container).</summary>
 public sealed class Ref<T>
 {
@@ -105,7 +123,7 @@ internal sealed class GestureHookState
 /// exactly the consumers that read it. High-frequency scalars get <see cref="UseSignal"/> bound straight to a node
 /// channel — no re-render at all.
 /// </summary>
-public sealed class RenderContext
+public sealed partial class RenderContext
 {
     private readonly List<HookCell> _cells = new();
     private int _cursor;
@@ -128,7 +146,13 @@ public sealed class RenderContext
     public IReadSignal<int>? ImageEpoch;        // bumped by the host on any image status change → re-renders UseImage consumers
 
     internal void BeginRender() => _cursor = 0;
-    internal void EndRender() => _mounted = true;
+    internal void EndRender()
+    {
+        _mounted = true;
+        // The "form under construction" thread-local (set by UseForm so same-component UseField calls auto-join) lives
+        // only for this render — clear it so it never leaks into the next component the reconciler renders.
+        FluentGpu.Forms.FormScope.Building = null;
+    }
 
     /// <summary>Run every pending effect cleanup + dispose owned reactive primitives (component unmount).</summary>
     public void RunAllCleanups()
@@ -328,6 +352,60 @@ public sealed class RenderContext
     public void PrefetchImage(string src, int decodePx)
     {
         if (Images is not null && !string.IsNullOrEmpty(src)) Images.Prefetch(src, decodePx, decodePx);
+    }
+
+    // ── Skeleton-loading: the async-value spine + the resource lifecycle ─────────────────────────────────────────────
+
+    /// <summary>A persistent per-field async value (Pending|Ready|Failed + value) — the skeleton-loading spine. Survives
+    /// re-renders; flip it with <c>SetReady</c>/<c>SetFailed</c> (typically from <see cref="UseAsyncResource"/> or an
+    /// off-thread <see cref="UsePost"/>). Use this for a field whose load you drive yourself (or a partial-known seed).</summary>
+    public Loadable<T> UseLoadable<T>(Loadable<T>? initial = null)
+    {
+        LoadableCell<T> cell;
+        if (!_mounted) { cell = new LoadableCell<T> { Loadable = initial ?? Loadable<T>.Pending() }; _cells.Add(cell); }
+        else cell = (LoadableCell<T>)_cells[_cursor];
+        _cursor++;
+        return cell.Loadable;
+    }
+
+    /// <summary>Kick an async <paramref name="loader"/> ONCE at mount and return its <see cref="Loadable{T}"/> (starts
+    /// Pending). Completion is marshalled to the UI thread via <see cref="UsePost"/> so <c>SetReady</c>/<c>SetFailed</c>
+    /// land in the batched flush; the <see cref="CancellationToken"/> is cancelled on unmount (the back-nav-mid-load
+    /// case — the cell is <see cref="IDisposableCell"/>) and a late post is dropped by the cancelled-token guard.
+    /// Modeled on the <see cref="UseImage"/> lifecycle. <paramref name="seed"/> is the placeholder value while pending
+    /// (e.g. an empty array so the region's content lambda is never invoked against null).</summary>
+    public Loadable<T> UseAsyncResource<T>(Func<CancellationToken, Task<T>> loader, T seed = default!)
+    {
+        var post = UsePost();   // UseContext consumes no hook cursor, so calling it here does not shift hook order
+        AsyncResourceCell<T> cell;
+        if (!_mounted) { cell = new AsyncResourceCell<T> { Loadable = Loadable<T>.Pending(seed), Cts = new CancellationTokenSource() }; _cells.Add(cell); }
+        else cell = (AsyncResourceCell<T>)_cells[_cursor];
+        _cursor++;
+
+        if (!cell.Started)
+        {
+            cell.Started = true;
+            var loadable = cell.Loadable;
+            var token = cell.Cts.Token;
+            _ = Run();
+
+            async Task Run()
+            {
+                try
+                {
+                    T v = await loader(token).ConfigureAwait(false);
+                    if (!token.IsCancellationRequested)
+                        post(() => { if (!token.IsCancellationRequested) loadable.SetReady(v); });
+                }
+                catch (OperationCanceledException) { /* unmounted mid-load — the CTS was cancelled */ }
+                catch (Exception ex)
+                {
+                    if (!token.IsCancellationRequested)
+                        post(() => { if (!token.IsCancellationRequested) loadable.SetFailed(ex); });
+                }
+            }
+        }
+        return cell.Loadable;
     }
 
     // ── Localization (i18n) hooks ────────────────────────────────────────────────────────────────────────────────────

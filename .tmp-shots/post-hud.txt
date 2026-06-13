@@ -1,9 +1,0 @@
-[wakediag] run 60 rendered 1 | reconciled 1 layout 0 recordOnly 59 | streak 60 idleAgo 1.1s minimized 0 | kept: frameNeeded=1 runtimePending=1 dynamicText=60 anim=54 | sole: dynamicText=6
-[wakediag] run 10 rendered 0 | reconciled 0 layout 0 recordOnly 10 | streak 70 idleAgo 2.2s minimized 0 | kept: dynamicText=10 | sole: dynamicText=10
-[wakediag] run 10 rendered 0 | reconciled 0 layout 0 recordOnly 10 | streak 80 idleAgo 3.3s minimized 0 | kept: dynamicText=10 | sole: dynamicText=10
-[wakediag] run 10 rendered 0 | reconciled 0 layout 0 recordOnly 10 | streak 90 idleAgo 4.4s minimized 0 | kept: dynamicText=10 | sole: dynamicText=10
-[wakediag] run 10 rendered 0 | reconciled 0 layout 0 recordOnly 10 | streak 100 idleAgo 5.5s minimized 0 | kept: dynamicText=10 | sole: dynamicText=10
-[wakediag] run 10 rendered 0 | reconciled 0 layout 0 recordOnly 10 | streak 110 idleAgo 6.6s minimized 0 | kept: dynamicText=10 | sole: dynamicText=10
-[wakediag] run 10 rendered 0 | reconciled 0 layout 0 recordOnly 10 | streak 120 idleAgo 7.7s minimized 0 | kept: dynamicText=10 | sole: dynamicText=10
-[wakediag] run 10 rendered 0 | reconciled 0 layout 0 recordOnly 10 | streak 130 idleAgo 8.8s minimized 0 | kept: dynamicText=10 | sole: dynamicText=10
-[wakediag] run 10 rendered 0 | reconciled 0 layout 0 recordOnly 10 | streak 140 idleAgo 9.9s minimized 0 | kept: dynamicText=10 | sole: dynamicText=10

@@ -73,6 +73,21 @@ static partial class PageInfo
             [new("Guide — control fidelity (motion & visual states)", "docs/guide/control-fidelity.md"),
              new("Spec — backdrop, effects & animation", "design/subsystems/backdrop-effects-animation.md")],
             []),
+        new("motion-recipes", "The Expressive Motion Kit — tuned transition recipes adopted from transitions.dev.",
+            "A library of named, ready-to-use motions (number pop-in, error shake, skeleton reveal, success check, icon swap, notification badge, soft reveal, neighbour-falloff hover) built on the engine's springs, eased tracks, the new per-node self-blur channel, and the expressive curve/token vocabulary. An opt-in app-author palette — framework controls keep their Fluent curves for parity.",
+            null, null, "src/FluentGpu.Engine/Hooks/MotionRecipes.cs", "src/FluentGpu.WindowsApp/MotionRecipesPage.cs",
+            [new("Guide — motion recipes", "docs/guide/motion-recipes.md"),
+             new("Spec — backdrop, effects & animation", "design/subsystems/backdrop-effects-animation.md")],
+            ["animation"]),
+        new("async-skeletons", "Native skeleton/shimmer-while-loading — ONE UI source, derived shimmer, blur-reveal swap.",
+            "Define the UI once; wrap an async region in Skel.Region(loadable, …) and the framework derives the shimmer from " +
+            "that same UI, keeps partial-known parts real (album cover + title), shimmers the pending region (the tracks), and " +
+            "swaps to real with the blur reveal on load. Per-field Loadable<T> lets individual cells (durations) stream in " +
+            "afterwards, shimmering just that leaf. No second hand-authored skeleton tree.",
+            null, null, "src/FluentGpu.Engine/Hooks/SkeletonRegion.cs", "src/FluentGpu.WindowsApp/AsyncSkeletonPage.cs",
+            [new("Guide — skeleton loading", "docs/guide/skeleton-loading.md"),
+             new("Guide — motion recipes (the blur reveal)", "docs/guide/motion-recipes.md")],
+            ["motion-recipes", "virtualization"]),
         new("compositor", "Per-node transform and opacity, applied at record time with no relayout.",
             "Transform and opacity are composited per node — rotation, scale, offset, and alpha apply at record time without reflowing siblings.",
             null, null, "src/FluentGpu.Render/SceneRecorder.cs", "src/FluentGpu.WindowsApp/GalleryPages.cs",

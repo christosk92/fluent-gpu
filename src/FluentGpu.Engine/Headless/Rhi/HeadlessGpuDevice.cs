@@ -53,8 +53,10 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     public IReadOnlyList<DrawGradientRectCmd> LastGradients => _gradients;
     /// <summary>Gradient-tinted border strokes (WinUI elevation borders) drawn this frame.</summary>
     public IReadOnlyList<DrawGradientStrokeCmd> LastGradientStrokes => _gradientStrokes;
-    /// <summary>Layers pushed this frame — acrylic (Kind 0, blur/tint recipe fields) AND flat opacity groups
-    /// (Kind 1, GroupAlpha) ride the same opcode; assert on <see cref="PushLayerCmd.Kind"/>/<c>GroupAlpha</c>.</summary>
+    /// <summary>Layers pushed this frame — acrylic (Kind 0, blur/tint recipe fields), flat opacity groups (Kind 1,
+    /// GroupAlpha), AND per-node self-blur groups (Kind 2, GroupAlpha + <see cref="PushLayerCmd.BlurSigma"/> — the
+    /// Expressive Motion Kit) all ride the same opcode; assert on <see cref="PushLayerCmd.Kind"/>/<c>GroupAlpha</c>/
+    /// <c>BlurSigma</c>.</summary>
     public IReadOnlyList<PushLayerCmd> LastLayers => _layers;
     /// <summary>WinUI selected-tab shapes drawn this frame (DrawTabShape — rounded-top + inverted bottom flares).</summary>
     public IReadOnlyList<DrawTabShapeCmd> LastTabShapes => _tabShapes;

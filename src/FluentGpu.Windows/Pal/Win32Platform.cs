@@ -261,6 +261,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private int _w, _h;
     private float _scale = 1f;
     private bool _closed;
+    private DropRegistration? _dropReg;          // OS file/folder drop registration (Win32DropTarget); null = not registered
 
     // ── custom-frame state (WindowDesc.CustomFrame): engine-reported NC regions + NC-pointer synthesis ──────────────
     private readonly bool _customFrame;
@@ -343,6 +344,20 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         ResizeClientPhysical((int)MathF.Round(requestedW * _scale), (int)MathF.Round(requestedH * _scale));
 
         RefreshClientSize();
+
+        // Register this top-level window as an OS file/folder drop target (OLE IDropTarget → engine external-drop seam).
+        // Best-effort: a no-op on a non-STA thread or if registration fails; popups (Win32PopupWindow) are excluded.
+        _dropReg = Win32DropTarget.Register(_hwnd, ScreenToDip);
+    }
+
+    /// <summary>(screenX, screenY) px → window DIP — the converter handed to <see cref="Win32DropTarget"/> for OLE drag
+    /// points (the same screen→client→DIP path the wheel/pointer events use, see <see cref="ScreenPtToDip"/>).</summary>
+    private Point2 ScreenToDip(int sx, int sy)
+    {
+        POINT p = new() { x = sx, y = sy };
+        ScreenToClient(_hwnd, &p);
+        float s = _scale <= 0f ? 1f : _scale;
+        return new Point2(p.x / s, p.y / s);
     }
 
     /// <summary>Desired-client → window-rect outsets. Standard frame: <c>AdjustWindowRectEx</c>. Custom frame: the
@@ -586,6 +601,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
 
     public void Dispose()
     {
+        Win32DropTarget.Revoke(_dropReg);   // RevokeDragDrop + release the CCW/OLE refcount before the HWND dies
+        _dropReg = null;
         _textInput?.DisposeSip();   // release the WinRT InputPane refs + SIP event subscriptions before the HWND dies
         if (_hwnd != HWND.NULL) { KillTimer(_hwnd, MoveLoopTimerId); DestroyWindow(_hwnd); }
         if (_self.IsAllocated) _self.Free();
@@ -713,13 +730,17 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
             case WM_POINTERHWHEEL:
             {
                 // Replaces WM_MOUSEWHEEL/HWHEEL once mouse-in-pointer is on. HIWORD(wParam) = signed notch delta (×120),
-                // lParam = SCREEN px — identical to the old wheel path, so sign/DIP semantics are preserved exactly:
-                // +delta = wheel forward = scroll up = offset↓, flipped to our "positive = toward content end".
+                // lParam = SCREEN px. WM_POINTERWHEEL is the VERTICAL wheel; WM_POINTERHWHEEL is the HORIZONTAL wheel /
+                // trackpad two-finger horizontal — they must land on DIFFERENT axes (else a horizontal swipe scrolls
+                // vertically). Vertical: +notch = wheel forward = scroll up = offsetY↓, flipped to "positive = toward
+                // content end". Horizontal: +notch = tilt/swipe RIGHT = offsetX↑, already "toward content end" (no flip).
                 short notch = unchecked((short)((ulong)(nuint)wParam >> 16));
-                float dip = -(notch / 120f) * WheelDipPerNotch;
-                _queue.Enqueue(new InputEvent(InputKind.Wheel, WheelPt(lp), 0, 0, dip, Mods(),
+                bool horizontal = msg == WM_POINTERHWHEEL;
+                float dipY = horizontal ? 0f : -(notch / 120f) * WheelDipPerNotch;
+                float dipX = horizontal ? (notch / 120f) * WheelDipPerNotch : 0f;
+                _queue.Enqueue(new InputEvent(InputKind.Wheel, WheelPt(lp), 0, 0, dipY, Mods(),
                     Pointer: PointerKindOf(GET_POINTERID_WPARAM(wParam)), TimestampMs: Now(),
-                    PointerId: GET_POINTERID_WPARAM(wParam)));
+                    PointerId: GET_POINTERID_WPARAM(wParam), ScrollDeltaX: dipX));
                 return true;
             }
             case WM_KEYDOWN:
@@ -988,11 +1009,12 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
 
     // WM_POINTERWHEEL/HWHEEL over the popup: HIWORD(wParam) = signed notch (×120), lParam = SCREEN px — same sign/DIP
     // semantics as the owner's own wheel path, mapped to owner DIP so the forwarded wheel feels identical.
-    internal void ForwardPopupPointerWheel(uint pointerId, long lp, short notch)
+    internal void ForwardPopupPointerWheel(uint pointerId, long lp, short notch, bool horizontal)
     {
-        float dip = -(notch / 120f) * WheelDipPerNotch;
-        _queue.Enqueue(new InputEvent(InputKind.Wheel, WheelPt(lp), 0, 0, dip, Mods(),
-            Pointer: PointerKindOf(pointerId), TimestampMs: Now(), PointerId: pointerId));
+        float dipY = horizontal ? 0f : -(notch / 120f) * WheelDipPerNotch;
+        float dipX = horizontal ? (notch / 120f) * WheelDipPerNotch : 0f;
+        _queue.Enqueue(new InputEvent(InputKind.Wheel, WheelPt(lp), 0, 0, dipY, Mods(),
+            Pointer: PointerKindOf(pointerId), TimestampMs: Now(), PointerId: pointerId, ScrollDeltaX: dipX));
     }
 
     // WM_POINTERCAPTURECHANGED over the popup: the contact's implicit capture broke — cancel just THAT PointerId's

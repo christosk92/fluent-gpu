@@ -181,6 +181,11 @@ public sealed class ItemsView : Component
     /// unconstrained ScrollView-over-ItemsRepeater shape (ItemsView.xaml template) — the gallery card shape.</summary>
     public float Grow = 1f;
 
+    /// <summary>Scroll-edge cues for the virtualized viewport (controls.md §8.3) — a surface-colour fade at an
+    /// overflowing edge so a long list reads as scrollable. <see cref="ScrollEdgeCues.Auto"/> (default) → the app
+    /// default (ON, fade-only); <see cref="ScrollEdgeCues.None"/> opts out. Forwarded onto the built VirtualListEl.</summary>
+    public ScrollEdgeCues EdgeCues = ScrollEdgeCues.Auto;
+
     /// <summary>Legacy demo factory (compat): a single-selectable grid of labeled tiles, now riding the full
     /// L0–L3 substrate (virtualized grid + ItemContainer chrome + keyboard nav). Natural-sized (Grow 0): the demo
     /// grid sits in an auto-height gallery card, so the view measures to its grid's ContentExtent.</summary>
@@ -846,6 +851,7 @@ public sealed class ItemsView : Component
                 KeyOf = KeyOf,
                 Overscan = OverscanItems,
                 Horizontal = horizontal,
+                EdgeCues = EdgeCues,
                 // Grow rides through to the viewport: 1 = fill the parent (hard viewport, never content-measured);
                 // 0 = natural — FlexLayout.MeasureViewport sizes a non-flexing viewport to the layout's ContentExtent
                 // (the gallery card shape; D1).

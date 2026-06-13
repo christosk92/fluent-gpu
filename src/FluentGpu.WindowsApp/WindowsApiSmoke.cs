@@ -14,6 +14,7 @@ using FluentGpu.WindowsApi.Notifications;
 using FluentGpu.WindowsApi.Packaging;
 using FluentGpu.WindowsApi.Power;
 using FluentGpu.WindowsApi.Shell;
+using FluentGpu.WindowsApi.Storage;
 using Microsoft.Win32;
 
 namespace FluentGpu;
@@ -102,6 +103,7 @@ internal static partial class WindowsApiSmoke
             // (Network / Power / JumpList) run real OS round-trips.
             NetworkSuite();
             PowerSuite();
+            StorageSuite();
             ShellSuite();
             DialogsAndMediaSuite();
         }
@@ -358,22 +360,35 @@ internal static partial class WindowsApiSmoke
     {
         Section("[4] Notifications — ToastBuilder / AumidRegistration / ToastNotifier.Show");
 
-        // ── (a) ToastBuilder produces well-formed, schema-shaped XML (pure managed — no interop). ──
-        string xml = new ToastBuilder()
-            .AddText("FluentGpu smoke")
-            .AddText("This toast is from the --windowsapi-smoke harness; it will auto-expire.")
-            .SetAppLogoOverride("file:///C:/does-not-matter.png", circle: true)
-            .AddArgument("action", "smoke")
-            .AddButton("Dismiss", "action", "dismiss")
-            .BuildXml();
+        // ── (a) The fluent ToastBuilder produces well-formed, schema-shaped XML (pure managed — no interop). Exercises
+        //        the redesigned surface: Title/Body, AppLogo, a reply TextBox + a Selection input, a styled Button, a
+        //        system DismissButton, and carried Tag/Group. ──
+        var built = Toast.Create()
+            .Title("FluentGpu smoke")
+            .Body("This toast is from the --windowsapi-smoke harness; it will auto-expire.")
+            .AppLogo("file:///C:/does-not-matter.png", circle: true)
+            .Argument("action", "smoke")
+            .TextBox("reply", "Type a reply…")
+            .Selection("rate", "good", ("good", "Good"), ("bad", "Bad"))
+            .Button("Open", b => b.Argument("action", "open").Success())
+            .DismissButton()
+            .ButtonStyles()
+            .Tag("smoke-1").Group("smoke");
+        string xml = built.BuildXml();
 
-        bool xmlShaped = xml.StartsWith("<toast", StringComparison.Ordinal)
-            && xml.EndsWith("</toast>", StringComparison.Ordinal)
-            && xml.Contains("<binding template='ToastGeneric'>")
-            && xml.Contains("launch='action=smoke'")
-            && xml.Contains("hint-crop='circle'");
-        Check("4.1 ToastBuilder.BuildXml() produces ToastGeneric XML", xmlShaped, $"{Encoding.UTF8.GetByteCount(xml)}B");
+        bool shell = xml.StartsWith("<toast", StringComparison.Ordinal) && xml.EndsWith("</toast>", StringComparison.Ordinal)
+            && xml.Contains("<binding template='ToastGeneric'>");
+        bool launch = xml.Contains("launch='action=smoke'");
+        bool logo = xml.Contains("hint-crop='circle'");
+        bool sel = xml.Contains("type='selection'") && xml.Contains("defaultInput='good'");
+        bool styled = xml.Contains("hint-buttonStyle='Success'");
+        bool dismiss = xml.Contains("activationType='system'") && xml.Contains("arguments='dismiss'");
+        bool order = xml.IndexOf("<input ", StringComparison.Ordinal) < xml.IndexOf("<action ", StringComparison.Ordinal); // button, not the <actions> container
+        bool xmlShaped = shell && launch && logo && sel && styled && dismiss && order;
+        Check("4.1 fluent ToastBuilder.BuildXml() produces ToastGeneric XML (text+image+input+selection+styled/dismiss buttons)", xmlShaped,
+            $"{Encoding.UTF8.GetByteCount(xml)}B shell={shell} launch={launch} logo={logo} sel={sel} styled={styled} dismiss={dismiss} order={order}");
         Check("4.2 XML well-formed (parses)", TryParseXml(xml, out string? parseErr), parseErr);
+        Check("4.2b builder carries Tag/Group for the no-XML Show(builder) path", built.TagValue == "smoke-1" && built.GroupValue == "smoke", $"tag={built.TagValue} group={built.GroupValue}");
 
         // ── (b) AUMID derivation (unpackaged registry mode). ──
         Guid activatorClsid = new("7F1A9C2E-5B3D-4E8A-9C11-FE00DEADBEEF"); // stable smoke CLSID
@@ -522,6 +537,57 @@ internal static partial class WindowsApiSmoke
         catch (Exception ex) { subOk = false; Check("6.5 PowerSession.Subscribe register + unregister", false, ex.Message); }
         if (subOk) Check("6.5 PowerSession.Subscribe register + unregister", true);
         Manual("6.6 live Suspending/Resumed delivery", "requires an actual machine sleep/wake; see the gallery Power card");
+
+        // F1 — the GetSystemPowerStatus snapshot decodes into a coherent PowerStatus (no throw; battery %/source sane).
+        try
+        {
+            PowerStatus p = PowerSession.ReadPower();
+            bool sane = (p.BatteryPercent is null || (p.BatteryPercent >= 0 && p.BatteryPercent <= 100))
+                        && (p.Source is PowerSource.Ac or PowerSource.Dc or PowerSource.Unknown);
+            Check("6.7 ReadPower() decodes GetSystemPowerStatus (source + battery sane)", sane,
+                $"{p.Source} hasBatt={p.HasBattery} pct={(p.BatteryPercent?.ToString() ?? "—")} charging={p.IsCharging} saver={p.EnergySaverOn}");
+        }
+        catch (Exception ex) { Check("6.7 ReadPower() decodes GetSystemPowerStatus (source + battery sane)", false, ex.Message); }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    // (6b) Storage — AppDataStore typed round-trip over HKCU (windowless, real registry).
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    [SupportedOSPlatform("windows")]
+    private static void StorageSuite()
+    {
+        Section("[6b] Storage — AppDataStore typed round-trip (HKCU)");
+
+        try
+        {
+            var store = AppDataStore.ForUnpackaged("FluentGpu", "Smoke");
+            store.SetString("s", "héllo;=%");   // exercise round-trip of chars that matter for arg-encoding elsewhere
+            store.SetBool("b", true);
+            store.SetInt("i", -42);
+            store.SetLong("l", 9_000_000_000L);
+            store.SetDouble("d", 3.14159);
+            bool roundTrip = store.GetString("s", "") == "héllo;=%"
+                && store.GetBool("b", false) == true
+                && store.GetInt("i", 0) == -42
+                && store.GetLong("l", 0) == 9_000_000_000L
+                && Math.Abs(store.GetDouble("d", 0) - 3.14159) < 1e-12;
+            Check("6b.1 AppDataStore String/Bool/Int/Long/Double round-trip via HKCU", roundTrip,
+                $"s='{store.GetString("s", "")}' i={store.GetInt("i", 0)} d={store.GetDouble("d", 0)}");
+
+            bool contains = store.Contains("s") && !store.Contains("nope");
+            Check("6b.2 Contains() reflects presence", contains);
+
+            store.Remove("s");
+            Check("6b.3 Remove() deletes a value", !store.Contains("s"));
+
+            store.Clear();
+            Check("6b.4 Clear() empties the container", store.Keys().Count == 0, $"{store.Keys().Count} keys left");
+
+            bool folders = !string.IsNullOrEmpty(store.LocalFolder) && !string.IsNullOrEmpty(store.TempFolder);
+            Check("6b.5 Local/Temp folder paths resolve", folders, store.LocalFolder);
+        }
+        catch (Exception ex) { Check("6b.1 AppDataStore round-trip", false, ex.Message); }
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────

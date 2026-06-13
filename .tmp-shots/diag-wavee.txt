@@ -1,3 +1,0 @@
-[allocdiag] total 86.6 KB/s | ui 268.2 | other -181.6 | untracked 0.0 | frames 88 | pump 0.1KB 7.63ms | dispatch 0.0KB 3.44ms | flip 6.2KB 0.83ms | flush 54.4KB 1.88ms | layout 43.6KB 23.38ms | anim 11.8KB 7.87ms | images 2.2KB 0.98ms | record 22.0KB 34.82ms | submit 127.8KB 644.20ms | effects 0.0KB 0.64ms
-[allocdiag] total 33.8 KB/s | ui 25.4 | other 8.4 | untracked 0.0 | frames 1 | pump 0.0KB 3.15ms | dispatch 0.0KB 1.15ms | flush 25.1KB 0.16ms | layout 0.0KB 1.58ms | record 0.0KB 0.30ms | submit 0.3KB 0.36ms
-[allocdiag] total 0.0 KB/s | ui 0.0 | other -0.0 | untracked 0.0 | frames 0 | pump 0.0KB 0.37ms

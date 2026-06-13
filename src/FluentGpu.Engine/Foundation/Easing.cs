@@ -13,6 +13,13 @@ public enum Easing : byte
     FluentDecelerate,  // entrance / show   — cubic-bezier(0.1, 0.9, 0.2, 1.0)
     FluentAccelerate,  // exit / hide       — cubic-bezier(0.9, 0.1, 1.0, 0.2)
     FluentPopOpen,     // flyout/menu open  — cubic-bezier(0, 0, 0, 1)  (the WinUI MenuPopupThemeTransition curve)
+    // The transitions.dev "expressive" vocabulary (the Expressive Motion Kit recipes — Motions / MotionHooks; an opt-in
+    // app-author palette, NOT the WinUI control curves above). The overshoot curves intentionally exceed 1.0 mid-flight
+    // (y1 > 1) so the value springs past its target and settles back — the cubic-bezier solver returns that overshoot.
+    SmoothOut,         // open/close/reposition — cubic-bezier(0.22, 1, 0.36, 1)   (transitions.dev signature curve)
+    Overshoot,         // gentle pop overshoot  — cubic-bezier(0.34, 1.36, 0.64, 1) (notification-badge pop)
+    OvershootStrong,   // pronounced bouncy return — cubic-bezier(0.34, 3.85, 0.64, 1) (avatar hover-out)
+    Pop,               // number/element pop-in — cubic-bezier(0.34, 1.45, 0.64, 1)
 }
 
 public readonly record struct EasingSpec
@@ -76,6 +83,10 @@ public static class Easings
         Easing.FluentDecelerate => CubicBezier(t, 0.1f, 0.9f, 0.2f, 1.0f),
         Easing.FluentAccelerate => CubicBezier(t, 0.9f, 0.1f, 1.0f, 0.2f),
         Easing.FluentPopOpen => CubicBezier(t, 0.0f, 0.0f, 0.0f, 1.0f),
+        Easing.SmoothOut => CubicBezier(t, 0.22f, 1.0f, 0.36f, 1.0f),
+        Easing.Overshoot => CubicBezier(t, 0.34f, 1.36f, 0.64f, 1.0f),
+        Easing.OvershootStrong => CubicBezier(t, 0.34f, 3.85f, 0.64f, 1.0f),
+        Easing.Pop => CubicBezier(t, 0.34f, 1.45f, 0.64f, 1.0f),
         _ => t,   // Linear
     };
 

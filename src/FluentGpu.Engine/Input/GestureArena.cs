@@ -144,6 +144,35 @@ internal sealed class GestureArena
         }
     }
 
+    /// <summary>True while any open, unresolved arena still has a <see cref="GestureKind.Hold"/> member armed (vote
+    /// <see cref="ArenaVote.Pending"/> — its long-press timer is counting down). A stationary held finger emits no input
+    /// events, so without this the frame loop would idle and the <c>OnFrameEnd</c> timer tick would never fire; the host
+    /// ORs this into a wake reason so frames keep coming until the Hold promotes (§7A.4 — the timer is ticked on the held
+    /// frames) or the contact strays/lifts and the member rejects. Zero-cost when no arena is open (the
+    /// <see cref="OpenArenaCount"/> early-out — the same pattern <c>ScrollAnimator.HasActive</c> uses); the bit clears the
+    /// instant the Hold resolves (<see cref="GestureArenaState.WinnerSlot"/> ≥ 0) or rejects, so the idle mask returns to
+    /// None right after the context flyout fires (no lingering keep-alive while the finger merely rests).</summary>
+    public bool HasArmedHold()
+    {
+        if (OpenArenaCount == 0) return false;
+        for (int slot = 0; slot < MaxArenas; slot++)
+            if (ArenaHasArmedHold(slot)) return true;
+        return false;
+    }
+
+    /// <summary>True when the SPECIFIC open arena <paramref name="arenaSlot"/> is unresolved and still has a
+    /// <see cref="GestureKind.Hold"/> member armed (vote <see cref="ArenaVote.Pending"/>). The dispatcher uses this to keep
+    /// a non-hit-testable context-only contact's slot alive (it has no Down/pan to hold the seat) until the long-press
+    /// fires or rejects — without it the slot would recycle on the down frame and free the arena before the timer.</summary>
+    public bool ArenaHasArmedHold(int arenaSlot)
+    {
+        if ((uint)arenaSlot >= MaxArenas || !_arenaUsed[arenaSlot] || _arenas[arenaSlot].WinnerSlot >= 0) return false;
+        ReadOnlySpan<ArenaMember> members = Members(arenaSlot);
+        for (int i = 0; i < members.Length; i++)
+            if (members[i].Kind == GestureKind.Hold && members[i].Vote == ArenaVote.Pending) return true;
+        return false;
+    }
+
     // ── opening / enrolling ────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>Open an arena for <paramref name="pointerId"/> (§7A.1, on PointerDown). Returns the arena slot, or -1
@@ -256,23 +285,38 @@ internal sealed class GestureArena
     /// <item><b>Last-standing:</b> if all-but-one rejected, the survivor wins (even still Pending) unless <see cref="GestureArenaState.Held"/>.</item>
     /// </list>
     /// Rule 4 (pointer-up sweep) and rule 5 (hold release) are <see cref="ResolveUp"/> / <see cref="ResolveHoldRelease"/>.
-    /// Returns the winning member slot (resolved this step) or -1 (stay open). Idempotent once resolved.</summary>
+    /// Returns the winning member slot (resolved this step) or -1 (stay open). Idempotent once resolved.
+    ///
+    /// TEAMS (§7A.3): a team presents ONE arena entry — its captain. A non-captain team member never wins independently;
+    /// it lends its vote to the captain's EFFECTIVE vote (the strongest of the captain + its teammates: EagerAccept ≻
+    /// Accept ≻ Pending ≻ Reject), so a drag-extend teammate crossing slop makes the team eager-win while a clean tap
+    /// keeps the captain's Tap vote — the captain (not the innermost drag member) stands for the whole selection control.
+    /// On a team win the teammates are NOT internally rejected (the §7A.3 "don't reject internally until the team loses");
+    /// the captain then picks the firing recognizer (<see cref="CaptainPick"/>). With no teams every helper short-circuits
+    /// to the member's own vote, so the team-free arena resolves bit-identically to the §7A.2 pseudocode.</summary>
     public int ResolveStep(int arenaSlot)
     {
         ref GestureArenaState a = ref _arenas[arenaSlot];
         if (a.WinnerSlot >= 0) return a.WinnerSlot;
         ReadOnlySpan<ArenaMember> members = Members(arenaSlot);
+        bool hasTeams = _teamLen[arenaSlot] > 0;
 
-        int eager = FindFirst(members, ArenaVote.EagerAccept);
-        if (eager >= 0) { Sweep(ref a, members, winner: a.MemberOffset + eager); return a.WinnerSlot; }
+        int eager = FindEffective(arenaSlot, members, ArenaVote.EagerAccept, hasTeams);   // a GLOBAL slot (or -1)
+        if (eager >= 0) { Sweep(ref a, members, winner: eager); return a.WinnerSlot; }
 
-        int accept = FirstVote(members, ArenaVote.Accept);
-        if (a.Closed && accept >= 0 && NoPendingAhead(members, accept))
-        { Sweep(ref a, members, winner: a.MemberOffset + accept); return a.WinnerSlot; }
+        int accept = FirstEffective(arenaSlot, members, ArenaVote.Accept, hasTeams);      // a GLOBAL slot (or -1)
+        if (a.Closed && accept >= 0 && NoPendingAheadEff(arenaSlot, members, accept, hasTeams))
+        { Sweep(ref a, members, winner: accept); return a.WinnerSlot; }
 
-        int alive = members.Length - CountVote(members, ArenaVote.Reject);
+        // Last-standing counts TEAM ENTRIES, not raw members: a team's non-captain members are not independent survivors
+        // (they're represented by the captain), so a lone selection team — captain + drag-extend + double-tap, all
+        // Pending — is ONE alive entry and wins by last-standing exactly as a single recognizer would (§7A.5 fast-path).
+        int alive = AliveEntries(arenaSlot, members, hasTeams);
         if (alive == 1 && !a.Held)
-        { Sweep(ref a, members, winner: a.MemberOffset + LastAlive(members)); return a.WinnerSlot; }
+        {
+            int win = LastAliveEntry(arenaSlot, members, hasTeams);
+            if (win >= 0) { Sweep(ref a, members, winner: win); return a.WinnerSlot; }
+        }
 
         return -1;   // stay open; wait for the next PointerMove vote, the up-sweep, or the hold timer
     }
@@ -287,17 +331,21 @@ internal sealed class GestureArena
         if (a.WinnerSlot >= 0) return a.WinnerSlot;
         if (a.Held) return -1;             // the hold window keeps it open; release decides (rule 5)
         ReadOnlySpan<ArenaMember> members = Members(arenaSlot);
+        bool hasTeams = _teamLen[arenaSlot] > 0;
 
+        // Highest-priority surviving ENTRY (a team is represented by its captain — a non-captain team member is not an
+        // independent candidate, so a clean tap resolves to the team's CAPTAIN, not the innermost drag-extend member).
         int best = -1;
         byte bestPri = byte.MaxValue;
         for (int i = 0; i < members.Length; i++)
         {
-            ArenaVote v = members[i].Vote;
-            if (v == ArenaVote.Reject) continue;
-            if (members[i].Priority < bestPri) { bestPri = members[i].Priority; best = i; }   // Accept/Pending, highest priority
+            int gs = a.MemberOffset + i;
+            if (hasTeams && IsNonCaptainTeamMember(arenaSlot, gs)) continue;   // represented by the captain
+            if (EffectiveVote(arenaSlot, gs, hasTeams) == ArenaVote.Reject) continue;
+            if (members[i].Priority < bestPri) { bestPri = members[i].Priority; best = gs; }   // Accept/Pending, highest priority
         }
         if (best < 0) return -1;
-        Sweep(ref a, members, winner: a.MemberOffset + best);
+        Sweep(ref a, members, winner: best);
         return a.WinnerSlot;
     }
 
@@ -341,11 +389,16 @@ internal sealed class GestureArena
     /// <summary>Grant the win to <paramref name="winner"/> (a global member slot) and sweep every other member with a
     /// synthetic <c>GestureRejected</c> (§7A.2 / §7A.5): each loser's vote becomes <see cref="ArenaVote.Reject"/> and its
     /// FSM is reset to Idle via <see cref="OnMemberRejected"/>; the winner's vote becomes <see cref="ArenaVote.Accept"/>
-    /// (or stays EagerAccept) and <see cref="OnMemberWon"/> fires. Pure in-place mutation + callbacks — no allocation.</summary>
+    /// (or stays EagerAccept) and <see cref="OnMemberWon"/> fires. A member sharing the winner's TEAM is RETAINED, not
+    /// rejected (§7A.3 — "don't reject internally until the team loses"): the team won as a whole, so the captain's
+    /// drag-extend / double-tap teammates keep their state for the captain's pick. Pure in-place mutation + callbacks —
+    /// no allocation; with no teams the retain test is one early-out and the sweep is byte-identical to §7A.2.</summary>
     private void Sweep(ref GestureArenaState a, ReadOnlySpan<ArenaMember> members, int winner)
     {
         a.WinnerSlot = winner;
         a.Held = false;
+        int arenaSlot = winner / MaxMembersPerArena;
+        bool hasTeams = _teamLen[arenaSlot] > 0;
         for (int i = 0; i < members.Length; i++)
         {
             int slot = a.MemberOffset + i;
@@ -355,6 +408,11 @@ internal sealed class GestureArena
                 Recorder?.OnWin(a.PointerId, slot, _members[slot].Kind, _members[slot].Vote);
                 OnMemberWon?.Invoke(_members[slot].FsmSlot);
             }
+            else if (hasTeams && SameTeam(arenaSlot, winner, slot))
+            {
+                // The winner's teammate: NOT swept — the team carries the win together (§7A.3). Its vote is left as-is so
+                // CaptainPick can read it (a drag-extend teammate's EagerAccept = "the captain fires drag, not tap").
+            }
             else if (_members[slot].Vote != ArenaVote.Reject)
             {
                 _members[slot].Vote = ArenaVote.Reject;     // synthetic GestureRejected
@@ -362,6 +420,92 @@ internal sealed class GestureArena
                 OnMemberRejected?.Invoke(_members[slot].FsmSlot);
             }
         }
+    }
+
+    // ── teams (§7A.3 — the captain stands for the team; teammates don't reject internally) ──────────────────────
+
+    /// <summary>True when global member slots <paramref name="x"/> and <paramref name="y"/> belong to the SAME team in
+    /// <paramref name="arenaSlot"/> (the §7A.3 internal-non-rejection test). Linear over the arena's ≤<see cref="MaxTeamsPerArena"/>
+    /// teams; called only when the arena has teams.</summary>
+    private bool SameTeam(int arenaSlot, int x, int y)
+    {
+        int n = _teamLen[arenaSlot];
+        int baseT = arenaSlot * MaxTeamsPerArena;
+        for (int t = 0; t < n; t++)
+        {
+            ref ArenaTeam tm = ref _teams[baseT + t];
+            bool xin = x >= tm.MemberOffset && x < tm.MemberOffset + tm.MemberLen;
+            bool yin = y >= tm.MemberOffset && y < tm.MemberOffset + tm.MemberLen;
+            if (xin && yin) return true;
+        }
+        return false;
+    }
+
+    /// <summary>The team index (0..teamLen) whose member RANGE contains global slot <paramref name="ms"/>, or -1 (not in
+    /// any team). §7A.3.</summary>
+    private int TeamOfMember(int arenaSlot, int ms)
+    {
+        int n = _teamLen[arenaSlot];
+        int baseT = arenaSlot * MaxTeamsPerArena;
+        for (int t = 0; t < n; t++)
+        {
+            ref ArenaTeam tm = ref _teams[baseT + t];
+            if (ms >= tm.MemberOffset && ms < tm.MemberOffset + tm.MemberLen) return t;
+        }
+        return -1;
+    }
+
+    /// <summary>True when global slot <paramref name="ms"/> is in a team but is NOT that team's captain — so it is
+    /// REPRESENTED by the captain in resolution and never wins independently (§7A.3).</summary>
+    private bool IsNonCaptainTeamMember(int arenaSlot, int ms)
+    {
+        int t = TeamOfMember(arenaSlot, ms);
+        if (t < 0) return false;
+        return _teams[arenaSlot * MaxTeamsPerArena + t].CaptainSlot != ms;
+    }
+
+    /// <summary>The team's EFFECTIVE vote for resolution (§7A.3): for a captain, the STRONGEST vote among the captain and
+    /// its teammates (EagerAccept ≻ Accept ≻ Pending ≻ Reject) — so a drag-extend teammate crossing slop makes the team
+    /// eager-win while a clean tap keeps the team on the captain's Accept; for a non-captain team member, <see cref="ArenaVote.Reject"/>
+    /// (never an independent candidate); for a member in no team, its own vote. With no teams this is just the member's vote.</summary>
+    private ArenaVote EffectiveVote(int arenaSlot, int ms, bool hasTeams)
+    {
+        if (!hasTeams) return _members[ms].Vote;
+        int t = TeamOfMember(arenaSlot, ms);
+        if (t < 0) return _members[ms].Vote;                 // not in any team
+        ref ArenaTeam tm = ref _teams[arenaSlot * MaxTeamsPerArena + t];
+        if (tm.CaptainSlot != ms) return ArenaVote.Reject;   // represented by the captain — not a candidate
+        // Captain: aggregate the team's strongest vote.
+        ArenaVote best = ArenaVote.Reject;
+        for (int s = tm.MemberOffset; s < tm.MemberOffset + tm.MemberLen; s++)
+            if (VoteRank(_members[s].Vote) > VoteRank(best)) best = _members[s].Vote;
+        return best;
+    }
+
+    private static int VoteRank(ArenaVote v) => v switch
+    {
+        ArenaVote.EagerAccept => 3,
+        ArenaVote.Accept => 2,
+        ArenaVote.Pending => 1,
+        _ => 0,   // Reject
+    };
+
+    /// <summary>On a TEAM win, the recognizer the captain fires (§7A.3 "based on tap count + movement"). Movement wins: a
+    /// teammate voting <see cref="ArenaVote.EagerAccept"/> (a drag-extend / selection-drag that crossed slop) fires its
+    /// kind; otherwise the captain's own kind (the clean tap / double-tap, whose tap-COUNT the editor's ClickCount realizes
+    /// downstream — §12A). Returns the firing <see cref="GestureKind"/>; defaults to the captain's kind when not a team
+    /// win. The dispatcher reads this to label the win; execution stays on the editor's scalar OnDrag + ClickCount path.</summary>
+    public GestureKind CaptainPick(int arenaSlot)
+    {
+        ref GestureArenaState a = ref _arenas[arenaSlot];
+        if (a.WinnerSlot < 0) return GestureKind.Tap;
+        int t = TeamOfMember(arenaSlot, a.WinnerSlot);
+        if (t < 0) return _members[a.WinnerSlot].Kind;       // a non-team winner fires its own kind
+        ref ArenaTeam tm = ref _teams[arenaSlot * MaxTeamsPerArena + t];
+        // Movement first: an eager-accepting teammate (drag-extend) is the gesture.
+        for (int s = tm.MemberOffset; s < tm.MemberOffset + tm.MemberLen; s++)
+            if (_members[s].Vote == ArenaVote.EagerAccept) return _members[s].Kind;
+        return _members[tm.CaptainSlot].Kind;                // else the captain's tap/double-tap
     }
 
     // ── span predicates (the §7A.2 ResolveStep helpers — all allocation-free linear scans) ─────────────────
@@ -375,43 +519,80 @@ internal sealed class GestureArena
     /// <summary>The arena slot currently open for <paramref name="pointerId"/>, or -1.</summary>
     public int ArenaSlotFor(uint pointerId) => FindArena(pointerId);
 
-    private static int FindFirst(ReadOnlySpan<ArenaMember> m, ArenaVote v)
+    // The §7A.2 ResolveStep helpers, generalized to read the team-EFFECTIVE vote (so a captain stands for its team and a
+    // non-captain team member is skipped). All return GLOBAL member slots and skip non-captain team members; with no
+    // teams `EffectiveVote` is the member's own vote and nothing is skipped, so they reduce to the original §7A.2 scans.
+
+    /// <summary>First ENTRY (global slot) whose effective vote == <paramref name="v"/> (skipping non-captain team members),
+    /// or -1. The eager-win scan.</summary>
+    private int FindEffective(int arenaSlot, ReadOnlySpan<ArenaMember> m, ArenaVote v, bool hasTeams)
     {
-        for (int i = 0; i < m.Length; i++) if (m[i].Vote == v) return i;
+        for (int i = 0; i < m.Length; i++)
+        {
+            int gs = _arenas[arenaSlot].MemberOffset + i;
+            if (hasTeams && IsNonCaptainTeamMember(arenaSlot, gs)) continue;
+            if (EffectiveVote(arenaSlot, gs, hasTeams) == v) return gs;
+        }
         return -1;
     }
 
-    /// <summary>First member with <paramref name="v"/>, lowest <see cref="ArenaMember.Priority"/> on a tie (innermost,
-    /// then doc-order) — the §7A.2 "ties broken by Priority" clause for the first-accept winner.</summary>
-    private static int FirstVote(ReadOnlySpan<ArenaMember> m, ArenaVote v)
+    /// <summary>Entry with effective vote <paramref name="v"/>, lowest <see cref="ArenaMember.Priority"/> on a tie
+    /// (innermost, then doc-order) — the §7A.2 "ties broken by Priority" clause for first-accept. Global slot or -1.</summary>
+    private int FirstEffective(int arenaSlot, ReadOnlySpan<ArenaMember> m, ArenaVote v, bool hasTeams)
     {
         int best = -1;
         byte bestPri = byte.MaxValue;
         for (int i = 0; i < m.Length; i++)
-            if (m[i].Vote == v && m[i].Priority < bestPri) { bestPri = m[i].Priority; best = i; }
+        {
+            int gs = _arenas[arenaSlot].MemberOffset + i;
+            if (hasTeams && IsNonCaptainTeamMember(arenaSlot, gs)) continue;
+            if (EffectiveVote(arenaSlot, gs, hasTeams) == v && m[i].Priority < bestPri) { bestPri = m[i].Priority; best = gs; }
+        }
         return best;
     }
 
-    private static int CountVote(ReadOnlySpan<ArenaMember> m, ArenaVote v)
+    /// <summary>True when no ENTRY with a strictly lower priority than the global slot <paramref name="acceptGlobal"/> is
+    /// still effectively Pending — the §7A.2 "no recognizer ahead of it is still Pending" gate for first-accept (teams
+    /// counted by captain).</summary>
+    private bool NoPendingAheadEff(int arenaSlot, ReadOnlySpan<ArenaMember> m, int acceptGlobal, bool hasTeams)
     {
-        int n = 0;
-        for (int i = 0; i < m.Length; i++) if (m[i].Vote == v) n++;
-        return n;
-    }
-
-    /// <summary>True when no member with a strictly lower priority than <paramref name="acceptIdx"/> is still Pending —
-    /// the §7A.2 "no recognizer ahead of it is still Pending" gate for first-accept.</summary>
-    private static bool NoPendingAhead(ReadOnlySpan<ArenaMember> m, int acceptIdx)
-    {
-        byte acceptPri = m[acceptIdx].Priority;
+        int off = _arenas[arenaSlot].MemberOffset;
+        byte acceptPri = _members[acceptGlobal].Priority;
         for (int i = 0; i < m.Length; i++)
-            if (m[i].Vote == ArenaVote.Pending && m[i].Priority < acceptPri) return false;
+        {
+            int gs = off + i;
+            if (hasTeams && IsNonCaptainTeamMember(arenaSlot, gs)) continue;
+            if (EffectiveVote(arenaSlot, gs, hasTeams) == ArenaVote.Pending && m[i].Priority < acceptPri) return false;
+        }
         return true;
     }
 
-    private static int LastAlive(ReadOnlySpan<ArenaMember> m)
+    /// <summary>The count of live ENTRIES (not raw members): a captain counts once for its whole team; a non-captain team
+    /// member counts zero; a member in no team counts if not Reject. The §7A.2 last-standing population, team-aware.</summary>
+    private int AliveEntries(int arenaSlot, ReadOnlySpan<ArenaMember> m, bool hasTeams)
     {
-        for (int i = 0; i < m.Length; i++) if (m[i].Vote != ArenaVote.Reject) return i;
-        return 0;
+        int off = _arenas[arenaSlot].MemberOffset;
+        int n = 0;
+        for (int i = 0; i < m.Length; i++)
+        {
+            int gs = off + i;
+            if (hasTeams && IsNonCaptainTeamMember(arenaSlot, gs)) continue;
+            if (EffectiveVote(arenaSlot, gs, hasTeams) != ArenaVote.Reject) n++;
+        }
+        return n;
+    }
+
+    /// <summary>The single surviving ENTRY's global slot (the last-standing winner), or -1. Mirrors <see cref="AliveEntries"/>
+    /// — a captain represents its team.</summary>
+    private int LastAliveEntry(int arenaSlot, ReadOnlySpan<ArenaMember> m, bool hasTeams)
+    {
+        int off = _arenas[arenaSlot].MemberOffset;
+        for (int i = 0; i < m.Length; i++)
+        {
+            int gs = off + i;
+            if (hasTeams && IsNonCaptainTeamMember(arenaSlot, gs)) continue;
+            if (EffectiveVote(arenaSlot, gs, hasTeams) != ArenaVote.Reject) return gs;
+        }
+        return -1;
     }
 }

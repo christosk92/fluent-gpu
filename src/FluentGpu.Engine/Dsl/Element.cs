@@ -10,7 +10,23 @@ public abstract record Element
 
     /// <summary>Stable per-record-type id for integer type-dispatch in the reconciler (the source-gen'd ElementTypeId).</summary>
     public abstract ushort ElementTypeId { get; }
+
+    /// <summary>Skeleton-derivation opt-out (the native skeleton-loading kit): <see cref="SkeletonMode.Off"/> ⇒ the
+    /// deriver emits a same-sized empty spacer (keeps the slot, no shimmer bar) for this node; <see cref="SkeletonMode.Auto"/>
+    /// (default) ⇒ the deriver maps it to a shimmer. Construction-time metadata read ONLY by <c>SkeletonDeriver</c> —
+    /// never written to a scene column, so it costs nothing at runtime. Set with <c>el.Skeletonized(false)</c>.</summary>
+    public SkeletonMode SkeletonMode { get; init; }
+    /// <summary>A bespoke shimmer subtree the deriver substitutes for this node (overrides the auto-map). Set with
+    /// <c>el.Skel(customShimmer)</c>.</summary>
+    public Element? SkeletonOverride { get; init; }
 }
+
+/// <summary>Per-node skeleton-derivation policy (see <see cref="Element.SkeletonMode"/>).</summary>
+public enum SkeletonMode : byte { Auto, Off }
+
+/// <summary>The form-validation visual state of a control surface (form-validation.md). <see cref="Warning"/> is
+/// reserved for non-blocking advisory styling; v1 styles only <see cref="Error"/> (red border + message).</summary>
+public enum ValidationState : byte { None, Warning, Error }
 
 /// <summary>A box: container/layout node and/or a filled, optionally-clickable surface (VStack/HStack/Button/Box).</summary>
 public sealed record BoxEl : Element
@@ -30,6 +46,11 @@ public sealed record BoxEl : Element
     public ColorF PressedBorderColor { get; init; }  // A==0 ⇒ recorder auto-darkens BorderColor on press; else eases to this exact state token
     public float BorderWidth { get; init; }
     public CornerRadius4 Corners { get; init; }
+    /// <summary>Form-validation visual state (form-validation.md). Bind it to a field's error memo
+    /// (<c>Validation = Prop.Of(() =&gt; field.Error.Value.IsValid ? ValidationState.None : ValidationState.Error)</c>):
+    /// on <see cref="ValidationState.Error"/> the reconciler resolves the theme critical color and the recorder swaps
+    /// this node's border to it. A bound channel — no re-render per keystroke; the write is equality-gated.</summary>
+    public Prop<ValidationState> Validation { get; init; }
 
     // Optional rich paint (carried into sparse scene side-tables by the reconciler; default = none).
     public ShadowSpec? Shadow { get; init; }       // soft drop shadow / elevation, drawn beneath the fill
@@ -166,6 +187,12 @@ public sealed record BoxEl : Element
     /// overlapping children don't double-blend (a fading dialog plate + its buttons). Default false = per-node
     /// multiplied opacity (WinUI's plain Visual.Opacity behavior). Engine primitive: PushLayer{Opacity} (E9).</summary>
     public bool OpacityGroup { get; init; }
+    /// <summary>Per-node self-blur radius σ (px) — the Expressive Motion Kit's perceptual softener. &gt; 0 wraps the
+    /// node's subtree in a PushLayer{Blur} (subtree → pooled offscreen RT → separable Gaussian → composite at the group
+    /// alpha), so the node's OWN pixels blur (CSS <c>filter: blur()</c>, not the backdrop). Animate it via
+    /// <c>AnimChannel.BlurSigma</c> (UseTransition/UseKeyframes) for the transitions.dev recipes (number pop-in, skeleton
+    /// reveal, icon swap, page slide, …). 0 = no blur (the default). Composited only — never relayout.</summary>
+    public float Blur { get; init; }
     /// <summary>Transform origin (normalized 0..1 of the box). Composited scale/rotate (and animated ScaleX/Y) pivot here;
     /// default centre (0.5,0.5). Set OriginY=0 to scale/unfold from the TOP edge (a flyout/menu), 1 for the bottom.</summary>
     public float TransformOriginX { get; init; } = 0.5f;
@@ -522,6 +549,18 @@ public sealed record ScrollEl : Element
     /// </summary>
     public bool ContentSized { get; init; }
 
+    /// <summary>Opt into pinch-zoom (WinUI <c>ScrollingZoomMode.Enabled</c> — default off, mirroring
+    /// ScrollPresenter's <c>s_defaultZoomMode = Disabled</c>). When set, a SECOND touch contact over the viewport scales
+    /// the content about the gesture midpoint (transform-only; never a relayout) and a single-finger remainder continues
+    /// as a pan. <see cref="MinZoom"/>/<see cref="MaxZoom"/> bound the factor.</summary>
+    public bool Zoomable { get; init; }
+    /// <summary>Minimum pinch-zoom factor (WinUI <c>s_defaultMinZoomFactor = 0.1</c>, ScrollPresenter.h:63). Ignored unless
+    /// <see cref="Zoomable"/>.</summary>
+    public float MinZoom { get; init; } = 0.1f;
+    /// <summary>Maximum pinch-zoom factor (WinUI <c>s_defaultMaxZoomFactor = 10.0</c>, ScrollPresenter.h:64). Ignored unless
+    /// <see cref="Zoomable"/>.</summary>
+    public float MaxZoom { get; init; } = 10f;
+
     // The viewport participates in its parent's layout like a box (size + flex + margin + a backing fill).
     public float Width { get; init; } = float.NaN;
     public float Height { get; init; } = float.NaN;
@@ -537,4 +576,9 @@ public sealed record ScrollEl : Element
     public Edges4 Padding { get; init; }
     public ColorF Fill { get; init; }
     public CornerRadius4 Corners { get; init; }
+
+    /// <summary>Scroll-edge cues (controls.md §8.3): a surface-colour gradient fade at any edge with more content past it,
+    /// so a clipped list signals there is more below the fold. <see cref="ScrollEdgeCues.Auto"/> (default) resolves to
+    /// <see cref="ScrollEdgeCuesDefaults.Default"/> (ON, fade-only); set <see cref="ScrollEdgeCues.None"/> to opt out.</summary>
+    public ScrollEdgeCues EdgeCues { get; init; } = ScrollEdgeCues.Auto;
 }

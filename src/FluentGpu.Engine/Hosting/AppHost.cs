@@ -429,6 +429,19 @@ public sealed class AppHost : IDisposable
         // single-window v1 host model; headless checks construct hosts sequentially).
         InputHooks.Current.Default.OpenUri = app.OpenUri;
 
+        // OS file/folder drop seam (the inbound twin of OpenUri): the platform's IDropTarget invokes these on the UI
+        // thread during an OLE drag; they drive the dispatcher's external DragSession so a BoxEl.DropTarget accepting
+        // DropKinds.Files receives the drop. Wired on the host instance AND the channel-default (the backend's
+        // Win32DropTarget reaches them via Current.Default — it has no component scope).
+        _inputHooks.ExternalDragEnter = _dispatcher.ExternalDragEnter;
+        _inputHooks.ExternalDragOver = _dispatcher.ExternalDragOver;
+        _inputHooks.ExternalDragLeave = _dispatcher.ExternalDragLeave;
+        _inputHooks.ExternalDrop = _dispatcher.ExternalDrop;
+        InputHooks.Current.Default.ExternalDragEnter = _dispatcher.ExternalDragEnter;
+        InputHooks.Current.Default.ExternalDragOver = _dispatcher.ExternalDragOver;
+        InputHooks.Current.Default.ExternalDragLeave = _dispatcher.ExternalDragLeave;
+        InputHooks.Current.Default.ExternalDrop = _dispatcher.ExternalDrop;
+
         // Inbound twin of OpenUri: a single-instance second-launch redirect (the PAL's WM_COPYDATA → ActivationRedirected,
         // already on the UI thread). Stash + WakeFrame here; Paint() drains _pendingActivation at the top and re-raises
         // the public AppHost.ActivationRedirected for app code. WakeFrame is UI-thread-only — safe because the PAL
@@ -1302,6 +1315,16 @@ public sealed class AppHost : IDisposable
         // host may have overwritten it (last-wins), and clearing that would break the live host's hyperlinks.
         var def = InputHooks.Current.Default;
         if (def.OpenUri is { } cur && ReferenceEquals(cur.Target, _app)) def.OpenUri = null;
+
+        // Same release for the OS-drop seam: the ctor mirrored this host's dispatcher onto the channel-default. Clear it
+        // only when our dispatcher is still the installed target (a later host may have overwritten it, last-wins).
+        if (def.ExternalDragEnter is { } de && ReferenceEquals(de.Target, _dispatcher))
+        {
+            def.ExternalDragEnter = null;
+            def.ExternalDragOver = null;
+            def.ExternalDragLeave = null;
+            def.ExternalDrop = null;
+        }
 
         // Symmetry for the intern-on-change HUD cache: each cached id holds one host AddRef (RefreshDynText), so a
         // disposed HUD-bearing host must drop them or it pins ≤5 ids on the shared interner per disposed host.

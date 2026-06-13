@@ -11,7 +11,9 @@ public enum FocusDirection : byte { Left, Right, Up, Down }
 /// <summary>
 /// Phase 2 (input dispatch): hit-tests the committed scene and routes pointer + keyboard. Pointer down→up over the
 /// same node fires the click handler and focuses the nearest focusable self-or-ancestor (a WinUI IsTabStop=False part
-/// never takes pointer focus; nothing focusable in the chain → focus unchanged); keyboard routes to the focused node and bubbles up ancestors
+/// never takes pointer focus; nothing focusable in the chain → focus is CLEARED iff the press hit INERT background — a node
+/// with no press handlers, AnyInteractiveMask == 0, and (touch) no pan candidate — else unchanged: a FluentGpu §8
+/// divergence); keyboard routes to the focused node and bubbles up ancestors
 /// (Handled stops it); Tab moves focus through focusable nodes; Enter/Space activates a focused clickable (the
 /// "one declaration, three modalities" contract). The full engine adds tunnel(Preview), gesture arena, XY-focus.
 /// </summary>
@@ -63,6 +65,12 @@ public sealed class InputDispatcher
     private NodeHandle _swipeDrag;     // a DragYieldsToPan OnDrag node hit on this contact (null = none — the eager OnDrag path)
     private bool _swipeAxisX;          // the swipe's own axis (the node's Direction==0 row ⇒ horizontal swipe) — its slop axis
     private NodeHandle _gesturePanNode;// a UseGesture(Pan) member's node (null = none) — voted RAW (any-axis) in the arena
+    // §7B/Phase-4 pinch-zoom (the working scalars; PinchViewport/PinchMember ride the slot): the nearest Zoomable viewport
+    // this contact's down landed over, and the Pinch arena member enrolled on it (innermost). A SECOND contact whose own
+    // PinchViewport matches a still-down contact's opens the pinch SESSION (the singleton _pinch* fields below) and feeds
+    // PointerFsm.OnSecondContact → the Pinch member EagerAccept-wins and sweeps Pan/Tap (the existing cancel routing).
+    private NodeHandle _pinchViewport; // the Zoomable viewport this contact landed over (null = none — no pinch candidate)
+    private int _pinchMember = -1;     // this contact's Pinch arena member slot (-1 = none)
     private NodeHandle _keyArmed;      // focused clickable held via Space/Enter — pressed while held, activates on key-UP
     private int _keyArmedKey;          // which key armed it (Space or Enter) — any OTHER key-down cancels without firing
     private bool _accessKeyMode;       // Alt tapped → the next letter invokes a matching AccessKey mnemonic
@@ -79,6 +87,23 @@ public sealed class InputDispatcher
     private NodeHandle _selText;
     private int _selAnchor;
     private bool _selDragging;
+    // The device class of the most recent pointer event (mouse/pen/touch), updated on every PointerDown/Move/Up. The SIP
+    // (touch-keyboard) trigger policy reads it through the InputHooks seam: an EditableText shows the on-screen keyboard
+    // on focus-gain ONLY when the focus-moving input was a touch contact (WinUI InputPaneHandler.cpp keys the SIP off the
+    // focus-causing pointer's device type). Mouse/pen focus never raises the panel. Defaults to Mouse (the safe identity).
+    private PointerKind _lastPointerKind = PointerKind.Mouse;
+
+    // ── pinch-zoom session (Phase-4; a singleton across the TWO pinching contacts — the DragController precedent) ──────
+    // Opened when a second touch contact lands over the same Zoomable viewport a still-down contact is over; both contacts'
+    // moves drive ZoomFor (the magnification about the gesture midpoint), and the FIRST up/cancel commits the scale and
+    // ends the session (the surviving finger re-arms as a pan naturally in TouchMove). All scalar (zero alloc).
+    private NodeHandle _pinchSessionViewport;   // the viewport being pinch-zoomed (null = no active pinch)
+    private uint _pinchIdA, _pinchIdB;          // the two contributing PointerIds (the session ends on either lifting)
+    private float _pinchStartDist;              // |A−B| in window px at the second-contact down (the scale denominator)
+    private float _pinchStartZoom;              // ScrollState.ZoomFactor captured when the pinch opened (the scale base)
+    private float _pinchOriginAxis;             // window-space position of the content node's local origin on the scroll
+                                                // axis (offset-independent) — midLocal = midpointAxis − this
+    private Point2 _pinchPosA, _pinchPosB;      // the latest window positions of A and B (each contact's move updates its own)
 
     public const float ClickSlopPx = 4f;
     public const uint DoubleClickMs = 500;
@@ -92,6 +117,10 @@ public sealed class InputDispatcher
     /// <summary>Below this speed a touch-up after a pan starts NO fling — the contact came to rest (WinUI treats a
     /// near-zero release velocity as a settle, not a flick). px/s.</summary>
     public const float FlingMinVelocityPxPerS = 50f;
+
+    /// <summary>Rubber-band overscroll cap as a fraction of the viewport extent: WinUI lets a ScrollViewer over/underpan
+    /// up to 10% of its viewport (ScrollInputHelper.cpp:309-311). The damped displacement band asymptotes to this cap.</summary>
+    public const float OverscrollLimitFraction = 0.1f;
 
     private const float ScrollbarSize = 12f;
     private const float ScrollbarMinExpandedThumb = 30f;
@@ -124,7 +153,11 @@ public sealed class InputDispatcher
         public NodeHandle SwipeDrag;       // §7A cross-axis content-pan Drag member's DragYieldsToPan node (null = none)
         public bool SwipeAxisX;            // the swipe's own axis (node Direction==0 row ⇒ horizontal swipe)
         public NodeHandle GesturePanNode;  // §13 UseGesture(Pan) member's node (raw any-axis vote)
+        public NodeHandle PinchViewport;   // the nearest Zoomable viewport this contact landed over (null = none) — a
+                                           // SECOND contact landing over the SAME viewport opens a pinch (§7B Pinch member)
+        public int PinchMember;            // this contact's enrolled Pinch arena member slot (-1 = none) — fed OnSecondContact
         public int ArenaSlot;   // the §7A arena this contact opened (-1 = none: a mouse/pen contact, or a route with no gestures)
+        public bool HoldFired;  // §7A the long-press Hold won + fired its context flyout: the eventual up suppresses the tap-click
     }
 
     /// <summary>Exponential-moving-average pointer-velocity sampler (px/s, ~50ms horizon) — the
@@ -183,6 +216,7 @@ public sealed class InputDispatcher
     private readonly GestureArena _arena = new();
     private readonly PointerFsm[] _fsms = new PointerFsm[GestureArena.MaxArenas * GestureArena.MaxMembersPerArena];
     private int _activeArenaSlot = -1;   // the arena slot of the contact being processed (loaded by SlotIn, stored by SlotOut)
+    private bool _holdFired;             // §7A the contact's Hold won + fired its context flyout (the up suppresses the tap-click; press visual still held until up)
     private long _arenaClockUs;          // monotonic µs clock for the §7A timer resolutions (Hold long-press): synced
                                          // forward to the latest event stamp in Dispatch, advanced by dt in TickGestureArenas
 
@@ -209,16 +243,29 @@ public sealed class InputDispatcher
     private Point2 _gestureWinVel;
     private readonly GestureEventArgs _gestureArgs = new();
 
-    /// <summary>The §7A win sink (input-a11y.md §13): if the winning member's node declared a <c>UseGesture</c> handler
-    /// for the won kind, fire it. Tap/Hold report the gesture point (the up / down position); a Pan win reports the
-    /// claim sample (the pan-start, velocity 0). The Pan-END velocity is delivered by <see cref="FireGesturePanEnd"/> on
-    /// touch-up. Reserved kinds (DoubleTap/RightTap/Drag/Pinch) have no Phase-3 handler slot, so this no-ops for them.
-    /// Zero alloc (gated on <c>HasGestureSubs</c>; the reused args struct is filled per invocation).</summary>
+    /// <summary>The §7A win sink: execute the winning recognizer's effect (§7A.2). Two surfaces close here. (1) A
+    /// <see cref="GestureKind.Hold"/> win on a <see cref="InteractionInfo.ContextBit"/> node FIRES the context request at
+    /// the contact point — the touch long-press → context flyout (WinUI: a touch <c>Holding</c> shows the context flyout
+    /// at the contact with the press visual held; touch has no right button, so the Hold is the only path). This runs
+    /// REGARDLESS of <c>HasGestureSubs</c> (a context-only node declares no <c>UseGesture</c>). (2) If the winning node
+    /// declared a matching <c>UseGesture</c> handler (§13), fire it: Tap/Hold report the gesture point (the up / down
+    /// position), a Pan win reports the claim sample (velocity 0; the Pan-END velocity is delivered by
+    /// <see cref="FireGesturePanEnd"/> on touch-up). Reserved kinds (DoubleTap/RightTap/Drag/Pinch) have no §13 handler
+    /// slot. Zero alloc (the §13 leg is gated on <c>HasGestureSubs</c>; the reused args struct is filled per invocation).</summary>
     private void RouteGestureWin(int fsmSlot)
     {
-        if (!_scene.HasGestureSubs) return;   // no UseGesture anywhere in the scene → skip (the common case)
         if ((uint)fsmSlot >= (uint)_fsms.Length) return;
         ref ArenaMember m = ref _arena.MemberAt(fsmSlot);
+        // (1) Touch long-press context flyout: a Hold winner over a context-request chain fires the SAME action a
+        // right-click fires (DispatchContextRequest walks for the nearest enabled ContextBit handler from the Hold's
+        // node). The position is the buffered DOWN point (_gestureWinPos — the contact where the finger went down and
+        // held, set by TickGestureArenas before this resolves). The press visual is still held: the contact owns the
+        // _pressed singleton (the Hold never crossed slop, so the press was never cancelled), and it releases on the
+        // eventual up — exactly the WinUI "show the flyout while the press is held" sequence.
+        if (m.Kind == GestureKind.Hold && !m.Node.IsNull && _scene.IsLive(m.Node)
+            && (_scene.Interaction(m.Node).HandlerMask & InteractionInfo.ContextBit) != 0)
+            DispatchContextRequest(m.Node, _gestureWinPos);
+        if (!_scene.HasGestureSubs) return;   // no UseGesture anywhere in the scene → skip the §13 leg (the common case)
         GestureType gt = m.Kind switch
         {
             GestureKind.Tap => GestureType.Tap,
@@ -259,11 +306,54 @@ public sealed class InputDispatcher
 
     public NodeHandle Focused => _focused;
 
+    /// <summary>The device class of the most recent focus-causing pointer (mouse/pen/touch). The host exposes it through
+    /// the <c>InputHooks.LastPointerWasTouch</c> seam so an editor's focus-gain handler shows the touch keyboard (SIP)
+    /// only on a TOUCH focus (WinUI InputPaneHandler.cpp keys the panel off the focus pointer's type). Defaults to Mouse.</summary>
+    public PointerKind LastPointerKind => _lastPointerKind;
+
+    /// <summary>
+    /// SIP reflow (input-a11y.md §10): scroll the focused editor's caret above the occluded region the touch keyboard
+    /// reported (<see cref="Pal.IPlatformTextInput.OccludedRectChanged"/>). Walks from <see cref="Focused"/> to its
+    /// nearest VERTICAL scrollable ancestor and, if the focused node's bottom edge sits below <paramref name="occludedTopDip"/>
+    /// (window DIP — the pane top), increases that viewport's offset just enough to lift the field above it (+ a small
+    /// margin), written through the <see cref="WriteScrollOffset"/> clamp chokepoint (so it inherits the clamp + virtual
+    /// re-realize and can never push past the content). The WinUI EnsureFocusedElementInView the InputPaneHandler runs
+    /// (InputPaneHandler.cpp → ScrollContentPresenter bring-into-view). A non-positive/empty rect (the pane hid) is a
+    /// no-op. Returns true when it moved a viewport. 0-alloc (scalar walk + one ref write).
+    /// </summary>
+    public bool EnsureFocusedAboveOcclusion(float occludedTopDip)
+    {
+        if (occludedTopDip <= 0f || _focused.IsNull || !_scene.IsLive(_focused)) return false;
+
+        // Nearest VERTICAL scrollable ancestor of the focused field (the panel reflow is a vertical bring-into-view; a
+        // horizontal-only scroller cannot lift the caret clear of a bottom-docked keyboard).
+        NodeHandle vp = NodeHandle.Null;
+        for (var n = _scene.Parent(_focused); !n.IsNull; n = _scene.Parent(n))
+            if ((_scene.Flags(n) & NodeFlags.Scrollable) != 0 && _scene.HasScroll(n) && _scene.ScrollRef(n).Orientation == 0)
+            { vp = n; break; }
+        if (vp.IsNull) return false;
+
+        const float Margin = 8f;   // keep a sliver of breathing room between the field's bottom and the pane top
+        RectF fieldAbs = _scene.AbsoluteRect(_focused);
+        float overlap = (fieldAbs.Y + fieldAbs.H + Margin) - occludedTopDip;
+        if (overlap <= 0f) return false;   // the field already clears the pane — nothing to scroll
+
+        ref ScrollState sc = ref _scene.ScrollRef(vp);
+        return WriteScrollOffset(vp, sc.OffsetY + overlap);   // clamp + virtual re-realize; bottom edge rides up by `overlap`
+    }
+
     /// <summary>The gesture-arena coordinator driving the touch path (§7A). Internal — exposed for the validation.md
     /// §12.6 arena-determinism gate, which attaches a <see cref="GestureArenaRecorder"/> to <see cref="GestureArena.Recorder"/>
     /// before a scripted sequence and reads its <see cref="GestureArena.CaptureIsTentative"/> mid-gesture. No production
     /// surface is widened (the type and its members are <c>internal</c>); the host never touches this.</summary>
     internal GestureArena Arena => _arena;
+
+    /// <summary>True while a touch contact's gesture arena has a long-press <c>Hold</c> member still armed (counting down
+    /// to the ~500ms context flyout). The host ORs this into <c>WakeReasons.GestureHold</c> so a STATIONARY held finger
+    /// — which emits no further input — still keeps frames coming, letting <see cref="TickGestureArenas"/> advance the
+    /// long-press timer to the fire (§7A.4). Zero-cost when no arena is open; clears the instant the Hold resolves or the
+    /// contact strays/lifts, so the idle mask returns to None right after the flyout fires.</summary>
+    public bool HasArmedHold => _arena.HasArmedHold();
 
     /// <summary>The drag-reorder gesture engine (E5-L1): armed by a press on a <c>CanDrag</c> chain, promoted past the
     /// 4px drag box, owning the pointer until release/Escape. Constructed with the dispatcher so every host gets
@@ -275,6 +365,45 @@ public sealed class InputDispatcher
     /// accepting <c>BoxEl.DropTarget</c> under the pointer gets Enter/Over/Leave, release over it gets OnDrop, and
     /// the engine edge auto-scroll arms when the pointer drags near an overflowing viewport's edge (host-ticked).</summary>
     public DragDropContext DragDrop { get; }
+
+    // ── External (OS / OLE) drop entry points ───────────────────────────────────────────────────────────────────────
+    // The host's IDropTarget (the Windows backend's Win32DropTarget) calls these on the UI thread during the OLE drag
+    // loop — wired in through InputHooks.ExternalDrag* (the inbound twin of OpenUri). They open / drive / commit an
+    // external DragSession on the SAME DragDropContext as in-app drags, so a BoxEl.DropTarget that accepts DropKinds.Files
+    // receives Enter/Over/Leave/Drop identically. Coordinates are window-DIP (the host converts the OLE screen POINTL via
+    // its ScreenPtToDip — the same space HitTestAny works in). Returned DropEffect → the OS drag cursor (None = no-drop).
+
+    /// <summary>OLE DragEnter: open the external session (payload = the dragged <paramref name="paths"/>), hit-test, and
+    /// report the effect the OS should show.</summary>
+    public DropEffect ExternalDragEnter(Point2 windowDip, string[] paths, KeyModifiers mods)
+    {
+        DragDrop.ExternalBegin(DropKinds.Files, new FileDropData(paths), windowDip, mods);
+        DragDrop.Move(HitTestAny(windowDip), windowDip, 0f, 0f, mods);
+        return CurrentExternalEffect();
+    }
+
+    /// <summary>OLE DragOver: re-hit-test under the new point and report the live effect.</summary>
+    public DropEffect ExternalDragOver(Point2 windowDip, KeyModifiers mods)
+    {
+        if (!DragDrop.IsActive) return DropEffect.None;
+        DragDrop.Move(HitTestAny(windowDip), windowDip, 0f, 0f, mods);
+        return CurrentExternalEffect();
+    }
+
+    /// <summary>OLE DragLeave / cancel: end the external session (fires OnLeave on a live target).</summary>
+    public void ExternalDragLeave() => DragDrop.Cancel();
+
+    /// <summary>OLE Drop: final hit-test then commit (<c>OnDrop</c> fires on an accepting target). Returns whether a
+    /// target accepted the drop.</summary>
+    public bool ExternalDrop(Point2 windowDip, KeyModifiers mods)
+    {
+        if (!DragDrop.IsActive) return false;
+        DragDrop.Move(HitTestAny(windowDip), windowDip, 0f, 0f, mods);
+        return DragDrop.TryDrop(windowDip, mods, out _);
+    }
+
+    private DropEffect CurrentExternalEffect()
+        => DragDrop.IsActive && !DragDrop.OverTarget.IsNull ? DragDrop.Session.Effect : DropEffect.None;
 
     /// <summary>Edge auto-scroll write for <see cref="DragDropContext"/>: immediate clamped offset move on a viewport
     /// (the SetScrollOffset path — content transform + virtual re-realize + scrollbar reveal). False at the boundary.</summary>
@@ -294,6 +423,21 @@ public sealed class InputDispatcher
     {
         if (n.IsNull || !_scene.IsLive(n) || !_scene.HasScroll(n)) return false;
         return SetScrollOffset(n, offset);
+    }
+
+    /// <summary>Overscroll-band write seam for the <see cref="ScrollAnimator"/> spring-back (wired in the host to
+    /// <c>ScrollAnimator.OverscrollWrite</c>, the <see cref="WriteScrollOffset"/> precedent). Sets the rubber-band
+    /// displacement and RE-APPLIES the content transform (the band is composed there with the unchanged -offset, so the
+    /// content displaces even though the offset is untouched — the clamp contract holds). The offset is NOT touched (the
+    /// band is purely visual); only the ContentNode's LocalTransform changes (TransformDirty). 0-alloc.</summary>
+    public void WriteOverscroll(NodeHandle n, float bandPx)
+    {
+        if (n.IsNull || !_scene.IsLive(n) || !_scene.HasScroll(n)) return;
+        ref ScrollState sc = ref _scene.ScrollRef(n);
+        sc.OverscrollPx = bandPx;
+        bool horizontal = sc.Orientation == 1;
+        float at = horizontal ? sc.OffsetX : sc.OffsetY;   // offset unchanged; the band rides the SAME content translation
+        ApplyScrollPosition(n, ref sc, horizontal, at);
     }
 
     /// <summary>The active contact's sampled flick velocity (px/s, window space; the ~50ms-EMA the touch fling uses). The
@@ -391,6 +535,7 @@ public sealed class InputDispatcher
         if (!_keyArmed.IsNull && !_scene.IsLive(_keyArmed)) { _keyArmed = NodeHandle.Null; _keyArmedKey = 0; }
         if (!_scrollHovered.IsNull && !_scene.IsLive(_scrollHovered)) _scrollHovered = NodeHandle.Null;
         if (!_selText.IsNull && !_scene.IsLive(_selText)) { _selText = NodeHandle.Null; _selDragging = false; }
+        if (!_pinchSessionViewport.IsNull && !_scene.IsLive(_pinchSessionViewport)) EndPinchSession();   // a reconciled-away zoom viewport ends the pinch
         PruneDeadSlots();      // every contact's per-pointer down/drag/scroll-drag/pan target dropped if its node died
         Drag.PruneDead();      // an armed/active drag node freed by a reconcile is abandoned (its columns are dead)
         DragDrop.PruneDead();  // a session whose source/target/viewport died: end / drop the dead reference
@@ -409,6 +554,10 @@ public sealed class InputDispatcher
                 long us = ToUs(e.TimestampMs);
                 if (us > _arenaClockUs) _arenaClockUs = us;
             }
+            // Track the focus-causing pointer's device class BEFORE the switch routes the down/up (which moves focus and
+            // fires OnFocusChanged → the EditableText SIP policy reads LastPointerWasTouch). PointerCancel is capture LOSS,
+            // not a focus-moving input, so it never rewrites the kind (a touch-up's cancel must not look like a mouse).
+            if (e.Kind is InputKind.PointerDown or InputKind.PointerMove or InputKind.PointerUp) _lastPointerKind = e.Pointer;
             if (pointerEvent)
             {
                 SlotIn(e.PointerId);
@@ -542,6 +691,17 @@ public sealed class InputDispatcher
                         if (!focusTarget.IsNull &&
                             (_scene.Interaction(focusTarget).HandlerMask & InteractionInfo.NoPointerFocusBit) == 0)
                             SetFocus(focusTarget, visual: false);
+                        // DIVERGENCE (input-a11y §8): a mouse press on INERT BACKGROUND — nothing focusable self-or-ancestor
+                        // (focusTarget == Null) AND the hit node advertises no press handlers (AnyInteractiveMask == 0) —
+                        // CLEARS focus. SetFocus(Null) drops _focused, clears Focused|FocusVisual (the white ring repaints
+                        // away) and fires the field's OnFocusChanged(false): edit commit + validate-on-blur + caret hide +
+                        // SIP dismiss (EditableText.cs:511-528). An interactive-but-non-focusable hit (light-dismiss/modal
+                        // scrim, OnDrag/OnPointer node, CanDrag handle, selectable label, hyperlink, gesture/wheel node) is
+                        // NOT background and KEEPS focus; a scrollbar press already returned above (:628). WinUI leaves focus
+                        // put on a background click — we deliberately diverge (click-away-to-blur).
+                        else if (focusTarget.IsNull && !_focused.IsNull && _scene.IsLive(_focused) &&
+                                 (_scene.Interaction(_down).HandlerMask & InteractionInfo.AnyInteractiveMask) == 0)
+                            SetFocus(NodeHandle.Null);
 
                         var local = LocalPos(_down, e.PositionPx);
                         _scene.GetPointerDown(_down)?.Invoke(local);                 // press-to-set
@@ -662,7 +822,7 @@ public sealed class InputDispatcher
                     // Element-level wheel handlers (WinUI PointerWheelChanged) see the wheel BEFORE the viewport:
                     // a Handled NumberBox consumes the step instead of scrolling the form (NumberBox.cpp:578-597).
                     if (DispatchWheel(in e)) { handled++; break; }
-                    if (ScrollAt(e.PositionPx, e.ScrollDelta)) handled++;
+                    if (ScrollAt(e.PositionPx, e.ScrollDelta, e.ScrollDeltaX)) handled++;
                     break;
 
                 case InputKind.PointerCancel:
@@ -747,13 +907,25 @@ public sealed class InputDispatcher
         _scrollDragNode = NodeHandle.Null;
         _contextDown = NodeHandle.Null;
         _middleDown = NodeHandle.Null;
-        _panTarget = NodeHandle.Null;   // a claimed pan dies with the contact — no fling on capture loss
+        // A claimed pan dies with the contact — no fling on capture loss. If it was holding the rubber band past the
+        // clamp, release the band to the phase-7 spring-back so it doesn't stick displaced (the band still belongs to the
+        // visual, not the offset, so it must return to 0).
+        if (!_panTarget.IsNull && _scene.IsLive(_panTarget) && _scene.HasScroll(_panTarget))
+        {
+            ref ScrollState psc = ref _scene.ScrollRef(_panTarget);
+            if (psc.OverscrollPx != 0f) { psc.Overscrolling = false; psc.OverscrollVel = 0f; OnScrollArmed?.Invoke(_panTarget); }
+        }
+        _panTarget = NodeHandle.Null;
         _panClaimed = false;
         _reorderTarget = NodeHandle.Null;   // a claimed drag-reorder dies with the contact (Drag.Cancel above restored the visuals)
         _touchReorder = false;
         _swipeDrag = NodeHandle.Null;       // a cross-axis swipe dies with the contact (no OnClick commit on capture loss)
         _swipeAxisX = false;
         _gesturePanNode = NodeHandle.Null;
+        // A contact lost mid-pinch ends the pinch session (the committed ZoomFactor stays — a partial pinch keeps its
+        // magnification, exactly like a lifted finger commits the scale). Cleared whether or not this contact was a member.
+        if (!_pinchSessionViewport.IsNull && (_activeSlotId == _pinchIdA || _activeSlotId == _pinchIdB)) EndPinchSession();
+        _pinchViewport = NodeHandle.Null; _pinchMember = -1;
         // The contact's arena force-closes (§7A.5 PointerCaptureLost: the provisional winner wins, the rest reject — pure
         // cleanup here, no further execution) and frees its seat: the scalar cancel above already aborted the gesture.
         if (_activeArenaSlot >= 0) { _arena.ForceClose(_activeArenaSlot); _arena.CloseAndFree(_activeArenaSlot); _activeArenaSlot = -1; }
@@ -778,7 +950,9 @@ public sealed class InputDispatcher
         _reorderTarget = s.ReorderTarget; _touchReorder = s.TouchReorder; _reorderAxisX = s.ReorderAxisX;
         _swipeDrag = s.SwipeDrag; _swipeAxisX = s.SwipeAxisX;
         _gesturePanNode = s.GesturePanNode;
+        _pinchViewport = s.PinchViewport; _pinchMember = s.PinchMember;
         _activeArenaSlot = s.ArenaSlot;
+        _holdFired = s.HoldFired;
     }
 
     /// <summary>Store the working scalars back into the active contact's slot, then RECYCLE the slot if the contact is
@@ -797,9 +971,17 @@ public sealed class InputDispatcher
         s.ReorderTarget = _reorderTarget; s.TouchReorder = _touchReorder; s.ReorderAxisX = _reorderAxisX;
         s.SwipeDrag = _swipeDrag; s.SwipeAxisX = _swipeAxisX;
         s.GesturePanNode = _gesturePanNode;
+        s.PinchViewport = _pinchViewport; s.PinchMember = _pinchMember;
         s.ArenaSlot = _activeArenaSlot;
-        if (s.Down.IsNull && s.DragTarget.IsNull && s.ScrollDragNode.IsNull && s.ContextDown.IsNull
-            && s.MiddleDown.IsNull && s.PanTarget.IsNull && s.ReorderTarget.IsNull && s.SwipeDrag.IsNull)
+        s.HoldFired = _holdFired;
+        // A context-ONLY contact (a long-press over a node that is hit-test-transparent to clicks) has no Down/pan/etc. to
+        // hold its seat — but its arena's Hold is still counting down. Keep the slot LIVE while that Hold is armed (else it
+        // recycles on the down frame and frees the arena before the ~500ms timer); the up/cancel or the Hold's resolution
+        // clears the seat normally. Zero-cost once the Hold resolves/rejects (the per-arena scan early-outs).
+        bool armedHold = _activeArenaSlot >= 0 && _arena.ArenaHasArmedHold(_activeArenaSlot);
+        if (!armedHold && s.Down.IsNull && s.DragTarget.IsNull && s.ScrollDragNode.IsNull && s.ContextDown.IsNull
+            && s.MiddleDown.IsNull && s.PanTarget.IsNull && s.ReorderTarget.IsNull && s.SwipeDrag.IsNull
+            && s.PinchViewport.IsNull)
         {
             // Idle contact: free its arena seat too (the contact ended — a resolved/unused arena is reclaimed so the
             // cap-10 table never fills) before reclaiming the slot. CloseAndFree is idempotent on an already-free slot.
@@ -817,7 +999,9 @@ public sealed class InputDispatcher
         _reorderTarget = NodeHandle.Null; _touchReorder = false; _reorderAxisX = false;
         _swipeDrag = NodeHandle.Null; _swipeAxisX = false;
         _gesturePanNode = NodeHandle.Null;
+        _pinchViewport = NodeHandle.Null; _pinchMember = -1;
         _activeArenaSlot = -1;
+        _holdFired = false;
     }
 
     private int FindSlot(uint id)
@@ -840,6 +1024,7 @@ public sealed class InputDispatcher
         _slots[free].Used = true;
         _slots[free].Id = id;
         _slots[free].ArenaSlot = -1;   // no arena until TouchDown opens one (default(int)==0 is a VALID arena slot, so -1 explicitly)
+        _slots[free].PinchMember = -1; // no Pinch member until enrolled (default(int)==0 is a VALID member slot, so -1 explicitly)
         return free;
     }
 
@@ -860,8 +1045,14 @@ public sealed class InputDispatcher
             if (!s.ReorderTarget.IsNull && !_scene.IsLive(s.ReorderTarget)) { s.ReorderTarget = NodeHandle.Null; s.TouchReorder = false; }
             if (!s.SwipeDrag.IsNull && !_scene.IsLive(s.SwipeDrag)) s.SwipeDrag = NodeHandle.Null;
             if (!s.GesturePanNode.IsNull && !_scene.IsLive(s.GesturePanNode)) s.GesturePanNode = NodeHandle.Null;
-            if (s.Down.IsNull && s.DragTarget.IsNull && s.ScrollDragNode.IsNull && s.ContextDown.IsNull
-                && s.MiddleDown.IsNull && s.PanTarget.IsNull && s.ReorderTarget.IsNull && s.SwipeDrag.IsNull)
+            if (!s.PinchViewport.IsNull && !_scene.IsLive(s.PinchViewport)) { s.PinchViewport = NodeHandle.Null; s.PinchMember = -1; }
+            // Keep a context-ONLY contact's slot alive while its Hold is armed (it holds no Down/pan to anchor the seat) —
+            // PruneDeadSlots runs every frame (top of Dispatch, even with no events), so without this a hit-test-transparent
+            // long-press would lose its arena on the first idle frame, before the ~500ms timer fires (the wake bug).
+            bool armedHold = s.ArenaSlot >= 0 && _arena.ArenaHasArmedHold(s.ArenaSlot);
+            if (!armedHold && s.Down.IsNull && s.DragTarget.IsNull && s.ScrollDragNode.IsNull && s.ContextDown.IsNull
+                && s.MiddleDown.IsNull && s.PanTarget.IsNull && s.ReorderTarget.IsNull && s.SwipeDrag.IsNull
+                && s.PinchViewport.IsNull)
             {
                 if (s.ArenaSlot >= 0) { _arena.CloseAndFree(s.ArenaSlot); s.ArenaSlot = -1; }   // the contact's targets all died → free its arena
                 s.Used = false;
@@ -977,6 +1168,12 @@ public sealed class InputDispatcher
             }
         }
 
+        // Pinch-zoom candidacy (Phase-4): record the nearest Zoomable viewport under this contact so a SECOND contact
+        // landing over the SAME viewport can open a pinch (the §7B Pinch member EagerAccept-wins, sweeping this contact's
+        // Pan/Tap). A zoomable viewport is also Scrollable, so the pan candidate above still arms — until the second
+        // contact's pinch sweeps it. Skipped when an eager OnDrag (Slider/EditableText) already captured the contact.
+        _pinchViewport = _dragTarget.IsNull ? ZoomableUnder(e.PositionPx) : NodeHandle.Null;
+
         if (!_down.IsNull)
         {
             // Pointer focus moves on the press edge (WinUI Focus(FocusState_Pointer)), exactly like a mouse press —
@@ -985,6 +1182,13 @@ public sealed class InputDispatcher
             if (!focusTarget.IsNull &&
                 (_scene.Interaction(focusTarget).HandlerMask & InteractionInfo.NoPointerFocusBit) == 0)
                 SetFocus(focusTarget, visual: false);
+            // DIVERGENCE (input-a11y §8): inert-background press clears focus (mouse + touch/pen parity). Full rationale at
+            // the mouse PointerDown site. TOUCH-ONLY refinement: a press that armed a content-pan candidate (scrollable !=
+            // null, :1102) is a SCROLL-gesture start, not a background tap — it KEEPS focus (the touch analogue of a
+            // scrollbar drag, requirement 2f). On mouse there is no content-pan, so an empty-content click stays a click-away.
+            else if (focusTarget.IsNull && scrollable.IsNull && !_focused.IsNull && _scene.IsLive(_focused) &&
+                     (_scene.Interaction(_down).HandlerMask & InteractionInfo.AnyInteractiveMask) == 0)
+                SetFocus(NodeHandle.Null);
 
             var local = LocalPos(_down, e.PositionPx);
             _scene.GetPointerDown(_down)?.Invoke(local);                 // press-to-set
@@ -1002,7 +1206,156 @@ public sealed class InputDispatcher
         // scalar machinery above/below still EXECUTES it (so the common case is observably identical — §7A.5 fast-path). A
         // route with no gesture-advertising node opens no arena (nothing to arbitrate) and the contact keeps pre-arena flow.
         EnrollTouchArena(in e, scrollable);
+        // Phase-4: if this is the SECOND contact over a Zoomable viewport a still-down contact is already over, open the
+        // pinch — feed the first contact's Pinch FSM OnSecondContact (EagerAccept), sweep both contacts' Pan/Tap, and start
+        // tracking the magnification. The press visuals/clicks are cancelled the capture-loss way (Pressed→Canceled).
+        if (TryOpenPinch(in e)) handled = true;
         return handled;
+    }
+
+    /// <summary>Detect a second touch contact landing over the SAME Zoomable viewport a still-down contact is over and open
+    /// the pinch session (§7B Pinch → EagerAccept). Returns true when a pinch was opened. Scans the fixed slab (≤10) for the
+    /// partner; zero alloc. The arena sweep + the explicit scalar cancel of BOTH contacts' pans run here so neither finger
+    /// drives a content scroll while pinching (the Pan members were swept; the scalar pan state is the executing path).</summary>
+    private bool TryOpenPinch(in InputEvent e)
+    {
+        if (_pinchViewport.IsNull) return false;                 // this contact isn't over a zoomable viewport
+        if (!_pinchSessionViewport.IsNull) return false;         // a pinch is already active (only two fingers drive it)
+        // Find a DIFFERENT live contact whose own down landed over the same viewport (its slot carries PinchViewport).
+        int partner = -1;
+        for (int i = 0; i < _slots.Length; i++)
+            if (_slots[i].Used && _slots[i].Id != e.PointerId && _slots[i].PinchViewport == _pinchViewport && _slots[i].PinchMember >= 0)
+            { partner = i; break; }
+        if (partner < 0) return false;
+
+        ref PointerSlot first = ref _slots[partner];
+        // Feed the FIRST contact's Pinch FSM the second contact (its EagerAccept vote), then resolve the first contact's
+        // arena so the Pinch member wins and sweeps that contact's Pan/Tap (the existing synthetic-GestureRejected routing).
+        int pm = first.PinchMember;
+        if ((uint)pm < (uint)_fsms.Length)
+        {
+            ArenaVote v = _fsms[pm].OnSecondContact(e.PositionPx, ToUs(e.TimestampMs));
+            _arena.SetVote(pm, v);
+            if (first.ArenaSlot >= 0 && _arena.IsArenaOpen(first.ArenaSlot)) _arena.ResolveStep(first.ArenaSlot);
+        }
+        // Cancel the FIRST contact's scalar pan (it lives in the partner slot — not the working set): a swept Pan must not
+        // keep driving the content scroll, and its eventual up must fire no fling. The press was already released on its
+        // own down→claim path or stays as a tap candidate; null Down so its up taps nothing mid-pinch.
+        first.PanTarget = NodeHandle.Null; first.PanClaimed = false; first.Down = NodeHandle.Null;
+        // Cancel THIS (second) contact's pan candidate too (working scalars): the pinch owns it.
+        if (_pressed == _down) SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
+        SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
+        _panTarget = NodeHandle.Null; _panClaimed = false; _down = NodeHandle.Null;
+
+        BeginPinchSession(_pinchViewport, first.Id, e.PointerId, first.PanAnchorPx, e.PositionPx);
+        return true;
+    }
+
+    /// <summary>Open the pinch session (Phase-4): capture the start separation/zoom and the content-origin axis anchor used
+    /// to keep the gesture midpoint's content point fixed as the scale changes. <paramref name="posA"/>/<paramref name="posB"/>
+    /// are the two contacts' window positions at the open. Zero alloc — scalar field writes.</summary>
+    private void BeginPinchSession(NodeHandle viewport, uint idA, uint idB, Point2 posA, Point2 posB)
+    {
+        if (viewport.IsNull || !_scene.IsLive(viewport) || !_scene.HasScroll(viewport)) return;
+        ref ScrollState sc = ref _scene.ScrollRef(viewport);
+        _pinchSessionViewport = viewport;
+        _pinchIdA = idA; _pinchIdB = idB;
+        _pinchPosA = posA; _pinchPosB = posB;
+        _pinchStartDist = Dist(posA, posB);
+        _pinchStartZoom = sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f;
+        // The content node's local origin in window space on the scroll axis, INDEPENDENT of the current scale/offset
+        // (AbsoluteRect includes the LocalTransform translation, so subtract it back out). midLocal = midpointAxis − this.
+        bool horizontal = sc.Orientation == 1;
+        _pinchOriginAxis = 0f;
+        var content = sc.ContentNode;
+        if (!content.IsNull && _scene.IsLive(content))
+        {
+            RectF cabs = _scene.AbsoluteRect(content);
+            ref NodePaint cp = ref _scene.Paint(content);
+            _pinchOriginAxis = horizontal ? cabs.X - cp.LocalTransform.Dx : cabs.Y - cp.LocalTransform.Dy;
+        }
+        UpdatePinch();   // apply the initial (start-zoom) transform so the content commits its current factor immediately
+    }
+
+    /// <summary>Recompute the magnification from the two contacts' current separation and apply it about the gesture
+    /// midpoint (Phase-4): <c>scale = clamp(startZoom · curDist/startDist, MinZoom, MaxZoom)</c>; the offset is solved so the
+    /// content point under the midpoint stays put on the scroll axis (the WinUI focal-point pinch), then written through
+    /// <see cref="SetScrollOffset"/> (clamp + the zoom-aware content transform + virtual re-realize — TransformDirty only,
+    /// never LayoutDirty). Called on every contributing move and at session open. Zero alloc.</summary>
+    private void UpdatePinch()
+    {
+        if (_pinchSessionViewport.IsNull || !_scene.IsLive(_pinchSessionViewport) || !_scene.HasScroll(_pinchSessionViewport)) return;
+        if (_pinchStartDist < 1f) return;   // degenerate start span (both fingers coincident) — no scale until they spread
+        ref ScrollState sc = ref _scene.ScrollRef(_pinchSessionViewport);
+        bool horizontal = sc.Orientation == 1;
+        float curDist = Dist(_pinchPosA, _pinchPosB);
+        float minZ = sc.MinZoom > 0f ? sc.MinZoom : 0.1f;
+        float maxZ = sc.MaxZoom > 0f ? sc.MaxZoom : 10f;
+        float z = Math.Clamp(_pinchStartZoom * (curDist / _pinchStartDist), minZ, maxZ);
+
+        float midAxis = horizontal ? (_pinchPosA.X + _pinchPosB.X) * 0.5f : (_pinchPosA.Y + _pinchPosB.Y) * 0.5f;
+        float midLocal = midAxis - _pinchOriginAxis;            // the midpoint in the viewport's content coordinate frame
+        float oldOff = horizontal ? sc.OffsetX : sc.OffsetY;
+        float oldZ = sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f;
+        // Keep the content point currently under the midpoint fixed: c = (midLocal + oldOff)/oldZ; newOff = z·c − midLocal.
+        float c = (midLocal + oldOff) / oldZ;
+        float newOff = z * c - midLocal;
+
+        sc.ZoomFactor = z;                  // commit the factor BEFORE the offset write so SetScrollOffset clamps on z·content
+        SetScrollOffset(_pinchSessionViewport, newOff);   // clamp + zoom-aware content transform + virtual re-realize (no relayout)
+    }
+
+    /// <summary>End the pinch session (Phase-4): the FIRST contact lifted/cancelled. The committed <see cref="ScrollState.ZoomFactor"/>
+    /// stays (a finished pinch keeps its magnification); the surviving finger re-arms as a pan naturally in
+    /// <see cref="TouchMove"/> (its slot's PanTarget was nulled at pinch open, but a fresh down/move on it re-anchors — see
+    /// the openIssues note). Clears the session scalars only.</summary>
+    private void EndPinchSession()
+    {
+        _pinchSessionViewport = NodeHandle.Null;
+        _pinchIdA = 0; _pinchIdB = 0;
+        _pinchStartDist = 0f; _pinchStartZoom = 1f; _pinchOriginAxis = 0f;
+        _pinchPosA = default; _pinchPosB = default;
+    }
+
+    private static float Dist(Point2 a, Point2 b)
+    {
+        float dx = a.X - b.X, dy = a.Y - b.Y;
+        return MathF.Sqrt(dx * dx + dy * dy);
+    }
+
+    /// <summary>Pinch→pan continuation (Phase-4; WinUI continues the manipulation with the remaining finger): re-anchor the
+    /// SURVIVING contact's slot (it is not the active event's contact — write its slot directly) as an ALREADY-CLAIMED pan
+    /// on <paramref name="viewport"/> from <paramref name="survivorPos"/> + the committed offset, so its next move scrolls
+    /// the zoomed content immediately (no slop re-cross). Resets that contact's velocity sampler so its eventual flick reads
+    /// a fresh post-pinch speed. No-op if the survivor already lifted (its slot was reclaimed). Zero alloc.</summary>
+    private void ContinuePinchAsPan(NodeHandle viewport, uint survivorId, Point2 survivorPos, uint timestampMs)
+    {
+        if (viewport.IsNull || !_scene.IsLive(viewport) || !_scene.HasScroll(viewport)) return;
+        int si = FindSlot(survivorId);
+        if (si < 0) return;   // the surviving finger already lifted in the same drain → nothing to continue
+        ref PointerSlot s = ref _slots[si];
+        ref ScrollState sc = ref _scene.ScrollRef(viewport);
+        bool horizontal = sc.Orientation == 1;
+        s.PanTarget = viewport;
+        s.PanClaimed = true;                       // already past slop (the pinch owned it) → its next move pans straight away
+        s.PanAxisX = horizontal;
+        s.PanAnchorPx = survivorPos;
+        s.PanAnchorOffset = horizontal ? sc.OffsetX : sc.OffsetY;
+        s.PanVel.Reset(survivorPos, timestampMs);
+        s.PinchViewport = NodeHandle.Null;         // the pinch is over for the survivor too (it's a pan now)
+        s.PinchMember = -1;
+    }
+
+    /// <summary>Update this contact's tracked position in the active pinch session (its move feeds the magnification). True
+    /// when the contact is one of the two pinching fingers (so its move is FULLY consumed by the pinch — no content pan).</summary>
+    private bool PinchMoveContact(in InputEvent e)
+    {
+        if (_pinchSessionViewport.IsNull) return false;
+        if (e.PointerId == _pinchIdA) _pinchPosA = e.PositionPx;
+        else if (e.PointerId == _pinchIdB) _pinchPosB = e.PositionPx;
+        else return false;
+        UpdatePinch();
+        return true;
     }
 
     /// <summary>Touch move: drive a captured OnDrag gesture (slider scrub / editor drag-select), a claimed scrollbar
@@ -1012,6 +1365,11 @@ public sealed class InputDispatcher
     /// and the up/cancel clears it — so a touch gesture never leaves a stuck hover behind (the WinUI no-resting-touch-hover).</summary>
     private bool TouchMove(in InputEvent e)
     {
+        // Phase-4 pinch: a move by either of the two pinching contacts updates that finger's position and re-applies the
+        // magnification about the gesture midpoint (no content pan, no hover). Tested FIRST — a pinching finger drives only
+        // the zoom until it lifts.
+        if (PinchMoveContact(in e)) return true;
+
         // A captured OnDrag node (the press landed on a Slider track / EditableText — _dragTarget set in TouchDown, the
         // mouse PointerMove's _dragTarget drive) owns the contact: each move scrubs/extends-selects it, exactly like the
         // mouse, with NO content pan and NO touch hover. The pan candidate is never armed alongside it (TouchDown gates
@@ -1044,7 +1402,7 @@ public sealed class InputDispatcher
         {
             _panVel.Sample(e.PositionPx, e.TimestampMs);
             float panDelta = _panAxisX ? (e.PositionPx.X - _panAnchorPx.X) : (e.PositionPx.Y - _panAnchorPx.Y);
-            SetScrollOffset(_panTarget, _panAnchorOffset - panDelta);   // content follows the finger (scroll axis only)
+            ApplyTouchPan(_panTarget, _panAnchorOffset - panDelta);   // content follows the finger (scroll axis only); past the clamp → rubber band
             return true;
         }
 
@@ -1065,7 +1423,7 @@ public sealed class InputDispatcher
                 if (_panClaimed)   // a just-claimed pan: drive the first content move (StepTouchArena gates the claim, not the drive)
                 {
                     float delta = _panAxisX ? (e.PositionPx.X - _panAnchorPx.X) : (e.PositionPx.Y - _panAnchorPx.Y);
-                    SetScrollOffset(_panTarget, _panAnchorOffset - delta);
+                    ApplyTouchPan(_panTarget, _panAnchorOffset - delta);
                     return true;
                 }
             }
@@ -1080,7 +1438,7 @@ public sealed class InputDispatcher
                 if (_panClaimed)
                 {
                     float delta = _panAxisX ? (e.PositionPx.X - _panAnchorPx.X) : (e.PositionPx.Y - _panAnchorPx.Y);
-                    SetScrollOffset(_panTarget, _panAnchorOffset - delta);
+                    ApplyTouchPan(_panTarget, _panAnchorOffset - delta);
                     return true;
                 }
             }
@@ -1150,11 +1508,18 @@ public sealed class InputDispatcher
         bool hasDrag = !_dragTarget.IsNull;
         bool hasSwipe = !_swipeDrag.IsNull;   // a DragYieldsToPan OnDrag node (cross-axis content pan) competing with Pan
         bool hasPan = !scrollable.IsNull;
+        bool hasPinch = !_pinchViewport.IsNull;   // a Zoomable viewport under this contact (Phase-4): a second contact opens the pinch
         bool clickable = !_down.IsNull && _scene.IsLive(_down)
                          && (_scene.Interaction(_down).HandlerMask
                              & (InteractionInfo.ClickBit | InteractionInfo.PointerBit | InteractionInfo.PressedBit)) != 0;
         NodeHandle dragReorder = (hasDrag || hasSwipe) ? NodeHandle.Null : NearestCanDrag(_down);   // DragController arms only off non-OnDrag chains
-        NodeHandle holdChain = NearestContextOrHold(_down);
+        // The touch long-press (Hold → context flyout) walks from the deepest VISUAL under the contact, not just the
+        // interactively-hit _down: a context-request handler (ContextBit) is NOT in the Hit interaction mask (a box with
+        // only OnContextRequested is hit-test-transparent to clicks), so a context-ONLY node would otherwise enroll no
+        // Hold. This mirrors the mouse right-click path, which also resolves its context target via HitTestAny (the
+        // any-node hit). When _down is set (a clickable+context row) the chain from it is identical.
+        NodeHandle holdHit = _down.IsNull ? HitTestAny(e.PositionPx) : _down;
+        NodeHandle holdChain = NearestContextOrHold(holdHit);
         // UseGesture (§13): the nearest self-or-ancestor that declared a gesture hook. Only probed when the scene has ANY
         // gesture subscription (HasGestureSubs) — the common case pays nothing. Its declared Tap/Hold/Pan kinds enroll as
         // arena members below; the arena WINNER routes to the handler (RouteGestureWin via OnMemberWon).
@@ -1164,7 +1529,9 @@ public sealed class InputDispatcher
         if (_activeArenaSlot >= 0) { _arena.CloseAndFree(_activeArenaSlot); _activeArenaSlot = -1; }
         _reorderTarget = NodeHandle.Null; _touchReorder = false;   // fresh down: no resolved reorder yet (set below if enrolled)
         _gesturePanNode = NodeHandle.Null;                          // fresh down: no UseGesture(Pan) member yet
-        if (!hasDrag && !hasSwipe && !hasPan && !clickable && dragReorder.IsNull && holdChain.IsNull && gestureNode.IsNull) return;
+        _pinchMember = -1;                                          // fresh down: no Pinch member yet (set below if enrolled)
+        _holdFired = false;                                         // fresh down: the long-press hasn't fired its context yet
+        if (!hasDrag && !hasSwipe && !hasPan && !hasPinch && !clickable && dragReorder.IsNull && holdChain.IsNull && gestureNode.IsNull) return;
 
         long timeUs = ToUs(e.TimestampMs);
         int slot = _arena.OpenArena(e.PointerId, timeUs);
@@ -1228,6 +1595,15 @@ public sealed class InputDispatcher
         {
             m = _arena.Enroll(slot, scrollable, GestureKind.Pan);
             if (m >= 0) ArmMemberFsm(m, GestureKind.Pan, e.PositionPx, timeUs);
+        }
+        // Pinch (Phase-4): a viewport-level member on the nearest Zoomable viewport (outermost; it stays Pending — a Pinch
+        // FSM votes ONLY on OnSecondContact, never on move). When a SECOND contact lands over the SAME viewport, the first
+        // contact's Pinch member is fed OnSecondContact → EagerAccept and sweeps this contact's Pan/Tap (the §7B trigger).
+        // The member slot is saved on the contact (_pinchMember, riding the slot) so the second-contact handler can reach it.
+        if (hasPinch)
+        {
+            m = _arena.Enroll(slot, _pinchViewport, GestureKind.Pinch);
+            if (m >= 0) { ArmMemberFsm(m, GestureKind.Pinch, e.PositionPx, timeUs); _pinchMember = m; }
         }
         // UseGesture (§13) members on the declaring node. A Tap/Hold member is enrolled only when not ALREADY covered by
         // the clickable-Tap / holdChain enrollment on the SAME node (the routing keys on the winner's node, so one member
@@ -1497,10 +1873,11 @@ public sealed class InputDispatcher
     /// <summary>The §7A "OnFrameEnd" timer tick (§7A.4): advance the arena clock by the frame's <paramref name="dtMs"/>
     /// and promote any Hold member whose long-press window elapsed (its FSM votes <see cref="ArenaVote.EagerAccept"/>),
     /// then resolve a step so the Hold can win. Wired from the host's phase-7 tick block (alongside the Repeat/Drag ticks),
-    /// the existing per-frame end hook the plan points at. Hold EXECUTION (a context flyout on long-press) is a later
-    /// feature, so a Hold win is arena bookkeeping today (the win sink is a no-op); the tick keeps the timer alive on
-    /// idle-held frames (no events) so the determinism stage's recorder sees the same promotion. Zero per-frame heap:
-    /// it scans the fixed slab only while arenas are open. No-op when nothing is open.</summary>
+    /// the existing per-frame end hook the plan points at. On a Hold win the win sink (<see cref="RouteGestureWin"/>) FIRES
+    /// the context flyout (a ContextBit node) / the UseGesture(Hold) handler, and this flags the contact so its eventual up
+    /// suppresses the tap-click (the press visual stays held until then). A motionless held finger emits no events, so the
+    /// host keeps frames coming via <see cref="HasArmedHold"/> (<c>WakeReasons.GestureHold</c>) until this fires. Zero
+    /// per-frame heap: it scans the fixed slab only while arenas are open. No-op when nothing is open.</summary>
     public void TickGestureArenas(float dtMs)
     {
         if (_arena.OpenArenaCount == 0) return;
@@ -1520,9 +1897,17 @@ public sealed class InputDispatcher
             }
             if (promoted)
             {
-                // A UseGesture(Hold) win reports the DOWN position (no current move in a timer tick — the FSM buffered it).
+                // The Hold win reports the DOWN position (no current move in a timer tick — the FSM buffered it). On a win,
+                // OnMemberWon (RouteGestureWin) fires the context flyout / UseGesture(Hold) handler at that point.
                 _gestureWinPos = holdStart; _gestureWinPointer = PointerKind.Touch; _gestureWinVel = Point2.Zero;
-                _arena.ResolveStep(slot);
+                int winner = _arena.ResolveStep(slot);
+                // If a Hold actually won, flag the owning contact's slot so its eventual PointerUp SUPPRESSES the tap-click
+                // (WinUI: a long-press that showed the context flyout does not also fire the element's click on release).
+                // The press visual stays held until the up (the contact still owns _pressed). TickGestureArenas runs OUTSIDE
+                // the SlotIn/SlotOut window, so write the slot directly (find it by ArenaSlot == this arena).
+                if (winner >= 0 && _arena.MemberAt(winner).Kind == GestureKind.Hold)
+                    for (int si = 0; si < _slots.Length; si++)
+                        if (_slots[si].Used && _slots[si].ArenaSlot == slot) { _slots[si].HoldFired = true; break; }
             }
         }
     }
@@ -1536,6 +1921,37 @@ public sealed class InputDispatcher
     /// hover is cleared (no resting touch hover).</summary>
     private bool TouchUp(in InputEvent e)
     {
+        // Phase-4 pinch end: a pinching contact lifted. Commit the scale (ZoomFactor stays) and CONTINUE the gesture with
+        // the surviving finger as a pan (WinUI continues the manipulation with the remaining contact) — re-anchor its slot
+        // as an already-claimed pan from its last position + the committed offset, so its next move scrolls the (now
+        // zoomed) content with no slop re-cross. This contact's up fires no tap/click/fling (it was the pinch).
+        if (!_pinchSessionViewport.IsNull && (e.PointerId == _pinchIdA || e.PointerId == _pinchIdB))
+        {
+            NodeHandle vp = _pinchSessionViewport;
+            uint survivorId = e.PointerId == _pinchIdA ? _pinchIdB : _pinchIdA;
+            Point2 survivorPos = e.PointerId == _pinchIdA ? _pinchPosB : _pinchPosA;
+            EndPinchSession();
+            ContinuePinchAsPan(vp, survivorId, survivorPos, e.TimestampMs);
+            // Clear this lifting contact's own state (it was the pinch; no tap/fling). Its slot recycles in SlotOut.
+            if (_pressed == _down) SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
+            _down = NodeHandle.Null; _panTarget = NodeHandle.Null; _panClaimed = false;
+            _pinchViewport = NodeHandle.Null; _pinchMember = -1;
+            ClearTouchHover();
+            return true;
+        }
+
+        // §7A long-press: the Hold already won + fired its context flyout while the finger was held (TickGestureArenas).
+        // The up releases the held press visual but fires NO tap-click (WinUI: a long-press that showed the context menu
+        // does not also click the element on release) and no fling. Nulling _down frees the arena seat in SlotOut.
+        if (_holdFired)
+        {
+            if (_pressed == _down) SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
+            _down = NodeHandle.Null; _panTarget = NodeHandle.Null; _panClaimed = false;
+            _holdFired = false;
+            ClearTouchHover();
+            return true;
+        }
+
         // Resolve the contact's arena on the up-sweep (§7A.2 rule 4): a within-slop Tap/RightTap/DoubleTap votes Accept and
         // the highest-priority survivor wins — the clean-tap resolution. This is arena bookkeeping (the win/reject sinks
         // are a no-op / an FSM reset this stage); the scalar branches below still fire the actual click / fling / commit,
@@ -1587,8 +2003,22 @@ public sealed class InputDispatcher
         {
             _panVel.Sample(e.PositionPx, e.TimestampMs);
             float v = _panAxisX ? _panVel.Vx : _panVel.Vy;
-            // The viewport scrolls -delta as the finger moves +axis, so the fling (in offset space) carries -velocity.
-            if (!_panTarget.IsNull && MathF.Abs(v) >= FlingMinVelocityPxPerS) OnFlingStarted?.Invoke(_panTarget, -v);
+            // Released while the rubber band is displaced (the finger was holding past the clamp): spring the band back to
+            // 0 in phase 7 (the ScrollAnimator's critically-damped StepSpring) and start NO fling — an overpan release is
+            // not a flick, it's a bounce-back. Clearing Overscrolling hands the band to the spring; arming keeps frames
+            // coming until it settles. Otherwise (released in-range) seed the friction-decay fling as before; the viewport
+            // scrolls -delta as the finger moves +axis, so the fling (in offset space) carries -velocity.
+            if (!_panTarget.IsNull && _scene.IsLive(_panTarget) && _scene.HasScroll(_panTarget))
+            {
+                ref ScrollState psc = ref _scene.ScrollRef(_panTarget);
+                if (psc.OverscrollPx != 0f)
+                {
+                    psc.Overscrolling = false;            // release the band to the phase-7 spring-back
+                    psc.OverscrollVel = 0f;
+                    OnScrollArmed?.Invoke(_panTarget);    // arm the ScrollAnimator (WakeReasons.ScrollAnim ticks the spring)
+                }
+                else if (MathF.Abs(v) >= FlingMinVelocityPxPerS) OnFlingStarted?.Invoke(_panTarget, -v);
+            }
             _panTarget = NodeHandle.Null;
             _panClaimed = false;
             handled = true;
@@ -1617,6 +2047,7 @@ public sealed class InputDispatcher
         if (_pressed == _down) SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
         _down = NodeHandle.Null;
         _swipeDrag = NodeHandle.Null;   // an un-claimed swipe candidate ends with the contact (a below-slop tap took the tap branch)
+        _pinchViewport = NodeHandle.Null; _pinchMember = -1;   // a pinch candidate that never became a pinch ends with the contact
         _selDragging = false;
         ClearTouchHover();   // lifting the finger never leaves a latched hover (touch has no resting hover)
         return handled;
@@ -1679,7 +2110,7 @@ public sealed class InputDispatcher
         {
             if ((_scene.Flags(n) & NodeFlags.Disabled) != 0) continue;
             if ((_scene.Interaction(n).HandlerMask & InteractionInfo.WheelBit) == 0) continue;
-            args ??= new WheelEventArgs { Delta = e.ScrollDelta, Mods = e.Mods };
+            args ??= new WheelEventArgs { Delta = e.ScrollDelta, DeltaX = e.ScrollDeltaX, Mods = e.Mods };
             args.Local = LocalPos(n, e.PositionPx);
             _scene.GetPointerWheel(n)?.Invoke(args);
             if (args.Handled) return true;
@@ -1695,6 +2126,16 @@ public sealed class InputDispatcher
     {
         for (var n = HitTestAny(p); !n.IsNull; n = _scene.Parent(n))
             if ((_scene.Flags(n) & NodeFlags.Scrollable) != 0) return n;
+        return NodeHandle.Null;
+    }
+
+    /// <summary>Nearest self-or-ancestor viewport under <paramref name="p"/> whose <see cref="ScrollState.Zoomable"/> opt-in
+    /// is set (Phase-4 pinch-zoom), or null. A zoomable viewport is always Scrollable; this walks PAST a non-zoomable inner
+    /// scroller to an enclosing zoomable one, so a pinch targets the declared zoom viewport.</summary>
+    private NodeHandle ZoomableUnder(Point2 p)
+    {
+        for (var n = HitTestAny(p); !n.IsNull; n = _scene.Parent(n))
+            if ((_scene.Flags(n) & NodeFlags.Scrollable) != 0 && _scene.HasScroll(n) && _scene.ScrollRef(n).Zoomable) return n;
         return NodeHandle.Null;
     }
 
@@ -1721,15 +2162,37 @@ public sealed class InputDispatcher
         return InScrollbarLane(local, in m);
     }
 
-    private bool ScrollAt(Point2 p, float delta)
+    private bool ScrollAt(Point2 p, float deltaY, float deltaX)
     {
         var node = HitTestAny(p);
+        bool any = false;
+        // The two wheel axes route INDEPENDENTLY to a scroller of their OWN orientation, so a horizontal swipe never
+        // scrolls vertically and a vertical wheel never scrolls horizontally.
+        // • Vertical wheel → nearest VERTICAL scroller, climbing PAST horizontal-only viewports (a horizontal code box /
+        //   shelf nested in a vertical page must not eat the page's wheel — WinUI semantics); a horizontal scroller is a
+        //   FALLBACK so a STANDALONE horizontal carousel still wheel-scrolls.
+        // • Horizontal wheel/two-finger swipe → nearest HORIZONTAL scroller ONLY (no vertical fallback — a horizontal
+        //   swipe must never scroll the page vertically, the symptom this fix removes).
+        if (deltaY != 0f) any |= ScrollAxis(node, deltaY, wantHorizontal: false, oppositeFallback: true);
+        if (deltaX != 0f) any |= ScrollAxis(node, deltaX, wantHorizontal: true, oppositeFallback: false);
+        return any;
+    }
+
+    private bool ScrollAxis(NodeHandle node, float delta, bool wantHorizontal, bool oppositeFallback)
+    {
+        NodeHandle fallback = NodeHandle.Null;
         for (var n = node; !n.IsNull; n = _scene.Parent(n))
         {
             if ((_scene.Flags(n) & NodeFlags.Scrollable) == 0) continue;
-            if (TryScrollNode(n, delta)) return true;   // consumed; else (at the edge) climb to an outer scroller
+            bool horiz = _scene.ScrollRef(n).Orientation == 1;
+            if (horiz != wantHorizontal)
+            {
+                if (oppositeFallback && fallback.IsNull) fallback = n;   // opposite-axis scroller remembered as a fallback
+                continue;
+            }
+            if (TryScrollNode(n, delta)) return true;                    // a same-axis scroller consumed it (else climb on)
         }
-        return false;
+        return oppositeFallback && !fallback.IsNull && TryScrollNode(fallback, delta);
     }
 
     private bool TryScrollNode(NodeHandle n, float delta)
@@ -1741,7 +2204,13 @@ public sealed class InputDispatcher
     {
         ref ScrollState sc = ref _scene.ScrollRef(n);
         bool horizontal = sc.Orientation == 1;
-        float max = horizontal ? MathF.Max(0f, sc.ContentW - sc.ViewportW) : MathF.Max(0f, sc.ContentH - sc.ViewportH);
+        // Clamp against the SCALED content extent (Content*Zoom − Viewport), identical to SetScrollOffset/ApplyTouchPan: the
+        // smooth (wheel + scrollbar-track-click) Target write below clamps directly here and never reaches SetScrollOffset,
+        // so it must use the same scaled max or a zoomed-in viewport can't wheel to the far edge / a zoomed-out one drives
+        // the eased Offset past the content. ZoomFactor is 1 on every non-zoom viewport (ScrollState.Default), so this is
+        // byte-identical to the old `Content − Viewport` there.
+        float z = sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f;
+        float max = horizontal ? MathF.Max(0f, sc.ContentW * z - sc.ViewportW) : MathF.Max(0f, sc.ContentH * z - sc.ViewportH);
 
         if (smooth)
         {
@@ -1763,7 +2232,12 @@ public sealed class InputDispatcher
     {
         ref ScrollState sc = ref _scene.ScrollRef(n);
         bool horizontal = sc.Orientation == 1;
-        float max = horizontal ? MathF.Max(0f, sc.ContentW - sc.ViewportW) : MathF.Max(0f, sc.ContentH - sc.ViewportH);
+        // The offset clamps against the SCALED content extent (Content*Zoom − Viewport, WinUI ScrollPresenter), so a
+        // zoomed-in viewport can pan across the full magnified content. ZoomFactor is 1 for every non-zoom viewport, so
+        // this is identical to the old `Content − Viewport` on the unchanged path (and the clamp contract is never
+        // relaxed — wheel/keyboard/programmatic offsets stay hard-clamped to this scaled max).
+        float z = sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f;
+        float max = horizontal ? MathF.Max(0f, sc.ContentW * z - sc.ViewportW) : MathF.Max(0f, sc.ContentH * z - sc.ViewportH);
         float old = horizontal ? sc.OffsetX : sc.OffsetY;
         float next = Math.Clamp(offset, 0f, max);
         float target = horizontal ? sc.TargetX : sc.TargetY;
@@ -1781,31 +2255,116 @@ public sealed class InputDispatcher
         return true;
     }
 
+    /// <summary>The touch-pan offset write (the ONLY path that produces an overscroll band). Splits the unclamped desired
+    /// offset <paramref name="rawOffset"/> into the in-range part (written hard-clamped through <see cref="SetScrollOffset"/>,
+    /// exactly as before) and the past-the-edge excess, which becomes a DAMPED visual displacement band — never the offset.
+    /// So a finger dragging past the clamp gives with resistance while <c>OffsetX/Y</c> stay in <c>[0, max]</c> (the clamp
+    /// contract holds: wheel/keyboard/programmatic never reach here). Returns whether anything moved (offset or band).
+    /// Resistance model: <see cref="OverscrollBand"/> — a bounded ratio damping capped at WinUI's 10%-of-viewport overpan
+    /// (ScrollInputHelper.cpp:309); the curve itself is engine-deliberate (DManip's is in the closed-source manipulation
+    /// engine, not recoverable from the repo).</summary>
+    private bool ApplyTouchPan(NodeHandle n, float rawOffset)
+    {
+        ref ScrollState sc = ref _scene.ScrollRef(n);
+        bool horizontal = sc.Orientation == 1;
+        float z = sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f;
+        float max = horizontal ? MathF.Max(0f, sc.ContentW * z - sc.ViewportW) : MathF.Max(0f, sc.ContentH * z - sc.ViewportH);
+        float viewport = horizontal ? sc.ViewportW : sc.ViewportH;
+
+        // Past-the-edge excess (signed in offset space): negative past the top/left, positive past the bottom/right.
+        float excess = rawOffset < 0f ? rawOffset : rawOffset > max ? rawOffset - max : 0f;
+        float band = OverscrollBand(excess, viewport);
+
+        float oldBand = sc.OverscrollPx;
+        sc.OverscrollPx = band;
+        sc.Overscrolling = band != 0f;       // a finger is driving the band → no spring-back yet
+        sc.OverscrollVel = 0f;
+
+        // The in-range offset still goes through the clamp chokepoint (SetScrollOffset clamps rawOffset to [0,max]); the
+        // band carries the rest. If only the band changed (already at the clamp, dragging further past), re-apply the
+        // content transform so the band displaces even though the clamped offset is unchanged.
+        bool offsetMoved = SetScrollOffset(n, rawOffset);
+        if (!offsetMoved && band != oldBand)
+        {
+            ref ScrollState sc2 = ref _scene.ScrollRef(n);   // SetScrollOffset took its own ref; re-fetch (no aliasing)
+            float at = horizontal ? sc2.OffsetX : sc2.OffsetY;
+            ApplyScrollPosition(n, ref sc2, horizontal, at);
+            sc2.ScrollMoved = true;          // the band moved → keep the thin indicator revealed through the overpan
+            OnScrollArmed?.Invoke(n);
+        }
+        return offsetMoved || band != oldBand;
+    }
+
+    /// <summary>Rubber-band displacement for a past-the-edge <paramref name="excess"/> (signed offset px) given the
+    /// <paramref name="viewport"/> extent along the scroll axis. Bounded ratio damping (the iOS/Android OverScroller
+    /// family): <c>d = limit · raw/(raw + limit)</c> where <c>limit = 0.1·viewport</c> (WinUI overpan cap,
+    /// ScrollInputHelper.cpp:309-311). The displacement asymptotes to the cap as the drag grows, so the first pixels
+    /// move almost 1:1 (low resistance) and it stiffens toward the limit — the WinUI/DManip overscroll feel. The curve is
+    /// ENGINE-DELIBERATE (the DManip resistance function is closed-source); only the 10% cap is the recovered WinUI value.
+    /// Sign-preserving; 0 for 0 excess.</summary>
+    private static float OverscrollBand(float excess, float viewport)
+    {
+        if (excess == 0f || viewport <= 0f) return 0f;
+        float limit = OverscrollLimitFraction * viewport;
+        float raw = MathF.Abs(excess);
+        float d = limit * raw / (raw + limit);     // bounded: → limit as raw → ∞, ≈ raw for raw ≪ limit
+        return excess < 0f ? -d : d;
+    }
+
     private void ApplyScrollPosition(NodeHandle n, ref ScrollState sc, bool horizontal, float next)
     {
-        // Layout-free scroll: the -ScrollOffset is the content child's LocalTransform (TransformDirty only).
+        // Layout-free scroll/zoom: the content child's LocalTransform carries BOTH the -ScrollOffset translation and (when
+        // the viewport is zoomed) the pinch SCALE (TransformDirty | PaintDirty only — never LayoutDirty). The composed map
+        // is the WinUI ScrollPresenter `viewport = Zoom·content − offset`: a pure Scale(z) with a -offset translation. The
+        // recorder applies a node's LocalTransform CONJUGATED by its transform origin (T(o)·L·T(−o), SceneRecorder.Walk),
+        // so the stored matrix is pre/post-multiplied by ±origin to cancel that conjugation and realize the origin-free
+        // `z·p − offset` map; at z==1 this collapses to the plain Translation(−offset) the scroll-only path always wrote
+        // (a pure translation is origin-invariant), so every non-zoom viewport is byte-identical.
         var content = sc.ContentNode;
         if (!content.IsNull && _scene.IsLive(content))
         {
             ref NodePaint cp = ref _scene.Paint(content);
-            cp.LocalTransform = Affine2D.Translation(horizontal ? -next : 0f, horizontal ? 0f : -next);
+            float z = sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f;
+            // Rubber-band overscroll (touch-pan only): a SEPARATE visual displacement term composed into the SAME content
+            // translation as the -offset. OffsetX/Y stay hard-clamped (next is already clamped) — the band is the only
+            // thing that can carry the content past the edge, and it springs back to 0 on release. A past-the-top overpan
+            // is OverscrollPx<0 ⇒ -band is positive ⇒ the content slides DOWN, revealing the rubber gap (and symmetric for
+            // the other three edges). 0 on every non-overscrolled / non-touch path, so the math is byte-identical there.
+            float band = sc.OverscrollPx;
+            float offX = horizontal ? next + band : 0f, offY = horizontal ? 0f : next + band;
+            if (z == 1f)
+            {
+                cp.LocalTransform = Affine2D.Translation(-offX, -offY);
+            }
+            else
+            {
+                ref RectF cb = ref _scene.Bounds(content);
+                float ox = cb.W * cp.OriginX, oy = cb.H * cp.OriginY;
+                // map = z·p − offset (+ overscroll band); stored = T(−o)·map·T(o) so the recorder's T(o)·stored·T(−o) == map.
+                var map = new Affine2D(z, 0f, 0f, z, -offX, -offY);
+                cp.LocalTransform = Affine2D.Translation(-ox, -oy).Multiply(map).Multiply(Affine2D.Translation(ox, oy));
+            }
             _scene.Mark(content, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
         }
 
-        // Virtualization: keep transform-only scroll while the visible band remains inside the realized guard band.
+        // Virtualization: keep transform-only scroll while the visible band remains inside the realized guard band. When
+        // zoomed, the on-screen viewport band maps back to a SMALLER content-space band ([off/z, (off+vp)/z]) — the item
+        // extents are in unscaled content units — so the realize window tracks the magnified content correctly.
         if (sc.ItemCount > 0)
         {
             int visibleFirst, visibleLast;
-            float vp = horizontal ? sc.ViewportW : sc.ViewportH;
+            float zv = sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f;
+            float vp = (horizontal ? sc.ViewportW : sc.ViewportH) / zv;
+            float contentNext = next / zv;
             if (sc.Layout is not null)   // fixed-geometry (stack/grid/custom)
             {
                 float cross = horizontal ? sc.ViewportH : sc.ViewportW;
-                sc.Layout.Window(sc.ItemCount, cross, vp, next, 0, out visibleFirst, out visibleLast);
+                sc.Layout.Window(sc.ItemCount, cross, vp, contentNext, 0, out visibleFirst, out visibleLast);
             }
             else if (_scene.TryGetExtents(n, out var t) && t is not null)   // variable (extent table)
             {
-                visibleFirst = t.IndexAt(next);
-                visibleLast = Math.Min(sc.ItemCount, t.IndexAt(next + vp) + 1);
+                visibleFirst = t.IndexAt(contentNext);
+                visibleLast = Math.Min(sc.ItemCount, t.IndexAt(contentNext + vp) + 1);
             }
             else { visibleFirst = visibleLast = 0; }
             if (VirtualWindowing.NeedsRealize(in sc, visibleFirst, visibleLast)) { _scene.Mark(n, NodeFlags.VirtualRangeDirty); RequestRerender(); }

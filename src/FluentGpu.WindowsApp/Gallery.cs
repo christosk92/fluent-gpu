@@ -33,6 +33,8 @@ sealed class GalleryApp : Component
                 new("repeater", Icons.List, "ItemsRepeater"),
                 new("virtualization", Icons.List, "List virtualization"),
                 new("animation", Icons.Movie, "Animation"),
+                new("motion-recipes", Icons.Movie, "Motion recipes"),
+                new("async-skeletons", Icons.Refresh, "Async & skeletons"),
                 new("compositor", Icons.Brush, "Compositor"),
                 new("scrolling", Icons.Document, "Scrolling"),
                 new("localization", Icons.Globe, "Localization"),
@@ -180,6 +182,7 @@ sealed class GalleryApp : Component
         new("h-samples", "", "Samples", IsHeader: true),
         new("wavee", Icons.MusicNote, "Wavee skeleton"),
         new("windowsapi", Icons.Globe, "Windows APIs"),
+        new("validation", Icons.Accept, "Validation"),
     };
 
     // Every control page, grouped by nav category — drives the All-controls page and the category overview pages
@@ -407,12 +410,15 @@ sealed class GalleryApp : Component
         "scrolling" => Embed.Comp(() => new ScrollPage()),
         "virtualization" => Embed.Comp(() => new VirtualizationPage()),
         "animation" => Embed.Comp(() => new AnimationPage()),
+        "motion-recipes" => Embed.Comp(() => new MotionRecipesPage()),
+        "async-skeletons" => Embed.Comp(() => new AsyncSkeletonPage()),
         "compositor" => Embed.Comp(() => new CompositorPage()),
         "state" => Embed.Comp(() => new StatePage()),
         "wavee" => Embed.Comp(() => new WaveeShell()),
         "windowsapi" => Embed.Comp(() => new WindowsApiPage()),
         "localization" => Embed.Comp(() => new LocalizationPage()),
         "validation-guide" => Embed.Comp(() => new ValidationGuidePage()),
+        "validation" => Embed.Comp(() => new ValidationPage()),
         _ => Embed.Comp(() => new WelcomePage()),
     };
 }

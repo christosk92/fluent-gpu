@@ -6,6 +6,36 @@ using static TerraFX.Interop.Windows.Windows;
 
 namespace FluentGpu.WindowsApi.Power;
 
+/// <summary>Where the machine is drawing power from (the <c>SYSTEM_POWER_STATUS.ACLineStatus</c> tri-state).</summary>
+public enum PowerSource : byte
+{
+    /// <summary>The OS could not determine the line status (ACLineStatus = 255).</summary>
+    Unknown,
+    /// <summary>Running on AC mains (ACLineStatus = 1).</summary>
+    Ac,
+    /// <summary>Running on battery (ACLineStatus = 0).</summary>
+    Dc,
+}
+
+/// <summary>
+/// A snapshot of the system power state (the modern, typed replacement for WASDK's <c>PowerManager</c> property bag /
+/// UWP <c>Windows.System.Power.PowerManager</c>): a single immutable read with <c>null</c> for every value the OS
+/// reports as unknown, rather than a stringly/255-sentinel surface. Produced by <see cref="PowerSession.ReadPower"/>.
+/// </summary>
+/// <param name="Source">AC / battery / unknown.</param>
+/// <param name="HasBattery">True when a battery is present (the <c>NO_BATTERY</c>/<c>UNKNOWN</c> flags are clear).</param>
+/// <param name="BatteryPercent">0..100, or <c>null</c> when unknown.</param>
+/// <param name="IsCharging">True while the battery is charging.</param>
+/// <param name="EnergySaverOn">True when Windows battery-saver is engaged (drives reduced-motion / background throttling).</param>
+/// <param name="RemainingDischarge">Estimated time left on battery, or <c>null</c> when unknown / on AC.</param>
+public readonly record struct PowerStatus(
+    PowerSource Source,
+    bool HasBattery,
+    int? BatteryPercent,
+    bool IsCharging,
+    bool EnergySaverOn,
+    TimeSpan? RemainingDischarge);
+
 /// <summary>
 /// The Power pillar: two cold, flat-Win32 facilities a desktop media app needs — a scope-bounded
 /// <see cref="KeepAwake"/> (so long playback / casting is not interrupted by sleep or display-off) and a
@@ -68,6 +98,13 @@ public static unsafe class PowerSession
     private const uint PBT_APMRESUMESUSPEND = 0x0007;      // resume from a user-initiated suspend.
     private const uint PBT_APMRESUMEAUTOMATIC = 0x0012;    // resume from any suspend (always delivered on resume).
 
+    // ── winbase.h SYSTEM_POWER_STATUS sentinels (the struct is TerraFX-projected; these #defines are not). ───────────
+    private const byte AC_LINE_OFFLINE = 0, AC_LINE_ONLINE = 1, AC_LINE_UNKNOWN = 255;
+    private const byte BATTERY_FLAG_CHARGING = 8, BATTERY_FLAG_NO_BATTERY = 128, BATTERY_FLAG_UNKNOWN = 255;
+    private const byte BATTERY_PERCENT_UNKNOWN = 255;
+    private const byte SYSTEM_STATUS_FLAG_ENERGY_SAVER = 1;   // SystemStatusFlag bit (Win10+; was Reserved1).
+    private const uint BATTERY_LIFE_UNKNOWN = 0xFFFFFFFF;
+
     /// <summary>
     /// <c>DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS</c> (winuser.h) — the callback + context pair passed (by pointer, as the
     /// <c>HANDLE hRecipient</c>) to <c>RegisterSuspendResumeNotification</c> when the flag is
@@ -104,6 +141,35 @@ public static unsafe class PowerSession
             throw new InvalidOperationException(
                 $"SetThreadExecutionState(0x{flags:X8}) failed to set the keep-awake request.");
         return new KeepAwakeHandle();
+    }
+
+    /// <summary>
+    /// Read a one-shot <see cref="PowerStatus"/> snapshot (AC/DC, battery %, charging, battery-saver, estimated remaining
+    /// discharge) via <c>GetSystemPowerStatus</c>. Identity-free, callable from any thread, and NOT a per-frame call —
+    /// poll it on demand (e.g. on a low-frequency tick or a WM_POWERBROADCAST, the change-event subscription being a
+    /// deferred follow-up). Every OS "unknown" sentinel maps to <c>null</c>/<see cref="PowerSource.Unknown"/>.
+    /// </summary>
+    /// <returns>The current power snapshot.</returns>
+    /// <exception cref="InvalidOperationException">if <c>GetSystemPowerStatus</c> returns FALSE.</exception>
+    public static PowerStatus ReadPower()
+    {
+        SYSTEM_POWER_STATUS s;
+        if (GetSystemPowerStatus(&s) == 0)
+            throw new InvalidOperationException("GetSystemPowerStatus failed (returned FALSE).");
+
+        PowerSource src = s.ACLineStatus switch
+        {
+            AC_LINE_ONLINE => PowerSource.Ac,
+            AC_LINE_OFFLINE => PowerSource.Dc,
+            _ => PowerSource.Unknown,   // AC_LINE_UNKNOWN
+        };
+        bool hasBattery = s.BatteryFlag != BATTERY_FLAG_UNKNOWN && (s.BatteryFlag & BATTERY_FLAG_NO_BATTERY) == 0;
+        int? percent = s.BatteryLifePercent == BATTERY_PERCENT_UNKNOWN ? null : s.BatteryLifePercent;
+        bool charging = (s.BatteryFlag & BATTERY_FLAG_CHARGING) != 0;
+        bool energySaver = (s.SystemStatusFlag & SYSTEM_STATUS_FLAG_ENERGY_SAVER) != 0;
+        TimeSpan? remaining = s.BatteryLifeTime == BATTERY_LIFE_UNKNOWN ? null : TimeSpan.FromSeconds(s.BatteryLifeTime);
+
+        return new PowerStatus(src, hasBattery, percent, charging, energySaver, remaining);
     }
 
     /// <summary>Raised when the system is about to suspend (<c>PBT_APMSUSPEND</c>). Delivered on an OS power-broadcast

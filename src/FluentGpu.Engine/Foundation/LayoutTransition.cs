@@ -70,9 +70,11 @@ public readonly record struct TransitionDynamics(
 }
 
 /// <summary>Presented-space terminal for an inserted/removed node: where it animates FROM on enter / TO on exit
-/// (offset + scale + opacity), relative to its laid-out rect. <c>Active</c>=false ⇒ the node simply snaps in/out.</summary>
+/// (offset + scale + opacity + self-blur σ), relative to its laid-out rect. <c>Active</c>=false ⇒ the node simply
+/// snaps in/out. <c>Blur</c> &gt; 0 drives <c>AnimChannel.BlurSigma</c> (enter: Blur→0; exit: current→Blur) — the
+/// skeleton cross-blur on the EXITING orphan layer.</summary>
 public readonly record struct EnterExit(
-    float Dx = 0f, float Dy = 0f, float Sx = 1f, float Sy = 1f, float Opacity = 1f, bool Active = false);
+    float Dx = 0f, float Dy = 0f, float Sx = 1f, float Sy = 1f, float Opacity = 1f, bool Active = false, float Blur = 0f);
 
 /// <summary>The whole authoring surface (interned POD). Channels × dynamics × size-mode × enter/exit compose
 /// orthogonally — translate / scale / rotate / opacity / clip-reveal all fall out, with no per-control special cases.</summary>

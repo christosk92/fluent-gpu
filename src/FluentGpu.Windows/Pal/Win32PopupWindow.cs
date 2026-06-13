@@ -173,7 +173,7 @@ public sealed unsafe class Win32PopupWindow : IPlatformPopupWindow
                 // HIWORD(wParam) = signed notch (×120); lParam = SCREEN px (same as the owner's own wheel path).
                 if (ResolveOwner() is not { } owner) return true;
                 short notch = unchecked((short)((ulong)(nuint)wParam >> 16));
-                owner.ForwardPopupPointerWheel(GET_POINTERID_WPARAM(wParam), lp, notch);
+                owner.ForwardPopupPointerWheel(GET_POINTERID_WPARAM(wParam), lp, notch, horizontal: msg == WM_POINTERHWHEEL);
                 return true;
             }
         }

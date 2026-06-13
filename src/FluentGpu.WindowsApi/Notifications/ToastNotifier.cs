@@ -77,6 +77,8 @@ public sealed unsafe class ToastNotifier : IDisposable
     private IToastNotificationFactory* _toastFactory;
     private IToastNotificationManagerStatics* _managerStatics;
     private IToastNotifier* _notifier;
+    private IToastNotificationManagerStatics2* _managerStatics2; // history accessor (RemoveByTag/RemoveGroup/Clear)
+    private IToastNotificationHistory* _history;
 
     // The activator (implement side): the singleton callback + its class-object registration.
     private ToastActivatorCallback? _callback;
@@ -181,6 +183,18 @@ public sealed unsafe class ToastNotifier : IDisposable
     }
 
     /// <summary>
+    /// Show a toast described by a <see cref="ToastBuilder"/> with no XML in sight — builds the payload and applies the
+    /// builder's carried <see cref="ToastBuilder.Tag"/>/<see cref="ToastBuilder.Group"/> automatically. This is the
+    /// "no need to render XML" entry point (mirror of <see cref="ToastBuilder.ShowVia"/>); the raw
+    /// <see cref="Show(string,string?,string?)"/> stays available as the escape hatch.
+    /// </summary>
+    public bool Show(ToastBuilder toast)
+    {
+        ArgumentNullException.ThrowIfNull(toast);
+        return Show(toast.BuildXml(), toast.TagValue, toast.GroupValue);
+    }
+
+    /// <summary>
     /// Show a toast from its XML payload (typically <see cref="ToastBuilder.BuildXml"/>). Runs the spike-proven WinRT
     /// chain, caching the activation factories and the per-AUMID notifier on first use. Returns the <c>Show</c>
     /// HRESULT-as-bool: <see langword="true"/> when the platform accepted the toast (NOT a guarantee it painted — see
@@ -195,8 +209,6 @@ public sealed unsafe class ToastNotifier : IDisposable
     public bool Show(string toastXml, string? tag = null, string? group = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(toastXml);
-        _ = tag;
-        _ = group;   // OPEN-QUESTION: tag/group set-once needs IToastNotification2 (CreateToastNotifierWithId path covers Show).
 
         lock (_gate)
         {
@@ -232,6 +244,7 @@ public sealed unsafe class ToastNotifier : IDisposable
                 ThrowIfFailed(_toastFactory->CreateToastNotification(xmlDoc, &toast), "CreateToastNotification");
                 try
                 {
+                    ApplyTagGroup(toast, tag, group);   // IToastNotification2.put_Tag/put_Group — enables Update/Remove-by-tag
                     EnsureNotifier();
                     int showHr = _notifier->Show(toast);
                     // Show failure is surfaced as false rather than thrown — a disabled/suppressed toast can also land
@@ -281,6 +294,87 @@ public sealed unsafe class ToastNotifier : IDisposable
                 }
             }
         }
+    }
+
+    /// <summary>Remove a shown/Action-Center toast by its <paramref name="tag"/> (and optional <paramref name="group"/>).</summary>
+    public void RemoveByTag(string tag, string? group = null)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(tag);
+        lock (_gate)
+        {
+            if (!_registered) return;
+            EnsureRoInitialized();
+            EnsureHistory();
+            using var hsTag = new HStringHandle(tag);
+            using var hsAumid = new HStringHandle(_aumid);
+            if (string.IsNullOrEmpty(group))
+                _history->Remove(hsTag.Value);
+            else
+            {
+                using var hsGroup = new HStringHandle(group);
+                _history->RemoveGroupedTagWithId(hsTag.Value, hsGroup.Value, hsAumid.Value);
+            }
+        }
+    }
+
+    /// <summary>Remove every toast in <paramref name="group"/> for this app.</summary>
+    public void RemoveGroup(string group)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(group);
+        lock (_gate)
+        {
+            if (!_registered) return;
+            EnsureRoInitialized();
+            EnsureHistory();
+            using var hsGroup = new HStringHandle(group);
+            using var hsAumid = new HStringHandle(_aumid);
+            _history->RemoveGroupWithId(hsGroup.Value, hsAumid.Value);
+        }
+    }
+
+    /// <summary>Clear this app's entire toast history (banners + Action Center entries).</summary>
+    public void ClearHistory()
+    {
+        lock (_gate)
+        {
+            if (!_registered) return;
+            EnsureRoInitialized();
+            EnsureHistory();
+            using var hsAumid = new HStringHandle(_aumid);
+            _history->ClearWithId(hsAumid.Value);
+        }
+    }
+
+    /// <summary>QI the manager statics to <c>…Statics2</c> and fetch the <c>IToastNotificationHistory</c>, cached.</summary>
+    private void EnsureHistory()
+    {
+        if (_history != null) return;
+        if (_managerStatics == null) EnsureNotifier();   // EnsureNotifier caches _managerStatics
+        if (_managerStatics2 == null)
+        {
+            IToastNotificationManagerStatics2* s2 = null;
+            Guid iid = __uuidof<IToastNotificationManagerStatics2>();
+            ThrowIfFailed(_managerStatics->QueryInterface(&iid, (void**)&s2), "QI IToastNotificationManagerStatics2");
+            _managerStatics2 = s2;
+        }
+        IToastNotificationHistory* hist = null;
+        ThrowIfFailed(_managerStatics2->get_History(&hist), "get_History");
+        _history = hist;
+    }
+
+    /// <summary>Set tag (and group) on a toast via <c>IToastNotification2</c> so it can later be updated/removed.</summary>
+    private static void ApplyTagGroup(IToastNotification* toast, string? tag, string? group)
+    {
+        if (string.IsNullOrEmpty(tag) && string.IsNullOrEmpty(group)) return;
+        IToastNotification2* t2 = null;
+        Guid iid = __uuidof<IToastNotification2>();
+        if (toast->QueryInterface(&iid, (void**)&t2) < 0 || t2 == null) return;
+        try
+        {
+            if (!string.IsNullOrEmpty(tag)) { using var h = new HStringHandle(tag); ThrowIfFailed(t2->put_Tag(h.Value), "put_Tag"); }
+            if (!string.IsNullOrEmpty(group)) { using var h = new HStringHandle(group); ThrowIfFailed(t2->put_Group(h.Value), "put_Group"); }
+        }
+        finally { t2->Release(); }
     }
 
     /// <summary>Lazily <c>RoInitialize</c> the apartment as multithreaded. Tolerates S_FALSE (already initialized) and
@@ -346,6 +440,9 @@ public sealed unsafe class ToastNotifier : IDisposable
 
     private void ReleaseWinRtPointers()
     {
+        // Release derived/QI'd pointers before their parents (reverse acquisition order).
+        if (_history != null) { _history->Release(); _history = null; }
+        if (_managerStatics2 != null) { _managerStatics2->Release(); _managerStatics2 = null; }
         if (_notifier != null) { _notifier->Release(); _notifier = null; }
         if (_managerStatics != null) { _managerStatics->Release(); _managerStatics = null; }
         if (_toastFactory != null) { _toastFactory->Release(); _toastFactory = null; }

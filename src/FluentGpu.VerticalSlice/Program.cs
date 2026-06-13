@@ -1,8 +1,10 @@
+using System;
 using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
+using FluentGpu.Forms;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Hosting;
@@ -153,6 +155,25 @@ sealed class HookProbe : Component
     }
 }
 
+// Form-validation probe: two fields (a Required email, a cross-field confirm) optionally joined to a UseForm scope.
+sealed class ValidationProbe : Component
+{
+    public readonly Signal<string> Email = new("");
+    public readonly Signal<string> Pwd = new("");
+    public readonly Signal<string> Confirm = new("");
+    public bool WithForm;
+    public Field<string>? EmailField, ConfirmField;
+    public FormScope? Form;
+
+    public override Element Render()
+    {
+        if (WithForm) Form = UseForm();
+        EmailField = UseField(Email, new FieldOptions<string> { Timing = ValidationTiming.OnTouched }, Rules.Required("err.req"));
+        ConfirmField = UseField(Confirm, new FieldOptions<string> { Timing = ValidationTiming.OnChange }, Rules.Equals(Pwd, "err.match"));
+        return new BoxEl();
+    }
+}
+
 // A 200×200 ScrollView over a 20×40px=800px-tall column → proves layout-free scroll + clip culling.
 sealed class ScrollProbe : Component
 {
@@ -167,6 +188,39 @@ sealed class ScrollProbe : Component
             Content = new BoxEl { Direction = 1, Children = items },
         };
     }
+}
+
+// [Validatable] sample (form-validation.md): the ValidatorGenerator emits SignupRules.Validators.{Email,Password,Age}.
+[Validatable]
+partial record SignupRules
+{
+    [Required, RegexMatch(@"^[^@\s]+@[^@\s]+\.[^@\s]+$", "err.email")] public string Email { get; init; } = "";
+    [Required, MinLength(8)] public string Password { get; init; } = "";
+    [Range(13, 120)] public double Age { get; init; }
+}
+
+// A VERTICAL page scroller containing a nested HORIZONTAL scroller at its top (the gallery "code box" scenario) over a
+// tall filler → proves wheel-axis routing: a vertical wheel scrolls the PAGE (climbing past the horizontal box), a
+// horizontal wheel scrolls the inner BOX (never the page vertically).
+sealed class NestedScrollProbe : Component
+{
+    public override Element Render() => new ScrollEl
+    {
+        Width = 200, Height = 200, Fill = ColorF.FromRgba(20, 20, 20),
+        Content = new BoxEl
+        {
+            Direction = 1,
+            Children =
+            [
+                new ScrollEl
+                {
+                    Horizontal = true, Width = 180, Height = 60, Fill = ColorF.FromRgba(30, 30, 30),
+                    Content = new BoxEl { Direction = 0, Children = [new BoxEl { Width = 600, Height = 40, Fill = ColorF.FromRgba(50, 50, 50) }] },
+                },
+                new BoxEl { Width = 180, Height = 800, Fill = ColorF.FromRgba(40, 40, 40) },
+            ],
+        },
+    };
 }
 
 // A 10,000-row virtualized list (40px uniform rows) in a 400px viewport → proves windowing + recycle at scale.
@@ -244,6 +298,24 @@ sealed class TouchFlingSettleProbe : Component
            with { Width = 300, Height = 400 };
 }
 
+// A bound virtual list sized so a touch flick lands MID-LIST (the clamp is far away) — the snap-fling probe. The test
+// sets ScrollState.SnapInterval = RowH on the viewport after mount (the reconciler patches Orientation/ItemCount but
+// never touches the snap fields, so a post-mount SnapInterval survives every reconcile). A flick then retargets its
+// friction decay to land EXACTLY on a RowH multiple (ScrollSnap + ScrollAnimator). Large content keeps the snap target
+// interior (never clamp-bounded), so the landing is purely the snap math. Viewport = Scene.Root.
+sealed class SnapFlingProbe : Component
+{
+    public const int N = 400;          // 400 × 50 = 20000px content, 400px viewport ⇒ 19600px max offset (snap target stays interior)
+    public const float RowH = 50f;
+    public override Element Render()
+        => Virtual.ListBound(N, RowH, idx => new BoxEl
+           {
+               Height = RowH,
+               Fill = Prop.Of(() => ColorF.FromRgba(30, 30, (byte)(idx.Value % 2 == 0 ? 30 : 50))),
+           })
+           with { Width = 300, Height = 400 };
+}
+
 // A virtualized list whose rows are clickable (the tap target). A below-slop touch down→up over a row TAPS it (the row's
 // OnClick fires); a touch drag over the list claims the pan, cancels the row's press, and never clicks. Row 0's press +
 // click are counted on the probe so a tap and a pan are distinguishable. Viewport = Scene.Root.
@@ -284,6 +356,34 @@ sealed class TouchEditInScrollerProbe : Component
                     return e;
                 }),
                 new BoxEl { Width = 160f, Height = 1600f, Fill = ColorF.FromRgba(30, 30, 30) },   // tall filler ⇒ scrollable
+            ],
+        }) with { Width = 200f, Height = 240f };
+    }
+}
+
+// The SIP (touch keyboard) reflow probe (gate.touch4.sip.reflow): an EditableText sitting BELOW a filler band inside a
+// vertical ScrollView, with a tall filler below it (so the viewport overflows on Y and the field can be lifted up). The
+// test touch-focuses the field (near the viewport bottom), fires a simulated InputPane Showing OccludedRect that covers
+// the field, and asserts the scroller scrolled the field's caret above the pane (the WinUI EnsureFocusedElementInView).
+sealed class TouchSipReflowProbe : Component
+{
+    public EditableText? Edit;
+    public override Element Render()
+    {
+        var t = UseSignal("type here");
+        return Ui.ScrollView(new BoxEl
+        {
+            Direction = 1,
+            Children =
+            [
+                new BoxEl { Width = 160f, Height = 180f, Fill = ColorF.FromRgba(28, 28, 28) },   // filler ABOVE → the field sits lower
+                Embed.Comp(() =>
+                {
+                    var e = new EditableText { Text = t, Width = 160f, Height = 32f };
+                    Edit = e;
+                    return e;
+                }),
+                new BoxEl { Width = 160f, Height = 1600f, Fill = ColorF.FromRgba(30, 30, 30) },   // filler BELOW ⇒ headroom to scroll
             ],
         }) with { Width = 200f, Height = 240f };
     }
@@ -382,6 +482,41 @@ sealed class ArenaHoldProbe : Component
         => new BoxEl { Width = 240, Height = 160, Fill = ColorF.FromRgba(40, 40, 50), OnContextRequested = _ => Contexts++ };
 }
 
+// The touch-Hold EXECUTION probe (gate.touch4.hold-fires-context): a virtualized list whose ROW 0 is BOTH clickable AND
+// context-requesting, inside a scroller (the rows overflow ⇒ a pan is available). The three Hold scenarios all play out
+// on row 0: a STATIONARY long-press (≥500ms) fires the context request (the touch long-press → flyout, the same action a
+// right-click fires); a SUB-500ms release taps it (OnClick, no context — the Hold timer never promoted); a MOVE-PAST-SLOP
+// claims the scroller's Pan (the arena sweeps the Hold AND the Tap — the list scrolls, no context, no click). Exposes the
+// per-channel counters + the live row-0 handle so the gate can drive each scenario and read the outcome.
+sealed class TouchHoldContextProbe : Component
+{
+    public int Contexts, Clicks;
+    public NodeHandle Row0;
+    public override Element Render()
+        => Virtual.List(2000, 60f, i => new BoxEl
+           {
+               Height = 60, Fill = ColorF.FromRgba(30, 30, 30),
+               OnRealized = i == 0 ? h => Row0 = h : null,
+               OnClick = i == 0 ? () => Clicks++ : () => { },
+               OnContextRequested = i == 0 ? _ => Contexts++ : null,
+           }, keyOf: i => "h" + i)
+           with { Width = 300, Height = 300 };
+}
+
+// A 5-star interactive RatingControl (gate.touch4.rating-tap): a touch tap on the 4th star sets the rating to 4 (the
+// OnPointerDown=Sweep sets the preview at the tapped X, the OnClick=Commit on release applies it — touch tap-to-rate,
+// RatingControl.cpp commit-on-release). Exposes the live value so the gate asserts the touch tap rated it.
+sealed class RatingTapProbe : Component
+{
+    public FloatSignal? Val;
+    public override Element Render()
+    {
+        var v = UseFloatSignal(0f);
+        Val = v;
+        return RatingControl.Create(v, max: 5);
+    }
+}
+
 // A lone Slider (the §7A.5 single-recognizer fast-path target): one OnDrag recognizer, nothing competing. A touch drag
 // must capture SYNCHRONOUSLY and scrub the value the same frame (capture is not tentative for a lone member). Exposes
 // the live value so gate.arena.fastpath-sync can assert the first move moved it.
@@ -412,6 +547,20 @@ sealed class TwoListProbe : Component
             Virtual.List(RightN, 40f, _ => new BoxEl { Height = 40, Fill = ColorF.FromRgba(30, 30, 40) }, keyOf: i => "r" + i)
                 with { Width = 200, Height = 300, Grow = 0f },
         ],
+    };
+}
+
+// A ZOOMABLE ScrollEl viewport (Phase-4 pinch): a 200×200 vertical scroller over a 200×800 content box, opted into
+// pinch-zoom (Zoomable, defaults Min 0.1 / Max 10.0). NON-virtual (no ItemCount) so a pinch move is a pure transform
+// frame (Rendered == false ⇒ no relayout — the no-LayoutDirty gate). The content node carries the composed scale+offset
+// LocalTransform; its model Bounds (800px) never change under zoom.
+sealed class PinchZoomProbe : Component
+{
+    public override Element Render() => new ScrollEl
+    {
+        Width = 200, Height = 200, Fill = ColorF.FromRgba(20, 20, 20),
+        Zoomable = true,
+        Content = new BoxEl { Width = 200, Height = 800, Fill = ColorF.FromRgba(40, 40, 40) },
     };
 }
 
@@ -2036,6 +2185,35 @@ static class Slice
         return worst;
     }
 
+    /// <summary>Drive a two-contact PINCH (Phase-4): contact <paramref name="idA"/> down at <paramref name="a0"/> and
+    /// <paramref name="idB"/> down at <paramref name="b0"/> (the second down opens the pinch), then <paramref name="steps"/>
+    /// move-pairs easing each finger from its start toward <paramref name="aEnd"/>/<paramref name="bEnd"/> (one RunFrame per
+    /// pair so the ring keeps every move). The two contacts move SYMMETRICALLY about their shared midpoint to spread/pinch.
+    /// Leaves both fingers DOWN (the caller lifts to commit / continue). Returns the worst hot-phase alloc across the moves.</summary>
+    static long PinchGesture(HeadlessWindow window, AppHost host, Point2 a0, Point2 b0, Point2 aEnd, Point2 bEnd,
+                             int steps, uint idA, uint idB, float msPerStep)
+    {
+        long worst = 0;
+        float acc = s_touchClockMs;
+        window.QueueInput(Touch(InputKind.PointerDown, a0, (uint)acc, idA));   // first contact: a pan candidate over the zoom viewport
+        host.RunFrame();
+        acc += msPerStep;
+        window.QueueInput(Touch(InputKind.PointerDown, b0, (uint)acc, idB));   // second contact over the SAME viewport → opens the pinch
+        host.RunFrame();
+        for (int i = 1; i <= steps; i++)
+        {
+            acc += msPerStep;
+            var pa = Lerp(a0, aEnd, (float)i / steps);
+            var pb = Lerp(b0, bEnd, (float)i / steps);
+            window.QueueInput(Touch(InputKind.PointerMove, pa, (uint)acc, idA));
+            window.QueueInput(Touch(InputKind.PointerMove, pb, (uint)acc, idB));
+            var f = host.RunFrame();
+            if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes;
+        }
+        s_touchClockMs = (uint)acc + 1000;
+        return worst;
+    }
+
     // Any node in the subtree carrying NodeFlags.Hovered (a touch sequence must leave none behind — no resting touch hover).
     static NodeHandle AnyHovered(SceneStore s, NodeHandle n)
     {
@@ -2148,6 +2326,90 @@ static class Slice
         Check("14. UseReducer folds dispatches", ok1 && p.State == 8, "0 →(+5,+3)→ 8");
         Check("15. UseMemo recomputes only on dep change", ok2 && ok3, $"memoRuns={p.MemoRuns}");
         Check("16. UseRef persists & is stable", p.RefBox!.Value == 42 && ReferenceEquals(p.RefBox, r1));
+    }
+
+    // Native form validation (form-validation.md): the signals-native core — gated error memo, cross-field via sibling
+    // reads, submit gating, server-error merge, zero-alloc rule evaluation, and form deregistration on unmount.
+    static void ValidationChecks()
+    {
+        // V1. a rule delegate evaluates allocation-free (the per-keystroke hot path resolves no string, allocates nothing).
+        var req = Rules.Required("err.req");
+        _ = req("warm");
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        MsgId last = MsgId.None;
+        for (int i = 0; i < 1000; i++) last = req(i % 2 == 0 ? "ok" : "");
+        long delta = GC.GetAllocatedBytesForCurrentThread() - before;
+        Check("V1. rule evaluation is zero-alloc", delta == 0 && !last.IsEmpty, $"delta={delta}B/1000");
+
+        // V2. cross-field: an error memo that reads a sibling signal (Rules.Equals) re-validates when the sibling moves.
+        var rt = new ReactiveRuntime();
+        var pwd = new Signal<string>("secret");
+        var confirm = new Signal<string>("secret");
+        var eq = Rules.Equals(pwd, "err.match");
+        var crossErr = new Memo<FieldError>(rt, () => { var m = eq(confirm.Value); return new FieldError(m, (byte)(m.IsEmpty ? 0 : 1)); });
+        bool matchValid = crossErr.Value.IsValid;
+        pwd.Value = "changed";                 // a sibling edit must re-validate confirm with no extra wiring
+        rt.Flush();
+        bool mismatchInvalid = !crossErr.Peek().IsValid;
+        Check("V2. cross-field re-validates on sibling change", matchValid && mismatchInvalid);
+
+        // V3. touched-gating: a pristine field hides its error while its UNGATED validity still reports the failure;
+        //     a blur (MarkTouched) reveals it.
+        var probe = new ValidationProbe { WithForm = true };
+        var prt = new ReactiveRuntime();
+        probe.Context.Runtime = prt;
+        probe.RenderWithHooks();
+        prt.Flush();
+        bool pristineHidden = probe.EmailField!.Error.Peek().IsValid;   // Required fails but untouched → displayed-valid
+        bool ungatedFalse = !probe.EmailField.IsValid.Peek();          // true validity reflects the failure
+        probe.EmailField.MarkTouched();
+        bool revealed = !probe.EmailField.Error.Peek().IsValid;
+        Check("V3. touched-gating hides error until blur (ungated validity unaffected)", pristineHidden && ungatedFalse && revealed);
+
+        // V4. submit gating: an invalid form blocks and reveals every field's error; fixing the value passes.
+        bool formInvalid = !probe.Form!.IsValid.Peek();
+        bool validateFalse = !probe.Form.Validate();
+        prt.Flush();
+        bool emailRevealed = !probe.EmailField.Error.Peek().IsValid;
+        probe.Email.Value = "filled";
+        prt.Flush();
+        bool formValid = probe.Form.IsValid.Peek();
+        bool validateTrue = probe.Form.Validate();
+        Check("V4. submit gating: invalid blocks+reveals, fixed passes", formInvalid && validateFalse && emailRevealed && formValid && validateTrue);
+
+        // V5. a server error (the async-result merge path) displays even on an untouched field, then clears — the
+        //     equality-gated signal means an out-of-order async completion can only ever leave the last-written result.
+        var p2 = new ValidationProbe { WithForm = false };
+        var p2rt = new ReactiveRuntime();
+        p2.Context.Runtime = p2rt;
+        p2.Email.Value = "ok";                 // sync-valid + untouched
+        p2.RenderWithHooks();
+        p2rt.Flush();
+        bool cleanFirst = p2.EmailField!.Error.Peek().IsValid;
+        p2.EmailField.SetServerError(Msg.Key("err.taken"));
+        bool serverShows = !p2.EmailField.Error.Peek().IsValid;        // bypasses the touched/submit gate
+        p2.EmailField.SetServerError(MsgId.None);
+        bool serverClears = p2.EmailField.Error.Peek().IsValid;
+        Check("V5. server error bypasses the gate (async merge) and clears", cleanFirst && serverShows && serverClears);
+
+        // V6. fields deregister from the form on unmount (no FormScope leak).
+        bool registered = probe.Form.FieldCount == 2;
+        probe.Unmount();
+        bool deregistered = probe.Form.FieldCount == 0;
+        Check("V6. fields deregister from the form on unmount", registered && deregistered, $"{(registered ? 2 : -1)}→{probe.Form.FieldCount}");
+
+        // V7. the [Validatable] SOURCE GENERATOR emits working Validator<T>[] arrays that lower to the same Rules.* path.
+        static bool AllPass<T>(Validator<T>[] rules, T value)
+        {
+            foreach (var r in rules) if (!r(value).IsEmpty) return false;
+            return true;
+        }
+        bool emailGen = !AllPass(SignupRules.Validators.Email, "")        // Required fails
+                        && !AllPass(SignupRules.Validators.Email, "bad")  // RegexMatch fails
+                        && AllPass(SignupRules.Validators.Email, "a@b.co");
+        bool pwdGen = !AllPass(SignupRules.Validators.Password, "1234567") && AllPass(SignupRules.Validators.Password, "12345678");
+        bool ageGen = !AllPass(SignupRules.Validators.Age, 5.0) && AllPass(SignupRules.Validators.Age, 30.0);
+        Check("V7. [Validatable] generator emits working Validator<T>[] (Required/MinLength/Range/RegexMatch)", emailGen && pwdGen && ageGen);
     }
 
     // Keyed reconcile: reorder preserves node identity (state), removal frees only the dropped key.
@@ -2273,6 +2535,290 @@ static class Slice
         Check("23z. multi-channel animation preserves completed channels while longer tracks continue",
             faded < 0.01f && held < 0.01f && scaleStillActive,
             $"opacity {faded:0.00}->{held:0.00}, active={scaleStillActive}");
+    }
+
+    // Expressive Motion Kit (transitions.dev adoption): the new named expressive curves, the per-node self-blur channel
+    // (AnimChannel.BlurSigma → NodePaint.BlurSigma, PaintDirty only — never relayout), and the recorder's PushLayer{Blur}
+    // emission. Blurred GPU pixels are a --shot manual check; here we prove the curve math, the channel, and the opcode.
+    static void ExpressiveMotionChecks(StringTable strings)
+    {
+        // EM.a — the four expressive curves: endpoints 0→1; SmoothOut decelerates (past halfway by t=0.5); Overshoot &
+        // Pop exceed 1.0 mid-flight (the spring-past-target look); OvershootStrong peaks highest of all.
+        bool ends =
+            Near(Easings.Ease(Easing.SmoothOut, 0f), 0f, 1e-3f) && Near(Easings.Ease(Easing.SmoothOut, 1f), 1f, 1e-3f) &&
+            Near(Easings.Ease(Easing.Overshoot, 0f), 0f, 1e-3f) && Near(Easings.Ease(Easing.Overshoot, 1f), 1f, 1e-3f) &&
+            Near(Easings.Ease(Easing.OvershootStrong, 0f), 0f, 1e-3f) && Near(Easings.Ease(Easing.OvershootStrong, 1f), 1f, 1e-3f) &&
+            Near(Easings.Ease(Easing.Pop, 0f), 0f, 1e-3f) && Near(Easings.Ease(Easing.Pop, 1f), 1f, 1e-3f);
+        bool smoothDecel = Easings.Ease(Easing.SmoothOut, 0.5f) > 0.6f;
+        float ovPeak = 0f, ovStrongPeak = 0f, popPeak = 0f;
+        for (int i = 1; i < 100; i++)
+        {
+            float t = i / 100f;
+            ovPeak = MathF.Max(ovPeak, Easings.Ease(Easing.Overshoot, t));
+            ovStrongPeak = MathF.Max(ovStrongPeak, Easings.Ease(Easing.OvershootStrong, t));
+            popPeak = MathF.Max(popPeak, Easings.Ease(Easing.Pop, t));
+        }
+        bool overshoots = ovPeak > 1.0f && popPeak > 1.0f && ovStrongPeak > ovPeak;
+        Check("EM.a expressive curves: 0→1 endpoints, SmoothOut decelerates, Overshoot/Pop exceed 1, OvershootStrong peaks highest",
+            ends && smoothDecel && overshoots,
+            $"smooth@.5={Easings.Ease(Easing.SmoothOut, 0.5f):0.00} ovPeak={ovPeak:0.00} popPeak={popPeak:0.00} strongPeak={ovStrongPeak:0.00}");
+
+        // EM.b — AnimChannel.BlurSigma eases NodePaint.BlurSigma (8→0), marks PaintDirty (never LayoutDirty), settles at 0.
+        {
+            var scene = new SceneStore();
+            var node = scene.CreateNode(1);
+            scene.Root = node;
+            var engine = new AnimEngine(scene);
+            scene.Paint(node).BlurSigma = 8f;
+            scene.Flags(node) &= ~(NodeFlags.PaintDirty | NodeFlags.LayoutDirty | NodeFlags.TransformDirty);
+            engine.Animate(node, AnimChannel.BlurSigma, 8f, 0f, 100f, Easing.Linear);
+            engine.Tick(0f);
+            float b0 = scene.Paint(node).BlurSigma;
+            engine.Tick(50f);
+            float bMid = scene.Paint(node).BlurSigma;
+            var fl = scene.Flags(node);
+            bool midOk = Near(bMid, 4f, 0.2f) && (fl & NodeFlags.PaintDirty) != 0 && (fl & NodeFlags.LayoutDirty) == 0;
+            engine.Tick(60f);   // > 100ms → complete
+            float bEnd = scene.Paint(node).BlurSigma;
+            bool doneOk = Near(bEnd, 0f, 1e-3f) && !engine.HasActive;
+            Check("EM.b AnimChannel.BlurSigma eases BlurSigma 8→0 (PaintDirty only, settles at 0)",
+                Near(b0, 8f, 0.1f) && midOk && doneOk, $"t0={b0:0.0} mid={bMid:0.0} end={bEnd:0.00}");
+        }
+
+        // EM.c — the recorder wraps a node with Blur>0 in a balanced PushLayer{Blur} carrying its σ; a 0-blur node does not.
+        {
+            var s = new SceneStore();
+            var recon = new TreeReconciler(s, strings);
+            recon.ReconcileRoot(new BoxEl
+            {
+                Width = 80, Height = 60, Fill = ColorF.FromRgba(0x20, 0x20, 0x20),
+                Children = [new BoxEl { Width = 30, Height = 30, Blur = 6f, Fill = ColorF.FromRgba(0x60, 0xCD, 0xFF) }],
+            }, null);
+            new FlexLayout(s, new HeadlessFontSystem(strings)).Run(s.Root);
+            var dl = new DrawList();
+            SceneRecorder.Record(s, dl);
+            var dev = new HeadlessGpuDevice();
+            dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(120, 80), 1f, ColorF.Transparent));
+            bool blurLayer = false; float sigma = 0f;
+            foreach (var l in dev.LastLayers) if (l.Kind == (int)LayerKind.Blur) { blurLayer = true; sigma = l.BlurSigma; }
+            bool balanced = dev.LayerBalance == 0;
+
+            var s0 = new SceneStore();
+            var recon0 = new TreeReconciler(s0, strings);
+            recon0.ReconcileRoot(new BoxEl
+            {
+                Width = 80, Height = 60, Fill = ColorF.FromRgba(0x20, 0x20, 0x20),
+                Children = [new BoxEl { Width = 30, Height = 30, Fill = ColorF.FromRgba(0x60, 0xCD, 0xFF) }],
+            }, null);
+            new FlexLayout(s0, new HeadlessFontSystem(strings)).Run(s0.Root);
+            var dl0 = new DrawList();
+            SceneRecorder.Record(s0, dl0);
+            var dev0 = new HeadlessGpuDevice();
+            dev0.SubmitDrawList(dl0.Bytes, dl0.SortKeys, new FrameInfo(new Size2(120, 80), 1f, ColorF.Transparent));
+            bool noBlurWhenZero = true;
+            foreach (var l in dev0.LastLayers) if (l.Kind == (int)LayerKind.Blur) noBlurWhenZero = false;
+
+            Check("EM.c recorder emits a balanced PushLayer{Blur} (σ carried) for Blur>0; none for Blur=0",
+                blurLayer && Near(sigma, 6f, 0.01f) && balanced && noBlurWhenZero,
+                $"blurLayer={blurLayer} sigma={sigma:0.0} balanced={balanced} noneWhenZero={noBlurWhenZero}");
+        }
+
+        // EM.d — the PopIn recipe (number pop-in) seeds Opacity 0→1 + TranslateY dist→0 + Blur small→0, and settles to
+        // rest (the recipe library composes the new curves + blur channel, not just one track).
+        {
+            var scene = new SceneStore();
+            var node = scene.CreateNode(1);
+            scene.Root = node;
+            var engine = new AnimEngine(scene);
+            engine.PopIn(node, dirY: 1f, distance: 8f, blur: 2f, durationMs: 100f);
+            engine.Tick(0f);
+            ref NodePaint pp = ref scene.Paint(node);
+            bool t0 = Near(pp.Opacity, 0f, 0.05f) && Near(pp.LocalTransform.Dy, 8f, 0.5f) && Near(pp.BlurSigma, 2f, 0.1f);
+            engine.Tick(120f);   // > 100ms → all tracks complete
+            bool settled = Near(pp.Opacity, 1f, 0.01f) && Near(pp.LocalTransform.Dy, 0f, 0.2f) && Near(pp.BlurSigma, 0f, 0.01f) && !engine.HasActive;
+            Check("EM.d PopIn recipe seeds Opacity+TranslateY+Blur and settles to rest", t0 && settled,
+                $"t0(op={pp.Opacity:0.00} dy=8 blur=2)={t0} settled={settled}");
+        }
+
+        // EM.e — the Shake recipe (error shake) is a single multi-segment TranslateX path that swings to +distance and
+        // settles back to 0 (one Replace track, completes).
+        {
+            var scene = new SceneStore();
+            var node = scene.CreateNode(1);
+            scene.Root = node;
+            var engine = new AnimEngine(scene);
+            engine.Shake(node, distance: 6f, overshoot: 4f, durationMs: 280f);
+            engine.Tick(0f);
+            engine.Tick(80f);   // 80/280 = 28.57% → the +distance peak keyframe
+            float dxPeak = scene.Paint(node).LocalTransform.Dx;
+            for (int i = 0; i < 16 && engine.HasActive; i++) engine.Tick(16f);   // run to settle (≈256ms more)
+            float dxEnd = scene.Paint(node).LocalTransform.Dx;
+            Check("EM.e Shake recipe swings to +distance then settles to 0", dxPeak > 3f && Near(dxEnd, 0f, 0.2f) && !engine.HasActive,
+                $"peak={dxPeak:0.0} end={dxEnd:0.00} active={engine.HasActive}");
+        }
+    }
+
+    // Native skeleton-loading (the Skel.Region kit): ONE UI source → derived shimmer → blur-reveal swap, partial-known,
+    // incremental per-field, failed, reduced-motion, and the wake-loop pulse-cancel. Drives the loadable across a flush.
+    private sealed record SkTrack(int Number, string Title, string Dur);
+
+    static Element SkRow(SkTrack? t) => new BoxEl
+    {
+        Direction = 0, Gap = 12f,
+        Children =
+        [
+            new TextEl(t is null ? "" : t.Number.ToString()) { Size = 14f, Width = 24f },
+            new TextEl(t?.Title ?? "") { Size = 14f, Grow = 1f },
+            new TextEl(t?.Dur ?? "") { Size = 13f, Width = 48f },
+        ],
+    };
+
+    static int CountText(SceneStore s, NodeHandle n)
+    {
+        int c = s.Paint(n).VisualKind == VisualKind.Text ? 1 : 0;
+        for (var ch = s.FirstChild(n); !ch.IsNull; ch = s.NextSibling(ch)) c += CountText(s, ch);
+        return c;
+    }
+
+    static void SkeletonChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        // SK.a derivation fidelity + SK.b swap + SK.c wake-loop.
+        {
+            var scene = new SceneStore();
+            var engine = new AnimEngine(scene);
+            var recon = new TreeReconciler(scene, strings) { Anim = engine };
+            var tracks = Loadable<SkTrack[]>.Pending(Array.Empty<SkTrack>());
+            recon.ReconcileRoot(
+                Skel.Region(tracks, SkRow, count: 5,
+                    content: ts => Flow.For(() => ts.Length, i => SkRow(ts[i]), keyOf: i => ts[i].Number.ToString()),
+                    reveal: SkelReveal.StaggerRows),
+                null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+
+            var region = scene.Root;
+            var shimmer = Child(scene, region, 0);
+            int shimmerRows = 0; for (var c = scene.FirstChild(shimmer); !c.IsNull; c = scene.NextSibling(c)) shimmerRows++;
+            var row0 = Child(scene, shimmer, 0);
+            bool widths = Near(scene.Bounds(Child(scene, row0, 0)).W, 24f, 0.5f) && Near(scene.Bounds(Child(scene, row0, 2)).W, 48f, 0.5f);
+            bool noTextPending = CountText(scene, region) == 0;
+            bool pulsing = engine.LoopTrackCount >= 1;
+            Check("SK.a skeleton derives N shimmer rows from the ONE row template (declared bar widths 24/48; no real text; pulsing)",
+                shimmerRows == 5 && widths && noTextPending && pulsing,
+                $"rows={shimmerRows} bar0={scene.Bounds(Child(scene, row0, 0)).W:0} bar2={scene.Bounds(Child(scene, row0, 2)).W:0} text={CountText(scene, region)} loops={engine.LoopTrackCount}");
+
+            tracks.SetReady(new[] { new SkTrack(1, "One", "1:01"), new SkTrack(2, "Two", "2:02"), new SkTrack(3, "Three", "3:03") });
+            recon.Runtime.Flush();
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            bool realText = CountText(scene, region) > 0;
+            engine.Tick(0f);
+            var realRow0 = Child(scene, Child(scene, region, 0), 0);
+            bool revealSeeded = engine.TryGetTrackValue(realRow0, AnimChannel.Opacity, out var op0) && op0 < 0.2f;
+            Check("SK.b Pending→Ready swaps shimmer→real (text appears) and blur-reveals the rows",
+                realText && revealSeeded, $"realText={realText} revealOp0={op0:0.00}");
+
+            for (int i = 0; i < 80 && engine.HasActive; i++) engine.Tick(16f);
+            Check("SK.c the looping skeleton pulse is cancelled on swap (no loop pins the orphan — wake-loop fix)",
+                engine.LoopTrackCount == 0, $"loops={engine.LoopTrackCount} active={engine.HasActive}");
+        }
+
+        // SK.d partial-known: a pre-Ready region renders real immediately (no shimmer).
+        {
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            var ready = Loadable<SkTrack[]>.Ready(new[] { new SkTrack(1, "Known", "0:30") });
+            recon.ReconcileRoot(
+                Skel.Region(ready, SkRow, count: 3, content: ts => Flow.For(() => ts.Length, i => SkRow(ts[i]), keyOf: i => i.ToString())),
+                null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            Check("SK.d a pre-Ready region (partial-known data) renders REAL immediately — no shimmer",
+                CountText(scene, scene.Root) > 0, $"text={CountText(scene, scene.Root)}");
+        }
+
+        // SK.e incremental per-field: .Pending(field) shimmers ONE leaf in place and reveals on the field flip.
+        {
+            var scene = new SceneStore();
+            var engine = new AnimEngine(scene);
+            var recon = new TreeReconciler(scene, strings) { Anim = engine };
+            var dur = Loadable<string>.Pending("");
+            Element leaf = new TextEl("") { Text = dur.Bind(), Size = 13f, Width = 48f }.Pending(dur);
+            recon.ReconcileRoot(new BoxEl { Direction = 0, Children = [new TextEl("Title") { Size = 14f }, leaf] }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var leafRegion = Child(scene, scene.Root, 1);
+            bool pendingBar = CountText(scene, leafRegion) == 0;
+            dur.SetReady("3:14");
+            recon.Runtime.Flush();
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            bool nowReal = CountText(scene, leafRegion) > 0;
+            Check("SK.e incremental field (.Pending) shimmers ONE leaf in place, reveals on the field flip (row identity kept)",
+                pendingBar && nowReal, $"pendingBar={pendingBar} nowReal={nowReal}");
+        }
+
+        // SK.f failed: SetFailed mounts the onFailed branch.
+        {
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            var ld = Loadable<SkTrack[]>.Pending(Array.Empty<SkTrack>());
+            recon.ReconcileRoot(
+                Skel.Region(ld, SkRow, count: 3, content: ts => Flow.For(() => ts.Length, i => SkRow(ts[i]), keyOf: i => i.ToString()),
+                    onFailed: () => new TextEl("FAILED") { Size = 14f }),
+                null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            ld.SetFailed(new Exception("nope"));
+            recon.Runtime.Flush();
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            Check("SK.f a failed load mounts the onFailed branch", CountText(scene, scene.Root) == 1, $"text={CountText(scene, scene.Root)}");
+        }
+
+        // SK.g reduced motion: structural swap occurs, but no pulse/reveal tracks are seeded (snap).
+        {
+            bool prev = Motion.ReducedMotion;
+            Motion.ReducedMotion = true;
+            try
+            {
+                var scene = new SceneStore();
+                var engine = new AnimEngine(scene);
+                var recon = new TreeReconciler(scene, strings) { Anim = engine };
+                var tracks = Loadable<SkTrack[]>.Pending(Array.Empty<SkTrack>());
+                recon.ReconcileRoot(
+                    Skel.Region(tracks, SkRow, count: 3, content: ts => Flow.For(() => ts.Length, i => SkRow(ts[i]), keyOf: i => i.ToString())),
+                    null);
+                new FlexLayout(scene, fonts).Run(scene.Root);
+                bool noPulse = engine.LoopTrackCount == 0;
+                tracks.SetReady(new[] { new SkTrack(1, "R", "0:01") });
+                recon.Runtime.Flush();
+                new FlexLayout(scene, fonts).Run(scene.Root);
+                bool real = CountText(scene, scene.Root) > 0;
+                bool noReveal = !engine.HasActive;
+                Check("SK.g reduced motion: structural swap occurs but no pulse/reveal tracks are seeded (snap)",
+                    noPulse && real && noReveal, $"noPulse={noPulse} real={real} noReveal={noReveal}");
+            }
+            finally { Motion.ReducedMotion = prev; }
+        }
+
+        // SK.h smooth-resize: the region is BoundsAnimated + carries a SizeMode.Reflow transition, so a height-changing
+        // swap eases the region's layout size (the host re-solves the parent each tick → surrounding content reflows,
+        // not snaps). The reflow RUNTIME is the host-driven FLIP path (proven by ReflowChecks); here we prove the region
+        // is enrolled AND that its spec produces a reflow track when the host applies the bounds diff.
+        {
+            var scene = new SceneStore();
+            var engine = new AnimEngine(scene);
+            var recon = new TreeReconciler(scene, strings) { Anim = engine };
+            var ld = Loadable<SkTrack[]>.Pending(Array.Empty<SkTrack>());
+            recon.ReconcileRoot(
+                Skel.Region(ld, SkRow, count: 4, content: ts => Flow.For(() => ts.Length, i => SkRow(ts[i]), keyOf: i => i.ToString())),
+                null);
+            var region = scene.Root;
+            bool boundsAnim = (scene.Flags(region) & NodeFlags.BoundsAnimated) != 0;
+            bool reflowSpec = engine.TryGetTransition(region, out var spec) && (spec.Channels & TransitionChannels.Size) != 0 && spec.Size == SizeMode.Reflow;
+            // Mimic the host FLIP "apply" for a shrinking swap (4 shimmer rows → a short branch): a Reflow size track runs.
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            engine.AnimateBounds(region, new RectF(0, 0, 320, 200), new RectF(0, 0, 320, 60), spec);
+            bool reflowRuns = engine.HasActive;
+            Check("SK.h smooth-resize: region is BoundsAnimated + SizeMode.Reflow → a height-changing swap reflows surrounding content (not snap)",
+                boundsAnim && reflowSpec && reflowRuns, $"boundsAnim={boundsAnim} reflowSpec={reflowSpec} reflowRuns={reflowRuns}");
+        }
     }
 
     // General layout-transition projection (continuous FLIP): the side-table plumbing, the spring that drives a moved
@@ -3187,6 +3733,50 @@ static class Slice
         Check("37. wheel scrolls via transform (layout-free) + clamps", scrolled && clamped, $"off→{sc1.OffsetY:0}, clamp={sc2.OffsetY:0}");
     }
 
+    // Wheel-axis routing: the two wheel axes route INDEPENDENTLY to a scroller of their own orientation, so a horizontal
+    // two-finger swipe over a nested horizontal box scrolls THAT box (not the page vertically), and a vertical wheel over
+    // the same box climbs past it to scroll the PAGE.
+    static void TwoAxisScrollChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("twoaxis", new Size2(220, 220), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new NestedScrollProbe());
+        host.RunFrame();
+
+        var outer = host.Scene.Root;                    // the vertical page scroller
+        NodeHandle inner = NodeHandle.Null;             // the nested horizontal scroller
+        void Visit(NodeHandle n)
+        {
+            if (n.IsNull) return;
+            if (host.Scene.TryGetScroll(n, out var s) && s.Orientation == 1) inner = n;
+            for (var c = host.Scene.FirstChild(n); !c.IsNull; c = host.Scene.NextSibling(c)) Visit(c);
+        }
+        Visit(outer);
+
+        var pos = new Point2(90, 30);   // over the inner horizontal box (top strip; it stays there through both wheels)
+
+        // Horizontal wheel over the inner box → the BOX scrolls on X; the page Y stays 0 (the swipe never leaks vertical).
+        window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, 0f, ScrollDeltaX: 60f));
+        host.RunFrame();
+        host.Scene.TryGetScroll(outer, out var o1);
+        host.Scene.TryGetScroll(inner, out var i1);
+        bool hWheelScrollsBox = Near(i1.OffsetX, 60) && Near(o1.OffsetY, 0);
+
+        // Vertical wheel over the same box → the PAGE scrolls on Y (climbing past the horizontal box); the box X is unchanged.
+        window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, 80f));
+        host.RunFrame();
+        host.Scene.TryGetScroll(outer, out var o2);
+        host.Scene.TryGetScroll(inner, out var i2);
+        bool vWheelScrollsPage = Near(o2.OffsetY, 80) && Near(i2.OffsetX, 60);
+
+        Check("37b. wheel-axis routing: horizontal wheel scrolls a nested horizontal box (not the page); vertical wheel scrolls the page past it",
+            !inner.IsNull && hWheelScrollsBox && vWheelScrollsPage,
+            $"box.X={i2.OffsetX:0} page.Y={o2.OffsetY:0} (after-h: box.X={i1.OffsetX:0} page.Y={o1.OffsetY:0})");
+    }
+
     static void ScrollCrossAxisChecks(StringTable strings)
     {
         const string longLine =
@@ -4051,6 +4641,748 @@ static class Slice
         }
     }
 
+    // ── Touch Phase-4: pinch-zoom (gate.touch4.*). A SECOND touch contact over a Zoomable ScrollEl viewport opens a pinch
+    // (the §7B Pinch member EagerAccept-wins, sweeping the Pan); the two contacts' separation scales the content about the
+    // gesture midpoint as a TRANSFORM-only term composed with the -offset translation (clamp 0.1..10.0, NEVER LayoutDirty),
+    // and the committed factor scales the extent the offset clamps against. Reuses the touch harness (PinchGesture + the
+    // two-clock fixed-animation model). The viewport is the PinchZoomProbe's NON-virtual ScrollEl root, so a pinch move is
+    // a pure transform frame (FrameStats.Rendered == false ⇒ no relayout — the asserted no-LayoutDirty proof).
+    static void PinchZoomChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        // gate.touch4.pinch-out-doubles: spreading the two contacts to 2× their start separation about a fixed midpoint
+        // doubles ZoomFactor (1 → 2), applies it as the content node's LocalTransform scale (M11 == M22 == ZoomFactor),
+        // keeps the content point under the midpoint fixed (the focal-point offset), and marks NO relayout (every pinch
+        // move frame renders transform-only — Rendered == false; the content's model Bounds stay 800px).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("pinch-out", new Size2(200, 200), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new PinchZoomProbe());
+            host.RunFrame();
+            var vp = host.Scene.Root;
+            host.Scene.TryGetScroll(vp, out var sc0);
+            var content = sc0.ContentNode;
+            float contentHBefore = host.Scene.Bounds(content).H;
+
+            // Midpoint (100,100); A=(100,70) B=(100,130) ⇒ sep 60. Spread to A=(100,40) B=(100,160) ⇒ sep 120 = 2×.
+            // Drive the move frames manually so each frame's Rendered flag is observable (no virtual re-realize on a plain
+            // ScrollEl ⇒ a pure transform frame returns Rendered == false: the LayoutDirty-never-marked proof).
+            uint t = s_touchClockMs;
+            window.QueueInput(Touch(InputKind.PointerDown, new Point2(100, 70), t, 1)); host.RunFrame();
+            window.QueueInput(Touch(InputKind.PointerDown, new Point2(100, 130), t + 16, 2)); host.RunFrame();   // 2nd contact opens the pinch
+            bool anyRelayout = false;
+            for (int i = 1; i <= 10; i++)
+            {
+                float fa = 70f - (70f - 40f) * i / 10f;     // A: 70 → 40
+                float fb = 130f + (160f - 130f) * i / 10f;   // B: 130 → 160
+                window.QueueInput(Touch(InputKind.PointerMove, new Point2(100, fa), t + 16 + (uint)i * 16, 1));
+                window.QueueInput(Touch(InputKind.PointerMove, new Point2(100, fb), t + 16 + (uint)i * 16, 2));
+                var f = host.RunFrame();
+                if (f.Rendered) anyRelayout = true;   // a relayout/reconcile would flip Rendered true
+            }
+            s_touchClockMs = t + 1000;
+            host.Scene.TryGetScroll(vp, out var scZ);
+            var lt = host.Scene.Paint(content).LocalTransform;
+            float contentHAfter = host.Scene.Bounds(content).H;
+
+            bool zoomDoubled = Near(scZ.ZoomFactor, 2.0f, 0.06f);
+            bool transformScaled = Near(lt.M11, scZ.ZoomFactor, 0.01f) && Near(lt.M22, scZ.ZoomFactor, 0.01f);
+            // Focal point under the midpoint (y=100, viewport-local 100) stays put: newOff = z·100 − 100 = 100 at z=2.
+            bool focalFixed = Near(scZ.OffsetY, 100f, 8f);
+            bool noRelayout = !anyRelayout && Near(contentHAfter, contentHBefore);
+            Check("gate.touch4.pinch-out-doubles a 2× spread doubles ZoomFactor (1→2) applied as the content LocalTransform scale about the gesture midpoint (focal point fixed), with NO relayout (every move frame transform-only; model bounds unchanged)",
+                zoomDoubled && transformScaled && focalFixed && noRelayout,
+                $"zoom={scZ.ZoomFactor:0.00} M11={lt.M11:0.00} M22={lt.M22:0.00} offY={scZ.OffsetY:0} (focal~100) anyRelayout={anyRelayout} contentH {contentHBefore:0}->{contentHAfter:0}");
+        }
+
+        // gate.touch4.clamp: pinch FAR out clamps at MaxZoom (10.0); pinch FAR in clamps at MinZoom (0.1). The ScrollEl
+        // defaults (Min 0.1 / Max 10.0 — ScrollPresenter.h:63-64) bound the factor; the transform never exceeds them.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("pinch-clamp", new Size2(200, 200), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new PinchZoomProbe());
+            host.RunFrame();
+            var vp = host.Scene.Root;
+
+            // Spread WAY out: A 70→ -300, B 130→ 500 (sep 60 → 800 ≈ 13× ⇒ clamps at 10).
+            PinchGesture(window, host, new Point2(100, 70), new Point2(100, 130), new Point2(100, -300), new Point2(100, 500), 12, 1, 2, 16f);
+            host.Scene.TryGetScroll(vp, out var scMax);
+            float maxZoom = scMax.ZoomFactor;
+            float maxM11 = host.Scene.Paint(scMax.ContentNode).LocalTransform.M11;
+            // Lift both to end the session (commit), reset to a fresh host for the pinch-in leg.
+            window.QueueInput(Touch(InputKind.PointerUp, new Point2(100, -300), s_touchClockMs, 1)); host.RunFrame();
+            window.QueueInput(Touch(InputKind.PointerUp, new Point2(100, 500), s_touchClockMs + 16, 2)); host.RunFrame();
+            s_touchClockMs += 1000;
+
+            using var app2 = new HeadlessPlatformApp();
+            var window2 = new HeadlessWindow(new WindowDesc("pinch-clamp2", new Size2(200, 200), 1f)); window2.Show();
+            using var host2 = new AppHost(app2, window2, new HeadlessGpuDevice(), fonts, strings, new PinchZoomProbe());
+            host2.RunFrame();
+            var vp2 = host2.Scene.Root;
+            // Pinch WAY in: A 40→98, B 160→102 (sep 120 → 4 ≈ 0.033× ⇒ clamps at 0.1).
+            PinchGesture(window2, host2, new Point2(100, 40), new Point2(100, 160), new Point2(100, 98), new Point2(100, 102), 12, 3, 4, 16f);
+            host2.Scene.TryGetScroll(vp2, out var scMin);
+            float minZoom = scMin.ZoomFactor;
+
+            bool maxOk = Near(maxZoom, 10f, 0.01f) && Near(maxM11, 10f, 0.01f);
+            bool minOk = Near(minZoom, 0.1f, 0.01f);
+            Check("gate.touch4.clamp pinch-out clamps ZoomFactor at MaxZoom (10.0) and pinch-in clamps at MinZoom (0.1) — the WinUI ScrollPresenter defaults",
+                maxOk && minOk, $"maxZoom={maxZoom:0.00} (M11={maxM11:0.00}) minZoom={minZoom:0.000}");
+        }
+
+        // gate.touch4.sweeps-pan: a pinch sweeps the single-finger Pan — during a pinch the content does NOT scroll as a
+        // pan (the offset follows the ZOOM focal math, not a finger-drag delta). A pure-spread pinch about a FIXED midpoint
+        // reaches z≈2 and offset≈100 (the focal value), which a finger-pan (offset ≈ anchor − fingerDelta ≈ 30) could
+        // never produce — so the Pan was swept, not co-driven. (No scroll-from-pan during the pinch.)
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("pinch-sweep", new Size2(200, 200), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new PinchZoomProbe());
+            host.RunFrame();
+            var vp = host.Scene.Root;
+            PinchGesture(window, host, new Point2(100, 70), new Point2(100, 130), new Point2(100, 40), new Point2(100, 160), 10, 1, 2, 16f);
+            host.Scene.TryGetScroll(vp, out var sc);
+            // The focal offset (≈100) is unreachable by a single-finger pan of the ≤30px finger travel (which would yield
+            // ≈30) — so a non-zero, zoom-consistent offset with z≈2 proves the Pan was swept and the zoom drove the offset.
+            bool zoomed = Near(sc.ZoomFactor, 2.0f, 0.06f);
+            bool offsetIsZoomFocal = sc.OffsetY > 60f;   // » the ~30px a finger-pan would have produced
+            Check("gate.touch4.sweeps-pan a pinch sweeps the single-finger Pan (the content scrolls by the zoom focal math, not a pan delta) — no scroll-from-pan during the pinch",
+                zoomed && offsetIsZoomFocal, $"zoom={sc.ZoomFactor:0.00} offY={sc.OffsetY:0} (focal~100, a finger-pan would be ~30)");
+        }
+
+        // gate.touch4.per-id-cancel: a PointerCancel for ONE finger mid-pinch ends the session GRACEFULLY — the committed
+        // ZoomFactor is kept (a partial pinch keeps its magnification), and the cancelled finger's stray moves + the
+        // surviving finger no longer drive any zoom (the session is closed). No crash, deterministic.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("pinch-cancel", new Size2(200, 200), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new PinchZoomProbe());
+            host.RunFrame();
+            var vp = host.Scene.Root;
+            uint t = s_touchClockMs;
+            window.QueueInput(Touch(InputKind.PointerDown, new Point2(100, 70), t, 1)); host.RunFrame();
+            window.QueueInput(Touch(InputKind.PointerDown, new Point2(100, 130), t + 16, 2)); host.RunFrame();
+            // Spread partway (sep 60 → 90 ⇒ z ≈ 1.5).
+            for (int i = 1; i <= 6; i++)
+            {
+                float fa = 70f - 15f * i / 6f, fb = 130f + 15f * i / 6f;
+                window.QueueInput(Touch(InputKind.PointerMove, new Point2(100, fa), t + 16 + (uint)i * 16, 1));
+                window.QueueInput(Touch(InputKind.PointerMove, new Point2(100, fb), t + 16 + (uint)i * 16, 2));
+                host.RunFrame();
+            }
+            host.Scene.TryGetScroll(vp, out var scMid);
+            float zoomAtCancel = scMid.ZoomFactor;
+            // Cancel finger 1 mid-pinch.
+            window.QueueInput(Touch(InputKind.PointerCancel, new Point2(100, 55), t + 200, 1)); host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var scAfterCancel);
+            // Stray moves for BOTH ids after the cancel must not change the zoom (session closed).
+            window.QueueInput(Touch(InputKind.PointerMove, new Point2(100, 200), t + 220, 2)); host.RunFrame();
+            window.QueueInput(Touch(InputKind.PointerMove, new Point2(100, 10), t + 236, 1)); host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var scStray);
+            window.QueueInput(Touch(InputKind.PointerUp, new Point2(100, 200), t + 260, 2)); host.RunFrame();
+            s_touchClockMs = t + 1000;
+
+            bool committed = zoomAtCancel > 1.2f && Near(scAfterCancel.ZoomFactor, zoomAtCancel, 0.02f);
+            bool noPostCancelZoom = Near(scStray.ZoomFactor, scAfterCancel.ZoomFactor, 0.02f);
+            Check("gate.touch4.per-id-cancel a per-id PointerCancel mid-pinch ends the session gracefully — the committed ZoomFactor is kept and post-cancel stray moves drive no further zoom",
+                committed && noPostCancelZoom, $"zoomAtCancel={zoomAtCancel:0.00} afterCancel={scAfterCancel.ZoomFactor:0.00} afterStray={scStray.ZoomFactor:0.00}");
+        }
+
+        // gate.touch4.pan-continuation: when the FIRST finger lifts, the pinch commits and the SURVIVING finger continues
+        // as a pan over the (now zoomed) content (WinUI continues the manipulation with the remaining contact). After a
+        // pinch-out, lift one finger, then drag the survivor — the content scrolls (the offset moves).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("pinch-cont", new Size2(200, 200), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new PinchZoomProbe());
+            host.RunFrame();
+            var vp = host.Scene.Root;
+            // Pinch out to z≈2 (both fingers DOWN at the end).
+            PinchGesture(window, host, new Point2(100, 70), new Point2(100, 130), new Point2(100, 40), new Point2(100, 160), 10, 1, 2, 16f);
+            host.Scene.TryGetScroll(vp, out var scZoomed);
+            float offBeforeContinue = scZoomed.OffsetY;
+            float zoomCommitted = scZoomed.ZoomFactor;
+            // Lift finger 1 (B survives at y=160). The survivor re-anchors as an already-claimed pan from (100,160).
+            uint t = s_touchClockMs;
+            window.QueueInput(Touch(InputKind.PointerUp, new Point2(100, 40), t, 1)); host.RunFrame();
+            // Drag the survivor UP by 60px → content scrolls down (offset increases).
+            for (int i = 1; i <= 6; i++)
+            {
+                window.QueueInput(Touch(InputKind.PointerMove, new Point2(100, 160 - 10f * i), t + (uint)i * 16, 2));
+                host.RunFrame();
+            }
+            host.Scene.TryGetScroll(vp, out var scPan);
+            window.QueueInput(Touch(InputKind.PointerUp, new Point2(100, 100), t + 200, 2)); host.RunFrame();
+            s_touchClockMs = t + 1000;
+
+            bool zoomKept = Near(scPan.ZoomFactor, zoomCommitted, 0.02f);   // the pan continuation never changes the factor
+            bool survivorPanned = scPan.OffsetY > offBeforeContinue + 30f;  // dragging the survivor up scrolled the content
+            Check("gate.touch4.pan-continuation lifting one pinch finger commits the zoom and the surviving finger continues as a pan over the zoomed content (WinUI manipulation continuation)",
+                zoomKept && survivorPanned, $"zoomKept={scPan.ZoomFactor:0.00} (was {zoomCommitted:0.00}) off {offBeforeContinue:0}->{scPan.OffsetY:0}");
+        }
+
+        // gate.touch4.alloc-zero: a 20-frame pinch allocates 0 managed bytes on the hot half (the dispatch + transform +
+        // re-realize machinery is fixed-storage; no LINQ/closures/boxing on the per-event path). Reuses the two-clock harness.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("pinch-alloc", new Size2(200, 200), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new PinchZoomProbe());
+            host.RunFrame();
+            // Warm the slab/arena once (first pinch primes any lazily-grown harness buffers), then measure the 2nd.
+            PinchGesture(window, host, new Point2(100, 70), new Point2(100, 130), new Point2(100, 45), new Point2(100, 155), 8, 1, 2, 16f);
+            window.QueueInput(Touch(InputKind.PointerUp, new Point2(100, 45), s_touchClockMs, 1)); host.RunFrame();
+            window.QueueInput(Touch(InputKind.PointerUp, new Point2(100, 155), s_touchClockMs + 16, 2)); host.RunFrame();
+            s_touchClockMs += 1000;
+
+            long worst = PinchGesture(window, host, new Point2(100, 70), new Point2(100, 130), new Point2(100, 30), new Point2(100, 170), 20, 5, 6, 16f);
+            window.QueueInput(Touch(InputKind.PointerUp, new Point2(100, 30), s_touchClockMs, 5)); var fu = host.RunFrame();
+            if (fu.HotPhaseAllocBytes > worst) worst = fu.HotPhaseAllocBytes;
+            window.QueueInput(Touch(InputKind.PointerUp, new Point2(100, 170), s_touchClockMs + 16, 6)); host.RunFrame();
+            s_touchClockMs += 1000;
+            Check("gate.touch4.alloc-zero a 20-frame pinch (down→spread→up) allocates 0 managed bytes on the hot half (fixed-storage dispatch + zoom transform + re-realize)",
+                worst == 0, $"worstHotAlloc={worst}B");
+        }
+
+        // gate.touch4.dispatch-alloc-zero: the COMPANION instrument (the gate.arena.dispatch-alloc-zero pattern) — a
+        // GetAllocatedBytesForCurrentThread delta wrapped DIRECTLY around host.Input.Dispatch over a full pinch, so the
+        // measured window is the per-event PINCH path itself: the second-contact TryOpenPinch (OnSecondContact + the arena
+        // sweep), UpdatePinch (the scale + the SetScrollOffset content-transform write) on every coalesced move pair, and the
+        // pinch-end commit + pan continuation. A stray new[]/closure on any of those is caught here. Dispatch via a reused
+        // 1-element buffer so the span itself never allocates; a warm pinch JITs the path, the second is the measured window.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("pinch-dispatch-alloc", new Size2(200, 200), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new PinchZoomProbe());
+            host.RunFrame();
+            var one = new InputEvent[1];
+
+            // Drive one full pinch (down A, down B opens it, 20 spread move-pairs, lift both) through the real dispatcher.
+            void DrivePinch(uint t0, uint idA, uint idB)
+            {
+                one[0] = Touch(InputKind.PointerDown, new Point2(100, 70), t0, idA); host.Input.Dispatch(one);
+                one[0] = Touch(InputKind.PointerDown, new Point2(100, 130), t0 + 16, idB); host.Input.Dispatch(one);
+                for (int i = 1; i <= 20; i++)
+                {
+                    float fa = 70f - 40f * i / 20f, fb = 130f + 40f * i / 20f;
+                    one[0] = Touch(InputKind.PointerMove, new Point2(100, fa), t0 + 16 + (uint)i * 16, idA); host.Input.Dispatch(one);
+                    one[0] = Touch(InputKind.PointerMove, new Point2(100, fb), t0 + 16 + (uint)i * 16, idB); host.Input.Dispatch(one);
+                }
+                one[0] = Touch(InputKind.PointerUp, new Point2(100, 30), t0 + 400, idA); host.Input.Dispatch(one);
+                one[0] = Touch(InputKind.PointerUp, new Point2(100, 170), t0 + 416, idB); host.Input.Dispatch(one);
+            }
+
+            DrivePinch(s_touchClockMs, 1, 2);   // warm (JIT the pinch path; not measured)
+            s_touchClockMs += 2000;
+            uint t = s_touchClockMs;
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            DrivePinch(t, 3, 4);                 // measured: the per-event pinch path only
+            long delta = GC.GetAllocatedBytesForCurrentThread() - before;
+            s_touchClockMs = t + 2000;
+            Check("gate.touch4.dispatch-alloc-zero the per-event pinch path itself — TryOpenPinch (OnSecondContact + arena sweep) + UpdatePinch (scale + SetScrollOffset transform) per coalesced move + the pinch-end commit/continuation, measured by a delta wrapped DIRECTLY around host.Input.Dispatch — allocates 0 managed bytes across a full pinch",
+                delta == 0, $"dispatchDelta={delta}B (direct phase-2 dispatch delta over a 40-move pinch)");
+        }
+    }
+
+    // ── Touch Phase-4 snap + overscroll exit criteria (gate.touch4.*): a touch fling retargets its friction decay to land
+    // EXACTLY on a configured snap point (the ScrollSnap applicable-zone math + the ScrollAnimator velocity re-solve), the
+    // snap landing is dt-invariant (the integrator-determinism sweep extended to a snap fling), a touch pan PAST the clamp
+    // boundary produces a damped rubber-band displacement that springs back to exactly 0 (while ScrollState.Offset NEVER
+    // leaves [0, max] — asserted via state, not pixels), a WHEEL past the edge stays hard-clamped with NO band, and the
+    // whole overscroll+spring+snap sequence is 0-alloc on the hot half. Reuses the Phase-1 touch harness.
+    static void TouchSnapOverscrollChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        // gate.touch4.fling-snap-lands-on-snap: a flick over a snap-configured list (SnapInterval = RowH) retargets its
+        // decay so the offset settles on an EXACT RowH multiple (interior — the content is large, so the snap target is
+        // never the clamp). Without snapping the 0.95/s decay settles wherever v_min/k lands (an arbitrary sub-row offset).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("touch4-snap", new Size2(360, 460), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new SnapFlingProbe());
+            host.RunFrame();
+            var vp = host.Scene.Root;
+            host.Scene.ScrollRef(vp).SnapInterval = SnapFlingProbe.RowH;   // survives reconcile (the patch never touches snap fields)
+
+            // A modest flick (the 0.95/s decay is near-frictionless, so even a slow flick coasts many rows). Settle to the
+            // snap with a generous frame budget (the free-fling gate uses 600; a snap target can be ~tens of rows away).
+            TouchGesture(window, host, new Point2(150, 300), new Point2(150, 240), 10, pointerId: 51, msPerStep: 16f);
+            int settledAt = -1;
+            for (int i = 0; i < 4000; i++) { host.RunFrame(); host.Scene.TryGetScroll(vp, out var s); if (s.ScrollMode == 0) { settledAt = i; break; } }
+            host.Scene.TryGetScroll(vp, out var settled);
+            float rem = settled.OffsetY % SnapFlingProbe.RowH;
+            float distToSnap = MathF.Min(rem, SnapFlingProbe.RowH - rem);   // distance to the nearest RowH multiple
+            float maxOff = MathF.Max(0f, settled.ContentH - settled.ViewportH);
+            bool onSnap = distToSnap < 0.5f;
+            bool interior = settled.OffsetY > SnapFlingProbe.RowH && settled.OffsetY < maxOff - SnapFlingProbe.RowH;   // a real snap, not the clamp
+            bool settledMode = settled.ScrollMode == 0 && settled.FlingVelocity == 0f;
+            Check("gate.touch4.fling-snap-lands-on-snap a touch flick over a snap-configured virtual list (SnapInterval=RowH) retargets its friction decay to settle EXACTLY on a RowH multiple, interior to the content (not the clamp)",
+                onSnap && interior && settledMode && settledAt >= 0,
+                $"offset={settled.OffsetY:0.###} distToSnap={distToSnap:0.###} interval={SnapFlingProbe.RowH} interior={interior} mode={settled.ScrollMode} settledAtFrame={settledAt}");
+        }
+
+        // gate.touch4.snap-fling-dt-invariant: the integrator-determinism sweep, extended to a SNAP fling. The same event
+        // script replayed at dt ∈ {8.33, 16.67, 33.3} ms lands on the IDENTICAL snap offset (the snap value is a property
+        // of the event-clock velocity + the snap grid, NOT the animation timestep — so unlike a free fling, which settles
+        // at dt-dependent offsets, a SNAP fling settles at the same value every dt). And the arena resolution trace stays
+        // identical across the sweep (the validation.md:1145 property — the snap landing is downstream of the arbitration).
+        {
+            string r833 = SnapFlingResolutionTrace(strings, 8.33f, out float o833);
+            string r1667 = SnapFlingResolutionTrace(strings, 16.67f, out float o1667);
+            string r333 = SnapFlingResolutionTrace(strings, 33.3f, out float o333);
+            bool traceIdentical = r833 == r1667 && r1667 == r333;
+            bool landingsIdentical = Near(o833, o1667, 0.5f) && Near(o1667, o333, 0.5f);   // dt-INVARIANT (the snap pins the landing)
+            float interval = SnapFlingProbe.RowH;
+            float rem = o1667 % interval; float dist = MathF.Min(rem, interval - rem);
+            bool onSnap = dist < 0.5f;
+            if (!traceIdentical) Console.WriteLine($"    [snap dt-sweep diff]\n8.33:\n{r833}16.67:\n{r1667}33.3:\n{r333}");
+            Check("gate.touch4.snap-fling-dt-invariant the §12.6 integrator sweep extended to a SNAP fling: the same event script at dt ∈ {8.33,16.67,33.3}ms produces an IDENTICAL arena resolution trace AND lands on the IDENTICAL snap offset (the snap pins the landing dt-invariantly, unlike a free fling), the offset an exact snap multiple",
+                traceIdentical && landingsIdentical && onSnap,
+                $"traceIdentical={traceIdentical} landings=({o833:0.#},{o1667:0.#},{o333:0.#}) identical={landingsIdentical} distToSnap={dist:0.###}");
+        }
+
+        // gate.touch4.overscroll-springback: a touch pan dragging PAST the top clamp (at offset 0, finger pulls DOWN)
+        // produces a transient damped displacement band (OverscrollPx != 0) WHILE OffsetY stays pinned at 0 — the band is a
+        // separate visual term, the clamp contract is never relaxed. On release the band springs back to EXACTLY 0 (phase-7
+        // StepSpring). Asserted via ScrollState (recorder/state, not pixels): the offset NEVER leaves [0, max] across the
+        // whole drag+release, the band peaks while dragging, and it settles at 0.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("touch4-overscroll", new Size2(360, 460), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
+            host.RunFrame();
+            var vp = host.Scene.Root;
+            host.Scene.TryGetScroll(vp, out var sc0);
+            float maxOff = MathF.Max(0f, sc0.ContentH - sc0.ViewportH);
+
+            // Drive a pan past the TOP: down at y=120, then pull the finger DOWN (y increases) to y=300 — content wants to
+            // go above offset 0 ⇒ clamps at 0, the excess becomes a negative band. Manual moves so we can read the band
+            // mid-drag and confirm the offset never goes negative.
+            uint t = s_touchClockMs;
+            var ev = new InputEvent[1];
+            ev[0] = Touch(InputKind.PointerDown, new Point2(150, 120), t, 61); host.Input.Dispatch(ev); host.RunFrame();
+            float worstNegOffset = 0f, peakBand = 0f, worstOverMax = 0f;
+            for (int i = 1; i <= 12; i++)
+            {
+                t += 16;
+                ev[0] = Touch(InputKind.PointerMove, new Point2(150, 120 + i * 15), t, 61); host.Input.Dispatch(ev); host.RunFrame();
+                host.Scene.TryGetScroll(vp, out var s);
+                if (s.OffsetY < worstNegOffset) worstNegOffset = s.OffsetY;
+                if (s.OffsetY - maxOff > worstOverMax) worstOverMax = s.OffsetY - maxOff;
+                if (MathF.Abs(s.OverscrollPx) > MathF.Abs(peakBand)) peakBand = s.OverscrollPx;
+            }
+            host.Scene.TryGetScroll(vp, out var dragging);
+            bool bandWhileDragging = MathF.Abs(dragging.OverscrollPx) > 1f;     // a real displacement past the edge
+            bool offsetPinned = dragging.OffsetY == 0f;                          // the clamp held — offset never went negative
+            float capLimit = TouchFlingSettleProbe_ViewportH(host, vp) * 0.1f;   // WinUI 10% overpan cap
+            bool bandCapped = MathF.Abs(peakBand) <= capLimit + 0.5f;            // damping asymptotes to the cap
+
+            // Release: the band springs back to exactly 0 (and the offset still never leaves [0, max]).
+            t += 16;
+            ev[0] = Touch(InputKind.PointerUp, new Point2(150, 300), t, 61); host.Input.Dispatch(ev); host.RunFrame();
+            s_touchClockMs = t + 1000;
+            bool offsetOk = true;
+            float bandAfter = 1f;
+            for (int i = 0; i < 200; i++)
+            {
+                host.RunFrame();
+                host.Scene.TryGetScroll(vp, out var s);
+                if (s.OffsetY < -0.001f || s.OffsetY > maxOff + 0.001f) offsetOk = false;
+                bandAfter = s.OverscrollPx;
+                if (s.OverscrollPx == 0f && s.ScrollMode == 0) break;
+            }
+            bool sprungToZero = bandAfter == 0f;
+            Check("gate.touch4.overscroll-springback a touch pan past the top clamp shows a damped displacement band (peaks ≤ 10%-viewport cap) WHILE OffsetY stays pinned at 0 (offset never negative, never > max across the whole drag), then springs back to EXACTLY 0 on release",
+                bandWhileDragging && offsetPinned && bandCapped && worstNegOffset == 0f && worstOverMax <= 0f && sprungToZero && offsetOk,
+                $"peakBand={peakBand:0.##} cap={capLimit:0.##} offsetPinned={offsetPinned} worstNeg={worstNegOffset:0.##} sprungTo={bandAfter:0.###} offsetOk={offsetOk}");
+        }
+
+        // gate.touch4.wheel-hard-clamps-no-band: a WHEEL past the top edge (negative delta at offset 0) stays HARD-clamped
+        // — OffsetY pinned at 0, and NO overscroll band is produced (the band is touch-pan-only; wheel/keyboard/programmatic
+        // are never rubber-banded, the SetScrollOffset clamp contract). The existing fling-stops-at-clamp gate stays green.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("touch4-wheel-clamp", new Size2(360, 460), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
+            host.RunFrame();
+            var vp = host.Scene.Root;
+            var ptr = new Point2(150, 200);
+            // Already at offset 0 (top). A big negative wheel delta tries to go above the top: must stay 0 with no band.
+            for (int i = 0; i < 5; i++) { window.QueueInput(new InputEvent(InputKind.Wheel, ptr, 0, 0, -50_000f)); host.RunFrame(); }
+            host.Scene.TryGetScroll(vp, out var top);
+            bool topClamped = top.OffsetY == 0f && top.OverscrollPx == 0f;
+            // And past the BOTTOM: scroll way down, then keep wheeling past max — pinned at max, still no band.
+            for (int i = 0; i < 30; i++) { window.QueueInput(new InputEvent(InputKind.Wheel, ptr, 0, 0, 50_000f)); host.RunFrame(); }
+            host.Scene.TryGetScroll(vp, out var bot);
+            float maxOff = MathF.Max(0f, bot.ContentH - bot.ViewportH);
+            bool botClamped = Near(bot.OffsetY, maxOff, 0.5f) && bot.OverscrollPx == 0f;
+            Check("gate.touch4.wheel-hard-clamps-no-band a wheel past the top AND past the bottom stays hard-clamped (OffsetY pinned at the boundary) with NO overscroll band — the rubber band is touch-pan-only, the clamp contract is never relaxed for wheel/keyboard/programmatic",
+                topClamped && botClamped,
+                $"top=(off {top.OffsetY:0},band {top.OverscrollPx:0.##}) bottom=(off {bot.OffsetY:0}->max {maxOff:0},band {bot.OverscrollPx:0.##})");
+        }
+
+        // gate.touch4.alloc-zero: the overscroll drag + spring-back + a snap fling sequence allocates 0 managed bytes on
+        // the hot half. The struct-only bound list (Fill channel only) keeps the reconcile edge clean, so the band write,
+        // the phase-7 spring step, the snap retarget + decay, and the SetScrollOffset re-realize must all be 0-alloc.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("touch4-alloc", new Size2(360, 460), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new SnapFlingProbe());
+            host.RunFrame();
+            var vp = host.Scene.Root;
+            host.Scene.ScrollRef(vp).SnapInterval = SnapFlingProbe.RowH;
+            for (int i = 0; i < 30; i++) host.RunFrame();   // drain residual
+
+            // Warm the overscroll + snap paths (JIT) outside the measured window.
+            DriveOverscrollAndSnap(window, host, vp);
+            for (int i = 0; i < 40; i++) host.RunFrame();
+
+            long worst = DriveOverscrollAndSnap(window, host, vp);   // returns worst hot-phase alloc across the sequence
+            for (int i = 0; i < 60; i++) { var f = host.RunFrame(); if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes; }
+            Check("gate.touch4.snap-overscroll-alloc-zero an overscroll pan-past-edge + spring-back + snap fling sequence allocates 0 managed bytes on the hot half (the band write, the phase-7 spring step, the snap retarget + friction decay, and the virtual re-realize stayed clean)",
+                worst == 0, $"worstHotAlloc={worst}B");
+        }
+    }
+
+    /// <summary>Viewport inner extent along the scroll axis (for the overscroll cap assertion). Reads the published
+    /// ScrollState ViewportH/W per Orientation.</summary>
+    static float TouchFlingSettleProbe_ViewportH(AppHost host, NodeHandle vp)
+    {
+        host.Scene.TryGetScroll(vp, out var sc);
+        return sc.Orientation == 1 ? sc.ViewportW : sc.ViewportH;
+    }
+
+    /// <summary>Drive a touch pan PAST the top clamp (rubber band) + release (spring-back) + a snap flick, returning the
+    /// worst <see cref="FrameStats.HotPhaseAllocBytes"/> across every frame of the sequence (the gate.touch4 0-alloc gate).
+    /// The viewport must be a snap-configured SnapFlingProbe (so the flick exercises the snap retarget too).</summary>
+    static long DriveOverscrollAndSnap(HeadlessWindow window, AppHost host, NodeHandle vp)
+    {
+        long worst = 0;
+        var ev = new InputEvent[1];
+        uint t = s_touchClockMs;
+        // First flick up to an interior position (seeds a snap fling), let it settle.
+        worst = Math.Max(worst, TouchGesture(window, host, new Point2(150, 360), new Point2(150, 140), 12, pointerId: 71, msPerStep: 16f));
+        for (int i = 0; i < 120; i++) { var f = host.RunFrame(); if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes; host.Scene.TryGetScroll(vp, out var s); if (s.ScrollMode == 0) break; }
+        // Now drag past the bottom: pull the finger UP hard from a low anchor so the content runs past max → band.
+        t = s_touchClockMs;
+        ev[0] = Touch(InputKind.PointerDown, new Point2(150, 360), t, 72); host.Input.Dispatch(ev); { var f = host.RunFrame(); if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes; }
+        for (int i = 1; i <= 10; i++)
+        {
+            t += 16;
+            ev[0] = Touch(InputKind.PointerMove, new Point2(150, 360 - i * 18), t, 72); host.Input.Dispatch(ev);
+            var f = host.RunFrame(); if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes;
+        }
+        t += 16;
+        ev[0] = Touch(InputKind.PointerUp, new Point2(150, 180), t, 72); host.Input.Dispatch(ev); { var f = host.RunFrame(); if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes; }
+        s_touchClockMs = t + 1000;
+        for (int i = 0; i < 60; i++) { var f = host.RunFrame(); if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes; host.Scene.TryGetScroll(vp, out var s); if (s.OverscrollPx == 0f && s.ScrollMode == 0) break; }
+        return worst;
+    }
+
+    /// <summary>The snap-fling twin of <see cref="FlingResolutionTrace"/>: a snap-configured viewport (SnapInterval = RowH)
+    /// flicked with a fixed event script at animation timestep <paramref name="dtMs"/>. The snap retarget makes the landing
+    /// dt-INVARIANT (the same snap offset at every dt), while the arena resolution stays identical — the §12.6 integrator
+    /// sweep over a SNAP fling. Returns the resolution signature; outputs the settled offset.</summary>
+    static string SnapFlingResolutionTrace(StringTable strings, float dtMs, out float settledOff)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+        var rec = new GestureArenaRecorder();
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("det-snap-fling-dt", new Size2(360, 460), 1f)); window.Show();
+        using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new SnapFlingProbe(), frameTime: new FixedFrameTimeSource(dtMs));
+        host.RunFrame();
+        host.Scene.ScrollRef(host.Scene.Root).SnapInterval = SnapFlingProbe.RowH;
+        host.Input.Arena.Recorder = rec;
+        var vp = host.Scene.Root;
+        // A modest, fixed flick (event clock identical across the dt sweep ⇒ identical sampled velocity ⇒ identical snap
+        // target). Generous settle budget so even the finest dt (8.33ms ⇒ ~4× the frames of 33.3ms) fully lands.
+        TouchGesture(window, host, new Point2(150, 300), new Point2(150, 240), 10, pointerId: 93, msPerStep: 16f);
+        for (int i = 0; i < 8000; i++) { host.RunFrame(); host.Scene.TryGetScroll(vp, out var sc); if (sc.ScrollMode == 0) break; }
+        host.Scene.TryGetScroll(vp, out var settled);
+        settledOff = settled.OffsetY;
+        return rec.ResolutionSignature();
+    }
+
+    // ── Touch Phase-4 SIP (software input panel / touch keyboard) trigger seam (input-a11y.md §10; gate.touch4.sip.*):
+    // a TOUCH focus on an editable field requests the on-screen keyboard exactly once and a MOUSE focus never does (the
+    // WinUI InputPaneHandler.cpp policy keyed off the focus pointer's device type); focus loss dismisses it; a simulated
+    // InputPane Showing OccludedRect reflows the focused editor's caret above the pane (the WinUI EnsureFocusedElementInView
+    // bring-into-view, dxaml InputPaneHandler.cpp). The headless HeadlessTextInput records the show/hide requests and
+    // re-fires the OccludedRect callback on a test cue — VerticalSlice stays TerraFX-free (the Windows InputPane2 impl is
+    // device-only). Reuses the Phase-1 touch harness (Touch / s_touchClockMs monotonic stamps).
+    static void Touch4SipChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        // (1) SHOW on touch focus / NOT on mouse focus: tap an EditableText with a touch contact ⇒ TryShowTouchKeyboard
+        //     fires exactly once; a fresh field clicked with a MOUSE never raises the panel.
+        int touchShow, mouseShow;
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("sip-show", new Size2(360, 320), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchEditInScrollerProbe());
+            host.RunFrame();
+            var ti = (HeadlessTextInput)window.TextInput;
+            var field = FindRole(host.Scene, host.Scene.Root, AutomationRole.Text);
+            var fr = host.Scene.AbsoluteRect(field);
+            var p = new Point2(fr.X + 6f, fr.Y + fr.H / 2f);
+            uint t = s_touchClockMs;
+            window.QueueInput(Touch(InputKind.PointerDown, p, t, 60)); host.RunFrame();
+            window.QueueInput(Touch(InputKind.PointerUp, p, t + 16, 60)); host.RunFrame();
+            s_touchClockMs = t + 1000;
+            touchShow = ti.ShowCount;
+        }
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("sip-mouse", new Size2(360, 320), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchEditInScrollerProbe());
+            host.RunFrame();
+            var ti = (HeadlessTextInput)window.TextInput;
+            var field = FindRole(host.Scene, host.Scene.Root, AutomationRole.Text);
+            ClickNode(host, window, field);   // mouse PointerDown+Up (PointerKind.Mouse) → focuses, must NOT show the SIP
+            mouseShow = ti.ShowCount;
+        }
+        Check("gate.touch4.sip.show-on-touch a touch focus on an editable field shows the touch keyboard exactly once; a mouse focus never does",
+            touchShow == 1 && mouseShow == 0, $"touchShow={touchShow} mouseShow={mouseShow}");
+
+        // (2) HIDE on focus loss: after the touch focus, blur the field (focus → null) ⇒ TryHideTouchKeyboard fires.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("sip-hide", new Size2(360, 320), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchEditInScrollerProbe());
+            host.RunFrame();
+            var ti = (HeadlessTextInput)window.TextInput;
+            var field = FindRole(host.Scene, host.Scene.Root, AutomationRole.Text);
+            var fr = host.Scene.AbsoluteRect(field);
+            var p = new Point2(fr.X + 6f, fr.Y + fr.H / 2f);
+            uint t = s_touchClockMs;
+            window.QueueInput(Touch(InputKind.PointerDown, p, t, 61)); host.RunFrame();
+            window.QueueInput(Touch(InputKind.PointerUp, p, t + 16, 61)); host.RunFrame();
+            s_touchClockMs = t + 1000;
+            int hideBefore = ti.HideCount;
+            host.Input.SetFocus(NodeHandle.Null);   // focus leaves the editor for a non-editable target (WinUI hides the SIP)
+            host.RunFrame();
+            Check("gate.touch4.sip.hide-on-blur focus loss from the editor dismisses the touch keyboard",
+                hideBefore == 0 && ti.HideCount >= 1 && !ti.TouchKeyboardShown,
+                $"showCount={ti.ShowCount} hideBefore={hideBefore} hideCount={ti.HideCount} shown={ti.TouchKeyboardShown}");
+        }
+
+        // (3) REFLOW on Showing: touch-focus a field that sits low in a scroller, then fire a simulated InputPane Showing
+        //     OccludedRect that covers it ⇒ the scroller scrolls the field's caret ABOVE the pane top (offset moved to
+        //     expose the caret), and an empty (Hiding) rect leaves the clamp untouched (a hidden pane needs no reflow).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("sip-reflow", new Size2(220, 240), 1f)); window.Show();
+            var probe = new TouchSipReflowProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var ti = (HeadlessTextInput)window.TextInput;
+            var field = FindRole(host.Scene, host.Scene.Root, AutomationRole.Text);
+            var vp = FindScrollable(host.Scene, host.Scene.Root);
+            // Touch-focus the field (its Showing-driven reflow uses the focused node).
+            var fr0 = host.Scene.AbsoluteRect(field);
+            var p = new Point2(fr0.X + 6f, fr0.Y + fr0.H / 2f);
+            uint t = s_touchClockMs;
+            window.QueueInput(Touch(InputKind.PointerDown, p, t, 62)); host.RunFrame();
+            window.QueueInput(Touch(InputKind.PointerUp, p, t + 16, 62)); host.RunFrame();
+            s_touchClockMs = t + 1000;
+
+            host.Scene.TryGetScroll(vp, out var sc0);
+            float offBefore = sc0.OffsetY;
+            var fieldBefore = host.Scene.AbsoluteRect(field);
+            // The pane covers the bottom of the viewport from y = paneTop down — chosen to overlap the field's bottom edge
+            // (the field is ~180 DIP down in a 240-tall viewport, so a paneTop above its bottom forces a reflow).
+            float paneTop = fieldBefore.Y + 10f;   // pane top sits 10 DIP into the field ⇒ a real occlusion
+            ti.FireOccludedRect(new RectF(0f, paneTop, 200f, 240f - paneTop));
+            host.RunFrame();
+
+            host.Scene.TryGetScroll(vp, out var sc1);
+            float offAfter = sc1.OffsetY;
+            var fieldAfter = host.Scene.AbsoluteRect(field);
+            bool moved = offAfter > offBefore + 0.5f;          // the viewport scrolled the content up
+            bool exposed = fieldAfter.Y + fieldAfter.H <= paneTop + 0.5f;   // the field's bottom now clears the pane top
+
+            // Hiding (empty rect) must NOT move the offset further (a hidden pane has nothing to clear).
+            ti.FireOccludedRect(default);
+            host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var sc2);
+            bool hideNoReflow = MathF.Abs(sc2.OffsetY - offAfter) < 0.5f;
+
+            Check("gate.touch4.sip.reflow a Showing OccludedRect scrolls the focused editor's caret above the pane; Hiding leaves the clamp untouched",
+                moved && exposed && hideNoReflow,
+                $"off {offBefore:0.#}->{offAfter:0.#} fieldBottom {fieldBefore.Y + fieldBefore.H:0.#}->{fieldAfter.Y + fieldAfter.H:0.#} paneTop={paneTop:0.#} moved={moved} exposed={exposed} hideNoReflow={hideNoReflow}");
+        }
+
+        // (4) 0-ALLOC steady: the SIP show/reflow path runs at focus/pane edges, never per frame — steady frames after a
+        //     touch focus + a Showing reflow allocate 0 managed bytes on the hot half (the seam is edge-driven).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("sip-alloc", new Size2(220, 240), 1f)); window.Show();
+            var probe = new TouchSipReflowProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var ti = (HeadlessTextInput)window.TextInput;
+            var field = FindRole(host.Scene, host.Scene.Root, AutomationRole.Text);
+            var fr = host.Scene.AbsoluteRect(field);
+            var p = new Point2(fr.X + 6f, fr.Y + fr.H / 2f);
+            uint t = s_touchClockMs;
+            window.QueueInput(Touch(InputKind.PointerDown, p, t, 63)); host.RunFrame();
+            window.QueueInput(Touch(InputKind.PointerUp, p, t + 16, 63)); host.RunFrame();
+            s_touchClockMs = t + 1000;
+            ti.FireOccludedRect(new RectF(0f, fr.Y + 10f, 200f, 200f));
+            host.RunFrame();
+            long worst = 0;
+            for (int i = 0; i < 10; i++) { var fs = host.RunFrame(); if (fs.HotPhaseAllocBytes > worst) worst = fs.HotPhaseAllocBytes; }
+            Check("gate.touch4.sip.alloc-zero steady frames after a SIP touch-focus + Showing reflow allocate 0 managed bytes on the hot half",
+                worst == 0, $"worstHotAlloc={worst}B");
+        }
+    }
+
+    // ── Touch Phase-4 Hold EXECUTION + the stationary-hold WAKE source (gate.touch4.*): a touch long-press fires the
+    // context flyout (the same action a right-click fires) and, because a STATIONARY held finger emits no input, a wake
+    // source keeps frames coming until the ~500ms timer fires, then clears so the loop idles. Plus the §7A.3 control-layer
+    // verdict for RatingControl touch tap-to-rate. Reuses the Phase-1 harness (Touch / s_touchClockMs / fixed 16ms clock).
+    static void Touch4HoldWakeChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        // gate.touch4.hold-fires-context: row 0 of a scroller is BOTH clickable and context-requesting. (1) a STATIONARY
+        // ≥500ms press fires the context request (the press held, no scroll, no click); (2) a SUB-500ms release fires the
+        // CLICK and no context (the Hold timer never promoted); (3) a MOVE-PAST-SLOP claims the Pan (scroll), firing
+        // NEITHER context nor click (the arena sweeps both the Hold and the Tap — WinUI Pressed→Canceled, never Released).
+        {
+            // (1) Stationary long-press → context.
+            using var app1 = new HeadlessPlatformApp();
+            var w1 = new HeadlessWindow(new WindowDesc("hold-ctx", new Size2(360, 360), 1f)); w1.Show();
+            var p1 = new TouchHoldContextProbe();
+            using var h1 = new AppHost(app1, w1, new HeadlessGpuDevice(), fonts, strings, p1);
+            h1.RunFrame();
+            var pt1 = CenterOf(h1.Scene, p1.Row0);
+            uint t1 = s_touchClockMs;
+            w1.QueueInput(Touch(InputKind.PointerDown, pt1, t1, 91));
+            h1.RunFrame();
+            // Hold idle for 600ms (=38 fixed 16ms frames > the 500ms HoldUs) so the timer promotes the Hold → context.
+            // The press visual is still HELD through the fire (the finger has not lifted).
+            bool pressedDuringHold = (h1.Scene.Flags(p1.Row0) & NodeFlags.Pressed) != 0;
+            for (int i = 0; i < 38; i++) h1.RunFrame();
+            bool firedHeldStillPressed = p1.Contexts == 1 && (h1.Scene.Flags(p1.Row0) & NodeFlags.Pressed) != 0;
+            w1.QueueInput(Touch(InputKind.PointerUp, pt1, t1 + 620, 91));
+            h1.RunFrame();
+            s_touchClockMs = t1 + 2000;
+            bool stationaryFiresContext = p1.Contexts == 1 && p1.Clicks == 0 && pressedDuringHold && firedHeldStillPressed;
+
+            // (2) Sub-500ms release → click, NOT context.
+            using var app2 = new HeadlessPlatformApp();
+            var w2 = new HeadlessWindow(new WindowDesc("hold-tap", new Size2(360, 360), 1f)); w2.Show();
+            var p2 = new TouchHoldContextProbe();
+            using var h2 = new AppHost(app2, w2, new HeadlessGpuDevice(), fonts, strings, p2);
+            h2.RunFrame();
+            var pt2 = CenterOf(h2.Scene, p2.Row0);
+            uint t2 = s_touchClockMs;
+            w2.QueueInput(Touch(InputKind.PointerDown, pt2, t2, 92)); h2.RunFrame();
+            for (int i = 0; i < 12; i++) h2.RunFrame();   // ~192ms held, well under 500ms
+            w2.QueueInput(Touch(InputKind.PointerUp, pt2, t2 + 200, 92)); h2.RunFrame();
+            s_touchClockMs = t2 + 2000;
+            bool quickReleaseClicks = p2.Clicks == 1 && p2.Contexts == 0;
+
+            // (3) Move-past-slop → pan (scroll), no context, no click.
+            using var app3 = new HeadlessPlatformApp();
+            var w3 = new HeadlessWindow(new WindowDesc("hold-pan", new Size2(360, 360), 1f)); w3.Show();
+            var p3 = new TouchHoldContextProbe();
+            using var h3 = new AppHost(app3, w3, new HeadlessGpuDevice(), fonts, strings, p3);
+            h3.RunFrame();
+            var vp3 = h3.Scene.Root;
+            var pt3 = CenterOf(h3.Scene, p3.Row0);
+            h3.Scene.TryGetScroll(vp3, out var sc3before);
+            uint t3 = s_touchClockMs;
+            w3.QueueInput(Touch(InputKind.PointerDown, pt3, t3, 93)); h3.RunFrame();
+            // Drag the finger UP 60px over several frames (content scrolls DOWN → OffsetY increases from the top clamp).
+            // Crossing the 4px pan slop on the scroll axis claims the Pan and SWEEPS the Hold + Tap; then keep holding past
+            // 500ms to prove the swept Hold never re-fires the context.
+            for (int i = 1; i <= 6; i++)
+            {
+                w3.QueueInput(Touch(InputKind.PointerMove, new Point2(pt3.X, pt3.Y - i * 10f), t3 + (uint)(i * 16), 93));
+                h3.RunFrame();
+            }
+            for (int i = 0; i < 38; i++) h3.RunFrame();   // hold past 500ms after the pan claim
+            w3.QueueInput(Touch(InputKind.PointerUp, new Point2(pt3.X, pt3.Y - 60f), t3 + 700, 93)); h3.RunFrame();
+            h3.Scene.TryGetScroll(vp3, out var sc3after);
+            s_touchClockMs = t3 + 2000;
+            bool movePansNoContext = p3.Contexts == 0 && p3.Clicks == 0 && sc3after.OffsetY > sc3before.OffsetY + 4f;
+
+            Check("gate.touch4.hold-fires-context a stationary ≥500ms touch press on a clickable+context row opens its context flyout (press held through the fire); a sub-500ms release fires the click not the context; a move-past-slop claims the scroller pan (scrolls) and fires neither context nor click",
+                stationaryFiresContext && quickReleaseClicks && movePansNoContext,
+                $"stationary(ctx={p1.Contexts} clk={p1.Clicks} heldPress={firedHeldStillPressed})={stationaryFiresContext} quick(clk={p2.Clicks} ctx={p2.Contexts})={quickReleaseClicks} pan(ctx={p3.Contexts} clk={p3.Clicks} dOff={sc3after.OffsetY - sc3before.OffsetY:0.#})={movePansNoContext}");
+        }
+
+        // gate.touch4.hold-wake: a STATIONARY hold with NO further input still resolves — the GestureHold wake bit keeps
+        // frames coming until TickGestureArenas fires the ~500ms Hold (mirrors gate.wake.idle-attribution). After the fire
+        // the bit clears (the Hold resolved); lifting + draining returns the idle mask to None. A bare context box (no
+        // scroller/click) so the ONLY post-down wake reason attributable to the hold is GestureHold.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("hold-wake", new Size2(300, 240), 1f)); window.Show();
+            var probe = new ArenaHoldProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var br = host.Scene.AbsoluteRect(host.Scene.Root);
+            var p = new Point2(br.X + 40f, br.Y + 40f);
+            uint t = s_touchClockMs;
+            window.QueueInput(Touch(InputKind.PointerDown, p, t, 94));
+            host.RunFrame();
+            // The down armed the Hold: the wake mask must light GestureHold so a stationary finger keeps frames coming.
+            bool holdBitLit = (host.CurrentWakeReasons & WakeReasons.GestureHold) != 0;
+            // Drive the loop ONLY while it claims active work (NO further input) — exactly the real idle loop. The Hold
+            // must promote + fire purely off the wake-driven frames (capped well above the 500ms/16ms ≈ 32 frames).
+            int pumped = 0;
+            for (; pumped < 120; pumped++)
+            {
+                if (!host.HasActiveWork) break;
+                host.RunFrame();
+            }
+            bool firedViaWake = probe.Contexts == 1;
+            // After resolution the GestureHold bit is cleared even though the finger is STILL down (the Hold won; the arena
+            // is resolved). The bare context handler queues no further work, so the loop is now idle.
+            bool bitClearedAfter = (host.CurrentWakeReasons & WakeReasons.GestureHold) == 0;
+            // Lift + drain: the idle mask returns fully to None (mirror gate.wake.idle-attribution).
+            window.QueueInput(Touch(InputKind.PointerUp, p, t + (uint)(pumped + 2) * 16, 94));
+            host.RunFrame();
+            int drained = 0;
+            for (; drained < 120; drained++) { if (!host.HasActiveWork) break; host.RunFrame(); }
+            bool idleNone = host.CurrentWakeReasons == WakeReasons.None;
+            s_touchClockMs = t + 4000;
+            Check("gate.touch4.hold-wake a stationary hold with NO further input still resolves — the GestureHold wake bit keeps frames coming until the ~500ms Hold fires the context, then the bit clears (Hold resolved, finger still down) and after lifting the idle mask returns to None (mirrors gate.wake.idle-attribution)",
+                holdBitLit && firedViaWake && bitClearedAfter && idleNone,
+                $"holdBitLit={holdBitLit} firedViaWake={firedViaWake}(ctx={probe.Contexts} pumped={pumped}) bitClearedAfter={bitClearedAfter} idleNone={idleNone}(final={host.CurrentWakeReasons} drained={drained})");
+        }
+
+        // gate.touch4.rating-tap: a touch TAP on the 4th star of a 5-star RatingControl rates it 4 (OnPointerDown=Sweep
+        // sets the preview at the tapped X; OnClick=Commit on release applies it — touch tap-to-rate, the commit-on-release
+        // RatingControl.cpp lifecycle, here via the eager OnDrag implicit-capture single-recognizer fast-path).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("rating-tap", new Size2(320, 120), 1f)); window.Show();
+            var probe = new RatingTapProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            // The interactive star row (the Sweep/Commit OnDrag surface) is the Rating container's first child; its 4th
+            // star centre in panel-local px is StarCenter(3) = 16·3.5 + 3·8 = 80 (StarsAt maps that to ceil(80/112·5)=4).
+            var rating = FindRole(host.Scene, host.Scene.Root, AutomationRole.Rating);
+            var starRow = Child(host.Scene, rating, 0);
+            var sr = host.Scene.AbsoluteRect(starRow);
+            float star4LocalX = RatingControlTemplateSettings.StarCenter(3, 16f, 8f);   // = 80
+            var tapPt = new Point2(sr.X + star4LocalX, sr.Y + sr.H / 2f);
+            uint t = s_touchClockMs;
+            window.QueueInput(Touch(InputKind.PointerDown, tapPt, t, 95)); host.RunFrame();
+            window.QueueInput(Touch(InputKind.PointerUp, tapPt, t + 16, 95)); host.RunFrame();
+            s_touchClockMs = t + 1000;
+            float rated = probe.Val?.Value ?? -1f;
+            Check("gate.touch4.rating-tap a touch tap on the 4th star of a 5-star RatingControl rates it 4 (OnPointerDown=Sweep preview + OnClick=Commit on release — touch tap-to-rate via the eager OnDrag single-recognizer capture)",
+                Near(rated, 4f, 0.01f), $"rated={rated} (expected 4) starRowX={sr.X:0.#} tapX={tapPt.X:0.#}");
+        }
+    }
+
     // ── Touch Phase-2 exit criteria: touch-correct visuals (Pressed-no-hover), light-dismiss parity with the mouse path,
     // text caret/selection by touch, the overlay scrollbar thumb-drag by touch, and a 0-alloc hot half across the
     // flyout-open/dismiss + caret-drag sequences. Reuses the Phase-1 touch harness (Touch / TouchGesture / s_touchClockMs
@@ -4720,6 +6052,78 @@ static class Slice
             bool zeroAlloc = delta == 0;
             Check("gate.arena.churn-zero-alloc 100 full arena lifecycles (open→enroll 3→vote→resolve→free) allocate 0 managed bytes after warmup — slab seats, (offset,len) member spans, and in-place votes are reused with zero growth (§7A.4)",
                 zeroAlloc, $"delta={delta}B over 100 arenas, openCount={arena.OpenArenaCount}");
+        }
+
+        // gate.arena.team: the §7A.3 selection team (SelectionDrag + Tap under a Tap captain). The prose (NOT the §7A.2
+        // pseudocode) governs: internal members never reject each other pre-slop; the captain stands for the team; on a
+        // CLEAN UP the captain picks Tap (tap-count, no movement); on a SLOP-CROSS the drag-extend teammate makes the team
+        // eager-win and the captain picks the drag. Driven directly over the arena + a real PointerFsm bank (the gate.arena
+        // unit pattern), with one NON-team competitor (an outer Pan) so the win still sweeps non-teammates.
+        {
+            // (A) PRE-SLOP non-rejection + CLEAN-UP picks Tap.
+            var arena = new GestureArena();
+            var fsms = new PointerFsm[GestureArena.MaxArenas * GestureArena.MaxMembersPerArena];
+            int rejects = 0;
+            arena.OnMemberRejected = slot => { fsms[slot].Reset(); rejects++; };
+            int slotA = arena.OpenArena(pointerId: 21);
+            int selDrag = arena.Enroll(slotA, NodeAt(1), GestureKind.SelectionDrag);   // innermost team member (drag-extend)
+            int selTap = arena.Enroll(slotA, NodeAt(1), GestureKind.Tap);              // the captain
+            int outPan = arena.Enroll(slotA, NodeAt(2), GestureKind.Pan);              // a NON-team competitor (outer scroller)
+            arena.EnrollTeam(slotA, captainSlot: selTap, memberOffset: selDrag, memberLen: selTap - selDrag + 1);
+            fsms[selDrag].Init(GestureKind.SelectionDrag); fsms[selTap].Init(GestureKind.Tap); fsms[outPan].Init(GestureKind.Pan);
+            long t = 1_000_000;
+            fsms[selDrag].OnDown(new Point2(60, 60), t); arena.SetVote(selDrag, fsms[selDrag].Vote);
+            fsms[selTap].OnDown(new Point2(60, 60), t); arena.SetVote(selTap, fsms[selTap].Vote);
+            fsms[outPan].OnDown(new Point2(60, 60), t); arena.SetVote(outPan, fsms[outPan].Vote);
+            // A within-slop move: NObody crosses slop. ResolveStep must NOT internally reject a teammate (§7A.3) and must
+            // NOT resolve (the team + the Pan are two live entries, both Pending).
+            t += 16_000;
+            fsms[selDrag].OnMove(new Point2(62, 61), t); arena.SetVote(selDrag, fsms[selDrag].Vote);   // within slop → Pending
+            fsms[outPan].OnMove(new Point2(62, 61), t); arena.SetVote(outPan, fsms[outPan].Vote);
+            int midResolve = arena.ResolveStep(slotA);
+            bool preSlopNoReject = midResolve < 0 && rejects == 0
+                                   && arena.VoteOf(selDrag) != ArenaVote.Reject && arena.VoteOf(selTap) != ArenaVote.Reject;
+            // Clean up: the Tap captain votes Accept (within slop), the drag stays Pending, the outer Pan votes Reject (a
+            // lone contact lifting is no pan). The up-sweep resolves to the team's CAPTAIN (not the innermost drag), the
+            // drag teammate is RETAINED (not rejected — only the non-team Pan is swept), and the captain picks Tap.
+            t += 16_000;
+            arena.SetVote(selTap, fsms[selTap].OnUp(new Point2(61, 60), t));    // within slop → Accept
+            arena.SetVote(outPan, fsms[outPan].OnUp(new Point2(61, 60), t));    // Pan → Reject
+            int upWin = arena.ResolveUp(slotA);
+            bool cleanUpPicksTap = upWin == selTap
+                                   && arena.CaptainPick(slotA) == GestureKind.Tap
+                                   && arena.VoteOf(selDrag) != ArenaVote.Reject   // teammate retained (no internal reject)
+                                   && arena.VoteOf(outPan) == ArenaVote.Reject;   // the non-team competitor was swept
+
+            // (B) SLOP-CROSS picks the drag. Fresh arena; the drag-extend teammate crosses slop → the team eager-wins.
+            var arena2 = new GestureArena();
+            var fsms2 = new PointerFsm[GestureArena.MaxArenas * GestureArena.MaxMembersPerArena];
+            int rejects2 = 0;
+            arena2.OnMemberRejected = slot => { fsms2[slot].Reset(); rejects2++; };
+            int slotB = arena2.OpenArena(pointerId: 22);
+            int selDrag2 = arena2.Enroll(slotB, NodeAt(1), GestureKind.SelectionDrag);
+            int selTap2 = arena2.Enroll(slotB, NodeAt(1), GestureKind.Tap);
+            int outPan2 = arena2.Enroll(slotB, NodeAt(2), GestureKind.Pan);
+            arena2.EnrollTeam(slotB, captainSlot: selTap2, memberOffset: selDrag2, memberLen: selTap2 - selDrag2 + 1);
+            fsms2[selDrag2].Init(GestureKind.SelectionDrag); fsms2[selTap2].Init(GestureKind.Tap); fsms2[outPan2].Init(GestureKind.Pan);
+            long t2 = 2_000_000;
+            fsms2[selDrag2].OnDown(new Point2(60, 60), t2); arena2.SetVote(selDrag2, fsms2[selDrag2].Vote);
+            fsms2[selTap2].OnDown(new Point2(60, 60), t2); arena2.SetVote(selTap2, fsms2[selTap2].Vote);
+            fsms2[outPan2].OnDown(new Point2(60, 60), t2); arena2.SetVote(outPan2, fsms2[outPan2].Vote);
+            t2 += 16_000;
+            arena2.SetVote(selDrag2, fsms2[selDrag2].OnMove(new Point2(110, 60), t2));   // +50px → SelectionDrag EagerAccept
+            int dragWin = arena2.ResolveStep(slotB);
+            // The team eager-wins via the captain; CaptainPick returns the drag (movement); the Tap teammate is retained;
+            // the outer Pan is swept (it is not in the team).
+            bool slopCrossPicksDrag = dragWin == selTap2
+                                      && arena2.CaptainPick(slotB) == GestureKind.SelectionDrag
+                                      && arena2.VoteOf(selTap2) != ArenaVote.Reject
+                                      && arena2.VoteOf(outPan2) == ArenaVote.Reject
+                                      && rejects2 == 1;   // exactly the non-team Pan was rejected (the teammate was not)
+
+            Check("gate.arena.team a SelectionDrag+Tap selection team (captain=Tap) never internally rejects pre-slop; a clean up resolves to the CAPTAIN and CaptainPick=Tap (the drag teammate retained, the outer Pan swept); a slop-cross makes the team eager-win and CaptainPick=SelectionDrag (§7A.3, the prose semantics)",
+                preSlopNoReject && cleanUpPicksTap && slopCrossPicksDrag,
+                $"preSlopNoReject={preSlopNoReject}(mid={midResolve} rej={rejects}) cleanUp={cleanUpPicksTap}(win={upWin} sel={selTap} pick={arena.CaptainPick(slotA)}) slopCross={slopCrossPicksDrag}(win={dragWin} pick={arena2.CaptainPick(slotB)} rej2={rejects2})");
         }
     }
 
@@ -7119,6 +8523,46 @@ static class Slice
             Check("e5dragdrop.1 press inside the 4px per-axis drag box stays a click (no drag lifecycle)",
                 armed && stillArmed && clicked && untouched,
                 $"armed={armed} stillArmed={stillArmed} clicks={clicks} started={started}");
+        }
+
+        // e5dragdrop.ext — an OS/OLE file drop driven through the dispatcher's ExternalDrag* seam reaches a DropTarget that
+        // accepts DropKinds.Files exactly like an in-app drag: Enter/Over report Copy (the Explorer convention set by
+        // DragDropContext.ExternalBegin), Drop fires OnDrop with the parsed paths, and dragging off the target reports
+        // None + fires OnLeave. (The Win32 IDropTarget→InputHooks half — Win32DropTarget — is live-drag-only.)
+        {
+            var scene = new SceneStore();
+            string[]? dropped = null; int enters = 0, leaves = 0;
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Width = 200, Height = 200, Fill = ColorF.FromRgba(20, 20, 20),
+                DropTarget = new DropTargetSpec(
+                    new[] { DropKinds.Files },
+                    OnEnter: _ => enters++,
+                    OnLeave: _ => leaves++,
+                    OnDrop: s => { if (s.Payload is FileDropData d) dropped = d.Paths; }),
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+
+            var paths = new[] { @"C:\music\track.flac", @"C:\music\album" };
+            var inside = new Point2(100, 100);
+            var outside = new Point2(400, 400);   // off the 200×200 target
+
+            var eff1 = disp.ExternalDragEnter(inside, paths, KeyModifiers.None);
+            var eff2 = disp.ExternalDragOver(inside, KeyModifiers.None);
+            bool dropOk = disp.ExternalDrop(inside, KeyModifiers.None);
+            bool acceptOk = eff1 == DropEffect.Copy && eff2 == DropEffect.Copy && dropOk
+                            && enters == 1 && dropped is { Length: 2 } && dropped[0] == paths[0] && dropped[1] == paths[1];
+
+            // off-target: a fresh enter inside, then a move OUTSIDE the target reports None and fires OnLeave; no drop.
+            var eff3 = disp.ExternalDragEnter(inside, paths, KeyModifiers.None);
+            var eff4 = disp.ExternalDragOver(outside, KeyModifiers.None);
+            disp.ExternalDragLeave();
+            bool leaveOk = eff3 == DropEffect.Copy && eff4 == DropEffect.None && leaves == 1;
+
+            Check("e5dragdrop.ext an OS file drop (ExternalDrag* seam) delivers Enter/Over=Copy + Drop with the dropped paths to a DropTarget accepting DropKinds.Files; off-target reports None + fires OnLeave",
+                acceptOk && leaveOk,
+                $"enter={eff1} over={eff2} drop={dropOk} paths={(dropped is null ? "null" : string.Join("|", dropped))} off(eff={eff4},leaves={leaves})");
         }
 
         // e5dragdrop.2/.2b — crossing the drag box on a press that began on a CHILD of the CanDrag row promotes the
@@ -14992,9 +16436,12 @@ static class Slice
 
         FlexChecks(strings);
         HookChecks();
+        ValidationChecks();
         KeyedChecks(strings);
         KeyboardChecks(strings);
         AnimChecks();
+        ExpressiveMotionChecks(strings);
+        SkeletonChecks(strings);
         ProjectionChecks(strings);
         EnterExitChecks(strings);
         SizeModeChecks(strings);
@@ -15011,6 +16458,7 @@ static class Slice
         AnimEngineChecks(strings);
         AnimHookChecks(strings);
         ScrollChecks(strings);
+        TwoAxisScrollChecks(strings);
         ScrollCrossAxisChecks(strings);
         ScrollOverlayChecks(strings);
         VirtualChecks(strings);
@@ -15022,6 +16470,10 @@ static class Slice
         ArenaCoreChecks(strings);      // Phase 3 ArenaCore: GestureArena (§7A) + PointerFsm (§7B) standalone units — votes/streams/resolution, 0-alloc churn
         ArenaConsumerChecks(strings);  // Phase 3 consumers: drag-reorder-vs-pan via the arena (YieldsToPan subsumed) + UseGesture(Tap) routing
         ArenaDeterminismChecks(strings); // Phase 3 determinism (validation.md §12.6): bit-identical replay trace + dt-sweep resolution identity + fast-path-sync + multi-recognizer 0-alloc
+        PinchZoomChecks(strings);      // Phase 4 pinch-zoom (gate.touch4.*): second-contact → Pinch sweeps Pan, scale-about-midpoint transform (no relayout), clamp 0.1..10.0, per-id cancel, pan continuation, 0-alloc
+        TouchSnapOverscrollChecks(strings); // Phase 4 snap + overscroll (gate.touch4.*): fling-snap lands on a snap point (dt-invariant), touch-pan rubber-band + spring-back (offset never leaves clamp), wheel hard-clamps, 0-alloc
+        Touch4SipChecks(strings);      // Phase 4 SIP (gate.touch4.sip.*): touch focus shows the touch keyboard once (mouse focus doesn't), focus loss hides, a Showing OccludedRect reflows the caret into view, 0-alloc steady
+        Touch4HoldWakeChecks(strings); // Phase 4 Hold EXECUTION + stationary-hold wake (gate.touch4.*): touch long-press fires the context flyout, the GestureHold wake bit keeps frames coming for a motionless held finger then clears, RatingControl touch tap-to-rate
         ImageCacheChecks();
         ImageElChecks(strings);
         ImageFitChecks(strings);

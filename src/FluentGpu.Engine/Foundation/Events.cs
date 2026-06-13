@@ -123,7 +123,8 @@ public sealed class PointerEventArgs
 public sealed class WheelEventArgs
 {
     public Point2 Local;
-    public float Delta;
+    public float Delta;     // vertical wheel (the value the viewport vertical-scroll path consumes)
+    public float DeltaX;    // horizontal wheel (WM_POINTERHWHEEL / trackpad two-finger horizontal); 0 on a plain wheel
     public KeyModifiers Mods;
     public bool Handled;
 }
@@ -253,4 +254,44 @@ public sealed class DragSession
     public DropEffect Effect;
     public KeyModifiers Mods;
     public PointerKind Pointer;
+}
+
+/// <summary>
+/// Well-known drag KIND discriminators for OS-originated (OLE) drags delivered through the external-drop seam
+/// (the host's <c>IDropTarget</c> → <c>InputHooks.ExternalDrag*</c> → <c>InputDispatcher</c> → <c>DragDropContext</c>).
+/// A <see cref="DropTargetSpec"/> that lists one of these in its <c>AcceptKinds</c> receives FOREIGN-surface drops
+/// exactly like an in-app drag — the engine never special-cases OS drags past the seam: they open a normal
+/// <see cref="DragSession"/> (Source = the scene root) whose <c>Payload</c> carries the typed data below.
+/// </summary>
+public static class DropKinds
+{
+    /// <summary>An OS file/folder drop (Explorer, the desktop, any OLE source offering <c>CF_HDROP</c>).
+    /// <see cref="DragSession.Payload"/> is a <see cref="FileDropData"/>.</summary>
+    public const string Files = "os.files";
+}
+
+/// <summary>
+/// The payload of a <see cref="DropKinds.Files"/> session: the absolute paths the OS handed us (files AND/OR folders,
+/// in the source's order). Read it in a target's <c>OnOver</c>/<c>OnDrop</c> via <c>(FileDropData)session.Payload</c>.
+/// Allocated once per OS drag (a cold OLE edge, never per frame); folders arrive as-is — the receiver decides whether
+/// to recurse.
+/// </summary>
+public sealed class FileDropData
+{
+    public FileDropData(string[] paths) => Paths = paths;
+    /// <summary>The dropped absolute paths (files and folders intermixed, OLE order).</summary>
+    public string[] Paths { get; }
+    public int Count => Paths.Length;
+    /// <summary>True when every path is an existing directory (a pure folder drop) — a cheap receiver hint.</summary>
+    public bool AllFolders
+    {
+        get
+        {
+            var p = Paths;
+            if (p.Length == 0) return false;
+            for (int i = 0; i < p.Length; i++)
+                if (!System.IO.Directory.Exists(p[i])) return false;
+            return true;
+        }
+    }
 }

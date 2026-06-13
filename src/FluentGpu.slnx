@@ -13,6 +13,7 @@
     <Project Path="FluentGpu.SourceGen/FluentGpu.SourceGen.csproj" />
     <Project Path="FluentGpu.Interop.SourceGen/FluentGpu.Interop.SourceGen.csproj" />
     <Project Path="FluentGpu.Localization.SourceGen/FluentGpu.Localization.SourceGen.csproj" />
+    <Project Path="FluentGpu.Validation.SourceGen/FluentGpu.Validation.SourceGen.csproj" />
   </Folder>
   <Folder Name="/Apps/">
     <Project Path="FluentGpu.VerticalSlice/FluentGpu.VerticalSlice.csproj" />

@@ -45,6 +45,9 @@ public sealed class TreeReconciler
     private readonly Dictionary<int, List<Computation>> _nodeBindings = new();
     private readonly Dictionary<int, Element?> _showState = new();             // last-mounted branch per ShowEl node
     private readonly Dictionary<int, (Element[] Prev, int Len)> _forState = new();   // last realized children per ForEl node
+    // Skeleton-loading: per SkelRegionEl node, the last branch (0 none / 1 shimmer / 2 real / 3 failed), the last-mounted
+    // child element (for ReconcileSingleChild's type-compare), and the reveal-group token (for the group coordinator).
+    private readonly Dictionary<int, (byte Branch, Element? El, object? Group)> _skelState = new();
     private readonly List<NodeHandle> _dirtyVirtualScratch = new();
 
     private Component? _root;
@@ -198,6 +201,7 @@ public sealed class TreeReconciler
         if (el is VirtualListEl ve) { MountVirtual(node, ve); return; }
         if (el is ShowEl sh) { MountShow(node, sh); return; }
         if (el is ForEl fe) { MountFor(node, fe); return; }
+        if (el is SkelRegionEl skr) { MountSkeletonRegion(node, skr); return; }
 
         WriteColumns(node, el, isMount: true);
         BindNode(node, el);
@@ -276,6 +280,11 @@ public sealed class TreeReconciler
         if (newEl is ForEl nfe)
         {
             return;   // autonomous reactive list boundary
+        }
+
+        if (newEl is SkelRegionEl)
+        {
+            return;   // autonomous skeleton boundary — its effect manages shimmer↔real on the loadable's state
         }
 
         if (newEl is ContextProviderEl np)
@@ -411,6 +420,88 @@ public sealed class TreeReconciler
         AddBinding(node, eff);
     }
 
+    // Native skeleton-loading boundary (modelled on MountShow): a reconcile effect reads the loadable's STATE via
+    // se.Pending()/se.Failed() (subscribes State; se.Content() reads Value via Peek, so a value change never re-fires
+    // here) and mounts one of three branches — a DERIVED shimmer, the real content, or the onFailed UI. On the
+    // shimmer→real edge it blur-reveals the freshly-mounted real subtree (the existing recipes); the looping pulse is
+    // cancelled on the orphan-exit path (Remove) so HasTracks drops and the idle wake-stop is not defeated.
+    private void MountSkeletonRegion(NodeHandle node, SkelRegionEl se)
+    {
+        int mountIdx = (int)node.Raw.Index;
+        _skelState[mountIdx] = (0, null, se.Group);
+        if (se.Group is { } grp) SkelGroupCoordinator.Register(grp, mountIdx);
+
+        // Smooth-resize: mark the region BoundsAnimated with a SizeMode.Reflow transition so a branch swap whose new
+        // content has a DIFFERENT height eases the region's layout size — the host re-solves the parent boundary each
+        // tick, so SURROUNDING content (the sibling below a failed/shorter section) reflows smoothly instead of snapping.
+        // Skipped under reduced motion (the swap snaps). The FLIP deadband makes a same-height swap a no-op.
+        if (se.SmoothResize && !Motion.ReducedMotion && Anim is { } sa)
+        {
+            sa.SetTransition(node, new LayoutTransition(
+                TransitionChannels.Size,
+                TransitionDynamics.Tween(Expressive.Fast, Easing.SmoothOut),
+                Size: SizeMode.Reflow));
+            _scene.Mark(node, NodeFlags.BoundsAnimated);
+        }
+
+        var eff = new Effect(Runtime, () =>
+        {
+            if (!_scene.IsLive(node)) return;
+            int idx = (int)node.Raw.Index;
+            var (lastBranch, lastEl, _) = _skelState.TryGetValue(idx, out var st) ? st : ((byte)0, (Element?)null, se.Group);
+
+            byte branch = se.Failed() ? (byte)3 : se.Pending() ? (byte)1 : (byte)2;   // 1 shimmer / 2 real / 3 failed
+            if (branch == lastBranch) return;   // state didn't flip the branch (a value-only change won't reach here)
+
+            Element? desired = branch switch
+            {
+                // Reduced motion ⇒ no exit-fade stamp (the swap snaps); the pulse + reveal already no-op under it.
+                1 => Motion.ReducedMotion
+                        ? SkeletonDeriver.Derive(se.ShimmerSource(), se.Style)
+                        : StampShimmerExit(SkeletonDeriver.Derive(se.ShimmerSource(), se.Style)),
+                3 => se.OnFailed?.Invoke(),
+                _ => se.Content(),
+            };
+            ReconcileSingleChild(node, desired, lastEl);
+            _skelState[idx] = (branch, desired, se.Group);
+
+            if (branch == 1 && Anim is { } a1)
+            {
+                // Pulse the whole derived skeleton (one looping track on the root; CancelAll on the orphan path kills it).
+                var shimmerRoot = _scene.FirstChild(node);
+                if (!shimmerRoot.IsNull) a1.SkeletonPulse(shimmerRoot, se.Style.PulseMin, se.Style.PulseMs);
+            }
+            else if (branch == 2 && lastBranch == 1 && Anim is { } a2)
+            {
+                // Shimmer→real: blur-reveal the freshly-mounted real subtree (grouped regions reveal together).
+                var realRoot = _scene.FirstChild(node);
+                void Reveal() { if (!realRoot.IsNull && _scene.IsLive(realRoot)) SkeletonReveal.Play(a2, _scene, se.Reveal, realRoot, se.Style); }
+                if (se.Group is { } g) SkelGroupCoordinator.Done(g, idx, Reveal);
+                else Reveal();
+            }
+            else if (branch == 3 && lastBranch != 3 && se.Group is { } gf)
+            {
+                SkelGroupCoordinator.Done(gf, idx, null);   // a failed member still completes its group's round
+            }
+
+            MirrorParticipation(node, _scene.FirstChild(node));
+        }, owner: null, runNow: true);
+        AddBinding(node, eff);
+    }
+
+    // Stamp the derived shimmer ROOT with a fast Opacity+Blur EXIT terminal so the orphan-exit (Remove) cross-blurs it
+    // out while the real content blur-reveals in (the two-layer cross-blur, same slot). Only a BoxEl root carries Animate.
+    private static Element StampShimmerExit(Element shimmerRoot)
+        => shimmerRoot is BoxEl b
+            ? b with
+            {
+                Animate = new LayoutTransition(
+                    TransitionChannels.Opacity,
+                    TransitionDynamics.Tween(Expressive.Fast, Easing.SmoothOut),
+                    Exit: new EnterExit(Opacity: 0f, Blur: Expressive.BlurMedium, Active: true)),
+            }
+            : shimmerRoot;
+
     private void MountFor(NodeHandle node, ForEl fe)
     {
         var eff = new Effect(Runtime, () =>
@@ -463,6 +554,23 @@ public sealed class TreeReconciler
             {
                 var fb = b.Fill.Thunk; var fs = b.Fill.Signal;
                 AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).Fill = fb is not null ? fb() : fs!.Value; _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+            }
+            if (b.Validation.IsBound)
+            {
+                // form-validation.md: resolve the semantic state → theme critical color on the UI thread (the recorder
+                // stays theme-agnostic), and write the resolved border equality-gated so an unchanged validity marks NO
+                // PaintDirty (Memo.OnStale re-runs this effect each keystroke, but a no-op validity dirties nothing).
+                var vb = b.Validation.Thunk; var vs = b.Validation.Signal;
+                AddBinding(node, new Effect(Runtime, () =>
+                {
+                    if (!_scene.IsLive(node)) return;
+                    ValidationState st = vb is not null ? vb() : vs!.Value;
+                    ColorF col = st == ValidationState.Error ? Tok.SystemFillCritical : default;
+                    ref var paint = ref _scene.Paint(node);
+                    if (paint.ValidationBorder == col) return;
+                    paint.ValidationBorder = col;
+                    _scene.Mark(node, NodeFlags.PaintDirty);
+                }, owner: null, runNow: true));
             }
             if (b.Width.IsBound)
             {
@@ -962,6 +1070,10 @@ public sealed class TreeReconciler
         if (Anim is { } anim && anim.TryGetTransition(node, out var spec) && spec.Exit.Active)
         {
             UnmountSubtree(node);
+            // Kill any looping track (the SkeletonPulse) BEFORE orphaning + SeedExit, so only the FINITE exit tracks
+            // remain: an orphan is reclaimed when HasTracks(node)→false, and a forever-looping pulse would pin it and
+            // defeat the engine's idle wake-stop (a battery/never-quiesce regression). Then seed the finite exit.
+            anim.CancelAll(node);
             _scene.Orphan(node);
             anim.SeedExit(node, spec.Exit, spec);
             return;
@@ -984,6 +1096,7 @@ public sealed class TreeReconciler
         _providerSig.Remove(idx);
         _showState.Remove(idx);
         _forState.Remove(idx);
+        if (_skelState.Remove(idx, out var sk) && sk.Group is { } skg) SkelGroupCoordinator.Unregister(skg, idx);
         if (_comps.Remove(node, out var e)) { e.Effect?.Dispose(); e.Comp.Unmount(); _live.Remove(e.Comp); _anchorOf.Remove(e.Comp); }
         if (_virtuals.Remove(node, out var v) && v.Prev is not null)
         {
@@ -993,6 +1106,19 @@ public sealed class TreeReconciler
     }
 
     // ── Column writes (POD → scene) ─────────────────────────────────────────────────────────────
+
+    /// <summary>Resolve a <see cref="ScrollEdgeCues"/> prop to the packed <c>ScrollState.EdgeCueConfig</c> bits, collapsing
+    /// <see cref="ScrollEdgeCues.Auto"/> against the app default ONCE here so the recorder never branches on the default.</summary>
+    private static byte ResolveEdgeCues(ScrollEdgeCues c)
+    {
+        var eff = c == ScrollEdgeCues.Auto ? ScrollEdgeCuesDefaults.Default : c;
+        return eff switch
+        {
+            ScrollEdgeCues.None => 0,
+            ScrollEdgeCues.FadeAndChevron => (byte)(ScrollState.EdgeCueFadeBit | ScrollState.EdgeCueChevronBit),
+            _ => ScrollState.EdgeCueFadeBit,   // Fade (and the defensive Auto-already-resolved fallthrough)
+        };
+    }
 
     private void WriteColumns(NodeHandle node, Element el, bool isMount, Element? old = null)
     {
@@ -1041,6 +1167,9 @@ public sealed class TreeReconciler
                 paint.BorderColor = b.BorderColor;
                 paint.HoverBorderColor = b.HoverBorderColor;
                 paint.PressedBorderColor = b.PressedBorderColor;
+                // Static (unbound) Validation: a bound channel owns paint.ValidationBorder via its effect, so only the
+                // static form asserts here (guarded like Fill above) — the common unbound case resets it to none.
+                if (!b.Validation.IsBound) paint.ValidationBorder = b.Validation.Value == ValidationState.Error ? Tok.SystemFillCritical : default;
                 paint.BorderWidth = b.BorderWidth;
                 paint.Corners = b.Corners;
 
@@ -1084,6 +1213,9 @@ public sealed class TreeReconciler
                 paint.HoverOpacity = b.HoverOpacity;
                 paint.PressedOpacity = b.PressedOpacity;
                 paint.OpacityGroup = b.OpacityGroup;
+                paint.BlurSigma = b.Blur;   // self-blur (Expressive Motion Kit); phase-7 AnimChannel.Blur overrides for animated nodes
+
+
 
                 if (b.HoverScale != 1f || b.PressScale != 1f || !float.IsNaN(b.HoverOpacity) || !float.IsNaN(b.PressedOpacity)
                     || !float.IsNaN(b.HoverDurationMs) || !float.IsNaN(b.PressDurationMs))
@@ -1303,6 +1435,11 @@ public sealed class TreeReconciler
                 ref ScrollState ss = ref _scene.ScrollRef(node);
                 ss.Orientation = s.Horizontal ? (byte)1 : (byte)0;
                 ss.ContentSized = s.ContentSized;
+                // Pinch-zoom opt-in (Input owns the live ZoomFactor — re-reconciling the element must NOT reset a
+                // mid-gesture / committed zoom, so only the declared opt-in + clamp bounds are written here).
+                ss.Zoomable = s.Zoomable;
+                ss.MinZoom = s.MinZoom; ss.MaxZoom = s.MaxZoom;
+                ss.EdgeCueConfig = ResolveEdgeCues(s.EdgeCues);
                 break;
             }
             case VirtualListEl v:
@@ -1325,6 +1462,7 @@ public sealed class TreeReconciler
                 sc.ItemCount = v.ItemCount;
                 sc.Layout = v.Layout;
                 sc.Overscan = v.Overscan;
+                sc.EdgeCueConfig = ResolveEdgeCues(v.EdgeCues);
                 break;
             }
             case GridEl g:

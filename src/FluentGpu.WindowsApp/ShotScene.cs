@@ -1,8 +1,10 @@
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
+using FluentGpu.Forms;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
+using FluentGpu.Signals;
 
 namespace FluentGpu;
 
@@ -59,6 +61,7 @@ sealed class ShotScene : Component
         "text-snap" => new BoxEl { Grow = 1, Fill = PageBg, Children = [Embed.Comp(() => new TextSnapShot())] },
         "expander-open" => CenterShot(Embed.Comp(() => new ExpanderOpenShot())),
         "expander-reflow" => CenterShot(Embed.Comp(() => new ExpanderReflowShot())),
+        "validation" => CenterShot(Embed.Comp(() => new ValidationShot())),
         "pips" => CenterShot(Embed.Comp(() => new PipsPagerShot())),
         "selectorbar" => CenterShot(Embed.Comp(() => new SelectorBarShot())),
         "pivot" => CenterShot(Embed.Comp(() => new PivotShot())),
@@ -688,6 +691,44 @@ sealed class ExpanderReflowShot : Component
             ],
         };
     }
+}
+
+// form-validation.md — the invalid state rendered statically: three deliberately-wrong fields whose errors are revealed
+// on mount (form.Validate()) so the screenshot shows the red border + message row + touched-gating result.
+sealed class ValidationShot : Component
+{
+    static readonly System.Text.RegularExpressions.Regex EmailRx = new(@"^[^@\s]+@[^@\s]+\.[^@\s]+$");
+    readonly Signal<string> _email = new("not-an-email");
+    readonly Signal<string> _pwd = new("12345");
+    readonly Signal<string> _confirm = new("99999");
+
+    public override Element Render()
+    {
+        UseEffect(() =>
+        {
+            FluentGpu.Localization.Localization.DefaultCulture = "en-US";
+            FluentGpu.Localization.Localization.LoadFolder(System.IO.Path.Combine(System.AppContext.BaseDirectory, "assets", "loc"));
+            if (string.IsNullOrEmpty(FluentGpu.Localization.Localization.CurrentCulture))
+                FluentGpu.Localization.Localization.SetCulture("en-US");
+        }, LocOnce);
+
+        var form = UseForm();
+        var email = UseField(_email, Rules.Required("validation.required"), Rules.Matches(EmailRx, "validation.email"));
+        var pwd = UseField(_pwd, Rules.MinLength(8, "validation.minlen"));
+        var confirm = UseField(_confirm, new FieldOptions<string> { Timing = ValidationTiming.OnChange },
+                               Rules.Equals(_pwd, "validation.match"));
+
+        // Reveal the (deliberately invalid) fields on mount so the static capture shows the error styling.
+        UseEffect(() => form.Validate(), RevealOnce);
+
+        return ShotCards.Column(
+            TextBox.Create(header: "Email", width: 340f, text: _email, field: email),
+            TextBox.Create(header: "Password", width: 340f, text: _pwd, field: pwd),
+            TextBox.Create(header: "Confirm password", width: 340f, text: _confirm, field: confirm));
+    }
+
+    static readonly object[] LocOnce = new object[] { "val-shot-loc" };
+    static readonly object[] RevealOnce = new object[] { "val-shot-reveal" };
 }
 
 sealed class PipsPagerShot : Component

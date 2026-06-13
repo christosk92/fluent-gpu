@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `FluentGpu.Engine` — the portable engine core (`RootNamespace=FluentGpu`, no NuGet). One folder per subsystem, namespaces unchanged: `Foundation/` (incl. `Foundation/Signals/`), `Seams/{Rhi,Pal,Text}/`, `Scene/`, `Render/`, `Layout/`, `Dsl/`, `Hooks/`, `Reconciler/`, `Animation/`, `Input/`, `Media/`, `Hosting/`, `Headless/{Rhi,Pal,Text}/`.
 - `FluentGpu.Controls` — the portable control kit (refs `Engine` only; **TerraFX-free** — the zero-alloc harness and the macOS port consume it unchanged).
 - `FluentGpu.Windows` — the swappable Windows backend (refs `Engine` + the one `TerraFX.Interop.Windows` PackageReference). Folders: `Interop/`, `Pal/`, `D3D12/`, `DirectWrite/`, `Wic/`, `Uia/`.
-- `FluentGpu.WindowsApi` — OS-services scaffold (`Notifications/`, `Credentials/`, `Packaging/`, `Activation/`), refs `Engine`. MSIX packaging is app-side (`.wapproj`), not here.
+- `FluentGpu.WindowsApi` — OS-services pillars (`Notifications/`, `Credentials/`, `Packaging/`, `Activation/`, `Media/` SMTC, `Dialogs/`, `Shell/`, `Power/`, `Network/`, `Storage/` app-data), refs `Engine`. AOT-clean Win32/WinRT interop (no WindowsAppSDK NuGet, no CsWinRT). MSIX packaging is app-side (`.wapproj`), not here.
 - Analyzers: `FluentGpu.SourceGen`, `FluentGpu.Interop.SourceGen` (netstandard2.0). Exes: `FluentGpu.VerticalSlice` (the `PublishAot` validation harness; refs `Engine`+`Controls`; **its transitive closure must stay TerraFX-free** — the portability guard) and `FluentGpu.WindowsApp` (the WinExe gallery / composition root; refs `Engine`+`Controls`+`Windows`).
 
 ## Commands

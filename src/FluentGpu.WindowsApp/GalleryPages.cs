@@ -1041,35 +1041,58 @@ sealed class ScrollPage : Component
         };
     }
 
-    public override Element Render()
+    static readonly string[] Months =
+        { "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December" };
+
+    // A 320px scroll card over 50 rows; `cues` drives the edge-cue affordance (controls.md §8.3).
+    Element ScrollCard(ScrollEdgeCues cues, float width)
     {
         const int RowCount = 50;
         var rows = new Element[RowCount];
-        for (int i = 0; i < RowCount; i++)
-            rows[i] = Row(i + 1);
-
-        var scrollCard = new BoxEl
+        for (int i = 0; i < RowCount; i++) rows[i] = Row(i + 1);
+        return new BoxEl
         {
-            Direction = 1,
-            Height = 360,
-            Grow = 0,
-            Fill = CardFill,
-            BorderColor = CardBorder,
-            BorderWidth = 1f,
-            Corners = CornerRadius4.All(10f),
-            Padding = Edges4.All(4),
-            Children =
-            [
-                ScrollView(VStack(0f, rows))
-            ],
+            Direction = 1, Height = 320, Grow = 0, Width = width,
+            Fill = CardFill, BorderColor = CardBorder, BorderWidth = 1f,
+            Corners = CornerRadius4.All(10f), Padding = Edges4.All(4),
+            Children = [ ScrollView(VStack(0f, rows)) with { EdgeCues = cues } ],
+        };
+    }
+
+    public override Element Render()
+    {
+        Element Caption(string s) => new TextEl(s) { Size = 12f, Color = Muted };
+        Element Labeled(string s, Element card) => VStack(8f, card, Caption(s));
+
+        // Horizontal strip wider than its viewport → left/right cues.
+        var cells = new Element[Months.Length];
+        for (int i = 0; i < Months.Length; i++)
+            cells[i] = new BoxEl
+            {
+                Direction = 1, Width = 104, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Padding = new Edges4(0, 20, 0, 20), Margin = new Edges4(0, 0, 8, 0),
+                Fill = RowA, Corners = CornerRadius4.All(8f),
+                Children = [ new TextEl(Months[i]) { Size = 13f, Color = RowText } ],
+            };
+        var hCard = new BoxEl
+        {
+            Direction = 1, Width = 420, Grow = 0,
+            Fill = CardFill, BorderColor = CardBorder, BorderWidth = 1f,
+            Corners = CornerRadius4.All(10f), Padding = Edges4.All(8),
+            Children = [ ScrollView(HStack(0f, cells), horizontal: true) ],
         };
 
         return VStack(16f,
             Heading("Scrolling"),
             Text("Scrolling is layout-free: the viewport clips and the content is offset by a transform — no relayout. Use the mouse wheel."),
-            new TextEl($"Demo: a fixed 360px viewport over {RowCount} rows. Only visible rows are painted; the rest are clipped and shifted by a single transform.") { Size = 13f, Color = Muted },
-            scrollCard,
-            new TextEl("The page itself does not scroll — the inner card is the scroll surface, so the wheel drives the clipped viewport above.") { Size = 12f, Color = Muted }
+            new TextEl("Edge cues (controls.md §8.3): a surface-colour fade marks any edge with more content, so a clipped list never looks finished — the affordance macOS's hidden scrollbars remove. On by default; set EdgeCues = ScrollEdgeCues.None to opt out.") { Size = 13f, Color = Muted },
+            HStack(20f,
+                Labeled("No cue (EdgeCues = None)", ScrollCard(ScrollEdgeCues.None, 300f)),
+                Labeled("Edge cue — default", ScrollCard(ScrollEdgeCues.Auto, 300f))),
+            new TextEl("Fade + chevron — an explicit directional hint (EdgeCues = ScrollEdgeCues.FadeAndChevron):") { Size = 13f, Color = Muted },
+            Labeled("Fade + chevron", ScrollCard(ScrollEdgeCues.FadeAndChevron, 300f)),
+            new TextEl("Horizontal — left/right cues on the same gradient logic:") { Size = 13f, Color = Muted },
+            Labeled("Horizontal scroll", hCard)
         ) is BoxEl box
             ? Wrap(box)
             : Wrap(null!);

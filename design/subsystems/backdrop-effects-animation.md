@@ -364,6 +364,26 @@ public struct EffectAux
 `app-requirements` §3.4's "all net-new contract additions" note (these are NOT pre-existing stubs; only
 `DrawBackdropCmd`/`PushLayer{Effect}`/`VisualKind.Backdrop`/`NeedsLayer` are the real existing stubs).
 
+**FA-2 (as-built — the per-node self-blur + the Expressive Motion Kit).** The `AnimChannel.BlurSigma` channel is
+realized today as a per-node **self-blur** (the element's OWN pixels, CSS `filter: blur()` — distinct from the backdrop
+acrylic above): a dense `NodePaint.BlurSigma:float` column (default 0; owned by `scene-memory.md`), animated by
+`AnimChannel.BlurSigma` (PaintDirty only, never LayoutDirty). When σ > 0 the recorder wraps the node's subtree in a
+**`PushLayer{Blur}`** (a new `LayerKind.Blur`, registered with the DrawList opcodes in `gpu-renderer.md`): the subtree
+renders to a pooled offscreen RT, gets a separable **dynamic-σ** Gaussian (animating, so weights are computed per-frame,
+unlike the acrylic compositor's fixed 30-DIP kernel), and composites once at the group alpha — the same offscreen-layer
+machinery as `OpacityGroup`, run by `OpacityLayerCompositor`. The **Expressive Motion Kit** (`MotionRecipes.*`,
+`docs/guide/motion-recipes.md`) adopts transitions.dev's vocabulary on this engine: the named curves `Easing.SmoothOut`
+(`cubic-bezier(0.22,1,0.36,1)`), `Overshoot`, `OvershootStrong`, `Pop` (added to the `Foundation.Easing` motion
+vocabulary this doc owns), the `Dsl.Expressive` token set (durations/distances/scales/blur — distinct from the WinUI
+`Motion`/`MotionSprings`), and ~15 named recipes. It is an opt-in app-author palette; framework controls keep their
+Fluent curves. Origin-aware scale-open uses the existing `NodePaint.OriginX/OriginY` (`BoxEl.TransformOriginX/Y`).
+
+**FA-3 (`EnterExit.Blur` — exit cross-blur for the skeleton swap).** The presence/exit terminal `EnterExit` (owned
+here, on `LayoutTransition`) gains a `float Blur` field: `SeedEnter` seeds `AnimChannel.BlurSigma` Blur→0 on enter,
+`SeedExit` seeds current→Blur on exit. This is the only animation-side addition the native skeleton-loading kit needs
+(`reconciler-hooks.md`): an EXITING shimmer orphan blurs out (it renders until reclaimed; the recorder already honors
+BlurSigma via the self-blur layer) while the real content blur-reveals in — the two-layer cross-blur, same slot.
+
 ---
 
 ## 5. Connected / implicit / driven animation — the phase-7 `AnimTrack`

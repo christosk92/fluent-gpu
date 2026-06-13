@@ -17,7 +17,7 @@ namespace FluentGpu.WindowsApi.Notifications;
 /// <c>key=value;key2=value2</c> with the percent-encoding reversed (<c>%25 %3B %3D</c> → <c>% ; =</c>,
 /// <c>AppNotificationBuilderUtility.h:146-167</c>), so a handler reads <c>args.Arguments["action"]</c> rather than
 /// re-parsing. <see cref="UserInput"/> is the typed/selected values keyed by the input <c>id</c> from
-/// <see cref="ToastBuilder.AddTextBox(string,string?)"/>.
+/// <see cref="ToastBuilder.TextBox(string,string?)"/> / <see cref="ToastBuilder.Selection"/>.
 /// </para>
 /// <para>Cold path (fires at most a handful of times per session); allocation is fine.</para>
 /// </remarks>

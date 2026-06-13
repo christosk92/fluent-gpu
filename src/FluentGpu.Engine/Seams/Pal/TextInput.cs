@@ -28,7 +28,11 @@ public interface ITextInputSink
 
 /// <summary>
 /// The per-window IME/text-services seam (Imm32 today; the interface is event-shaped so a TSF/ITextStoreACP
-/// implementation can replace it without touching the engine — full in-place TSF is a named hardening item).
+/// implementation can replace it without touching the engine — full in-place TSF is a named hardening item). It is
+/// also the portable SIP (software input panel / touch keyboard) seam: <see cref="TryShowTouchKeyboard"/> /
+/// <see cref="TryHideTouchKeyboard"/> request the on-screen keyboard and <see cref="OccludedRectChanged"/> reports the
+/// area it covers, so the engine reflows the focused editor's caret above it (WinUI <c>InputPane</c> + the
+/// ScrollContentPresenter bring-into-view that <c>InputPaneHandler</c> drives — dxaml\xcp\dxaml\lib\InputPaneHandler.cpp).
 /// </summary>
 public interface IPlatformTextInput
 {
@@ -44,4 +48,25 @@ public interface IPlatformTextInput
 
     /// <summary>The OS caret blink half-period in ms (Win32 GetCaretBlinkTime; headless = a fixed test value).</summary>
     int CaretBlinkMs { get; }
+
+    // ── SIP (touch keyboard) trigger seam (input-a11y.md §10; WinUI InputPane2.TryShow/TryHide via IInputPaneInterop) ──
+
+    /// <summary>Request the OS touch keyboard (software input panel). The engine calls this only when focus is gained on
+    /// an editable control by a TOUCH pointer (the WinUI policy InputPaneHandler.cpp drives off the focused element's
+    /// editability + the touch-input source). Returns true if the platform showed (or already shows) the panel; false on
+    /// a desktop with no touch keyboard available — never throws. The default (headless / SIP-less backends) is a no-op
+    /// returning false, so the seam is opt-in: a backend overrides it to participate.</summary>
+    bool TryShowTouchKeyboard() => false;
+
+    /// <summary>Dismiss the OS touch keyboard. Called when focus leaves the editor for a non-editable target. Returns
+    /// true if a panel was hidden, false otherwise (no-op default; never throws).</summary>
+    bool TryHideTouchKeyboard() => false;
+
+    /// <summary>The SIP reported a new occluded region (the touch keyboard's <c>InputPane.Showing</c>/<c>Hiding</c>
+    /// OccludedRect), in CLIENT DIP — the area the panel now covers, or the default empty rect (<see cref="RectF.IsEmpty"/>)
+    /// when it is hidden. The
+    /// host subscribes and scrolls the focused editor's caret above <c>rect.Y</c> (the WinUI EnsureFocusedElementInView
+    /// reflow). Backends without a SIP never raise it; the default add/remove keeps non-supporting impls test-neutral
+    /// (a default-interface-method event so a backend opts in without every implementer declaring the field).</summary>
+    event Action<RectF>? OccludedRectChanged { add { } remove { } }
 }

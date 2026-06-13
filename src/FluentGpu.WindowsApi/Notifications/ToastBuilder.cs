@@ -1,55 +1,60 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text;
 
 namespace FluentGpu.WindowsApi.Notifications;
 
 /// <summary>
-/// A fluent builder that assembles a <c>ToastGeneric</c> notification XML payload as a string — the pure-managed,
-/// zero-interop half of the Notifications pillar (no P/Invoke, no COM, no WinRT; fully portable and AOT-trivial). The
-/// produced string is what <see cref="ToastNotifier.Show(string,string?,string?)"/> hands to the WinRT
-/// <c>XmlDocument</c>/<c>IToastNotifier</c> path.
+/// A fluent builder for a <c>ToastGeneric</c> notification — the pure-managed, zero-interop half of the Notifications
+/// pillar (no P/Invoke, no COM, no WinRT; fully portable and AOT-trivial). You describe the toast with chained calls
+/// and never have to think about XML: hand the builder straight to <see cref="ShowVia"/> /
+/// <see cref="ToastNotifier.Show(ToastBuilder)"/> and it carries its own tag/group. <see cref="BuildXml"/> remains the
+/// raw escape hatch when you want the string yourself.
 /// </summary>
+/// <example>
+/// <code>
+/// Toast.Create()
+///      .Title("Download complete")
+///      .Body("song.flac is ready")
+///      .AppLogo(localArtPath, circle: true)
+///      .Button("Open", b => b.Argument("action", "open").Success())
+///      .Button("Dismiss", b => b.Dismiss())
+///      .Tag("dl-42").Group("downloads")
+///      .ShowVia(notifier);
+/// </code>
+/// </example>
 /// <remarks>
 /// <para>
-/// The element shapes, attribute names, encoding rules, child ordering, and hard limits are cribbed verbatim from
-/// WASDK's <c>AppNotificationBuilder</c> so the output is byte-compatible with the platform's <c>ToastGeneric</c>
-/// schema (we build against the in-box public toast surface, not the WASDK runtime — see
-/// docs/plans/windowsapi-implementation-research.md §2.1). The assembled document is:
+/// The element shapes, attribute names, encoding rules, child ordering, and hard limits follow WASDK's
+/// <c>AppNotificationBuilder</c> so the output is byte-compatible with the in-box <c>ToastGeneric</c> schema. The
+/// assembled document is:
 /// <code>
 /// &lt;toast{timestamp}{duration}{scenario}{launch}{useButtonStyle}&gt;
+///   {header}
 ///   &lt;visual&gt;&lt;binding template='ToastGeneric'&gt;
-///     {text…}{attribution}{appLogoOverride}{heroImage}{inlineImage}
+///     {text…}{progress}{attribution}{appLogoOverride}{heroImage}{inlineImage}
 ///   &lt;/binding&gt;&lt;/visual&gt;
-///   {inputs+actions in &lt;actions&gt;…&lt;/actions&gt;}{audio}
+///   &lt;actions&gt;{inputs}{buttons}&lt;/actions&gt;{audio}
 /// &lt;/toast&gt;
 /// </code>
-/// (WASDK assembles <c>&lt;toast …&gt;&lt;visual&gt;…&lt;/visual&gt;{audio}{actions}&lt;/toast&gt;</c> at
-/// <c>AppNotificationBuilder.cpp:379-391</c>; this builder emits <c>actions</c> before <c>audio</c>, which the schema
-/// also accepts, so the two are presentation-equivalent.)
 /// </para>
 /// <para>
 /// <b>Encoding (replicate exactly or toasts break / inject).</b> Text/attribute bodies are XML-escaped
-/// (<c>&amp; " &lt; &gt; '</c> → entities, <c>AppNotificationBuilderUtility.h:24-34</c>). <c>launch</c>/button
-/// <c>arguments</c> key-values are percent-encoded (<c>% ; =</c> → <c>%25 %3B %3D</c>) <i>then</i> XML-escaped
-/// (<c>:99-122</c>), because <c>;</c>/<c>=</c> delimit the <c>key=value;key2=value2</c> argument string the activation
-/// parser reverses (<see cref="ToastActivatedArgs"/>).
+/// (<c>&amp; " &lt; &gt; '</c> → entities). <c>launch</c>/button <c>arguments</c> key-values are percent-encoded
+/// (<c>% ; =</c> → <c>%25 %3B %3D</c>) THEN XML-escaped, because <c>;</c>/<c>=</c> delimit the argument string the
+/// activation parser reverses (<see cref="ToastActivatedArgs"/>).
 /// </para>
 /// <para>
-/// <b>Hard limits (from <c>AppNotificationBuilderUtility.h:11-15</c>).</b> ≤ 3 <c>&lt;text&gt;</c>, ≤ 5 buttons,
-/// ≤ 5 inputs, and a ≤ 5120-byte final payload (<see cref="BuildXml"/> throws past it). The builder enforces the count
-/// caps eagerly (on <c>Add*</c>) and the byte cap at build time.
+/// <b>Hard limits.</b> ≤ 3 <c>&lt;text&gt;</c>, ≤ 5 buttons, ≤ 5 inputs, and a ≤ 5120-byte final payload
+/// (<see cref="BuildXml"/> throws past it). Count caps are enforced eagerly; the byte cap at build time.
 /// </para>
 /// <para>
 /// <b>Image-source caveat.</b> <c>src</c> is a bare URI passthrough — an unpackaged app cannot use an
 /// <c>http(s)://</c> source (the platform silently drops the image); resolve such URLs through
-/// <see cref="ToastImageCache"/> to a local <c>ms-appdata:///local/…</c> path before passing them here
-/// (docs/plans/windowsapi-implementation-research.md §2.1, "unpackaged web-image trap").
+/// <see cref="ToastImageCache"/> to a local <c>ms-appdata:///local/…</c> path first.
 /// </para>
-/// <para>
-/// Not thread-safe; build a toast on one thread. Cold path — allocation (the <see cref="StringBuilder"/> and the
-/// per-element strings) is fine.
-/// </para>
+/// <para>Not thread-safe; build a toast on one thread. Cold path — allocation is fine.</para>
 /// </remarks>
 public sealed class ToastBuilder
 {
@@ -60,27 +65,41 @@ public sealed class ToastBuilder
     private const int MaxInputs = 5;
 
     private readonly List<string> _text = new(MaxTextElements);
-    private readonly List<string> _actions = new(MaxButtons);   // <input …/> and <action …/> children of <actions>
+    private readonly List<string> _inputs = new();    // <input …/> children (schema: inputs precede buttons)
+    private readonly List<string> _buttons = new(MaxButtons);
     private readonly List<(string Key, string? Value)> _arguments = new();
+    private string _launchOverride = string.Empty;    // a whole launch string set via Launch(); wins over _arguments
 
-    private int _buttonCount;
     private int _inputCount;
 
+    private string _header = string.Empty;
     private string _appLogoOverride = string.Empty;
     private string _heroImage = string.Empty;
     private string _inlineImage = string.Empty;
+    private string _progress = string.Empty;
     private string _attribution = string.Empty;
     private string _audio = string.Empty;
     private string _scenarioAttr = string.Empty;
+    private string _timestampAttr = string.Empty;
     private bool _longDuration;
     private bool _useButtonStyle;
 
-    /// <summary>
-    /// Append a body <c>&lt;text&gt;</c> line (XML-escaped). Up to <see cref="MaxTextElements"/> (3) lines; the first is
-    /// the title, the rest are body text (<c>AppNotificationBuilder.cpp:72</c>).
-    /// </summary>
+    private string? _tag;
+    private string? _group;
+
+    /// <summary>The data-binding placeholder names a data-bound <see cref="Progress"/> emits — the keys a
+    /// <see cref="ToastProgress"/> writes into the toast's NotificationData.</summary>
+    internal const string BindValue = "progressValue", BindStatus = "progressStatus", BindTitle = "progressTitle", BindValueString = "progressValueString";
+
+    /// <summary>Start a fresh toast (sugar for <c>new ToastBuilder()</c>).</summary>
+    public static ToastBuilder Create() => new();
+
+    // ── Text ────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Append a body <c>&lt;text&gt;</c> line (XML-escaped). The first line is the title, the rest are body
+    /// text. Up to <see cref="MaxTextElements"/> (3) lines.</summary>
     /// <exception cref="InvalidOperationException">More than 3 text lines were added.</exception>
-    public ToastBuilder AddText(string text)
+    public ToastBuilder Text(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
         if (_text.Count >= MaxTextElements)
@@ -89,11 +108,14 @@ public sealed class ToastBuilder
         return this;
     }
 
-    /// <summary>
-    /// Set the attribution line (small dimmed text under the body, conventionally the source/app), optionally tagged
-    /// with a BCP-47 language (<c>AppNotificationBuilder.cpp:92,100</c>). Replaces any previous attribution.
-    /// </summary>
-    public ToastBuilder SetAttributionText(string text, string? language = null)
+    /// <summary>The headline line (the first <c>&lt;text&gt;</c> — bold). Sugar over <see cref="Text"/>.</summary>
+    public ToastBuilder Title(string text) => Text(text);
+    /// <summary>A body line under the title. Sugar over <see cref="Text"/>.</summary>
+    public ToastBuilder Body(string text) => Text(text);
+
+    /// <summary>Set the attribution line (small dimmed text under the body, conventionally the source/app), optionally
+    /// tagged with a BCP-47 language. Replaces any previous attribution.</summary>
+    public ToastBuilder Attribution(string text, string? language = null)
     {
         ArgumentNullException.ThrowIfNull(text);
         _attribution = string.IsNullOrEmpty(language)
@@ -102,16 +124,25 @@ public sealed class ToastBuilder
         return this;
     }
 
-    /// <summary>
-    /// Set the <c>appLogoOverride</c> image (the small image shown to the left of the text — the album thumbnail for
-    /// WAVEE). <paramref name="circle"/> crops it to a circle (<c>hint-crop='circle'</c>,
-    /// <c>AppNotificationBuilder.cpp:134-162</c>).
-    /// </summary>
-    /// <param name="src">A local image source. Unpackaged apps must NOT pass an <c>http(s)://</c> URI here (resolve it
-    /// via <see cref="ToastImageCache"/> first); <c>ms-appdata:///local/…</c>, <c>file:///…</c>, and (packaged)
-    /// <c>ms-appx:///…</c> all work.</param>
-    /// <param name="circle"><see langword="true"/> to crop the image to a circle (<c>hint-crop='circle'</c>).</param>
-    public ToastBuilder SetAppLogoOverride(string src, bool circle = false)
+    /// <summary>Add a notification header (<c>&lt;header&gt;</c>) — a category title above the toast that groups related
+    /// toasts in the Action Center. Clicking it activates the app with <paramref name="arguments"/>. One per toast.</summary>
+    public ToastBuilder Header(string id, string title, string arguments = "")
+    {
+        ArgumentException.ThrowIfNullOrEmpty(id);
+        ArgumentNullException.ThrowIfNull(title);
+        _header = $"<header id='{EncodeXml(id)}' title='{EncodeXml(title)}' arguments='{EncodeXml(arguments)}'/>";
+        return this;
+    }
+
+    // ── Images ──────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Set the <c>appLogoOverride</c> image (the small image to the left of the text — the album thumbnail for
+    /// WAVEE). <paramref name="circle"/> crops it to a circle.</summary>
+    /// <param name="src">A local image source (<c>ms-appdata:///local/…</c>, <c>file:///…</c>, packaged
+    /// <c>ms-appx:///…</c>). Unpackaged apps must NOT pass an <c>http(s)://</c> URI — resolve via
+    /// <see cref="ToastImageCache"/> first.</param>
+    /// <param name="circle"><see langword="true"/> to crop to a circle (<c>hint-crop='circle'</c>).</param>
+    public ToastBuilder AppLogo(string src, bool circle = false)
     {
         ArgumentException.ThrowIfNullOrEmpty(src);
         _appLogoOverride = circle
@@ -120,87 +151,158 @@ public sealed class ToastBuilder
         return this;
     }
 
-    /// <summary>Set the <c>hero</c> image — a full-width banner above the text (<c>AppNotificationBuilder.cpp:164</c>).
-    /// The <paramref name="src"/> source rules are the same as <see cref="SetAppLogoOverride"/>.</summary>
-    public ToastBuilder SetHeroImage(string src)
+    /// <summary>Set the <c>hero</c> image — a full-width banner above the text. Source rules as <see cref="AppLogo"/>.</summary>
+    public ToastBuilder Hero(string src)
     {
         ArgumentException.ThrowIfNullOrEmpty(src);
         _heroImage = $"<image placement='hero' src='{EncodeXml(src)}'/>";
         return this;
     }
 
-    /// <summary>Set a single inline image — full-width inside the body (<c>AppNotificationBuilder.cpp:104</c>).
-    /// The <paramref name="src"/> source rules are the same as <see cref="SetAppLogoOverride"/>.</summary>
-    public ToastBuilder SetInlineImage(string src)
+    /// <summary>Set a single inline image — full-width inside the body. Source rules as <see cref="AppLogo"/>.</summary>
+    public ToastBuilder Inline(string src)
     {
         ArgumentException.ThrowIfNullOrEmpty(src);
         _inlineImage = $"<image src='{EncodeXml(src)}'/>";
         return this;
     }
 
-    /// <summary>
-    /// Add a top-level <c>launch</c> argument (<c>key</c> or <c>key=value</c>) carried when the toast body (not a
-    /// button) is clicked. Keys/values are percent-then-XML encoded; an empty/<c>null</c> value emits a bare <c>key</c>
-    /// (<c>AppNotificationBuilder.cpp:285-310</c>). The activation handler receives these parsed in
-    /// <see cref="ToastActivatedArgs.Arguments"/>.
-    /// </summary>
-    public ToastBuilder AddArgument(string key, string? value = null)
+    // ── Launch arguments ────────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Set the WHOLE top-level <c>launch</c> argument string at once (e.g. <c>"open=song;id=42"</c>) — carried
+    /// when the toast body (not a button) is clicked, and reported in <see cref="ToastActivatedArgs.Arguments"/>.
+    /// XML-escaped only (the <c>;</c>/<c>=</c> delimiters are preserved). Overrides any <see cref="Argument"/> calls.</summary>
+    public ToastBuilder Launch(string arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        _launchOverride = arguments;
+        return this;
+    }
+
+    /// <summary>Append one top-level <c>launch</c> argument (<c>key</c> or <c>key=value</c>), percent-then-XML encoded.
+    /// Ignored if <see cref="Launch"/> set a whole string.</summary>
+    public ToastBuilder Argument(string key, string? value = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         _arguments.Add((key, value));
         return this;
     }
 
-    /// <summary>
-    /// Add an action button. When clicked, the Shell activates the app with <paramref name="argKey"/>=
-    /// <paramref name="argValue"/> as the invoked argument string (parsed into
-    /// <see cref="ToastActivatedArgs.Arguments"/>). Up to <see cref="MaxButtons"/> (5) buttons
-    /// (<c>AppNotificationBuilder.cpp:233-239</c>, button XML <c>AppNotificationButton.cpp:120-129</c>).
-    /// </summary>
-    /// <param name="content">The button caption (XML-escaped).</param>
-    /// <param name="argKey">The argument key the activation reports (percent+XML encoded).</param>
-    /// <param name="argValue">The argument value (percent+XML encoded).</param>
-    /// <exception cref="InvalidOperationException">More than 5 buttons were added.</exception>
-    public ToastBuilder AddButton(string content, string argKey, string argValue)
-    {
-        ArgumentNullException.ThrowIfNull(content);
-        ArgumentException.ThrowIfNullOrEmpty(argKey);
-        ArgumentNullException.ThrowIfNull(argValue);
-        if (_buttonCount >= MaxButtons)
-            throw new InvalidOperationException($"A toast supports at most {MaxButtons} buttons.");
+    // ── Buttons ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
-        // <action content='…' arguments='key=value'/> — arguments is the same key=value;… convention as launch.
-        string args = string.IsNullOrEmpty(argValue)
-            ? EncodeArgument(argKey)
-            : $"{EncodeArgument(argKey)}={EncodeArgument(argValue)}";
-        _actions.Add($"<action content='{EncodeXml(content)}' arguments='{args}'/>");
-        _buttonCount++;
+    /// <summary>Add a simple foreground action button carrying <paramref name="arguments"/> (a whole structured string
+    /// like <c>"action=play"</c>, XML-escaped only). Up to <see cref="MaxButtons"/> (5) buttons.</summary>
+    /// <exception cref="InvalidOperationException">More than 5 buttons were added.</exception>
+    public ToastBuilder Button(string content, string arguments)
+        => Button(new ToastButton(content).Arguments(arguments));
+
+    /// <summary>Add a fully-configured button (activation type, icon, style, tooltip, context-menu placement, …) via a
+    /// fluent <see cref="ToastButton"/> callback.</summary>
+    public ToastBuilder Button(string content, Action<ToastButton> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        var b = new ToastButton(content);
+        configure(b);
+        return Button(b);
+    }
+
+    /// <summary>Add a pre-built <see cref="ToastButton"/>.</summary>
+    public ToastBuilder Button(ToastButton button)
+    {
+        ArgumentNullException.ThrowIfNull(button);
+        if (_buttons.Count >= MaxButtons)
+            throw new InvalidOperationException($"A toast supports at most {MaxButtons} buttons.");
+        _buttons.Add(button.Build());
         return this;
     }
 
-    /// <summary>
-    /// Add a free-text input box the user can type into before pressing a button; its typed value is reported under
-    /// <paramref name="id"/> in <see cref="ToastActivatedArgs.UserInput"/> (<c>AppNotificationBuilder.cpp:215-222</c>).
-    /// Up to <see cref="MaxInputs"/> (5) inputs.
-    /// </summary>
-    /// <param name="id">The input id (XML-escaped) the typed value is reported under.</param>
-    /// <param name="placeholder">Optional placeholder text shown when empty.</param>
+    /// <summary>Add the built-in dismiss button (<c>activationType='system'</c>) — sugar for
+    /// <c>Button(c =&gt; c.Dismiss())</c>.</summary>
+    public ToastBuilder DismissButton(string content = "Dismiss")
+        => Button(new ToastButton(content).Dismiss());
+
+    // ── Inputs ──────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Add a free-text input box; its typed value is reported under <paramref name="id"/> in
+    /// <see cref="ToastActivatedArgs.UserInput"/>. Up to <see cref="MaxInputs"/> (5) inputs.</summary>
     /// <exception cref="InvalidOperationException">More than 5 inputs were added.</exception>
-    public ToastBuilder AddTextBox(string id, string? placeholder = null)
+    public ToastBuilder TextBox(string id, string? placeholder = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(id);
-        if (_inputCount >= MaxInputs)
-            throw new InvalidOperationException($"A toast supports at most {MaxInputs} inputs.");
-        _actions.Add(string.IsNullOrEmpty(placeholder)
+        GuardInputCap();
+        _inputs.Add(string.IsNullOrEmpty(placeholder)
             ? $"<input id='{EncodeXml(id)}' type='text'/>"
             : $"<input id='{EncodeXml(id)}' type='text' placeHolderContent='{EncodeXml(placeholder)}'/>");
         _inputCount++;
         return this;
     }
 
+    /// <summary>Add a drop-down selection input; the chosen option's id is reported under <paramref name="id"/> in
+    /// <see cref="ToastActivatedArgs.UserInput"/>. Counts toward the <see cref="MaxInputs"/> (5) input cap.</summary>
+    /// <param name="id">The input id the chosen value is reported under.</param>
+    /// <param name="defaultId">The option id selected initially (null = no preselection).</param>
+    /// <param name="options">The <c>(id, text)</c> choices, in display order.</param>
+    public ToastBuilder Selection(string id, string? defaultId, params (string Id, string Text)[] options)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(id);
+        ArgumentNullException.ThrowIfNull(options);
+        GuardInputCap();
+
+        var sb = new StringBuilder("<input id='").Append(EncodeXml(id)).Append("' type='selection'");
+        if (!string.IsNullOrEmpty(defaultId)) sb.Append(" defaultInput='").Append(EncodeXml(defaultId)).Append('\'');
+        sb.Append('>');
+        foreach (var (optId, optText) in options)
+            sb.Append("<selection id='").Append(EncodeXml(optId)).Append("' content='").Append(EncodeXml(optText)).Append("'/>");
+        sb.Append("</input>");
+        _inputs.Add(sb.ToString());
+        _inputCount++;
+        return this;
+    }
+
+    private void GuardInputCap()
+    {
+        if (_inputCount >= MaxInputs)
+            throw new InvalidOperationException($"A toast supports at most {MaxInputs} inputs.");
+    }
+
+    // ── Progress ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Add a determinate (or indeterminate) <c>&lt;progress&gt;</c> bar (one per toast). By default it is DATA-BOUND
+    /// (emits <c>{progressValue}</c>/<c>{progressStatus}</c>/… placeholders) so the toast can be updated in place via the
+    /// notifier's data path without re-showing. Pass <paramref name="dataBound"/>=false to bake literal values in.
+    /// </summary>
+    /// <param name="value">0.0..1.0 determinate fraction, or <see langword="null"/> for an indeterminate (marquee) bar.</param>
+    /// <param name="status">The caption under the bar (e.g. "Downloading…").</param>
+    /// <param name="title">Optional bold label above the bar.</param>
+    /// <param name="valueStringOverride">Optional text replacing the default "NN%" readout.</param>
+    public ToastBuilder Progress(double? value = 0.0, string status = "", string? title = null, string? valueStringOverride = null, bool dataBound = true)
+    {
+        var sb = new StringBuilder("<progress");
+        if (dataBound)
+        {
+            if (title is not null) sb.Append($" title='{{{BindTitle}}}'");
+            sb.Append($" value='{{{BindValue}}}'");
+            if (valueStringOverride is not null) sb.Append($" valueStringOverride='{{{BindValueString}}}'");
+            sb.Append($" status='{{{BindStatus}}}'");
+        }
+        else
+        {
+            if (!string.IsNullOrEmpty(title)) sb.Append($" title='{EncodeXml(title)}'");
+            sb.Append(" value='").Append(value is double v ? v.ToString("0.###", CultureInfo.InvariantCulture) : "indeterminate").Append('\'');
+            if (!string.IsNullOrEmpty(valueStringOverride)) sb.Append($" valueStringOverride='{EncodeXml(valueStringOverride)}'");
+            sb.Append($" status='{EncodeXml(status)}'");
+        }
+        sb.Append("/>");
+        _progress = sb.ToString();
+        return this;
+    }
+
+    // ── Presentation ────────────────────────────────────────────────────────────────────────────────────────────────
+
     /// <summary>Set the toast <c>scenario</c> (presentation aggressiveness). <see cref="ToastScenario.Default"/> emits
-    /// nothing (<c>AppNotificationBuilder.cpp:267-283</c>).</summary>
-    public ToastBuilder SetScenario(ToastScenario scenario)
+    /// nothing.</summary>
+    public ToastBuilder Scenario(ToastScenario scenario)
     {
         _scenarioAttr = scenario switch
         {
@@ -213,75 +315,95 @@ public sealed class ToastBuilder
         return this;
     }
 
-    /// <summary>Use the "long" toast duration (the toast lingers ~25s instead of ~7s) —
-    /// <c>duration='long'</c> (<c>AppNotificationBuilder.cpp:262-265</c>).</summary>
-    public ToastBuilder SetLongDuration(bool longDuration = true)
+    /// <summary>Use the "long" toast duration (~25s instead of ~7s) — <c>duration='long'</c>.</summary>
+    public ToastBuilder LongDuration(bool longDuration = true) { _longDuration = longDuration; return this; }
+
+    /// <summary>Opt buttons into the colored rendering (<c>useButtonStyle='true'</c>) so <see cref="ToastButton.Success"/>/
+    /// <see cref="ToastButton.Critical"/> take effect.</summary>
+    public ToastBuilder ButtonStyles(bool use = true) { _useButtonStyle = use; return this; }
+
+    /// <summary>Override the toast's displayed timestamp (<c>displayTimestamp</c>, ISO-8601 UTC) instead of the OS
+    /// receipt time — e.g. for a message that arrived earlier.</summary>
+    public ToastBuilder Timestamp(DateTimeOffset when)
     {
-        _longDuration = longDuration;
+        _timestampAttr = $" displayTimestamp='{when.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture)}'";
         return this;
     }
 
-    /// <summary>Opt buttons into the colored "useButtonStyle" rendering (<c>useButtonStyle='true'</c> on the root, for
-    /// Success/Critical button hints).</summary>
-    public ToastBuilder UseButtonStyle(bool use = true)
+    // ── Audio ───────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Play a built-in notification sound when the toast appears. Mutually exclusive with
+    /// <see cref="Silent"/> (last call wins).</summary>
+    public ToastBuilder Sound(ToastSound sound, bool loop = false) => Sound(SoundUri(sound), loop);
+
+    /// <summary>Play a custom <c>ms-winsoundevent:…</c> (or app-package) audio URI. Mutually exclusive with
+    /// <see cref="Silent"/> (last call wins).</summary>
+    public ToastBuilder Sound(string uri, bool loop = false)
     {
-        _useButtonStyle = use;
+        ArgumentException.ThrowIfNullOrEmpty(uri);
+        _audio = loop ? $"<audio src='{EncodeXml(uri)}' loop='true'/>" : $"<audio src='{EncodeXml(uri)}'/>";
         return this;
     }
 
-    /// <summary>Play a built-in notification sound when the toast appears (<c>AppNotificationBuilder.cpp:190-194</c>).
-    /// Mutually exclusive with <see cref="MuteAudio"/> (last call wins).</summary>
-    public ToastBuilder SetAudioEvent(ToastSound sound, bool loop = false)
-    {
-        string uri = SoundUri(sound);
-        _audio = loop
-            ? $"<audio src='{uri}' loop='true'/>"
-            : $"<audio src='{uri}'/>";
-        return this;
-    }
+    /// <summary>Silence the toast (<c>&lt;audio silent='true'/&gt;</c>). Mutually exclusive with <see cref="Sound(ToastSound,bool)"/>.</summary>
+    public ToastBuilder Silent() { _audio = "<audio silent='true'/>"; return this; }
 
-    /// <summary>Silence the toast (<c>&lt;audio silent='true'/&gt;</c>, <c>AppNotificationBuilder.cpp:202-206</c>).
-    /// Mutually exclusive with <see cref="SetAudioEvent"/> (last call wins).</summary>
-    public ToastBuilder MuteAudio()
+    // ── Tag / group (carried with the toast; read by ToastNotifier.Show(ToastBuilder)) ──────────────────────────────
+
+    /// <summary>Tag the toast (for later update/remove-by-tag). Carried into <see cref="ToastNotifier.Show(ToastBuilder)"/>;
+    /// no need to pass it separately.</summary>
+    public ToastBuilder Tag(string tag) { _tag = tag; return this; }
+    /// <summary>Group the toast (for collection-level remove). Carried into <see cref="ToastNotifier.Show(ToastBuilder)"/>.</summary>
+    public ToastBuilder Group(string group) { _group = group; return this; }
+
+    /// <summary>The tag carried on the builder (null if unset) — read by <see cref="ToastNotifier.Show(ToastBuilder)"/>.</summary>
+    public string? TagValue => _tag;
+    /// <summary>The group carried on the builder (null if unset) — read by <see cref="ToastNotifier.Show(ToastBuilder)"/>.</summary>
+    public string? GroupValue => _group;
+
+    // ── Terminal ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Show this toast through <paramref name="notifier"/> with no XML in sight — builds, applies the carried
+    /// <see cref="Tag"/>/<see cref="Group"/>, and shows. Returns the platform's success.</summary>
+    public bool ShowVia(ToastNotifier notifier)
     {
-        _audio = "<audio silent='true'/>";
-        return this;
+        ArgumentNullException.ThrowIfNull(notifier);
+        return notifier.Show(this);
     }
 
     /// <summary>
-    /// Assemble the final toast XML string. Composes the launch-arguments attribute from
-    /// <see cref="AddArgument(string,string?)"/>, orders the children per the <c>ToastGeneric</c> schema, and enforces
-    /// the ≤ 5120-byte payload cap (<c>AppNotificationBuilder.cpp:393</c>).
+    /// Assemble the final toast XML string (the raw escape hatch — most callers use <see cref="ShowVia"/> instead).
+    /// Orders the children per the <c>ToastGeneric</c> schema and enforces the ≤ 5120-byte payload cap.
     /// </summary>
-    /// <exception cref="InvalidOperationException">The assembled payload exceeds <see cref="MaxPayloadBytes"/> (5120)
-    /// bytes (the platform rejects larger toasts).</exception>
+    /// <exception cref="InvalidOperationException">The assembled payload exceeds <see cref="MaxPayloadBytes"/> (5120) bytes.</exception>
     public string BuildXml()
     {
         var sb = new StringBuilder(512);
 
         sb.Append("<toast");
+        sb.Append(_timestampAttr);
         sb.Append(_scenarioAttr);
-        if (_longDuration)
-            sb.Append(" duration='long'");
+        if (_longDuration) sb.Append(" duration='long'");
         AppendLaunchAttribute(sb);
-        if (_useButtonStyle)
-            sb.Append(" useButtonStyle='true'");
+        if (_useButtonStyle) sb.Append(" useButtonStyle='true'");
         sb.Append('>');
 
+        sb.Append(_header);
+
         sb.Append("<visual><binding template='ToastGeneric'>");
-        foreach (string t in _text)
-            sb.Append(t);
+        foreach (string t in _text) sb.Append(t);
+        sb.Append(_progress);   // <progress> follows the text lines in the ToastGeneric binding
         sb.Append(_attribution);
         sb.Append(_appLogoOverride);
         sb.Append(_heroImage);
         sb.Append(_inlineImage);
         sb.Append("</binding></visual>");
 
-        if (_actions.Count > 0)
+        if (_inputs.Count > 0 || _buttons.Count > 0)
         {
             sb.Append("<actions>");
-            foreach (string a in _actions)
-                sb.Append(a);
+            foreach (string i in _inputs) sb.Append(i);     // schema: inputs precede buttons
+            foreach (string b in _buttons) sb.Append(b);
             sb.Append("</actions>");
         }
 
@@ -289,20 +411,23 @@ public sealed class ToastBuilder
         sb.Append("</toast>");
 
         string xml = sb.ToString();
-        // The platform caps the payload at 5120 BYTES (UTF-8/UTF-16 — measure the UTF-8 length, the on-wire form).
-        int bytes = Encoding.UTF8.GetByteCount(xml);
+        int bytes = Encoding.UTF8.GetByteCount(xml);   // the platform caps the payload at 5120 BYTES (UTF-8 on-wire)
         if (bytes > MaxPayloadBytes)
             throw new InvalidOperationException(
                 $"Toast payload is {bytes} bytes; the maximum is {MaxPayloadBytes}. Trim text/arguments or use fewer images.");
         return xml;
     }
 
-    /// <summary>Compose <c>launch='key=value;key2;…'</c> from the collected arguments (trailing <c>;</c> dropped, like
-    /// <c>AppNotificationBuilder.cpp:285-310</c>), percent+XML encoding each key and value. Emits nothing when empty.</summary>
+    /// <summary>Compose <c>launch='key=value;key2;…'</c>. A whole-string <see cref="Launch"/> wins (XML-escaped only);
+    /// otherwise each <see cref="Argument"/> pair is percent+XML encoded. Emits nothing when empty.</summary>
     private void AppendLaunchAttribute(StringBuilder sb)
     {
-        if (_arguments.Count == 0)
+        if (_launchOverride.Length > 0)
+        {
+            sb.Append(" launch='").Append(EncodeXml(_launchOverride)).Append('\'');
             return;
+        }
+        if (_arguments.Count == 0) return;
 
         var args = new StringBuilder();
         foreach ((string key, string? value) in _arguments)
@@ -312,9 +437,7 @@ public sealed class ToastBuilder
             else
                 args.Append(EncodeArgument(key)).Append(';');
         }
-        if (args.Length > 0)
-            args.Length--;   // drop the trailing ';'
-
+        if (args.Length > 0) args.Length--;   // drop the trailing ';'
         sb.Append(" launch='").Append(args).Append('\'');
     }
 
@@ -329,14 +452,12 @@ public sealed class ToastBuilder
         _ => "ms-winsoundevent:Notification.Default",
     };
 
-    /// <summary>XML-escape a body/attribute value: <c>&amp; " &lt; &gt; '</c> → entities
-    /// (<c>AppNotificationBuilderUtility.h:24-34,124-142</c>). Returns the input unchanged when nothing needs escaping.</summary>
+    /// <summary>XML-escape a body/attribute value: <c>&amp; " &lt; &gt; '</c> → entities. Returns the input unchanged
+    /// when nothing needs escaping.</summary>
     internal static string EncodeXml(string value)
     {
-        if (string.IsNullOrEmpty(value))
-            return string.Empty;
-        if (value.IndexOfAny(s_xmlSpecials) < 0)
-            return value;
+        if (string.IsNullOrEmpty(value)) return string.Empty;
+        if (value.IndexOfAny(s_xmlSpecials) < 0) return value;
 
         var sb = new StringBuilder(value.Length + 8);
         foreach (char ch in value)
@@ -355,23 +476,19 @@ public sealed class ToastBuilder
     }
 
     /// <summary>Encode a <c>launch</c>/<c>arguments</c> key or value: percent-encode <c>% ; =</c> (→ <c>%25 %3B %3D</c>),
-    /// then XML-escape the rest, exactly as <c>EncodeArgument</c> does (<c>AppNotificationBuilderUtility.h:99-122</c>).
-    /// The percent step MUST come first so the <c>;</c>/<c>=</c> delimiters survive into the parsed argument string.</summary>
+    /// then XML-escape the rest. The percent step MUST come first so the <c>;</c>/<c>=</c> delimiters survive.</summary>
     internal static string EncodeArgument(string value)
     {
-        if (string.IsNullOrEmpty(value))
-            return string.Empty;
+        if (string.IsNullOrEmpty(value)) return string.Empty;
 
         var sb = new StringBuilder(value.Length + 8);
         foreach (char ch in value)
         {
             switch (ch)
             {
-                // Percent encodings take precedence (these chars delimit the argument string).
                 case '%': sb.Append("%25"); break;
                 case ';': sb.Append("%3B"); break;
                 case '=': sb.Append("%3D"); break;
-                // Otherwise XML-escape.
                 case '&': sb.Append("&amp;"); break;
                 case '"': sb.Append("&quot;"); break;
                 case '<': sb.Append("&lt;"); break;
@@ -384,4 +501,11 @@ public sealed class ToastBuilder
     }
 
     private static readonly char[] s_xmlSpecials = ['&', '"', '<', '>', '\''];
+}
+
+/// <summary>Sugar entry point: <c>Toast.Create()</c> reads better than <c>new ToastBuilder()</c> at a call site.</summary>
+public static class Toast
+{
+    /// <summary>Start a fresh toast builder.</summary>
+    public static ToastBuilder Create() => new();
 }

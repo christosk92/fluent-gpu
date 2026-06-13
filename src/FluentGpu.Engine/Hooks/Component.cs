@@ -1,5 +1,6 @@
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
+using FluentGpu.Forms;
 using FluentGpu.Foundation;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
@@ -29,6 +30,20 @@ public abstract class Component
     /// <summary>The host UI-thread poster (<see cref="HostDispatch.Post"/>): run an action on the UI thread next frame
     /// from any thread. Use for off-thread data instead of <c>UseContext(FrameClock.Tick)</c> + a per-frame drain.</summary>
     protected Action<Action> UsePost() => Context.UsePost();
+    /// <summary>A persistent per-field async value (Pending|Ready|Failed) — the skeleton-loading spine; flip with SetReady/SetFailed.</summary>
+    protected Loadable<T> UseLoadable<T>(Loadable<T>? initial = null) => Context.UseLoadable(initial);
+    /// <summary>Kick an async loader once at mount; returns a Loadable&lt;T&gt; (Pending→Ready/Failed via UsePost; cancels on unmount).</summary>
+    protected Loadable<T> UseAsyncResource<T>(Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>> loader, T seed = default!) => Context.UseAsyncResource(loader, seed);
+
+    /// <summary>Create a reactive validation field over a caller-owned value signal (form-validation.md): pass the
+    /// resulting <see cref="Field{T}"/> to a control's <c>Field</c> prop. Cross-field/conditional rules that read a
+    /// sibling signal re-validate automatically.</summary>
+    protected Field<T> UseField<T>(Signal<T> value, params Validator<T>[] rules) => Context.UseField(value, rules);
+    /// <summary>As <see cref="UseField{T}(Signal{T}, Validator{T}[])"/> with timing/async/compound/explicit-form options.</summary>
+    protected Field<T> UseField<T>(Signal<T> value, FieldOptions<T> options, params Validator<T>[] rules) => Context.UseField(value, options, rules);
+    /// <summary>Establish a <see cref="FormScope"/> for this component (submit gating + focus-first-error); the
+    /// <c>UseField</c> calls that follow in this render auto-join it.</summary>
+    protected FormScope UseForm() => Context.UseForm();
 
     /// <summary>Bind a localized string into a text node with no re-render (<see cref="RenderContext.L"/>):
     /// <c>new TextEl("") { Text = L("app.title") }</c>. A culture switch re-resolves only the bound node.</summary>

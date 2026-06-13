@@ -44,6 +44,12 @@ public enum LayerKind : int
     /// — overlapping children do not double-blend (unlike the default per-node multiplied opacity, which matches
     /// WinUI's plain Visual.Opacity). Tint/blur fields are unused for this kind.</summary>
     Opacity = 1,
+    /// <summary>Per-node SELF-blur (the Expressive Motion Kit, <see cref="PushLayerCmd.BlurSigma"/>): the subtree renders
+    /// at FULL alpha into a pooled offscreen RT (like <see cref="Opacity"/>), then a separable Gaussian of radius
+    /// <see cref="PushLayerCmd.BlurSigma"/> is run over it and the result composites ONCE at <see cref="PushLayerCmd.GroupAlpha"/>
+    /// — so a node's own pixels (and its subtree) blur + fade together (CSS <c>filter: blur()</c> on the element). The
+    /// tint/noise/luminosity acrylic fields are unused for this kind (this blurs the element, NOT the backdrop behind it).</summary>
+    Blur = 2,
 }
 
 // POD payloads (unmanaged). Encoded as [int op][payload] in the byte stream.
@@ -256,6 +262,19 @@ public sealed class DrawList
         WriteOp(DrawOp.PushLayer);
         WritePayload(new PushLayerCmd(deviceRect, radii, default, default, 0f, 0f, 0f, 0f,
             (int)LayerKind.Opacity, Math.Clamp(groupAlpha, 0f, 1f)));
+        PushSort(sortKey);
+    }
+
+    /// <summary>Begin a per-node SELF-blur group (<see cref="LayerKind.Blur"/>): the subtree until the matching
+    /// <see cref="PopLayer"/> renders at full alpha into a pooled offscreen RT, is separable-Gaussian-blurred by
+    /// <paramref name="blurSigma"/> px, and composites once at <paramref name="groupAlpha"/> (so blur + fade read as one
+    /// motion). The element's OWN pixels blur — not the backdrop behind it. Subtree commands record at opacity relative
+    /// to 1, NOT pre-multiplied by the group alpha.</summary>
+    public void PushBlurLayer(in RectF deviceRect, in CornerRadius4 radii, float blurSigma, float groupAlpha, ulong sortKey = 0)
+    {
+        WriteOp(DrawOp.PushLayer);
+        WritePayload(new PushLayerCmd(deviceRect, radii, default, default, 0f, MathF.Max(0f, blurSigma), 0f, 0f,
+            (int)LayerKind.Blur, Math.Clamp(groupAlpha, 0f, 1f)));
         PushSort(sortKey);
     }
 

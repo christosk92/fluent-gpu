@@ -11,6 +11,8 @@ using static TerraFX.Interop.Windows.Windows;   // __uuidof<T>, RoInitialize, RO
 // native ones so the public API surface (FluentGpu.WindowsApi.Media.MediaPlaybackStatus) stays unambiguous.
 using MediaPlaybackStatusWinRT = TerraFX.Interop.WinRT.MediaPlaybackStatus;
 using MediaPlaybackTypeWinRT = TerraFX.Interop.WinRT.MediaPlaybackType;
+// NOTE: TerraFX projects Windows.Foundation.TimeSpan straight onto the BCL System.TimeSpan (same single-long, 100ns-tick
+// layout), so the put_*Time / UpdateTimelineProperties bindings take System.TimeSpan directly — no marshalling, no wrapper.
 
 namespace FluentGpu.WindowsApi.Media;
 
@@ -80,6 +82,7 @@ public sealed unsafe class SystemMediaControls : IDisposable
     private const string RuntimeClass_Smtc = "Windows.Media.SystemMediaTransportControls";
     private const string RuntimeClass_Uri = "Windows.Foundation.Uri";
     private const string RuntimeClass_RandomAccessStreamReference = "Windows.Storage.Streams.RandomAccessStreamReference";
+    private const string RuntimeClass_TimelineProperties = "Windows.Media.SystemMediaTransportControlsTimelineProperties";
 
     // Benign RoInitialize results (already initialized / changed apartment mode) — gate on FAILED, not != S_OK.
     private const int S_FALSE = 1;
@@ -92,6 +95,7 @@ public sealed unsafe class SystemMediaControls : IDisposable
 
     // Cached, AddRef-owned WinRT call-out pointers (released in Dispose).
     private ISystemMediaTransportControls* _smtc;
+    private ISystemMediaTransportControls2* _smtc2;   // v2 QI: timeline + playback rate (the Win11 scrub bar)
     private IRandomAccessStreamReferenceStatics* _streamRefStatics;
     private IUriRuntimeClassFactory* _uriFactory;
 
@@ -233,6 +237,72 @@ public sealed unsafe class SystemMediaControls : IDisposable
                 if (updater != null) updater->Release();
             }
         }
+    }
+
+    /// <summary>
+    /// Push the timeline (position + track length) to the OS so the Windows-11 now-playing flyout / lock screen shows a
+    /// working SCRUB BAR (<c>ISystemMediaTransportControls2.UpdateTimelineProperties</c>). Drive it from a low-frequency
+    /// (≈1 Hz) clock while playing. <paramref name="start"/> defaults to zero; <paramref name="minSeek"/>/<paramref name="maxSeek"/>
+    /// default to <paramref name="start"/>/<paramref name="end"/> (the full track is seekable). All times are BCL
+    /// <see cref="TimeSpan"/> (100 ns ticks — the exact WinRT unit, copied with no marshalling).
+    /// </summary>
+    public void UpdateTimeline(TimeSpan position, TimeSpan end, TimeSpan start = default, TimeSpan? minSeek = null, TimeSpan? maxSeek = null)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            EnsureV2();
+
+            IInspectable* insp = null;
+            ISystemMediaTransportControlsTimelineProperties* tl = null;
+            try
+            {
+                using (var hc = new HStringHandle(RuntimeClass_TimelineProperties))
+                    ThrowIfFailed(RoActivateInstance(hc.Value, &insp), "RoActivateInstance(TimelineProperties)");
+                Guid iid = __uuidof<ISystemMediaTransportControlsTimelineProperties>();
+                ThrowIfFailed(insp->QueryInterface(&iid, (void**)&tl), "QI ISystemMediaTransportControlsTimelineProperties");
+
+                ThrowIfFailed(tl->put_StartTime(start), "put_StartTime");
+                ThrowIfFailed(tl->put_EndTime(end), "put_EndTime");
+                ThrowIfFailed(tl->put_Position(position), "put_Position");
+                ThrowIfFailed(tl->put_MinSeekTime(minSeek ?? start), "put_MinSeekTime");
+                ThrowIfFailed(tl->put_MaxSeekTime(maxSeek ?? end), "put_MaxSeekTime");
+
+                ThrowIfFailed(_smtc2->UpdateTimelineProperties(tl), "UpdateTimelineProperties");
+            }
+            finally
+            {
+                if (tl != null) tl->Release();
+                if (insp != null) insp->Release();
+            }
+        }
+    }
+
+    /// <summary>Convenience over <see cref="UpdateTimeline"/>: a [0, <paramref name="trackLength"/>] timeline at
+    /// <paramref name="position"/> — the common "current position in a track" update.</summary>
+    public void UpdatePosition(TimeSpan position, TimeSpan trackLength) => UpdateTimeline(position, trackLength);
+
+    /// <summary>The playback rate the OS reflects (<c>get/put_PlaybackRate</c>). Must be &gt; 0 (keep
+    /// <see cref="SetPlaybackStatus"/> authoritative for play/pause — do not report a 0.0 rate to mean paused).</summary>
+    public double PlaybackRate
+    {
+        get { lock (_gate) { ThrowIfDisposed(); EnsureV2(); double r; ThrowIfFailed(_smtc2->get_PlaybackRate(&r), "get_PlaybackRate"); return r; } }
+        set
+        {
+            if (value <= 0 || double.IsNaN(value) || double.IsInfinity(value))
+                throw new ArgumentOutOfRangeException(nameof(value), "PlaybackRate must be a finite value > 0.");
+            lock (_gate) { ThrowIfDisposed(); EnsureV2(); ThrowIfFailed(_smtc2->put_PlaybackRate(value), "put_PlaybackRate"); }
+        }
+    }
+
+    /// <summary>QI the controls to <c>ISystemMediaTransportControls2</c> (timeline + rate), cached AddRef-owned.</summary>
+    private void EnsureV2()
+    {
+        if (_smtc2 != null) return;
+        ISystemMediaTransportControls2* v2 = null;
+        Guid iid = __uuidof<ISystemMediaTransportControls2>();
+        ThrowIfFailed(_smtc->QueryInterface(&iid, (void**)&v2), "QI ISystemMediaTransportControls2");
+        _smtc2 = v2;
     }
 
     /// <summary>Clear all now-playing metadata from the OS surface (<c>DisplayUpdater.ClearAll</c> + <c>Update</c>).</summary>
@@ -472,6 +542,7 @@ public sealed unsafe class SystemMediaControls : IDisposable
 
             if (_streamRefStatics != null) { _streamRefStatics->Release(); _streamRefStatics = null; }
             if (_uriFactory != null) { _uriFactory->Release(); _uriFactory = null; }
+            if (_smtc2 != null) { _smtc2->Release(); _smtc2 = null; }   // release the QI'd v2 before its parent
             if (_smtc != null) { _smtc->Release(); _smtc = null; }
         }
     }

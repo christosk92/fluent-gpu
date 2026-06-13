@@ -44,8 +44,9 @@ public readonly record struct TitleBarRegion(RectF RectDip, TitleBarHit Hit);
 
 /// <summary>
 /// POD input event drained from the host-owned ring once per frame (no C# events across the seam).
-/// <paramref name="ScrollDelta"/> (Wheel only) is in DIP, oriented so positive = scroll toward the content end
-/// (offset increases). The platform pump converts WM_MOUSEWHEEL notches → DIP and flips the sign there.
+/// <paramref name="ScrollDelta"/> (Wheel only) is the VERTICAL wheel in DIP, oriented so positive = scroll toward the
+/// content end (offset increases); <paramref name="ScrollDeltaX"/> is the HORIZONTAL wheel (WM_POINTERHWHEEL / trackpad
+/// two-finger horizontal), same DIP + sign convention on the X axis. The platform pump converts notches → DIP per axis.
 /// <paramref name="Button"/>: 0 = left, 1 = right, 2 = middle. <paramref name="Mods"/> is the modifier chord at the
 /// time of the event (pump-captured); <paramref name="IsRepeat"/> = keyboard auto-repeat (lParam bit 30);
 /// <paramref name="TimestampMs"/> = the platform message time (drives double/triple-click detection in the dispatcher).
@@ -56,7 +57,8 @@ public readonly record struct TitleBarRegion(RectF RectDip, TitleBarHit Hit);
 public readonly record struct InputEvent(
     InputKind Kind, Point2 PositionPx, int Button, int KeyCode, float ScrollDelta = 0f,
     KeyModifiers Mods = KeyModifiers.None, PointerKind Pointer = PointerKind.Mouse,
-    bool IsRepeat = false, uint TimestampMs = 0, uint PointerId = 0, float Pressure = 1f);
+    bool IsRepeat = false, uint TimestampMs = 0, uint PointerId = 0, float Pressure = 1f,
+    float ScrollDeltaX = 0f);   // trailing-optional (mouse call sites unchanged); the HORIZONTAL wheel delta (DIP)
 
 /// <summary>
 /// Drained by the host each frame (drain-to-empty, single contiguous span — <c>AppHost.RunFrame</c> Clears, the window
@@ -106,7 +108,7 @@ public sealed class InputEventRing
             ref InputEvent prev = ref _buf[_count - 1];
             if (prev.Kind == InputKind.Wheel && prev.PositionPx.Equals(e.PositionPx))
             {
-                prev = prev with { ScrollDelta = prev.ScrollDelta + e.ScrollDelta };
+                prev = prev with { ScrollDelta = prev.ScrollDelta + e.ScrollDelta, ScrollDeltaX = prev.ScrollDeltaX + e.ScrollDeltaX };
                 return;
             }
         }

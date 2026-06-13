@@ -79,6 +79,11 @@ public struct NodePaint
     public Affine2D LocalTransform;
     public float Opacity;
     public float HoverOpacity, PressedOpacity;
+    // Per-node self-blur sigma (px), animated by AnimChannel.BlurSigma (the Expressive Motion Kit's perceptual softener).
+    // When > ε the recorder wraps this node's subtree in a PushLayer{Blur}…PopLayer (subtree → pooled offscreen RT →
+    // separable Gaussian → composite) — the same offscreen-layer machinery as OpacityGroup, with the AcrylicCompositor
+    // Gaussian. 0 = no blur layer (the default); a change sets PaintDirty (never LayoutDirty).
+    public float BlurSigma;
     // Composited transform origin (normalized 0..1 of the node box; default centre 0.5,0.5). The recorder scales/transforms
     // the node about (OriginX·W, OriginY·H) — so e.g. a menu can scale/unfold from its TOP edge (OriginY=0).
     public float OriginX, OriginY;
@@ -100,6 +105,9 @@ public struct NodePaint
     public ColorF BorderColor;
     public ColorF HoverBorderColor;    // A==0 ⇒ recorder auto-lightens BorderColor on hover (else eases to this exact token)
     public ColorF PressedBorderColor;  // A==0 ⇒ recorder auto-darkens BorderColor on press (else eases to this exact token)
+    // Validation error border (form-validation.md): the theme-resolved invalid color, written by the reconciler from the
+    // bound BoxEl.Validation channel. A==0 ⇒ valid/none; A>0 ⇒ the recorder overrides the resolved border with it.
+    public ColorF ValidationBorder;
     public float BorderWidth;
     public CornerRadius4 Corners;
     public ColorF TextColor;
@@ -167,9 +175,56 @@ public struct ScrollState
     public byte  Orientation;             // 0 = vertical scroll (Y), 1 = horizontal scroll (X)
     public float FlingVelocity;           // touch-fling speed along Orientation (px/s, signed in offset space; Input seeds, Animation friction-decays)
     public byte  ScrollMode;              // 0 = TargetChase (wheel ease toward Target), 1 = Fling (friction-decay inertia from FlingVelocity)
+    public bool  FlingRetargeted;         // a snap-configured fling has had its velocity re-solved to land on the snap value
+                                          // (the ScrollAnimator does this ONCE on fling entry; reset when a fresh fling is seeded).
+    public float FlingFromOffset;         // the offset captured when the fling was seeded (the impulse "ignored value" anchor)
+    public float FlingSnapTarget;         // the exact snap value a retargeted fling lands on (the integrator writes THIS on
+                                          // settle, so discrete-integration drift never leaves it a fraction off the snap). NaN = no snap target.
     public bool  ContentSized;            // auto-size to content then clamp (popup lists); false = hard viewport
+    // Pinch-zoom (WinUI ScrollPresenter ZoomFactor; opt-in like ScrollingZoomMode — default Disabled). When Zoomable, a
+    // SECOND touch contact over this viewport scales the content about the gesture midpoint (Input owns ZoomFactor; it is
+    // applied as a TRANSFORM-only term composed with the -offset translation on the ContentNode, never a relayout). The
+    // committed factor scales the content extent the offset clamps against (Content*Zoom − Viewport), so a zoomed-in pan
+    // reaches the full magnified content. Defaults: factor 1, Min 0.1 / Max 10.0 (ScrollPresenter.h:63-64).
+    public bool  Zoomable;                // the viewport opts into pinch-zoom (WinUI ScrollingZoomMode.Enabled)
+    public float ZoomFactor;              // committed content scale (1 = unzoomed); Input clamps to [MinZoom, MaxZoom]
+    public float MinZoom, MaxZoom;        // zoom clamp bounds (ScrollPresenter s_defaultMin/MaxZoomFactor = 0.1 / 10.0)
+    // ── Snap points (WinUI ScrollPresenter Mandatory snap-point model — controls\dev\ScrollPresenter\SnapPoint.cpp).
+    // A touch fling retargets its friction decay to land EXACTLY on the nearest applicable snap value (the ScrollAnimator
+    // computes the natural rest from v0 over the decay integral, picks the snap per the zone rules, then re-solves the
+    // velocity so the SAME decay curve lands there — see ScrollSnap + ScrollAnimator). POD, per-viewport: a uniform
+    // interval (the WinUI RepeatedScrollSnapPoint, e.g. a LoopingSelector item row) and/or an explicit sorted list (the
+    // WinUI ScrollSnapPoint irregular case). Both empty (SnapInterval ≤ 0 ∧ SnapPoints null) ⇒ no snapping, the plain
+    // fling. The snap math is "Mandatory" (no applicable-range gaps): every value falls in some snap point's zone, the
+    // zone boundary between two adjacent points being their midpoint (SnapPoint.cpp Influence(), :453/:474). Snapping
+    // applies to flings only (a wheel/keyboard/programmatic offset is hard-clamped, never snapped — matching the clamp
+    // contract); the offset axis is Orientation's.
+    public float SnapInterval;            // uniform snap spacing (DIP) on the scroll axis; ≤ 0 = no interval snapping
+    public float SnapStart;               // first snap value / lower bound of the repeated zone (DIP; default 0)
+    public float SnapEnd;                 // upper bound of the repeated zone (DIP); ≤ SnapStart = open (clamp-max bound)
+    public float[]? SnapPoints;           // optional explicit sorted snap values (the irregular case); null = none. The
+                                          // managed ref is fine in the dict-backed side-table (like Layout / GridSpec.Columns).
+    // Rubber-band overscroll (WinUI manipulation overpan; TOUCH-PAN ONLY). A claimed touch pan dragging PAST the [0,max]
+    // clamp produces a transient visual DISPLACEMENT band — a SEPARATE transform term composed with the -offset
+    // translation on the ContentNode — so the content visibly gives with resistance while OffsetX/Y NEVER leaves [0,max]
+    // (the SetScrollOffset clamp contract is untouched: wheel/keyboard/programmatic stay hard-clamped, no band). On
+    // release the band springs back to 0 with the critically-damped StepSpring in phase 7 (TransformDirty only). Signed
+    // in offset space (negative = pulled past the top/left, positive = past the bottom/right). 0 at rest.
+    public float OverscrollPx;            // current visual displacement past the clamp (Input writes on overpan; Animation springs back)
+    public float OverscrollVel;           // spring velocity for the release spring-back (px/s; 0 while the finger drives it)
+    public bool  Overscrolling;           // a finger is actively driving the band (no spring-back yet); cleared on release
+
     public float FadeT;                   // scrollbar indicator opacity 0..1 (eased in on scroll/hover, auto-hides after idle)
     public float ExpandT;                 // WinUI conscious scrollbar expansion 0=thin indicator, 1=full gutter + buttons
+
+    // Scroll-edge cues (controls.md §8.3): a surface-colour gradient fade (+ optional chevron) at any edge with more
+    // content past it, so a clipped list signals there is more below the fold. Reconciler-resolved from the
+    // ScrollEdgeCues prop (Auto already resolved to ScrollEdgeCuesDefaults.Default), read at record time by
+    // SceneRecorder.EmitScrollEdgeCues. 0 = no cue (None / a synthetic scroller the reconciler never touched).
+    public byte EdgeCueConfig;            // bit0 = fade, bit1 = chevron
+    public const byte EdgeCueFadeBit = 1, EdgeCueChevronBit = 2;
+    public readonly bool EdgeCueFade => (EdgeCueConfig & EdgeCueFadeBit) != 0;
+    public readonly bool EdgeCueChevron => (EdgeCueConfig & EdgeCueChevronBit) != 0;
     public float IdleMs;                  // time since the last scroll movement / hover (drives the auto-hide)
     public bool PointerOver;              // pointer is inside this scroll viewport
     public bool PointerOverScrollbar;     // pointer is inside this viewport's scrollbar gutter
@@ -194,7 +249,130 @@ public struct ScrollState
     public StringId AnchorKey;
     public float AnchorViewportDelta;
 
-    public static ScrollState Default => new() { ExtentTableRef = -1 };
+    public static ScrollState Default => new() { ExtentTableRef = -1, ZoomFactor = 1f, MinZoom = 0.1f, MaxZoom = 10f, FlingSnapTarget = float.NaN };
+
+    /// <summary>True when this viewport has any snap points configured (a fling lands on one).</summary>
+    public readonly bool HasSnap => SnapInterval > 0f || (SnapPoints is { Length: > 0 });
+}
+
+/// <summary>
+/// Snap-point evaluation (WinUI ScrollPresenter "Mandatory" snap points), ported as portable plain math from
+/// <c>microsoft-ui-xaml controls\dev\ScrollPresenter\SnapPoint.cpp</c> — the applicable-zone / midpoint model, with no
+/// Composition <c>ExpressionAnimation</c> (the engine's fling integrator is downstream of the arbitration clock, not an
+/// OS InteractionTracker). Two snap kinds, exactly as WinUI:
+/// <list type="bullet">
+/// <item><b>Repeated</b> (uniform interval — <c>RepeatedScrollSnapPoint</c>): the resting value is the nearer of the two
+/// interval multiples bracketing the natural value. <c>Evaluate</c> (SnapPoint.cpp:1032-1059): <c>first = offset −
+/// floor((offset − start)/interval)·interval</c> (:851), <c>prev = floor((v−first)/interval)·interval + first</c> (:1040),
+/// <c>next = prev + interval</c> (:1041), pick <c>prev</c> iff <c>(v−prev) ≤ (next−v)</c> (:1043).</item>
+/// <item><b>Irregular</b> (explicit sorted list — <c>ScrollSnapPoint</c>): each value owns the applicable zone
+/// <c>[midpoint-to-prev, midpoint-to-next]</c>, the boundary between two adjacent points being their midpoint
+/// <c>(a+b)/2</c> (<c>Influence</c>, SnapPoint.cpp:453/:474, "Mandatory" branch :467 returns the bare midpoint). A value
+/// is snapped to whichever point's zone contains it — i.e. the nearest point (<c>Evaluate</c>, :527-536).</item>
+/// </list>
+/// <b>Impulse</b> (a fling, vs a within-content drag): WinUI marks the snap point AT the gesture-start position as the
+/// "ignored value" so the inertia must advance at least to the NEXT snap point — a flick never settles back where it
+/// started (<c>UpdateSnapPointsIgnoredValue</c> / <c>ImpulseInfluence</c>, ScrollPresenter.cpp:2243, SnapPoint.cpp:478).
+/// We realize that as: in impulse mode, if the natural value snaps back to the start point, step one snap in the fling
+/// direction instead. All math is <c>double</c> (the WinUI type) collapsed to the value the offset clamps to.
+/// </summary>
+public static class ScrollSnap
+{
+    /// <summary>Snap <paramref name="natural"/> (the unsnapped natural resting value) to this viewport's nearest
+    /// applicable snap value. <paramref name="impulse"/> = the move is a fling (apply the ignored-start rule);
+    /// <paramref name="fromOffset"/> is the gesture-start offset (the ignored value lives there). Returns the snapped
+    /// value; identity when the viewport has no snap points. Pure; 0-alloc.</summary>
+    public static float Snap(in ScrollState sc, float natural, bool impulse, float fromOffset)
+    {
+        if (!sc.HasSnap) return natural;
+
+        // Both kinds present ⇒ evaluate each and take the candidate NEARER the natural value (the WinUI sorted-set scan
+        // resolves to the closest applicable zone; with two independent sources the nearest snapped candidate wins).
+        float best = natural;
+        float bestDist = float.PositiveInfinity;
+
+        if (sc.SnapInterval > 0f)
+        {
+            float cand = SnapRepeated(natural, sc.SnapInterval, sc.SnapStart, sc.SnapEnd);
+            float d = MathF.Abs(cand - natural);
+            if (d < bestDist) { best = cand; bestDist = d; }
+        }
+        if (sc.SnapPoints is { Length: > 0 } pts)
+        {
+            float cand = SnapIrregular(natural, pts);
+            float d = MathF.Abs(cand - natural);
+            if (d < bestDist) { best = cand; bestDist = d; }
+        }
+
+        if (!impulse) return best;
+
+        // Impulse: the snap point at the gesture-start position is "ignored" (SnapPoint.cpp:478 ImpulseInfluence) — a
+        // flick must travel at least one snap. If the natural value snapped right back to the start point, advance one
+        // snap step in the fling's travel direction (natural − fromOffset gives the sign).
+        float startSnap = Snap(in sc, fromOffset, impulse: false, fromOffset);
+        if (MathF.Abs(best - startSnap) < 0.5f)
+        {
+            float dir = natural - fromOffset;
+            if (MathF.Abs(dir) > 0.0001f)
+                best = NextSnap(in sc, startSnap, dir > 0f);
+        }
+        return best;
+    }
+
+    /// <summary>The repeated-interval resting value (SnapPoint.cpp Evaluate :1032-1059; First :851).</summary>
+    private static float SnapRepeated(float value, float interval, float start, float end)
+    {
+        // first = start (offset == start here: a uniform grid anchored at SnapStart). prev/next bracket the value.
+        float first = start;
+        float prev = MathF.Floor((value - first) / interval) * interval + first;
+        float next = prev + interval;
+        float snapped = (value - prev) <= (next - value) ? prev : next;
+        // Clamp to the configured [start, end] band when end is a real upper bound (else open).
+        if (end > start) snapped = Math.Clamp(snapped, start, end);
+        else if (snapped < start) snapped = start;
+        return snapped;
+    }
+
+    /// <summary>The irregular nearest-point resting value via the midpoint zones (SnapPoint.cpp Influence :453/:474 +
+    /// Evaluate :527-536). The list is assumed sorted ascending; nearest point == zone-containing point.</summary>
+    private static float SnapIrregular(float value, float[] pts)
+    {
+        float best = pts[0];
+        float bestDist = MathF.Abs(pts[0] - value);
+        for (int i = 1; i < pts.Length; i++)
+        {
+            float d = MathF.Abs(pts[i] - value);
+            if (d < bestDist) { best = pts[i]; bestDist = d; }
+        }
+        return best;
+    }
+
+    /// <summary>The snap value immediately after (<paramref name="forward"/>) or before <paramref name="from"/> — used by
+    /// the impulse ignored-start rule. Combines both kinds: the nearest snap strictly on the requested side.</summary>
+    private static float NextSnap(in ScrollState sc, float from, bool forward)
+    {
+        float best = from;
+        float bestGap = float.PositiveInfinity;
+        if (sc.SnapInterval > 0f)
+        {
+            float cand = forward ? from + sc.SnapInterval : from - sc.SnapInterval;
+            if (sc.SnapEnd > sc.SnapStart) cand = Math.Clamp(cand, sc.SnapStart, sc.SnapEnd);
+            float gap = MathF.Abs(cand - from);
+            if (gap > 0.5f && gap < bestGap) { best = cand; bestGap = gap; }
+        }
+        if (sc.SnapPoints is { Length: > 0 } pts)
+        {
+            for (int i = 0; i < pts.Length; i++)
+            {
+                float p = pts[i];
+                bool side = forward ? p > from + 0.5f : p < from - 0.5f;
+                if (!side) continue;
+                float gap = MathF.Abs(p - from);
+                if (gap < bestGap) { best = p; bestGap = gap; }
+            }
+        }
+        return best;
+    }
 }
 
 /// <summary>
@@ -321,6 +499,16 @@ public struct InteractionInfo
     public const ushort GestureBit = 32768;         // the node declared a UseGesture handler (§13): hit-testable so a
                                                     // tap/hold/pan over it opens a gesture arena even when the node is
                                                     // not otherwise clickable; set/cleared by SceneStore.SetGestureHandler
+
+    /// <summary>Any handler bit that makes a node a PRESS TARGET (interactive, though not necessarily focusable). A press
+    /// on such a node is NOT an inert "background" press — the light-dismiss/modal scrim (Click/Pressed), an OnDrag/OnPointer
+    /// node (Pointer), a CanDrag handle (Drag), a selectable label (SelectableText), a hyperlink span (SpanLinks), a
+    /// NumberBox wheel-stepper (Wheel), a UseGesture node (Gesture). Excludes the pure MARKER bits (Key/Char/Focus/Repeat/
+    /// Cursor/NoEnterActivate/NoPointerFocus) that don't make a node a press target. Consumed by InputDispatcher's
+    /// clear-focus-on-inert-background-press rule (input-a11y §8). Note: scroll-viewport-ness is NOT a HandlerMask bit
+    /// (it lives in ScrollState/NodeFlags.Scrollable) — the touch press site additionally excludes a pan candidate.</summary>
+    public const ushort AnyInteractiveMask =
+        ClickBit | PointerBit | PressedBit | ContextBit | DragBit | SelectableTextBit | SpanLinksBit | WheelBit | GestureBit;
 
     /// <summary>WinUI RepeatButton Delay/Interval (ms) for <see cref="RepeatBit"/> nodes. NaN (or non-positive) = the
     /// WinUI DP defaults (500/33, DependencyProperty.cpp:714-720); ScrollBar template arrows use Interval=50.</summary>

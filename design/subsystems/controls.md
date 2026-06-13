@@ -493,7 +493,9 @@ control with an empty resolved `Name` or a missing required pattern is a CI fail
   text-layer `FlowDirection` (text.md §8.1) + §10A read-side order.
 - **Name/role:** `Name` from header/`LabeledBy`/placeholder fallback; the **value is the document text**, not the
   `Name`. Validation errors set `A11yInfo.{FullDescription, DescribedBy}` (input-a11y §11.7) to the error message and
-  flip `VisualState`-equivalent invalid styling; a `UseAnnounce` reports the error.
+  flip `VisualState`-equivalent invalid styling; a `UseAnnounce` reports the error. **The full design is now
+  `form-validation.md`** (`FluentGpu.Forms`): the field's `Field` prop drives the `BoxEl.Validation` channel (border) +
+  `FieldVisuals.MessageRow` (message); the a11y wiring above is that subsystem's activation seam.
 - **Motion/cursor:** caret blink is a `DrivenClock` `AnimTrack` (paint-only); **cursor = I-beam** over the text body
   (the I-beam the cursor resolver, input-a11y §18, picks the instant selectable/editable text lands), `Arrow` over
   the chrome. Selection-drag past the edge → edge-autoscroll (L11).

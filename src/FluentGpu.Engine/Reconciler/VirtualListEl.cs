@@ -69,4 +69,9 @@ public sealed record VirtualListEl : Element
     public FlexAlign AlignSelf { get; init; } = FlexAlign.Auto;
     public Edges4 Margin { get; init; }
     public ColorF Fill { get; init; }
+
+    /// <summary>Scroll-edge cues (controls.md §8.3): a surface-colour gradient fade at an overflowing edge so a clipped
+    /// list signals there is more below the fold. <see cref="ScrollEdgeCues.Auto"/> (default) resolves to
+    /// <see cref="ScrollEdgeCuesDefaults.Default"/> (ON, fade-only); <see cref="ScrollEdgeCues.None"/> opts out.</summary>
+    public ScrollEdgeCues EdgeCues { get; init; } = ScrollEdgeCues.Auto;
 }
