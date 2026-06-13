@@ -20,7 +20,7 @@ sealed class WelcomePage : Component
         ("virtualization", Icons.List, "List virtualization", "100k rows, recycled"),
         ("buttons", Icons.Accept, "Buttons & commands", "Accent · standard · toggle"),
         ("inputs", Icons.Volume, "Inputs & sliders", "Sliders, scrollbars, toggles"),
-        ("images", Icons.Picture, "Images", "Async album art + placeholders"),
+        ("Image", Icons.Picture, "Image", "Async art · object-fit · corners"),
         ("scrolling", Icons.Document, "Scrolling", "Smooth, inertial, auto-bars"),
         ("animation", Icons.Movie, "Animation", "Springs · keyframes · reflow · FLIP"),
         ("compositor", Icons.Brush, "Compositor", "GPU transform + opacity"),

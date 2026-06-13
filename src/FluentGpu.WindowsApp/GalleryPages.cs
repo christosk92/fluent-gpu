@@ -860,14 +860,13 @@ sealed class GridPage : Component
         };
 }
 
-// ===== ImagesPage =====
-sealed class ImagesPage : Component
+// ===== ImagePage (Media › Image) =====
+// The Ui.Image element as a control-style gallery page: GalleryPage.Shell + ControlExample cards, each with a C# code
+// panel — a simple image, object-fit (Cover/Contain), corner radius, sizing/decodePx, the placeholder tint, and the
+// responsive async album grid (the full FluentGpu.Media pipeline: HTTP/2 fetch → off-thread WIC decode → disk cache →
+// GPU texture residency).
+sealed class ImagePage : Component
 {
-    static readonly ColorF Grey = ColorF.FromRgba(150, 150, 156, 255);
-    static readonly ColorF CardFill = ColorF.FromRgba(32, 32, 38, 255);
-    static readonly ColorF CardBorder = ColorF.FromRgba(58, 58, 66, 255);
-    static readonly ColorF SectionFill = ColorF.FromRgba(24, 24, 30, 255);
-
     static readonly string[] AlbumTitles =
     [
         "Midnight City", "Solar Drift", "Velvet Echo", "Neon Harbor",
@@ -886,129 +885,118 @@ sealed class ImagesPage : Component
         "#6E5147", "#3D5E7A", "#7A3544", "#4F6066"
     ];
 
-    // A real, stable, distinct sample cover from a public image CDN (picsum.photos), requested ~2× the display size
-    // for crispness at high DPI. These fetch over HTTP/2, decode off-thread on the worker pool, cache to disk, and
-    // upload to GPU textures — the full FluentGpu.Media pipeline end to end.
+    // A stable, distinct sample cover from a public image CDN (picsum.photos), requested ~2× the display size for
+    // crispness at high DPI.
     static string Cover(int seed, int displayPx) => $"https://picsum.photos/seed/fluentgpu-{seed}/{displayPx * 2}/{displayPx * 2}";
 
-    Element AlbumCard(int i)
+    static Element LabeledTile(string label, Element tile) => new BoxEl
     {
-        return new BoxEl
-        {
-            Direction = 1,
-            Gap = 8f,
-            Padding = Edges4.All(12),
-            Fill = CardFill,
-            HoverFill = ColorF.FromRgba(40, 40, 48, 255),
-            BorderColor = CardBorder,
-            BorderWidth = 1f,
-            Corners = CornerRadius4.All(10),
-            Children =
-            [
-                // Responsive art: no fixed extent — it fills the card's (fluid) width and stays square (aspect 1), with the
-                // cover crop (object-fit: cover). Decodes at 300px regardless of the on-screen size. No more overflow when
-                // the cell shrinks below a hard-coded tile size.
-                Image(Cover(i, 150), ImageFit.Cover, aspect: 1f, decodePx: 300f, corners: 8f, placeholder: AlbumPlaceholders[i % AlbumPlaceholders.Length]),
-                Text($"Album {AlbumTitles[i % AlbumTitles.Length]}").Strong(),
-                Text(Artists[i % Artists.Length]).Foreground(Grey).FontSize(12f)
-            ],
-        };
-    }
+        Direction = 1, Gap = 8f, AlignItems = FlexAlign.Center,
+        Children = [tile, Caption(label).Secondary()],
+    };
 
-    Element Section(string title, string subtitle, Element body)
+    // A wrapping row of small labeled tiles (wraps + bottom-aligns like the old showcase).
+    static Element WrapRow(params Element[] kids) => new BoxEl
     {
-        return new BoxEl
-        {
-            Direction = 1,
-            Gap = 12f,
-            Padding = Edges4.All(20),
-            Fill = SectionFill,
-            BorderColor = CardBorder,
-            BorderWidth = 1f,
-            Corners = CornerRadius4.All(12),
-            Children =
-            [
-                Text(title).Strong().FontSize(18f),
-                Text(subtitle).Foreground(Grey).FontSize(13f),
-                body
-            ],
-        };
-    }
+        Direction = 0, Gap = 24f, AlignItems = FlexAlign.End, Wrap = true, Children = kids,
+    };
 
-    Element LabeledTile(string label, Element tile)
+    // One object-fit tile: a width-constrained box so the responsive image has a width to fill, height from aspect.
+    static Element FitBox(string label, ImageFit fit, string ph) => LabeledTile(label, new BoxEl
     {
-        return new BoxEl
-        {
-            Direction = 1,
-            Gap = 8f,
-            AlignItems = FlexAlign.Center,
-            Children =
-            [
-                tile,
-                Text(label).Foreground(Grey).FontSize(12f)
-            ],
-        };
-    }
+        Direction = 1, Width = 180f, AlignItems = FlexAlign.Stretch,
+        Children = [Image(Cover(7, 200), fit, aspect: 16f / 9f, decodePx: 200f, corners: 8f, placeholder: ph)],
+    });
+
+    static Element AlbumCard(int i) => new BoxEl
+    {
+        Direction = 1, Gap = 8f, Padding = Edges4.All(12),
+        Fill = Tok.FillCardDefault, HoverFill = Tok.FillCardSecondary,
+        BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, Corners = Radii.OverlayAll,
+        Children =
+        [
+            // Responsive art: no fixed extent — fills its (fluid) cell and stays square (aspect 1) with the cover crop.
+            Image(Cover(i, 150), ImageFit.Cover, aspect: 1f, decodePx: 300f, corners: 8f, placeholder: AlbumPlaceholders[i % AlbumPlaceholders.Length]),
+            BodyStrong(AlbumTitles[i % AlbumTitles.Length]),
+            Caption(Artists[i % Artists.Length]).Secondary(),
+        ],
+    };
 
     public override Element Render()
     {
-        var cards = new Element[AlbumTitles.Length];
-        for (int i = 0; i < cards.Length; i++)
-            cards[i] = AlbumCard(i);
+        var albumCards = new Element[AlbumTitles.Length];
+        for (int i = 0; i < albumCards.Length; i++) albumCards[i] = AlbumCard(i);
 
-        // Responsive auto-fill grid: the column count reflows with the width (packs as many ≥180px columns as fit) and
-        // rows size to content (NaN row height), so the square art tiles grow/shrink with their cells instead of a
-        // fixed tile overflowing a fixed column count.
-        var gallery = AutoGrid(180f, 16f, float.NaN, cards);
+        return GalleryPage.Shell("Image",
+            "Async, GPU-resident images. Ui.Image fetches over HTTP/2, decodes off-thread (WIC, constrained to the display size), caches to disk, and uploads to a GPU texture — with object-fit, corner radius, a decode-size hint, and a placeholder tint shown until the decode lands.",
 
-        var cornerVariants = new BoxEl
-        {
-            Direction = 0,
-            Gap = 24f,
-            AlignItems = FlexAlign.End,
-            Wrap = true,
-            Children =
-            [
-                LabeledTile("square (0)", Image(Cover(10, 80), 80f, 80f, 0f, AlbumPlaceholders[0])),
-                LabeledTile("rounded (12)", Image(Cover(11, 80), 80f, 80f, 12f, AlbumPlaceholders[1])),
-                LabeledTile("circle (40)", Image(Cover(12, 80), 80f, 80f, 40f, AlbumPlaceholders[2]))
-            ],
-        };
+            ControlExample.Build("A simple image",
+                Image(Cover(1, 120), 120f, 120f, 8f, "#273E6C"),
+                description: "Ui.Image(source, width, height, corners) renders a fixed-size, GPU-resident texture; the placeholder tint shows until the off-thread decode lands.",
+                code: """
+                // Fetched over HTTP/2, decoded off-thread (WIC), disk-cached, uploaded to a GPU texture.
+                Image("https://picsum.photos/seed/cover/240/240", 120f, 120f, corners: 8f)
+                """),
 
-        var sizeVariants = new BoxEl
-        {
-            Direction = 0,
-            Gap = 24f,
-            AlignItems = FlexAlign.End,
-            Wrap = true,
-            Children =
-            [
-                LabeledTile("48 x 48", Image(Cover(20, 48), 48f, 48f, 6f, AlbumPlaceholders[3])),
-                LabeledTile("80 x 80", Image(Cover(20, 80), 80f, 80f, 6f, AlbumPlaceholders[4])),
-                LabeledTile("120 x 120", Image(Cover(20, 120), 120f, 120f, 6f, AlbumPlaceholders[5]))
-            ],
-        };
+            ControlExample.Build("Object-fit: Cover vs. Contain",
+                WrapRow(FitBox("Cover", ImageFit.Cover, "#273E6C"), FitBox("Contain", ImageFit.Contain, "#4F776C")),
+                description: "A responsive image fills the width its layout gives it and derives its height from aspect. ImageFit.Cover fills the box and crops the overflow; ImageFit.Contain fits the whole image and letterboxes the remainder with the placeholder.",
+                code: """
+                // The album/thumbnail shape: no fixed extent — fills its cell, height from aspect.
+                Image(src, ImageFit.Cover,   aspect: 16f / 9f, decodePx: 200f, corners: 8f)
+                Image(src, ImageFit.Contain, aspect: 16f / 9f, decodePx: 200f, corners: 8f)
+                """),
 
-        return ScrollView(
-            VStack(16f,
-                Heading("Async images (album art)"),
-                Text("Real cover art fetched from a web CDN over HTTP/2, decoded off-thread on a worker pool (WIC, constrained to the display size), cached to disk, and uploaded to GPU textures. The placeholder tint shows until each decode lands.")
-                    .Foreground(Grey),
-                Section(
-                    "Album grid",
-                    "A responsive grid of 8 album cards: the column count reflows with the width and each art tile fills its cell as a square (object-fit: cover) — resize the window and the tiles scale instead of overflowing.",
-                    gallery),
-                Section(
-                    "Corner-radius variants",
-                    "The same decode feeds any corner radius — square, rounded, or a full circle (radius = half the tile size).",
-                    cornerVariants),
-                Section(
-                    "Size variants",
-                    "One source, requested at several display sizes; the cache keys on logical extent so each gets its own residency slot.",
-                    sizeVariants)
-            ),
-            false
-        );
+            ControlExample.Build("Corner radius",
+                WrapRow(
+                    LabeledTile("square (0)", Image(Cover(10, 80), 80f, 80f, 0f, AlbumPlaceholders[0])),
+                    LabeledTile("rounded (12)", Image(Cover(11, 80), 80f, 80f, 12f, AlbumPlaceholders[1])),
+                    LabeledTile("circle (40)", Image(Cover(12, 80), 80f, 80f, 40f, AlbumPlaceholders[2]))),
+                description: "The same decode feeds any corner radius — a radius of half the extent gives a full circle.",
+                code: """
+                Image(src, 80f, 80f, corners: 0f)    // square
+                Image(src, 80f, 80f, corners: 12f)   // rounded
+                Image(src, 80f, 80f, corners: 40f)   // circle (radius = size / 2)
+                """),
+
+            ControlExample.Build("Sizing & decode resolution",
+                WrapRow(
+                    LabeledTile("48", Image(Cover(20, 48), 48f, 48f, 6f, AlbumPlaceholders[3])),
+                    LabeledTile("80", Image(Cover(20, 80), 80f, 80f, 6f, AlbumPlaceholders[4])),
+                    LabeledTile("120", Image(Cover(20, 120), 120f, 120f, 6f, AlbumPlaceholders[5]))),
+                description: "One source requested at several display sizes; the cache keys on logical extent, so each size gets its own residency slot decoded to fit — no oversized texture for a thumbnail.",
+                code: """
+                Image(src, 48f, 48f, corners: 6f)
+                Image(src, 80f, 80f, corners: 6f)
+                Image(src, 120f, 120f, corners: 6f)
+                """),
+
+            ControlExample.Build("Placeholder tint",
+                WrapRow(
+                    LabeledTile("decoded", Image(Cover(30, 96), 96f, 96f, 8f, "#3D5E7A")),
+                    LabeledTile("unresolved → tint", Image("https://example.invalid/cover.jpg", 96f, 96f, 8f, "#7A3544"))),
+                description: "Every image shows its placeholder fill until the decode lands; an unresolved source keeps the tint indefinitely — no broken-image box.",
+                code: """
+                // The argument after corners is the placeholder (ColorF or "#RRGGBB") shown pre-decode.
+                Image(src, 96f, 96f, corners: 8f, placeholder: "#3D5E7A")
+                """),
+
+            ControlExample.Build("Async album grid",
+                AutoGrid(180f, 16f, float.NaN, albumCards),
+                description: "A responsive auto-fill grid of 8 covers: the column count reflows with the width and each tile fills its cell as a square (object-fit: cover). Real cover art from a public CDN — fetch → off-thread WIC decode → disk cache → GPU residency, end to end.",
+                code: """
+                Element AlbumCard(int i) => new BoxEl
+                {
+                    Direction = 1, Gap = 8f, Padding = Edges4.All(12),
+                    Fill = Tok.FillCardDefault, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, Corners = Radii.OverlayAll,
+                    Children =
+                    [
+                        Image(cover(i), ImageFit.Cover, aspect: 1f, decodePx: 300f, corners: 8f),
+                        BodyStrong(titles[i]), Caption(artists[i]).Secondary(),
+                    ],
+                };
+                AutoGrid(180f, 16f, float.NaN, cards);   // reflow columns ≥180px, rows size to content
+                """));
     }
 }
 

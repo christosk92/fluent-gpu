@@ -69,12 +69,13 @@ static class GalleryPage
 // ── Overview / category pages ─────────────────────────────────────────────────────
 sealed class FundamentalsPage : Component
 {
+    // The engine model — kept in lockstep with the "fundamentals" nav group's children (Gallery.Items).
     static readonly (string Key, string Glyph, string Title)[] Items =
     {
         ("state", Icons.Refresh, "State & components"), ("flex", Icons.Tag, "Flexbox"), ("grid", Icons.Grid, "CSS Grid"),
         ("repeater", Icons.List, "ItemsRepeater"), ("virtualization", Icons.List, "List virtualization"),
-        ("animation", Icons.Movie, "Animation"), ("compositor", Icons.Brush, "Compositor"), ("scrolling", Icons.Document, "Scrolling"),
-        ("localization", Icons.Globe, "Localization"), ("validation-guide", Icons.Accept, "Validation"),
+        ("animation", Icons.Movie, "Animation"), ("compositor", Icons.Brush, "Compositor"),
+        ("edge-fade", Icons.Brush, "Edge fade"), ("scrolling", Icons.Document, "Scrolling"),
     };
 
     public override Element Render()
@@ -87,11 +88,11 @@ sealed class FundamentalsPage : Component
     }
 }
 
-sealed class DesignPage : Component
+sealed class PatternsPage : Component
 {
     static readonly (string Key, string Glyph, string Title)[] Items =
     {
-        ("typography", Icons.Font, "Typography"), ("icons", Icons.Star, "Iconography"), ("images", Icons.Picture, "Images"),
+        ("motion-recipes", Icons.Movie, "Motion recipes"), ("async-skeletons", Icons.Refresh, "Async & skeletons"),
     };
 
     public override Element Render()
@@ -99,7 +100,42 @@ sealed class DesignPage : Component
         var navigate = UseContext(NavigationView.Nav);
         var tiles = new Element[Items.Length];
         for (int i = 0; i < Items.Length; i++) { var d = Items[i]; tiles[i] = GalleryPage.Tile(d.Title, null, d.Glyph, () => navigate(d.Key)); }
-        return GalleryPage.Shell("Design", "Design guidance — the Fluent type ramp, iconography, and async imagery.", AutoGrid(300f, 12f, 90f, tiles));
+        return GalleryPage.Shell("Patterns", "UX recipes built on the engine — the Expressive Motion Kit and skeleton/shimmer-while-loading.",
+            AutoGrid(300f, 12f, 90f, tiles));
+    }
+}
+
+sealed class AppServicesPage : Component
+{
+    static readonly (string Key, string Glyph, string Title)[] Items =
+    {
+        ("localization", Icons.Globe, "Localization"), ("validation-guide", Icons.Accept, "Validation"),
+        ("windowsapi", Icons.Globe, "Windows APIs"),
+    };
+
+    public override Element Render()
+    {
+        var navigate = UseContext(NavigationView.Nav);
+        var tiles = new Element[Items.Length];
+        for (int i = 0; i < Items.Length; i++) { var d = Items[i]; tiles[i] = GalleryPage.Tile(d.Title, null, d.Glyph, () => navigate(d.Key)); }
+        return GalleryPage.Shell("App services", "Engine features WinUI lacks — JSON/ICU localization, signals-native form validation, and the OS-services pillars.",
+            AutoGrid(300f, 12f, 90f, tiles));
+    }
+}
+
+sealed class DesignPage : Component
+{
+    static readonly (string Key, string Glyph, string Title)[] Items =
+    {
+        ("typography", Icons.Font, "Typography"), ("icons", Icons.Star, "Iconography"),
+    };
+
+    public override Element Render()
+    {
+        var navigate = UseContext(NavigationView.Nav);
+        var tiles = new Element[Items.Length];
+        for (int i = 0; i < Items.Length; i++) { var d = Items[i]; tiles[i] = GalleryPage.Tile(d.Title, null, d.Glyph, () => navigate(d.Key)); }
+        return GalleryPage.Shell("Design", "Design guidance — the Fluent type ramp and iconography.", AutoGrid(300f, 12f, 90f, tiles));
     }
 }
 
