@@ -235,6 +235,9 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     {
         _shutdown.Cancel();
         try { Task.WaitAll(_workers, TimeSpan.FromSeconds(2)); } catch { /* best-effort drain on shutdown */ }
+        // Workers are joined ⇒ no decode is in flight ⇒ safe to release the codec's native COM state (e.g. the Windows
+        // WIC leaf's shared IWICImagingFactory). No-op for codecs that hold none.
+        (_codec as IDisposable)?.Dispose();
         _signal.Dispose();
         _shutdown.Dispose();
     }

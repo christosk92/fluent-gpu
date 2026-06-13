@@ -27,3 +27,11 @@ out/
 
 # MSIX packaging prototype: self-contained publish output (loose-register install location)
 .pkg-publish*/
+
+# MSIX pipeline (build/pack-msix.ps1): publish+layout staging area (artifacts/ already ignored above).
+# NOTE: build/appicon-source.png and src/**/assets/AppIcon/*.png|*.ico ARE committed (the app's icon source + assets).
+.msix-build/
+.tmp-*
+
+# Trusted Signing account config (not secret, but keep it local; commit the .template instead).
+build/signing/metadata.json

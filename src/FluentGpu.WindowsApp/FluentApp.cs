@@ -95,6 +95,16 @@ public static class FluentApp
 
         window.Show();
 
+        // Longevity / leak-hunt harness (SoakProbe). Each mode runs instead of the interactive loop and returns to the
+        // clean shutdown below. Pair with FG_D3D_MEM=1 for the per-resource [d3d-mem] create/release trace.
+        if (device is D3D12Device probeGpu)
+        {
+            if (Diag.EnvFlag("FG_SOAK"))          { SoakProbe.RunSoak(host, window, probeGpu);  WindowHandle = 0; return; }
+            if (Diag.EnvFlag("FG_STRESS_RESIZE")) { SoakProbe.RunResize(host, window, probeGpu); WindowHandle = 0; return; }
+            if (Diag.EnvFlag("FG_STRESS_NAV"))    { SoakProbe.RunNav(host, window, probeGpu);    WindowHandle = 0; return; }
+            if (Diag.EnvFlag("FG_WAKE_AUDIT"))    { SoakProbe.RunWakeAudit(host, window, probeGpu); WindowHandle = 0; return; }
+        }
+
         int n = 0;
         while (!window.IsClosed)
         {

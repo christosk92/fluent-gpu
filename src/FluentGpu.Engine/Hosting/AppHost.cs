@@ -245,6 +245,20 @@ public sealed class AppHost : IDisposable
     private double _fps;
     private double _frameMs;
     private const double FpsWindowSeconds = 1.0;
+
+    // Ambient-animation frame-rate cap (FG_ANIM_FPS env, default 60; 0 = uncapped/display-rate). Perpetual/looping
+    // animations — a spinner, skeleton shimmer, reveal fade, implicit brush transition, caret blink — don't need the
+    // full display refresh (a 120 Hz panel spins a ProgressRing 120×/s, pinning a core for no visible benefit). Pacing
+    // them to AmbientAnimationFps halves/quarters that CPU with no perceptible change. Latency-SENSITIVE motion
+    // (scroll/hover/press/drag/repeat — motion the user actively drives) is exempt and always runs at display rate; and
+    // input/worker-posts wake the loop instantly regardless of the wait, so the cap NEVER adds input latency.
+    private long _lastFrameStartTicks;
+    public int AmbientAnimationFps { get; set; } = s_ambientFpsDefault;
+    private static readonly int s_ambientFpsDefault = ReadAmbientFps();
+    private static int ReadAmbientFps() => int.TryParse(Environment.GetEnvironmentVariable("FG_ANIM_FPS"), out var v) && v >= 0 ? v : 60;
+    private const WakeReasons LatencySensitiveWake =
+        WakeReasons.Interact | WakeReasons.ScrollAnim | WakeReasons.Repeat |
+        WakeReasons.DragActive | WakeReasons.DragDropWork | WakeReasons.GestureHold;
     // Dynamic-text (HUD) intern-on-change cache, indexed by (int)DynamicTextKind (None..FrameMs = 0..5). Each slot
     // holds the last DISPLAYED quantized value (the int fps / int cmd|draw|cull / 0.1-rounded ms — exactly the display
     // granularity) and the StringId it interned to (the host holds ONE ref per cached id). When a kind's quantized
@@ -284,7 +298,29 @@ public sealed class AppHost : IDisposable
         WakeReasons r = ComputeWakeReasons();
         if (r == WakeReasons.None) { MaybeTrimOnIdle(); return -1; }   // fully idle: trim the slab tail once, then block until a message arrives
         if (r == WakeReasons.DynamicText) return 100;   // HUD-only: 10 Hz readout, ~0% idle CPU
-        return 0;                                   // active work: present-throttled display-rate pacing
+        // Ambient-only animation (no latency-sensitive interaction live, and any AnimEngine activity is loop-only — a
+        // spinner/shimmer, NOT a one-shot transition mid-flight): pace to AmbientAnimationFps instead of the full
+        // display refresh. A real input/post still wakes WaitForWork early, so this paces only the autonomous tick.
+        if (AmbientAnimationFps > 0 && (r & LatencySensitiveWake) == 0 && AnimIsAmbient())
+            return AmbientFrameWaitMs();
+        return 0;                                   // latency-sensitive / one-shot motion: display-rate pacing
+    }
+
+    /// <summary>True when capping the frame rate won't dull a one-shot transition: either no AnimEngine track is running,
+    /// or every active track is a perpetual LOOP (an indeterminate spinner, skeleton shimmer). A one-shot transition
+    /// (page entrance, number pop, reveal) keeps the full display rate so it stays crisp.</summary>
+    private bool AnimIsAmbient() => !_anim.HasActive || _anim.LoopTrackCount == _anim.TrackCount;
+
+    /// <summary>Milliseconds to wait before the next AMBIENT-animation frame so the loop holds ~<see cref="AmbientAnimationFps"/>
+    /// instead of free-running at the display refresh. = frame budget minus the time the just-finished frame took (this is
+    /// called right after <see cref="RunFrame"/>), clamped to ≥0. Returns the full budget on the first frame.</summary>
+    private int AmbientFrameWaitMs()
+    {
+        double budgetMs = 1000.0 / AmbientAnimationFps;
+        if (_lastFrameStartTicks == 0) return (int)budgetMs;
+        double elapsedMs = (Stopwatch.GetTimestamp() - _lastFrameStartTicks) * 1000.0 / Stopwatch.Frequency;
+        double wait = budgetMs - elapsedMs;
+        return wait <= 0 ? 0 : (int)wait;
     }
 
     // Slow idle-cadence slab tail-trim (mem-02): the SoA columns only grow; when the loop has been fully idle for a
@@ -616,6 +652,7 @@ public sealed class AppHost : IDisposable
     /// <summary>Run one full frame: pump + input, then paint (the reactive flush + layout + record happen in Paint).</summary>
     public FrameStats RunFrame()
     {
+        _lastFrameStartTicks = Stopwatch.GetTimestamp();   // frame-start stamp for RecommendedWaitMs ambient-fps pacing
         long db = 0, dt = 0;
         if (s_allocDiag) { db = GC.GetAllocatedBytesForCurrentThread(); dt = Stopwatch.GetTimestamp(); }
         long diagUiStart = db;

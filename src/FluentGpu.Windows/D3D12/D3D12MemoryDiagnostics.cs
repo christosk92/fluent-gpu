@@ -87,6 +87,35 @@ internal static unsafe class D3D12MemoryDiagnostics
         }
     }
 
+    /// <summary>Live-resource breakdown by name prefix (the part before the first space or '['), largest first. Written
+    /// to stderr unconditionally (it's an explicit operator dump, not the gated [d3d-mem] trace) — the empirical "which
+    /// resource class is holding the climbing memory" answer for native-RAM leak hunts on UMA hardware.</summary>
+    public static void DumpLive(string label)
+    {
+        lock (Gate)
+        {
+            var agg = new Dictionary<string, long[]>();   // key -> [bytes, count]
+            foreach (var e in Live.Values)
+            {
+                string key = NameKey(e.Name);
+                if (!agg.TryGetValue(key, out var v)) { v = new long[2]; agg[key] = v; }
+                v[0] += (long)e.Bytes; v[1]++;
+            }
+            var rows = new List<KeyValuePair<string, long[]>>(agg);
+            rows.Sort((a, b) => b.Value[0].CompareTo(a.Value[0]));
+            Console.Error.WriteLine($"[d3d-mem] === live {label}: total={Format(_liveBytes)} resources={Live.Count} created={Format(_createdBytes)} released={Format(_releasedBytes)} creates={_createCount} releases={_releaseCount} resizes={_resizeCount} ===");
+            foreach (var r in rows)
+                Console.Error.WriteLine($"[d3d-mem]   {r.Key,-32} {Format((ulong)r.Value[0]),12}  x{r.Value[1]}");
+        }
+    }
+
+    private static string NameKey(string name)
+    {
+        int cut = name.Length;
+        for (int i = 0; i < name.Length; i++) { char c = name[i]; if (c == ' ' || c == '[') { cut = i; break; } }
+        return cut == 0 ? name : name.Substring(0, cut);
+    }
+
     private static ulong SubtractSaturating(ulong value, ulong delta) => value > delta ? value - delta : 0;
 
     private static string Format(ulong bytes)

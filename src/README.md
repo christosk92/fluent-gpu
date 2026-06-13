@@ -8,7 +8,7 @@ The engine code. Design lives in [`../design`](../design); this is the scaffold 
 - **Seams** (interface-only) — `Rhi` · `Pal` · `Text`
 - **Backends.Windows** (the reference D3D12 path — scaffold) — `Win32.Interop` · `Rhi.D3D12` · `Pal.Windows` · `Text.DirectWrite` · `Accessibility.Uia`
 - **Backends.Headless** (the CPU test path — real) — `Rhi.Headless` · `Pal.Headless` · `Text.Headless`
-- **Tooling** (analyzers/generators — scaffold) — `SourceGen` · `Interop.SourceGen`
+- **Tooling** (Roslyn analyzers/generators) — `SourceGen` (one netstandard2.0 assembly: the `Localization/` loc-keys + `Validation/` `[Validatable]` generators, plus the engine-DSL/Theme + COM-binding scaffolds)
 - **Apps** — `VerticalSlice`
 
 ### Solution filters (`.slnf`)

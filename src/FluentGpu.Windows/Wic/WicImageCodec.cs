@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Threading;
 using TerraFX.Interop.Windows;
 using static TerraFX.Interop.Windows.Windows;
 
@@ -11,27 +12,47 @@ namespace FluentGpu.Media.Codecs.Wic;
 /// texture format). All WIC COM objects are created and used ENTIRELY on the calling worker thread (per-thread cached
 /// factory) and never cross the scheduler seam — only POD pixels do (the FGCOM per-thread-COM rule).
 /// </summary>
-public sealed unsafe class WicImageCodec : IImageCodec
+public sealed unsafe class WicImageCodec : IImageCodec, IDisposable
 {
     // CLSID_WICImagingFactory {CACAF262-9370-4615-A13B-9F5539DA4C0A}
     private static readonly Guid CLSID_WICImagingFactory = new(0xCACAF262, 0x9370, 0x4615, 0xA1, 0x3B, 0x9F, 0x55, 0x39, 0xDA, 0x4C, 0x0A);
     // GUID_WICPixelFormat32bppPBGRA {6FDDC324-4E03-4BFE-B185-3D77768DC910}
     private static readonly Guid GUID_WICPixelFormat32bppPBGRA = new(0x6FDDC324, 0x4E03, 0x4BFE, 0xB1, 0x85, 0x3D, 0x77, 0x76, 0x8D, 0xC9, 0x10);
 
-    [ThreadStatic] private static nint _tlsFactory;       // IWICImagingFactory* per worker thread
+    // ONE process-wide WIC factory. IWICImagingFactory is free-threaded, so a single shared instance is safe across the
+    // decode workers and is released deterministically in Dispose — replacing a per-thread factory that, on the
+    // thread-pool decode workers, was never released (a finalizer-only native COM handle: harmless given the workers are
+    // bounded, but a real residual). CoInitializeEx stays per-thread (a thread must init COM to use it; the pool decode
+    // threads are MTA, so this is effectively a refcount no-op) — it has no per-call resource cost to reclaim.
+    private nint _factory;                            // IWICImagingFactory*, lazily created, shared, agile
+    private readonly object _factoryGate = new();
     [ThreadStatic] private static bool _tlsComInit;
 
-    private static IWICImagingFactory* Factory()
+    private IWICImagingFactory* Factory()
     {
-        if (_tlsFactory != 0) return (IWICImagingFactory*)_tlsFactory;
         if (!_tlsComInit) { CoInitializeEx(null, (uint)(COINIT.COINIT_MULTITHREADED | COINIT.COINIT_DISABLE_OLE1DDE)); _tlsComInit = true; }
-        Guid clsid = CLSID_WICImagingFactory;
-        Guid iid = __uuidof<IWICImagingFactory>();
-        IWICImagingFactory* f = null;
-        HRESULT hr = CoCreateInstance(&clsid, null, (uint)CLSCTX.CLSCTX_INPROC_SERVER, &iid, (void**)&f);
-        if (hr.FAILED) return null;
-        _tlsFactory = (nint)f;
-        return f;
+        nint cached = Volatile.Read(ref _factory);
+        if (cached != 0) return (IWICImagingFactory*)cached;
+        lock (_factoryGate)
+        {
+            if (_factory != 0) return (IWICImagingFactory*)_factory;
+            Guid clsid = CLSID_WICImagingFactory;
+            Guid iid = __uuidof<IWICImagingFactory>();
+            IWICImagingFactory* f = null;
+            if (CoCreateInstance(&clsid, null, (uint)CLSCTX.CLSCTX_INPROC_SERVER, &iid, (void**)&f).FAILED) return null;
+            Volatile.Write(ref _factory, (nint)f);
+            return f;
+        }
+    }
+
+    /// <summary>Release the shared WIC factory. Invoked by <c>DecodeScheduler.Dispose</c> AFTER its workers are joined,
+    /// so no decode is in flight on the factory.</summary>
+    public void Dispose()
+    {
+        lock (_factoryGate)
+        {
+            if (_factory != 0) { ((IWICImagingFactory*)_factory)->Release(); _factory = 0; }
+        }
     }
 
     public bool DecodeConstrained(ReadOnlySpan<byte> encoded, int targetW, int targetH, Span<byte> dstBgra8, out int w, out int h)

@@ -234,6 +234,11 @@ sealed class GalleryApp : Component
     readonly Signal<string> _navigateReq = new("");
     readonly Signal<string> _searchText = new("");
 
+    // Diagnostics seam (SoakProbe — FG_SOAK / FG_STRESS_NAV): a static lever so the longevity/leak harness can cycle
+    // pages by key without simulating clicks. Wired in Render under the env flag; invoked between RunFrames on the UI thread.
+    internal static System.Action<string>? StressNavigate;
+    internal static string[] StressNavKeys = System.Array.Empty<string>();
+
     // The titlebar search corpus: every selectable nav entry (groups + leaves); AutoSuggestBox substring-filters it.
     static readonly (string Label, string Key)[] SearchIndex = BuildSearchIndex();
     static readonly string[] SearchTitles = SearchIndex.Select(e => e.Label).Distinct().ToArray();
@@ -273,6 +278,12 @@ sealed class GalleryApp : Component
 
     public override Element Render()
     {
+        if (Diag.EnvFlag("FG_SOAK") || Diag.EnvFlag("FG_STRESS_NAV") || Diag.EnvFlag("FG_WAKE_AUDIT"))
+        {
+            StressNavigate = key => { _navigateReq.Value = ""; _navigateReq.Value = key; };
+            if (StressNavKeys.Length == 0) StressNavKeys = SearchIndex.Select(e => e.Key).Distinct().ToArray();
+        }
+
         var shell = VStack(0,
             // The WinUI 3 Gallery titlebar: hamburger + accent icon + title + the centered AutoSuggestBox +
             // engine-drawn min/max/close on the custom frame. Back is COLLAPSED, not disabled — WinUI binds

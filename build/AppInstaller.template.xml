@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One-click sideload auto-update manifest. The CI release job substitutes __VERSION__ / __ARCH__ / __PUBLISHER__ /
+     __APPINSTALLER_URI__ / __MSIX_URI__. Publisher MUST match the signed package's manifest Publisher exactly. -->
+<AppInstaller
+  xmlns="http://schemas.microsoft.com/appx/appinstaller/2018"
+  Version="__VERSION__"
+  Uri="__APPINSTALLER_URI__">
+
+  <MainPackage
+    Name="cproducts.FluentGpuGallery"
+    Publisher="__PUBLISHER__"
+    Version="__VERSION__"
+    ProcessorArchitecture="__ARCH__"
+    Uri="__MSIX_URI__" />
+
+  <UpdateSettings>
+    <OnLaunch HoursBetweenUpdateChecks="8" ShowPrompt="true" />
+    <AutomaticBackgroundTask />
+  </UpdateSettings>
+</AppInstaller>

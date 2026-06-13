@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace FluentGpu.Localization.SourceGen
+namespace FluentGpu.SourceGen.Localization
 {
     /// <summary>
     /// Collects the distinct argument names an ICU message template references, so the generator can emit a typed format

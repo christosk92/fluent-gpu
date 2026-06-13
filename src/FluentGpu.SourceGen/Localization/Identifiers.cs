@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace FluentGpu.Localization.SourceGen
+namespace FluentGpu.SourceGen.Localization
 {
     /// <summary>
     /// Turns a JSON key segment (<c>app</c>, <c>nowPlaying</c>, <c>$comment.songs</c>) into a valid C# identifier.
