@@ -1,0 +1,32 @@
+{
+  "$culture": "de-DE",
+  "$comment": "German. Same one/other plural shape as English (proves the plural table is per-language even when two languages share a rule). German strings run long — good for pseudo-loc expansion comparison.",
+
+  "app": {
+    "title": "FluentGpu-Galerie",
+    "greeting": "Hallo, {name}!",
+    "subtitle": "Eine moderne JSON-basierte Lokalisierungs-Engine"
+  },
+
+  "lang": {
+    "picker": "Sprache",
+    "current": "Aktive Kultur: {culture}",
+    "pseudo": "Pseudo-Lokalisierung (qps-ploc)"
+  },
+
+  "player": {
+    "queue": "Warteschlange",
+    "nowPlaying": "Aktuelle Wiedergabe: {track}",
+    "added": "„{track}“ zu {playlist} hinzugefügt",
+    "songs": "{count, plural, =0 {Keine Titel} one {# Titel} other {# Titel}}",
+    "songsBy": "{count, plural, =0 {Keine Titel von {artist}} one {# Titel von {artist}} other {# Titel von {artist}}}"
+  },
+
+  "profile": {
+    "invited": "{gender, select, male {Er hat {name} eingeladen} female {Sie hat {name} eingeladen} other {Sie haben {name} eingeladen}}"
+  },
+
+  "files": {
+    "count": "{count, plural, =0 {Keine Dateien} one {# Datei} other {# Dateien}}"
+  }
+}

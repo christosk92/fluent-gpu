@@ -29,6 +29,16 @@ public abstract class Component
     /// <summary>The host UI-thread poster (<see cref="HostDispatch.Post"/>): run an action on the UI thread next frame
     /// from any thread. Use for off-thread data instead of <c>UseContext(FrameClock.Tick)</c> + a per-frame drain.</summary>
     protected Action<Action> UsePost() => Context.UsePost();
+
+    /// <summary>Bind a localized string into a text node with no re-render (<see cref="RenderContext.L"/>):
+    /// <c>new TextEl("") { Text = L("app.title") }</c>. A culture switch re-resolves only the bound node.</summary>
+    protected FluentGpu.Signals.Prop<string> L(string key) => Context.L(key);
+    /// <summary>Bind a localized, formatted string (named placeholders / ICU plural-select) into a text node with no
+    /// re-render (<see cref="RenderContext.Lf"/>): <c>Text = Lf("player.added", ("name", track))</c>.</summary>
+    protected FluentGpu.Signals.Prop<string> Lf(string key, params (string Name, object Value)[] args) => Context.Lf(key, args);
+    /// <summary>The active culture + a setter, re-rendering this component on a culture change
+    /// (<see cref="RenderContext.UseLocale"/>) — for render that branches on the culture (a language picker).</summary>
+    protected (string Culture, Action<string> SetCulture) UseLocale() => Context.UseLocale();
     protected float UseAnimatedValue(float target, float durationMs = 180f, Easing easing = Easing.EaseInOut) => Context.UseAnimatedValue(target, durationMs, easing);
 
     // Declarative, composited animation of this component's node (no per-frame re-render):

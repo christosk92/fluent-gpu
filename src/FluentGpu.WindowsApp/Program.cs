@@ -153,6 +153,14 @@ static class Program
             Environment.Exit(PackagingProbe.Run(args));
             return;
         }
+        // Localization (i18n) engine probe: loads the sample JSON resources and runs headless [PASS]/[FAIL] checks over
+        // every feature (dotted-key load, named {name} interp, ICU plural en/pl, select, parent fallback, missing-key/arg
+        // visible forms, pseudo-loc, live SetCulture re-resolution, OS-detected culture). exit code = failure count.
+        if (Array.IndexOf(args, "--loc-probe") >= 0)
+        {
+            Environment.Exit(LocProbe.Run(args));
+            return;
+        }
 
         int frames = -1;   // optional --frames N for headless/CI; omit for a normal interactive window
         string demo = "default";

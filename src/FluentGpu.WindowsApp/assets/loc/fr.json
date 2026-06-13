@@ -1,0 +1,24 @@
+{
+  "$culture": "fr",
+  "$comment": "Region-neutral French. Holds the keys fr-FR omits, so fr-FR resolves them here (parent fallback). French plural: 0 and 1 are singular (one), 2+ are plural (other).",
+
+  "app": {
+    "subtitle": "Un moteur de localisation moderne basé sur JSON"
+  },
+
+  "player": {
+    "queue": "File d’attente",
+    "nowPlaying": "Lecture en cours : {track}",
+    "added": "« {track} » ajouté à {playlist}",
+    "songs": "{count, plural, =0 {Aucune chanson} one {# chanson} other {# chansons}}",
+    "songsBy": "{count, plural, =0 {Aucune chanson de {artist}} one {# chanson de {artist}} other {# chansons de {artist}}}"
+  },
+
+  "profile": {
+    "invited": "{gender, select, male {Il a invité {name}} female {Elle a invité {name}} other {Ils ont invité {name}}}"
+  },
+
+  "files": {
+    "count": "{count, plural, =0 {Aucun fichier} one {# fichier} other {# fichiers}}"
+  }
+}

@@ -330,6 +330,34 @@ public sealed class RenderContext
         if (Images is not null && !string.IsNullOrEmpty(src)) Images.Prefetch(src, decodePx, decodePx);
     }
 
+    // ── Localization (i18n) hooks ────────────────────────────────────────────────────────────────────────────────────
+    // Bind a localized string into a text node WITHOUT re-rendering: L/Lf return a Prop<string> whose thunk reads the
+    // localization culture-epoch (inside Localization.Get/Format), so the engine's Prop bind effect re-resolves ONLY
+    // that text node when the culture changes (the binding-not-re-render path). UseLocale is the re-render-on-change
+    // form for code that must branch on the active culture (e.g. a language picker's selected item).
+
+    /// <summary>A localized string bound for a text node: <c>new TextEl("") { Text = ctx.L("app.title") }</c>. Returns a
+    /// <see cref="Prop{T}"/> thunk that resolves <paramref name="key"/> through <see cref="FluentGpu.Localization.Localization.Get"/>;
+    /// a culture switch re-resolves just this node (no component re-render). Missing key renders visibly as <c>[key]</c>.</summary>
+    public Prop<string> L(string key) => Prop.Of(() => FluentGpu.Localization.Localization.Get(key));
+
+    /// <summary>A localized + formatted string bound for a text node (named placeholders / ICU plural-select):
+    /// <c>Text = ctx.Lf("player.added", ("name", track))</c>. Returns a <see cref="Prop{T}"/> thunk over
+    /// <see cref="FluentGpu.Localization.Localization.Format(string, ValueTuple{string, object}[])"/>; re-resolves on
+    /// culture change with no re-render. The <paramref name="args"/> are captured by the thunk.</summary>
+    public Prop<string> Lf(string key, params (string Name, object Value)[] args)
+        => Prop.Of(() => FluentGpu.Localization.Localization.Format(key, args));
+
+    /// <summary>The re-rendering culture hook: returns the active culture name and a setter, subscribing THIS component
+    /// to the culture epoch so it re-renders on a culture change (use when render output branches on the culture — a
+    /// language picker's selected index, an RTL flip — rather than just displaying a localized string, which should use
+    /// <see cref="L"/>/<see cref="Lf"/> to avoid the re-render).</summary>
+    public (string Culture, Action<string> SetCulture) UseLocale()
+    {
+        _ = FluentGpu.Localization.Localization.CultureEpoch.Value;   // subscribe the render-effect to culture changes
+        return (FluentGpu.Localization.Localization.CurrentCulture, FluentGpu.Localization.Localization.SetCulture);
+    }
+
     /// <summary>A stable mutable box that survives re-renders without triggering them.</summary>
     public Ref<T> UseRef<T>(T initial)
     {

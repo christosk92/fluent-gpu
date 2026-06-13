@@ -1,0 +1,15 @@
+{
+  "$culture": "fr-FR",
+  "$comment": "fr-FR intentionally OMITS 'app.subtitle' and the whole 'player' namespace to exercise per-key parent fallback to fr.json (fr-FR -> fr -> en-US).",
+
+  "app": {
+    "title": "Galerie FluentGpu",
+    "greeting": "Bonjour, {name} !"
+  },
+
+  "lang": {
+    "picker": "Langue",
+    "current": "Culture active : {culture}",
+    "pseudo": "Pseudo-localisation (qps-ploc)"
+  }
+}

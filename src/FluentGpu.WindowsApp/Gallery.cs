@@ -178,6 +178,7 @@ sealed class GalleryApp : Component
         new("h-samples", "", "Samples", IsHeader: true),
         new("wavee", Icons.MusicNote, "Wavee skeleton"),
         new("windowsapi", Icons.Globe, "Windows APIs"),
+        new("localization", Icons.Globe, "Localization"),
     };
 
     // Every control page, grouped by nav category — drives the All-controls page and the category overview pages
@@ -409,6 +410,7 @@ sealed class GalleryApp : Component
         "state" => Embed.Comp(() => new StatePage()),
         "wavee" => Embed.Comp(() => new WaveeShell()),
         "windowsapi" => Embed.Comp(() => new WindowsApiPage()),
+        "localization" => Embed.Comp(() => new LocalizationPage()),
         _ => Embed.Comp(() => new WelcomePage()),
     };
 }
