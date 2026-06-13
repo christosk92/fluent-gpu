@@ -36,6 +36,7 @@ sealed class GalleryApp : Component
                 new("compositor", Icons.Brush, "Compositor"),
                 new("scrolling", Icons.Document, "Scrolling"),
                 new("localization", Icons.Globe, "Localization"),
+                new("validation-guide", Icons.Accept, "Validation"),
             ],
         },
         new("design", Icons.Brush, "Design")
@@ -411,6 +412,7 @@ sealed class GalleryApp : Component
         "wavee" => Embed.Comp(() => new WaveeShell()),
         "windowsapi" => Embed.Comp(() => new WindowsApiPage()),
         "localization" => Embed.Comp(() => new LocalizationPage()),
+        "validation-guide" => Embed.Comp(() => new ValidationGuidePage()),
         _ => Embed.Comp(() => new WelcomePage()),
     };
 }

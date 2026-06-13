@@ -74,7 +74,7 @@ sealed class FundamentalsPage : Component
         ("state", Icons.Refresh, "State & components"), ("flex", Icons.Tag, "Flexbox"), ("grid", Icons.Grid, "CSS Grid"),
         ("repeater", Icons.List, "ItemsRepeater"), ("virtualization", Icons.List, "List virtualization"),
         ("animation", Icons.Movie, "Animation"), ("compositor", Icons.Brush, "Compositor"), ("scrolling", Icons.Document, "Scrolling"),
-        ("localization", Icons.Globe, "Localization"),
+        ("localization", Icons.Globe, "Localization"), ("validation-guide", Icons.Accept, "Validation"),
     };
 
     public override Element Render()
