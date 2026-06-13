@@ -9,6 +9,24 @@
     <!-- Bundled gallery assets (WinUI-Gallery control tile images, header art) copied next to the exe. -->
     <Content Include="assets\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <!-- ── Compile-safe localization keys (source generator) ──────────────────────────────────────────────────
+       The base-culture loc JSON is fed to FluentGpu.Localization.SourceGen as an AdditionalFiles item; the
+       generator emits a nested `static class Strings` of dotted-key consts (+ typed ICU-format methods) into
+       this project at build time, so call sites use L(Strings.Player.Queue) instead of raw strings. -->
+  <ItemGroup>
+    <AdditionalFiles Include="assets\loc\en-US.json" FluentGpuLocBase="true" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Surface the custom metadata to the analyzer (build_metadata.AdditionalFiles.FluentGpuLocBase). -->
+    <CompilerVisibleItemMetadata Include="AdditionalFiles" MetadataName="FluentGpuLocBase" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- OutputItemType=Analyzer loads the generator asm as an analyzer; ReferenceOutputAssembly=false keeps the
+         netstandard2.0 generator OUT of the net10.0 app's runtime references. -->
+    <ProjectReference Include="..\FluentGpu.Localization.SourceGen\FluentGpu.Localization.SourceGen.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
   <!-- The composition root: wires the Windows backend (D3D12/Win32/DWrite/WIC) into the portable engine + kit. -->
   <ItemGroup>
     <ProjectReference Include="..\FluentGpu.Engine\FluentGpu.Engine.csproj" />

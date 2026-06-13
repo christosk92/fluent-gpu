@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using FluentGpu.Localization;
+using FluentGpu.WindowsApp;   // the generated compile-safe loc keys (Strings.App.Title, Strings.Files.Count, …)
 
 /// <summary>
 /// Headless validation harness for the localization (i18n) engine — the <c>--loc-probe</c> console mode (routed in
@@ -131,6 +132,31 @@ internal static class LocProbe
         // 9) OS-detected culture non-empty (via GetUserDefaultLocaleName).
         string os = Localization.DetectOsCulture();
         Check("OS culture non-empty", !string.IsNullOrEmpty(os), os);
+
+        // 10) Generated compile-safe keys (FluentGpu.Localization.SourceGen → static class Strings). These assertions
+        // PROVE the source generator emitted the right constants from en-US.json: each const equals its dotted key, the
+        // key resolves through the engine to the en-US value, and the typed ICU-format methods route correctly. (The
+        // very fact this file COMPILES already proves Strings.* exist with the right shape — a wrong/missing key or
+        // placeholder would be a compile error; these runtime checks pin the VALUES.)
+        Localization.SetCulture("en-US");
+        // 10a) const equals the raw dotted key (plain + nested namespaces).
+        Check("gen const app.title", Strings.App.Title == "app.title", Strings.App.Title);
+        Check("gen const player.queue", Strings.Player.Queue == "player.queue", Strings.Player.Queue);
+        Check("gen const lang.picker", Strings.Lang.Picker == "lang.picker", Strings.Lang.Picker);
+        // 10b) the parameterized-key '…Key' const equals its dotted key (the bound-thunk surface used by L/Lf).
+        Check("gen key const app.greeting", Strings.App.GreetingKey == "app.greeting", Strings.App.GreetingKey);
+        Check("gen key const files.count", Strings.Files.CountKey == "files.count", Strings.Files.CountKey);
+        // 10c) a generated const resolves through the engine to the en-US value.
+        Check("gen const resolves (Get)", Localization.Get(Strings.App.Title) == "FluentGpu Gallery", Localization.Get(Strings.App.Title));
+        // 10d) typed format methods produce the right string (named interpolation + ICU plural + nested select).
+        Check("gen typed Greeting", Strings.App.Greeting("World") == "Hello, World!", Strings.App.Greeting("World"));
+        Check("gen typed Files.Count(0)", Strings.Files.Count(0) == "No files", Strings.Files.Count(0));
+        Check("gen typed Files.Count(1)", Strings.Files.Count(1) == "1 file", Strings.Files.Count(1));
+        Check("gen typed Files.Count(5)", Strings.Files.Count(5) == "5 files", Strings.Files.Count(5));
+        Check("gen typed Player.SongsBy", Strings.Player.SongsBy(2, "Adele") == "2 songs by Adele", Strings.Player.SongsBy(2, "Adele"));
+        Check("gen typed Profile.Invited", Strings.Profile.Invited("female", "Sam") == "She invited Sam", Strings.Profile.Invited("female", "Sam"));
+        Check("gen typed Player.Added", Strings.Player.Added("Hey Jude", "Favorites") == "Added “Hey Jude” to Favorites",
+              Strings.Player.Added("Hey Jude", "Favorites"));
 
         Localization.SetCulture("en-US");
         Console.WriteLine($"== {s_pass} passed, {s_fail} failed ==");

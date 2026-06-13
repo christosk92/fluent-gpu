@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Isolated Roslyn source generator for compile-safe localization keys.
+
+    It reads the BASE-CULTURE loc JSON (en-US.json), supplied as an AdditionalFiles item,
+    at BUILD time and emits a nested `static class Strings` of `const string` dotted-key
+    constants (+ typed ICU-format methods) into the consuming project (the gallery).
+
+    Deliberately ISOLATED from FluentGpu.SourceGen (the engine's DSL/Element/Theme generator
+    scaffold) so activating this loc generator in the gallery does NOT activate the unready
+    engine generators. Wired ONLY into FluentGpu.WindowsApp via an OutputItemType=Analyzer
+    ProjectReference with PrivateAssets=all (the analyzer asm never flows transitively, and is
+    never linked into the net10.0 app).
+  -->
+
+  <PropertyGroup>
+    <!-- Analyzers/generators MUST target netstandard2.0 (override the net10.0 solution baseline). -->
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+
+    <!-- This is an analyzer assembly, not a library reference: don't emit it as a compile ref. -->
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <IsAotCompatible>false</IsAotCompatible>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+
+    <!-- Override the solution Directory.Build.props (which forces these on for DocFX). A generator
+         needs neither an XML doc file nor the net10.0/LangVersion-14 baseline. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+
+    <!-- RS2008 (analyzer release tracking) is advisory; this generator ships in-repo, not as a NuGet analyzer. -->
+    <NoWarn>$(NoWarn);RS2008</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Roslyn. Pinned to 4.14.0 (present in the offline nuget cache; ships with the .NET 10/11 SDK).
+         PrivateAssets=all keeps the Roslyn dependency from flowing to consumers of this analyzer. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

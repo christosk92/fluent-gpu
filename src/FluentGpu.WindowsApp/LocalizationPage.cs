@@ -5,6 +5,7 @@ using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
+using FluentGpu.WindowsApp;   // generated compile-safe loc keys: Strings.App.Title, Strings.Player.Queue, …
 using static FluentGpu.Dsl.Ui;
 
 // ── The "Localization" gallery page ───────────────────────────────────────────────────────────────────────────────────
@@ -42,7 +43,7 @@ sealed class LocalizationPage : Component
             // (e.g. pl-PL to capture the four-form plural) without clicking. Falls back to en-US.
             string? forced = Environment.GetEnvironmentVariable("FLUENTGPU_LOC_CULTURE");
             if (!string.IsNullOrEmpty(forced)) Localization.SetCulture(forced);
-            else if (string.IsNullOrEmpty(Localization.CurrentCulture) || !Localization.Has("app.title"))
+            else if (string.IsNullOrEmpty(Localization.CurrentCulture) || !Localization.Has(Strings.App.Title))
                 Localization.SetCulture("en-US");
         }, LocMountOnce);
 
@@ -93,8 +94,8 @@ sealed class LocLivePanel : ReactiveComponent
                         Children =
                         [
                             // L()-bound: re-resolves on culture change, no re-render.
-                            new TextEl("") { Size = 13f, Weight = 600, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap, Text = L("lang.picker") },
-                            GalleryPage.LiveText(() => Localization.Format("lang.current", ("culture", Localization.CurrentCulture))),
+                            new TextEl("") { Size = 13f, Weight = 600, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap, Text = L(Strings.Lang.Picker) },
+                            GalleryPage.LiveText(() => Strings.Lang.Current(Localization.CurrentCulture)),
                         ],
                     }),
 
@@ -105,9 +106,9 @@ sealed class LocLivePanel : ReactiveComponent
                         Direction = 1, Gap = 4f,
                         Children =
                         [
-                            new TextEl("") { Size = 18f, Weight = 600, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap, Text = L("app.title") },
-                            new TextEl("") { Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, Text = L("app.subtitle") },
-                            new TextEl("") { Size = 13f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap, Text = L("player.queue") },
+                            new TextEl("") { Size = 18f, Weight = 600, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap, Text = L(Strings.App.Title) },
+                            new TextEl("") { Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, Text = L(Strings.App.Subtitle) },
+                            new TextEl("") { Size = 13f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap, Text = L(Strings.Player.Queue) },
                         ],
                     },
                     description: "Nested JSON objects (\"app\": { \"title\": … }) flatten to \"app.title\". " +
@@ -124,8 +125,8 @@ sealed class LocLivePanel : ReactiveComponent
                         Direction = 1, Gap = 4f,
                         Children =
                         [
-                            new TextEl("") { Size = 14f, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap, Text = Lf("app.greeting", ("name", "Ada")) },
-                            new TextEl("") { Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, Text = Lf("player.added", ("track", "Clair de Lune"), ("playlist", "Focus")) },
+                            new TextEl("") { Size = 14f, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap, Text = Lf(Strings.App.GreetingKey, ("name", "Ada")) },
+                            new TextEl("") { Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, Text = Lf(Strings.Player.AddedKey, ("track", "Clair de Lune"), ("playlist", "Focus")) },
                         ],
                     },
                     description: "Arguments bind by NAME (not positional {0}) so translators see meaning and may reorder. " +
@@ -153,11 +154,11 @@ sealed class LocLivePanel : ReactiveComponent
                             // The headline: the plural FORM changes with the count AND the language (en one/other,
                             // pl one/few/many). Bound thunk reads both the epoch and the count signal.
                             new TextEl("") { Size = 18f, Weight = 600, Color = Tok.AccentDefault, Wrap = TextWrap.Wrap,
-                                             Text = Prop.Of(() => Localization.Format("files.count", ("count", Count()))) },
+                                             Text = Prop.Of(() => Strings.Files.Count(Count())) },
                             new TextEl("") { Size = 14f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap,
-                                             Text = Prop.Of(() => Localization.Format("player.songs", ("count", Count()))) },
+                                             Text = Prop.Of(() => Strings.Player.Songs(Count())) },
                             new TextEl("") { Size = 13f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap,
-                                             Text = Prop.Of(() => Localization.Format("player.songsBy", ("count", Count()), ("artist", "Satie"))) },
+                                             Text = Prop.Of(() => Strings.Player.SongsBy(Count(), "Satie")) },
                         ],
                     },
                     description: "Plural categories come from a hand-rolled CLDR-lite table (mandatory under " +
@@ -176,9 +177,9 @@ sealed class LocLivePanel : ReactiveComponent
                         Direction = 1, Gap = 4f,
                         Children =
                         [
-                            new TextEl("") { Size = 14f, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap, Text = Lf("profile.invited", ("gender", "female"), ("name", "Mira")) },
-                            new TextEl("") { Size = 14f, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap, Text = Lf("profile.invited", ("gender", "male"), ("name", "Theo")) },
-                            new TextEl("") { Size = 14f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, Text = Lf("profile.invited", ("gender", "other"), ("name", "the team")) },
+                            new TextEl("") { Size = 14f, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap, Text = Lf(Strings.Profile.InvitedKey, ("gender", "female"), ("name", "Mira")) },
+                            new TextEl("") { Size = 14f, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap, Text = Lf(Strings.Profile.InvitedKey, ("gender", "male"), ("name", "Theo")) },
+                            new TextEl("") { Size = 14f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, Text = Lf(Strings.Profile.InvitedKey, ("gender", "other"), ("name", "the team")) },
                         ],
                     },
                     description: "select chooses a branch by an argument's value (gender here), each branch a full " +
@@ -198,8 +199,8 @@ sealed class LocLivePanel : ReactiveComponent
                         Direction = 1, Gap = 4f, MinWidth = 220f,
                         Children =
                         [
-                            new TextEl("") { Size = 14f, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap, Text = L("app.title") },
-                            new TextEl("") { Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, Text = Lf("app.greeting", ("name", "World")) },
+                            new TextEl("") { Size = 14f, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap, Text = L(Strings.App.Title) },
+                            new TextEl("") { Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, Text = Lf(Strings.App.GreetingKey, ("name", "World")) },
                         ],
                     }),
             ],
