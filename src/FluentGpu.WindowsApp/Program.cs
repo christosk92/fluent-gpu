@@ -143,6 +143,16 @@ static class Program
             Environment.Exit(FilePickerProbe.RunAuto(args));
             return;
         }
+        // Packaging identity readback probe (the MSIX/package-identity prototype gate): reads PackageIdentity for the
+        // CURRENT process and writes {IsPackaged, PackageFullName, PackageFamilyName, ApplicationUserModelId, Version,
+        // InstalledLocation} to a fixed non-virtualized file (+ %TEMP% + Console), then exits — BEFORE any window/GPU
+        // spins up. Launched under package identity via the AppExecutionAlias (fluentgpu-gallery.exe --packaging-probe),
+        // IsPackaged reports True and a real PackageFullName/AUMID is read back from outside the process.
+        if (Array.IndexOf(args, "--packaging-probe") >= 0)
+        {
+            Environment.Exit(PackagingProbe.Run(args));
+            return;
+        }
 
         int frames = -1;   // optional --frames N for headless/CI; omit for a normal interactive window
         string demo = "default";
