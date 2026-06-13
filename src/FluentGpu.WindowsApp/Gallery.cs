@@ -35,6 +35,7 @@ sealed class GalleryApp : Component
                 new("animation", Icons.Movie, "Animation"),
                 new("compositor", Icons.Brush, "Compositor"),
                 new("scrolling", Icons.Document, "Scrolling"),
+                new("localization", Icons.Globe, "Localization"),
             ],
         },
         new("design", Icons.Brush, "Design")
@@ -178,7 +179,6 @@ sealed class GalleryApp : Component
         new("h-samples", "", "Samples", IsHeader: true),
         new("wavee", Icons.MusicNote, "Wavee skeleton"),
         new("windowsapi", Icons.Globe, "Windows APIs"),
-        new("localization", Icons.Globe, "Localization"),
     };
 
     // Every control page, grouped by nav category — drives the All-controls page and the category overview pages
