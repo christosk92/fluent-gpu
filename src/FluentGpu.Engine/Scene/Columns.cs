@@ -109,6 +109,7 @@ public struct NodePaint
     // bound BoxEl.Validation channel. A==0 ⇒ valid/none; A>0 ⇒ the recorder overrides the resolved border with it.
     public ColorF ValidationBorder;
     public float BorderWidth;
+    public float BorderDashOn, BorderDashOff;   // 0/0 = solid stroke; >0 = dashed (DropZone look). Solid-border path only.
     public CornerRadius4 Corners;
     public ColorF TextColor;
     // Stateful foreground ramps (text/glyph). A==0 ⇒ no state color for that axis; the recorder leaves TextColor as-is.
@@ -178,6 +179,11 @@ public struct ScrollState
     public bool  FlingRetargeted;         // a snap-configured fling has had its velocity re-solved to land on the snap value
                                           // (the ScrollAnimator does this ONCE on fling entry; reset when a fresh fling is seeded).
     public float FlingFromOffset;         // the offset captured when the fling was seeded (the impulse "ignored value" anchor)
+    // Precision-touchpad / high-resolution scroll: a hi-res wheel delta (|notch| < 120) tracks the content 1:1 — a crisp
+    // DIRECT scroll through Input.ScrollBy → SetScrollOffset, with NO synthesized momentum. A WM_POINTERWHEEL stream has
+    // no contact-lift edge, so reconstructing a touchpad inertia fling from it is guessing (it caused the "stops midway"
+    // jitter); WinUI's touchpad glide comes from the OS InteractionTracker owning the real manipulation, which a
+    // wheel-message pipeline can't tap. Momentum + rubber-band live ONLY on the genuine touch path (WM_POINTER down/up).
     public float FlingSnapTarget;         // the exact snap value a retargeted fling lands on (the integrator writes THIS on
                                           // settle, so discrete-integration drift never leaves it a fraction off the snap). NaN = no snap target.
     public bool  ContentSized;            // auto-size to content then clamp (popup lists); false = hard viewport
@@ -225,6 +231,10 @@ public struct ScrollState
     public const byte EdgeCueFadeBit = 1, EdgeCueChevronBit = 2;
     public readonly bool EdgeCueFade => (EdgeCueConfig & EdgeCueFadeBit) != 0;
     public readonly bool EdgeCueChevron => (EdgeCueConfig & EdgeCueChevronBit) != 0;
+    // Auto edge fade (premium alpha-mask cue): the recorder feathers only the edges that currently overflow, ramped by
+    // the scroll offset. Set by the reconciler from ScrollEl/VirtualListEl.AutoEdgeFade. Band 0 = off.
+    public bool  AutoEdgeFade;
+    public float AutoEdgeFadeBand;        // DIP
     public float IdleMs;                  // time since the last scroll movement / hover (drives the auto-hide)
     public bool PointerOver;              // pointer is inside this scroll viewport
     public bool PointerOverScrollbar;     // pointer is inside this viewport's scrollbar gutter

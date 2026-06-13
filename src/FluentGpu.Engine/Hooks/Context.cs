@@ -140,21 +140,34 @@ public sealed class InputHooks
     /// host-less tree → element construction/clicks never launch.</summary>
     public Action<string>? OpenUri;
 
-    // ── OS file/folder drop seam (OLE IDropTarget → host → tree; the INBOUND twin of OpenUri) ────────────────────────
+    // ── OS file/folder drop seam (host → tree; the INBOUND twin of OpenUri) ──────────────────────────────────────────
     // Host-wired in the AppHost ctor onto BOTH this host instance and the Current.Default channel-default (so the
-    // Windows backend's Win32DropTarget — which has no component scope — reaches them through the default). The host
-    // sets these to the InputDispatcher's ExternalDrag* methods; the platform's IDropTarget invokes them on the UI
-    // thread during the OLE drag loop. Coordinates are window-DIP. Null in a host-less / drop-less tree ⇒ no OS drops.
+    // Windows backend's WM_DROPFILES handler — which has no component scope — reaches them through the default). The host
+    // sets these to the InputDispatcher's ExternalDrag* methods and invokes them on the UI thread via the normal message
+    // pump. Coordinates are window-DIP. Null in a host-less / drop-less tree ⇒ no OS drops. The Over/Leave delegates are
+    // for backends that can supply hover feedback; the WM_DROPFILES backend uses Enter+Drop only.
 
-    /// <summary>OLE drag entered the window: window-DIP point + the dragged absolute paths + key modifiers. Returns the
+    /// <summary>OS drag entered the window: window-DIP point + the dragged absolute paths + key modifiers. Returns the
     /// engine <see cref="DropEffect"/> the OS should reflect as the drag cursor (<see cref="DropEffect.None"/> ⇒ no-drop).</summary>
     public Func<Point2, string[], KeyModifiers, DropEffect>? ExternalDragEnter;
-    /// <summary>OLE drag moved within the window: window-DIP point + modifiers → the live effect.</summary>
+    /// <summary>OS drag moved within the window: window-DIP point + modifiers → the live effect (hover-capable backends only).</summary>
     public Func<Point2, KeyModifiers, DropEffect>? ExternalDragOver;
-    /// <summary>OLE drag left the window / was cancelled: end the external session.</summary>
+    /// <summary>OS drag left the window / was cancelled: end the external session (hover-capable backends only).</summary>
     public Action? ExternalDragLeave;
-    /// <summary>OLE drop committed inside the window: window-DIP point + modifiers. Returns true if a target accepted it.</summary>
+    /// <summary>OS drop committed inside the window: window-DIP point + modifiers. Returns true if a target accepted it.</summary>
     public Func<Point2, KeyModifiers, bool>? ExternalDrop;
+    /// <summary>OS drop committed WITH the dragged paths (the hover-capable backend's IDropTarget::Drop reads the file
+    /// list once, at drop, and passes it here — hover stayed data-free). Returns true if a target accepted it.</summary>
+    public Func<Point2, string[], KeyModifiers, bool>? ExternalDropFiles;
+
+    // ── Live drag state (host-wired; consumed by UseDragState / a DragPreviewLayer to render a cursor-following custom
+    //    preview). DragEpoch bumps each frame while a typed drag (in-app DragSource OR an OS file drag) is live, plus once
+    //    when it ends; GetDragState reads the live session as a copied snapshot. Mirrors WindowChromeEpoch's pattern. ──
+    /// <summary>Bumped by the host while a drag is live (and once on end): a component reads it to subscribe, then pulls
+    /// <see cref="GetDragState"/> for the current snapshot on re-render.</summary>
+    public Signal<int>? DragEpoch;
+    /// <summary>Snapshot the live drag (active/kind/position/payload) — <see cref="DragState.Active"/> false when idle.</summary>
+    public Func<DragState>? GetDragState;
 
     /// <summary>Arm the caret blinker for a (newly focused) editor's TEXT node; float = blink half-period ms
     /// (<c>IPlatformTextInput.CaretBlinkMs</c>).</summary>

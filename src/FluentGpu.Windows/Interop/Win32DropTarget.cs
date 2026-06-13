@@ -1,118 +1,189 @@
 using System;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Runtime.InteropServices.Marshalling; // [GeneratedComInterface], [GeneratedComClass]
-using FluentGpu.Foundation;
-using FluentGpu.Hooks;                              // InputHooks.Current
+using FluentGpu.Foundation;   // Point2, KeyModifiers, DropEffect
+using FluentGpu.Hooks;        // InputHooks.Current
 using TerraFX.Interop.Windows;
-using static TerraFX.Interop.Windows.Windows;
+using ComCcw = FluentGpu.Text.DirectWrite.ComCcw;   // S_OK / IID_IUnknown / IID_IDropTarget (DWriteItemizer.cs)
 
 namespace FluentGpu.Pal.Windows;
 
 /// <summary>
-/// The Windows OLE <c>IDropTarget</c> that bridges an OS file/folder drag (Explorer, the desktop — any source offering
-/// <c>CF_HDROP</c>) into the portable engine's drag-drop seam. It is the INBOUND OLE twin of the Win32 PAL's other
-/// host→tree hooks: on each OLE callback it converts the screen point to window-DIP, parses the dropped paths once at
-/// <c>DragEnter</c>, and forwards to the engine through <see cref="InputHooks"/>' external-drop delegates
-/// (<c>ExternalDragEnter/Over/Leave/Drop</c>, wired by the AppHost onto the <see cref="InputHooks.Current"/>
-/// channel-default → <c>InputDispatcher.ExternalDrag*</c> → <c>DragDropContext</c>). A <c>BoxEl.DropTarget</c> that
-/// accepts <see cref="DropKinds.Files"/> then receives Enter/Over/Leave/Drop exactly like an in-app drag; if no node
-/// accepts, the engine reports <see cref="DropEffect.None"/> and the OS shows the no-drop cursor.
+/// The OLE <c>IDropTarget</c> that bridges an OS file/folder drag (Explorer / the desktop) into the engine's
+/// external-drop seam, restoring DRAG-OVER HOVER feedback (so an app can light up a "Drop to Deploy"-style overlay
+/// while a file is dragged over the window) and the OS drop-effect cursor ("+Copy"/no-drop).
 ///
-/// <para><b>COM posture (com-interop.md).</b> Implemented (the OS calls us), so it uses the sanctioned cold-COM
-/// <c>[GeneratedComInterface]</c>/<c>[GeneratedComClass]</c> + <see cref="StrategyBasedComWrappers"/> path — NO
-/// <c>[ComImport]</c>, NO <c>ComWrappers</c> subclassing, NO reflection — the exact shape proven by the WindowsApi
-/// pillar's <c>MediaButtonHandler</c>/<c>ToastActivator</c>. The OLE registration entry points (<c>OleInitialize</c>,
-/// <c>RegisterDragDrop</c>, …) are declared locally rather than pulled from TerraFX so the native <c>IDropTarget*</c>
-/// passes as an opaque <c>nint</c> (the CCW pointer) — no dependency on a TerraFX vtable shape for the call OUT, and no
-/// name clash with TerraFX's own <c>IDropTarget</c> struct used nowhere here.</para>
+/// <para><b>Why a HAND-ROLLED vtable (not <c>[GeneratedComInterface]</c>).</b> The prior source-generated IDropTarget
+/// crashed on drop — the suspected cause was the by-value <c>POINTL</c> parameter under the COM source generator's
+/// marshalling (an uncatchable AccessViolation). This CCW declares the exact unmanaged thunk ABI itself — <c>POINTL</c>
+/// is a real 8-byte by-value struct in <c>[UnmanagedCallersOnly(CallConvMemberFunction)]</c> signatures, honored
+/// identically on x64 and ARM64 — the same proven pattern as <c>DWriteItemizer.cs</c>'s CCWs. </para>
 ///
-/// <para><b>Threading.</b> Every callback fires on the window's UI thread inside the OLE drag loop, the same thread
-/// the dispatcher runs on — so the forwarded calls are synchronous and single-threaded (no marshalling hop). All paths
-/// swallow managed exceptions and degrade to <c>DROPEFFECT_NONE</c> rather than throwing across the COM boundary.</para>
+/// <para><b>De-risked data handling.</b> HOVER (DragEnter/Over) does ZERO data transfer: DragEnter only
+/// <c>QueryGetData(CF_HDROP)</c> (a cheap "do you offer files" check) to decide acceptance, then reports an effect.
+/// Only DROP reads the file list (<c>GetData(CF_HDROP)</c> → HDROP → <c>DragQueryFileW</c>) — the same enumeration the
+/// previous (working) <c>WM_DROPFILES</c> path used, run exactly once. Every thunk swallows managed exceptions and
+/// returns an HRESULT — nothing crosses the COM boundary.</para>
+///
+/// <para><b>Threading.</b> OLE delivers the callbacks on the registering (UI) thread during the drag loop — the same
+/// thread the dispatcher runs on — so the forwarded <c>InputHooks.ExternalDrag*</c> calls are synchronous and
+/// single-threaded. <c>RegisterDragDrop</c> requires the thread to be STA (the gallery is <c>[STAThread]</c>).</para>
 /// </summary>
-[GeneratedComInterface]
-[Guid("00000122-0000-0000-C000-000000000046")]
-internal partial interface IOleDropTarget
+internal static unsafe partial class Win32DropTarget
 {
-    [PreserveSig] unsafe int DragEnter(void* pDataObj, uint grfKeyState, long pt, uint* pdwEffect);
-    [PreserveSig] unsafe int DragOver(uint grfKeyState, long pt, uint* pdwEffect);
-    [PreserveSig] int DragLeave();
-    [PreserveSig] unsafe int Drop(void* pDataObj, uint grfKeyState, long pt, uint* pdwEffect);
-}
-
-/// <summary>The managed <see cref="IOleDropTarget"/> implementation registered on a window via
-/// <see cref="Win32DropTarget.Register"/>. Stateless except the paths parsed at the current drag's <c>DragEnter</c>.</summary>
-[GeneratedComClass]
-internal sealed partial class Win32DropTarget : IOleDropTarget
-{
-    // DROPEFFECT (ole2.h): a bitfield the OS interprets as the drag cursor.
-    private const uint DROPEFFECT_NONE = 0, DROPEFFECT_COPY = 1, DROPEFFECT_MOVE = 2, DROPEFFECT_LINK = 4;
-    // grfKeyState (winuser.h MK_*): the modifier/button flags carried with the drag.
+    private const ushort CF_HDROP = 15;
     private const uint MK_SHIFT = 0x0004, MK_CONTROL = 0x0008;
+    private const uint DROPEFFECT_NONE = 0, DROPEFFECT_COPY = 1, DROPEFFECT_MOVE = 2, DROPEFFECT_LINK = 4;
+    private const int S_OK = 0, S_FALSE = 1, RPC_E_CHANGED_MODE = unchecked((int)0x80010106);
 
-    private const int S_OK = 0;
-    private const ushort CF_HDROP = 15;   // winuser.h — the shell file-list clipboard format
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct PointL { public int x, y; }   // POINTL / POINT: { LONG x; LONG y } — 8 bytes by value
 
-    private readonly Func<int, int, Point2> _screenToDip;   // (screenX, screenY) → window DIP — owned by the Win32Window
-    private string[]? _paths;                                // parsed once at DragEnter, cleared at Drop/Leave
+    // ── OLE / shell / user32 entry points (declared locally so the CCW passes as an opaque nint) ──
+    [LibraryImport("ole32.dll")] private static partial int OleInitialize(nint pvReserved);
+    [LibraryImport("ole32.dll")] private static partial void OleUninitialize();
+    [LibraryImport("ole32.dll")] private static partial int RegisterDragDrop(nint hwnd, nint pDropTarget);
+    [LibraryImport("ole32.dll")] private static partial int RevokeDragDrop(nint hwnd);
+    [LibraryImport("ole32.dll")] private static partial void ReleaseStgMedium(STGMEDIUM* pmedium);
+    [LibraryImport("shell32.dll", EntryPoint = "DragQueryFileW")] private static partial uint DragQueryFileW(nint hDrop, uint iFile, char* lpszFile, uint cch);
+    [LibraryImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static partial bool ScreenToClient(nint hWnd, PointL* lpPoint);
+    [LibraryImport("user32.dll")] private static partial uint GetDpiForWindow(nint hWnd);
 
-    internal Win32DropTarget(Func<int, int, Point2> screenToDip) => _screenToDip = screenToDip;
-
-    public unsafe int DragEnter(void* pDataObj, uint grfKeyState, long pt, uint* pdwEffect)
+    /// <summary>OLE-init this STA thread + register a fresh CCW on <paramref name="hwnd"/>. Returns a token to pass to
+    /// <see cref="Revoke"/>, or null when drag-drop is unavailable (non-STA thread, or RegisterDragDrop failed).</summary>
+    internal static DropRegistration? Register(nint hwnd)
     {
+        if (hwnd == 0) return null;
+        int oi = OleInitialize(0);
+        if (oi == RPC_E_CHANGED_MODE) return null;   // thread is MTA → OLE drag-drop can't run here
+        bool oleInited = oi == S_OK || oi == S_FALSE;
+
+        Win32DropTargetCcw* ccw = Win32DropTargetCcw.Create(hwnd);
+        int hr = RegisterDragDrop(hwnd, (nint)ccw);
+        if (hr < 0)
+        {
+            Win32DropTargetCcw.Destroy(ccw);
+            if (oleInited) OleUninitialize();
+            return null;
+        }
+        return new DropRegistration(hwnd, (nint)ccw, oleInited);
+    }
+
+    /// <summary>Revoke the registration and free the CCW (mirror of <see cref="Register"/>).</summary>
+    internal static void Revoke(DropRegistration? reg)
+    {
+        if (reg is not { } r) return;
+        RevokeDragDrop(r.Hwnd);                       // releases OLE's ref → back to our single ref
+        if (r.Ccw != 0) Win32DropTargetCcw.Destroy((Win32DropTargetCcw*)r.Ccw);
+        if (r.OleInited) OleUninitialize();
+    }
+
+    /// <summary>
+    /// In-process vtable round-trip — proves the hand-rolled CCW dispatches correctly through its function-pointer
+    /// vtable, EXERCISING THE BY-VALUE <c>POINTL</c> ABI (the element that crashed the source-gen attempt) without a
+    /// real drag. Calls QI(IID_IDropTarget) + all four IDropTarget methods with a NULL data object (the no-files fast
+    /// path) and a synthetic by-value point; asserts no crash and sane effects. Returns true on success.
+    /// </summary>
+    internal static bool SelfTest(out string detail)
+    {
+        Win32DropTargetCcw* ccw = Win32DropTargetCcw.Create(0);
         try
         {
-            _paths = ParsePaths(pDataObj);
-            if (_paths is null || _paths.Length == 0) { if (pdwEffect != null) *pdwEffect = DROPEFFECT_NONE; return S_OK; }
+            void** vt = ccw->Vtbl;
 
-            var fn = InputHooks.Current.Default.ExternalDragEnter;
-            DropEffect want = fn?.Invoke(DipOf(pt), _paths, Mods(grfKeyState)) ?? DropEffect.None;
-            if (pdwEffect != null) *pdwEffect = Allowed(want, *pdwEffect);
+            Guid iid = ComCcw.IID_IDropTarget;
+            void* ppv = null;
+            var qi = (delegate* unmanaged[MemberFunction]<Win32DropTargetCcw*, Guid*, void**, int>)vt[0];
+            int hrQi = qi(ccw, &iid, &ppv);
+            bool qiOk = hrQi == S_OK && ppv == ccw;
+
+            var enter = (delegate* unmanaged[MemberFunction]<Win32DropTargetCcw*, void*, uint, PointL, uint*, int>)vt[3];
+            var over  = (delegate* unmanaged[MemberFunction]<Win32DropTargetCcw*, uint, PointL, uint*, int>)vt[4];
+            var leave = (delegate* unmanaged[MemberFunction]<Win32DropTargetCcw*, int>)vt[5];
+            var drop  = (delegate* unmanaged[MemberFunction]<Win32DropTargetCcw*, void*, uint, PointL, uint*, int>)vt[6];
+
+            var pt = new PointL { x = 123, y = 456 };           // the by-value POINTL under test
+
+            uint eff = DROPEFFECT_COPY | DROPEFFECT_MOVE;
+            int hrE = enter(ccw, null, 0, pt, &eff);             // null data → no files → effect NONE
+            bool enterOk = hrE == S_OK && eff == DROPEFFECT_NONE;
+
+            eff = DROPEFFECT_COPY;
+            int hrO = over(ccw, 0, pt, &eff);
+            int hrL = leave(ccw);
+
+            eff = DROPEFFECT_COPY;
+            int hrD = drop(ccw, null, 0, pt, &eff);              // null data → no paths → not accepted → NONE
+            bool dropOk = hrD == S_OK && eff == DROPEFFECT_NONE;
+
+            detail = $"qi={qiOk}(hr=0x{hrQi:X}) enter={enterOk} over=hr0x{hrO:X} leave=hr0x{hrL:X} drop={dropOk}";
+            return qiOk && enterOk && hrO == S_OK && hrL == S_OK && dropOk;
         }
-        catch { if (pdwEffect != null) *pdwEffect = DROPEFFECT_NONE; }
-        return S_OK;
+        finally { Win32DropTargetCcw.Destroy(ccw); }
     }
 
-    public unsafe int DragOver(uint grfKeyState, long pt, uint* pdwEffect)
+    // ── helpers shared by the CCW thunks ───────────────────────────────────────────────────────────────────────────
+    private static FORMATETC HdropFormat() => new()
     {
+        cfFormat = CF_HDROP,
+        ptd = null,
+        dwAspect = (uint)DVASPECT.DVASPECT_CONTENT,
+        lindex = -1,
+        tymed = (uint)TYMED.TYMED_HGLOBAL,
+    };
+
+    /// <summary>True iff the data object offers a file list — a cheap format probe (NO data transfer).</summary>
+    internal static bool OffersFiles(void* pDataObj)
+    {
+        if (pDataObj == null) return false;
+        FORMATETC fmt = HdropFormat();
+        return ((IDataObject*)pDataObj)->QueryGetData(&fmt) == S_OK;
+    }
+
+    /// <summary>Pull the dropped absolute paths out of the data object's CF_HDROP medium (the once-per-drop read).</summary>
+    internal static string[] ReadDroppedPaths(void* pDataObj)
+    {
+        if (pDataObj == null) return Array.Empty<string>();
+        var data = (IDataObject*)pDataObj;
+        FORMATETC fmt = HdropFormat();
+        STGMEDIUM medium;
+        if (data->GetData(&fmt, &medium) < 0) return Array.Empty<string>();
         try
         {
-            var fn = InputHooks.Current.Default.ExternalDragOver;
-            DropEffect want = fn?.Invoke(DipOf(pt), Mods(grfKeyState)) ?? DropEffect.None;
-            if (pdwEffect != null) *pdwEffect = Allowed(want, *pdwEffect);
+            nint hDrop = (nint)(void*)medium.hGlobal;
+            if (hDrop == 0) return Array.Empty<string>();
+            uint count = DragQueryFileW(hDrop, 0xFFFFFFFF, null, 0);
+            if (count == 0) return Array.Empty<string>();
+            var paths = new string[count];
+            int filled = 0;
+            for (uint i = 0; i < count; i++)
+            {
+                uint need = DragQueryFileW(hDrop, i, null, 0);
+                if (need == 0) continue;
+                var arr = new char[need + 1];
+                fixed (char* p = arr)
+                {
+                    uint got = DragQueryFileW(hDrop, i, p, need + 1);
+                    if (got == 0) continue;
+                    paths[filled++] = new string(p, 0, (int)got);
+                }
+            }
+            if (filled != paths.Length) Array.Resize(ref paths, filled);
+            return paths;
         }
-        catch { if (pdwEffect != null) *pdwEffect = DROPEFFECT_NONE; }
-        return S_OK;
+        finally { ReleaseStgMedium(&medium); }
     }
 
-    public int DragLeave()
+    /// <summary>OLE screen POINTL (by-value) → window-DIP point, via ScreenToClient + the window DPI scale.</summary>
+    internal static Point2 ToDip(nint hwnd, PointL pt)
     {
-        try { InputHooks.Current.Default.ExternalDragLeave?.Invoke(); }
-        catch { /* swallow across the COM boundary */ }
-        _paths = null;
-        return S_OK;
+        ScreenToClient(hwnd, &pt);
+        uint dpi = GetDpiForWindow(hwnd);
+        float s = dpi == 0 ? 1f : dpi / 96f;
+        return new Point2(pt.x / s, pt.y / s);
     }
 
-    public unsafe int Drop(void* pDataObj, uint grfKeyState, long pt, uint* pdwEffect)
-    {
-        try
-        {
-            // The engine session already holds the paths from DragEnter; re-parse defensively if it somehow missed.
-            if (_paths is null || _paths.Length == 0) _paths = ParsePaths(pDataObj);
-            var fn = InputHooks.Current.Default.ExternalDrop;
-            bool accepted = _paths is { Length: > 0 } && (fn?.Invoke(DipOf(pt), Mods(grfKeyState)) ?? false);
-            if (pdwEffect != null) *pdwEffect = accepted ? Allowed(DropEffect.Copy, *pdwEffect) : DROPEFFECT_NONE;
-        }
-        catch { if (pdwEffect != null) *pdwEffect = DROPEFFECT_NONE; }
-        _paths = null;
-        return S_OK;
-    }
-
-    // POINTL is passed by value (8 bytes, two LONGs) — ABI-identical to a single 64-bit integer on x64 AND ARM64, so
-    // it arrives as `long pt`: x is the low dword (offset 0, little-endian), y the high dword.
-    private Point2 DipOf(long pt) => _screenToDip(unchecked((int)(pt & 0xFFFFFFFF)), unchecked((int)(pt >> 32)));
-
-    private static KeyModifiers Mods(uint grfKeyState)
+    internal static KeyModifiers Mods(uint grfKeyState)
     {
         KeyModifiers m = KeyModifiers.None;
         if ((grfKeyState & MK_CONTROL) != 0) m |= KeyModifiers.Ctrl;
@@ -120,8 +191,8 @@ internal sealed partial class Win32DropTarget : IOleDropTarget
         return m;
     }
 
-    // Map the engine effect to a DROPEFFECT, intersected with what the OLE source allows (proper drop etiquette).
-    private static uint Allowed(DropEffect want, uint allowed)
+    /// <summary>Map the engine effect to a DROPEFFECT, intersected with what the source allows (proper drop etiquette).</summary>
+    internal static uint MapEffect(DropEffect want, uint allowed)
     {
         uint w = want switch
         {
@@ -131,99 +202,107 @@ internal sealed partial class Win32DropTarget : IOleDropTarget
             _ => DROPEFFECT_NONE,
         };
         uint hit = w & allowed;
-        return hit != 0 ? hit : (w == DROPEFFECT_NONE ? DROPEFFECT_NONE : (allowed & DROPEFFECT_COPY)); // prefer copy fallback
-    }
-
-    /// <summary>Pull the absolute paths out of an OLE data object's <c>CF_HDROP</c> medium (files and/or folders, OLE
-    /// order). Returns null when the object carries no file list — a non-file drag the engine ignores.</summary>
-    private static unsafe string[]? ParsePaths(void* pDataObj)
-    {
-        if (pDataObj == null) return null;
-        var data = (IDataObject*)pDataObj;
-
-        FORMATETC fmt = new()
-        {
-            cfFormat = CF_HDROP,
-            ptd = null,
-            dwAspect = (uint)DVASPECT.DVASPECT_CONTENT,
-            lindex = -1,
-            tymed = (uint)TYMED.TYMED_HGLOBAL,
-        };
-        STGMEDIUM medium;
-        if (data->GetData(&fmt, &medium) < 0) return null;
-        try
-        {
-            HDROP hDrop = (HDROP)(void*)medium.hGlobal;
-            if (hDrop == HDROP.NULL) return null;
-
-            uint count = DragQueryFileW(hDrop, 0xFFFFFFFF, null, 0);
-            if (count == 0) return null;
-
-            var paths = new string[count];
-            const int Cap = 32768;   // long-path tolerant (\\?\-prefixed paths fit)
-            char* buf = stackalloc char[Cap];
-            int filled = 0;
-            for (uint i = 0; i < count; i++)
-            {
-                uint len = DragQueryFileW(hDrop, i, buf, (uint)Cap);
-                if (len == 0) continue;
-                paths[filled++] = new string(buf, 0, (int)len);
-            }
-            if (filled == 0) return null;
-            if (filled != paths.Length) Array.Resize(ref paths, filled);
-            return paths;
-        }
-        finally
-        {
-            ReleaseStgMedium(&medium);
-        }
-    }
-
-    // ── OLE registration (the host calls these from the Win32 window) ───────────────────────────────────────────────
-    // Declared locally so the CCW passes as an opaque IDropTarget* (nint); no TerraFX IDropTarget vtable dependency.
-    private static readonly StrategyBasedComWrappers s_wrappers = new();
-
-    [LibraryImport("ole32.dll")] private static partial int OleInitialize(nint pvReserved);
-    [LibraryImport("ole32.dll")] private static partial void OleUninitialize();
-    [LibraryImport("ole32.dll")] private static partial int RegisterDragDrop(nint hwnd, nint pDropTarget);
-    [LibraryImport("ole32.dll")] private static partial int RevokeDragDrop(nint hwnd);
-
-    private const int S_FALSE = 1;
-    private const int RPC_E_CHANGED_MODE = unchecked((int)0x80010106);
-
-    /// <summary>
-    /// OLE-init this (STA) thread and register a fresh drop target on <paramref name="hwnd"/>. Returns the live
-    /// registration token (to pass to <see cref="Revoke"/> on teardown), or null when drag-drop is unavailable
-    /// (a non-STA thread, or <c>RegisterDragDrop</c> failed) — the window then simply receives no OS drops.
-    /// </summary>
-    internal static DropRegistration? Register(nint hwnd, Func<int, int, Point2> screenToDip)
-    {
-        if (hwnd == 0) return null;
-        int oi = OleInitialize(0);
-        if (oi == RPC_E_CHANGED_MODE) return null;   // thread is MTA: OLE drag-drop can't run here (honest no-op)
-        bool oleInited = oi == S_OK || oi == S_FALSE;
-
-        var target = new Win32DropTarget(screenToDip);
-        nint unknown = s_wrappers.GetOrCreateComInterfaceForObject(target, CreateComInterfaceFlags.None);
-        int hr = RegisterDragDrop(hwnd, unknown);
-        if (hr < 0)
-        {
-            Marshal.Release(unknown);
-            if (oleInited) OleUninitialize();
-            return null;
-        }
-        return new DropRegistration(hwnd, unknown, target, oleInited);
-    }
-
-    /// <summary>Revoke the registration and release the CCW + OLE refcount (mirror of <see cref="Register"/>).</summary>
-    internal static void Revoke(DropRegistration? reg)
-    {
-        if (reg is not { } r) return;
-        RevokeDragDrop(r.Hwnd);
-        if (r.Unknown != 0) Marshal.Release(r.Unknown);
-        if (r.OleInited) OleUninitialize();
+        return hit != 0 ? hit : (w == DROPEFFECT_NONE ? DROPEFFECT_NONE : (allowed & DROPEFFECT_COPY));
     }
 }
 
-/// <summary>A live OS-drop registration — opaque token the Win32 window holds for the window's lifetime.</summary>
-internal readonly record struct DropRegistration(nint Hwnd, nint Unknown, Win32DropTarget Target, bool OleInited);
+/// <summary>A live OS-drop registration token (the CCW + its OLE init state) the window holds for its lifetime.</summary>
+internal readonly record struct DropRegistration(nint Hwnd, nint Ccw, bool OleInited);
+
+/// <summary>The hand-rolled <c>IDropTarget</c> CCW (vtable + refcount + owner HWND) — modeled on
+/// <c>DWriteItemizer.cs</c>'s CCWs. The thunks forward to the engine's <c>InputHooks.ExternalDrag*</c> seam.</summary>
+internal unsafe struct Win32DropTargetCcw
+{
+    public void** Vtbl;     // MUST be first (COM "this" vptr)
+    public int Rc;
+    public nint Hwnd;       // owner window — for ScreenToClient + the DPI scale
+
+    private static readonly void** _vtbl = Build();
+
+    private static void** Build()
+    {
+        void** v = (void**)NativeMemory.Alloc(7, (nuint)sizeof(void*));
+        v[0] = (delegate* unmanaged[MemberFunction]<Win32DropTargetCcw*, Guid*, void**, int>)&QueryInterface;
+        v[1] = (delegate* unmanaged[MemberFunction]<Win32DropTargetCcw*, uint>)&AddRef;
+        v[2] = (delegate* unmanaged[MemberFunction]<Win32DropTargetCcw*, uint>)&Release;
+        v[3] = (delegate* unmanaged[MemberFunction]<Win32DropTargetCcw*, void*, uint, Win32DropTarget.PointL, uint*, int>)&DragEnter;
+        v[4] = (delegate* unmanaged[MemberFunction]<Win32DropTargetCcw*, uint, Win32DropTarget.PointL, uint*, int>)&DragOver;
+        v[5] = (delegate* unmanaged[MemberFunction]<Win32DropTargetCcw*, int>)&DragLeave;
+        v[6] = (delegate* unmanaged[MemberFunction]<Win32DropTargetCcw*, void*, uint, Win32DropTarget.PointL, uint*, int>)&Drop;
+        return v;
+    }
+
+    public static Win32DropTargetCcw* Create(nint hwnd)
+    {
+        var p = (Win32DropTargetCcw*)NativeMemory.Alloc((nuint)sizeof(Win32DropTargetCcw));
+        p->Vtbl = _vtbl; p->Rc = 1; p->Hwnd = hwnd;
+        return p;
+    }
+
+    public static void Destroy(Win32DropTargetCcw* p) => NativeMemory.Free(p);
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
+    private static int QueryInterface(Win32DropTargetCcw* self, Guid* riid, void** ppv)
+    {
+        if (ppv == null) return unchecked((int)0x80004003);   // E_POINTER
+        if (*riid == ComCcw.IID_IUnknown || *riid == ComCcw.IID_IDropTarget)
+        { Interlocked.Increment(ref self->Rc); *ppv = self; return ComCcw.S_OK; }
+        *ppv = null; return unchecked((int)0x80004002);       // E_NOINTERFACE
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
+    private static uint AddRef(Win32DropTargetCcw* self) => (uint)Interlocked.Increment(ref self->Rc);
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
+    private static uint Release(Win32DropTargetCcw* self) => (uint)Interlocked.Decrement(ref self->Rc);
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
+    private static int DragEnter(Win32DropTargetCcw* self, void* pDataObj, uint grfKeyState, Win32DropTarget.PointL pt, uint* pdwEffect)
+    {
+        try
+        {
+            if (!Win32DropTarget.OffersFiles(pDataObj)) { if (pdwEffect != null) *pdwEffect = 0; return ComCcw.S_OK; }
+            var fn = InputHooks.Current.Default.ExternalDragEnter;   // hover: NO data read — empty paths
+            DropEffect want = fn?.Invoke(Win32DropTarget.ToDip(self->Hwnd, pt), Array.Empty<string>(), Win32DropTarget.Mods(grfKeyState)) ?? DropEffect.None;
+            if (pdwEffect != null) *pdwEffect = Win32DropTarget.MapEffect(want, *pdwEffect);
+        }
+        catch { if (pdwEffect != null) *pdwEffect = 0; }
+        return ComCcw.S_OK;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
+    private static int DragOver(Win32DropTargetCcw* self, uint grfKeyState, Win32DropTarget.PointL pt, uint* pdwEffect)
+    {
+        try
+        {
+            var fn = InputHooks.Current.Default.ExternalDragOver;
+            DropEffect want = fn?.Invoke(Win32DropTarget.ToDip(self->Hwnd, pt), Win32DropTarget.Mods(grfKeyState)) ?? DropEffect.None;
+            if (pdwEffect != null) *pdwEffect = Win32DropTarget.MapEffect(want, *pdwEffect);
+        }
+        catch { if (pdwEffect != null) *pdwEffect = 0; }
+        return ComCcw.S_OK;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
+    private static int DragLeave(Win32DropTargetCcw* self)
+    {
+        try { InputHooks.Current.Default.ExternalDragLeave?.Invoke(); }
+        catch { /* swallow across the COM boundary */ }
+        return ComCcw.S_OK;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
+    private static int Drop(Win32DropTargetCcw* self, void* pDataObj, uint grfKeyState, Win32DropTarget.PointL pt, uint* pdwEffect)
+    {
+        try
+        {
+            string[] paths = Win32DropTarget.ReadDroppedPaths(pDataObj);   // the once-per-drop file read
+            var dip = Win32DropTarget.ToDip(self->Hwnd, pt);
+            var mods = Win32DropTarget.Mods(grfKeyState);
+            bool accepted = paths.Length > 0 && (InputHooks.Current.Default.ExternalDropFiles?.Invoke(dip, paths, mods) ?? false);
+            if (pdwEffect != null) *pdwEffect = accepted ? Win32DropTarget.MapEffect(DropEffect.Copy, *pdwEffect) : 0;
+        }
+        catch { if (pdwEffect != null) *pdwEffect = 0; }
+        return ComCcw.S_OK;
+    }
+}

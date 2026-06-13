@@ -366,12 +366,13 @@ public sealed class InputDispatcher
     /// the engine edge auto-scroll arms when the pointer drags near an overflowing viewport's edge (host-ticked).</summary>
     public DragDropContext DragDrop { get; }
 
-    // ── External (OS / OLE) drop entry points ───────────────────────────────────────────────────────────────────────
-    // The host's IDropTarget (the Windows backend's Win32DropTarget) calls these on the UI thread during the OLE drag
-    // loop — wired in through InputHooks.ExternalDrag* (the inbound twin of OpenUri). They open / drive / commit an
-    // external DragSession on the SAME DragDropContext as in-app drags, so a BoxEl.DropTarget that accepts DropKinds.Files
-    // receives Enter/Over/Leave/Drop identically. Coordinates are window-DIP (the host converts the OLE screen POINTL via
-    // its ScreenPtToDip — the same space HitTestAny works in). Returned DropEffect → the OS drag cursor (None = no-drop).
+    // ── External (OS) drop entry points ─────────────────────────────────────────────────────────────────────────────
+    // The host's file-drop handler (the Windows backend's WM_DROPFILES case) calls these on the UI thread via the normal
+    // message pump — wired in through InputHooks.ExternalDrag* (the inbound twin of OpenUri). They open / drive / commit
+    // an external DragSession on the SAME DragDropContext as in-app drags, so a BoxEl.DropTarget that accepts
+    // DropKinds.Files receives the drop identically. Coordinates are window-DIP (the host converts the drop point from
+    // client px). Returned DropEffect → the OS drag cursor (None = no-drop). The seam keeps the richer Over/Leave shape
+    // for backends that can supply hover feedback (a future OLE IDropTarget, or macOS); WM_DROPFILES uses Enter+Drop only.
 
     /// <summary>OLE DragEnter: open the external session (payload = the dragged <paramref name="paths"/>), hit-test, and
     /// report the effect the OS should show.</summary>
@@ -392,6 +393,20 @@ public sealed class InputDispatcher
 
     /// <summary>OLE DragLeave / cancel: end the external session (fires OnLeave on a live target).</summary>
     public void ExternalDragLeave() => DragDrop.Cancel();
+
+    /// <summary>OLE Drop WITH the dragged paths (the hover-capable backend reads the file list once, at drop, and passes
+    /// it here — hover stayed data-free). Fills the session payload deferred from the data-free DragEnter, then commits
+    /// (<c>OnDrop</c> sees the real <see cref="FileDropData"/>). Opens a session first if somehow none is live.</summary>
+    public bool ExternalDropFiles(Point2 windowDip, string[] paths, KeyModifiers mods)
+    {
+        var data = new FileDropData(paths);
+        if (!DragDrop.IsActive)
+            DragDrop.ExternalBegin(DropKinds.Files, data, windowDip, mods);   // robustness: drop with no prior enter
+        else
+            DragDrop.Session.Payload = data;                                  // fill the payload the hover left empty
+        DragDrop.Move(HitTestAny(windowDip), windowDip, 0f, 0f, mods);
+        return DragDrop.TryDrop(windowDip, mods, out _);
+    }
 
     /// <summary>OLE Drop: final hit-test then commit (<c>OnDrop</c> fires on an accepting target). Returns whether a
     /// target accepted the drop.</summary>
@@ -461,6 +476,7 @@ public sealed class InputDispatcher
     public bool SmoothScroll;
     /// <summary>Set by the host: arm a viewport in the ScrollAnimator after a smooth-scroll wheel (decouples Input from Animation).</summary>
     public Action<NodeHandle>? OnScrollArmed;
+
     /// <summary>Set by the host: pointer is over a scrollable viewport → reveal its auto-hiding scrollbar.</summary>
     public Action<NodeHandle, bool>? OnScrollHover;
     public Action<NodeHandle>? OnScrollLeave;
@@ -2013,11 +2029,17 @@ public sealed class InputDispatcher
                 ref ScrollState psc = ref _scene.ScrollRef(_panTarget);
                 if (psc.OverscrollPx != 0f)
                 {
+                    if (FluentGpu.Foundation.ScrollLog.On) FluentGpu.Foundation.ScrollLog.Line($"UP  overpan-release band={psc.OverscrollPx:0.0} -> spring back");
                     psc.Overscrolling = false;            // release the band to the phase-7 spring-back
                     psc.OverscrollVel = 0f;
                     OnScrollArmed?.Invoke(_panTarget);    // arm the ScrollAnimator (WakeReasons.ScrollAnim ticks the spring)
                 }
-                else if (MathF.Abs(v) >= FlingMinVelocityPxPerS) OnFlingStarted?.Invoke(_panTarget, -v);
+                else if (MathF.Abs(v) >= FlingMinVelocityPxPerS)
+                {
+                    if (FluentGpu.Foundation.ScrollLog.On) FluentGpu.Foundation.ScrollLog.Line($"UP  fling seed v={-v:0} (panVel={v:0})");
+                    OnFlingStarted?.Invoke(_panTarget, -v);
+                }
+                else if (FluentGpu.Foundation.ScrollLog.On) FluentGpu.Foundation.ScrollLog.Line($"UP  no fling (|v|={MathF.Abs(v):0} < {FlingMinVelocityPxPerS:0})");
             }
             _panTarget = NodeHandle.Null;
             _panClaimed = false;
@@ -2212,6 +2234,12 @@ public sealed class InputDispatcher
         float z = sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f;
         float max = horizontal ? MathF.Max(0f, sc.ContentW * z - sc.ViewportW) : MathF.Max(0f, sc.ContentH * z - sc.ViewportH);
 
+        // ALL wheel input (precision touchpad reported as a hi-res wheel, free-spin mice, AND a clicky wheel) rides ONE
+        // unified eased TargetChase path below — there is NO magnitude-based "hi-res" branch. A precision touchpad's
+        // WM_POINTERWHEEL notches span the whole range within a single gesture, so any threshold straddles a normal flick
+        // and made the offset flip-flop between an eased target and a 1:1 jump every gesture (the "ultra buggy / stops
+        // midway" regression). Edge/Chromium likewise give every mousewheel/keyboard/scrollbar scroll one smooth curve.
+        // (True OS-quality touchpad pan + inertia + rubber-band is the separate DirectManipulation WM_POINTER path.)
         if (smooth)
         {
             // Set the target; the ScrollAnimator eases the live offset toward it (+ virtualization re-realize + fade).
@@ -2221,11 +2249,16 @@ public sealed class InputDispatcher
             if (horizontal) sc.TargetX = nextTarget; else sc.TargetY = nextTarget;
             sc.IdleMs = 0f;
             OnScrollArmed?.Invoke(n);
+            if (FluentGpu.Foundation.ScrollLog.On)
+                FluentGpu.Foundation.ScrollLog.Line($"  scrollBy SMOOTH {(horizontal ? "x" : "y")} delta={delta:0.0} target={curTarget:0}->{nextTarget:0}");
             return true;
         }
 
         float old = horizontal ? sc.OffsetX : sc.OffsetY;
-        return SetScrollOffset(n, old + delta);
+        bool movedDirect = SetScrollOffset(n, old + delta);
+        if (FluentGpu.Foundation.ScrollLog.On)
+            FluentGpu.Foundation.ScrollLog.Line($"  scrollBy DIRECT {(horizontal ? "x" : "y")} delta={delta:0.0} off={old:0}->{(horizontal ? sc.OffsetX : sc.OffsetY):0}");
+        return movedDirect;
     }
 
     private bool SetScrollOffset(NodeHandle n, float offset)
@@ -2274,6 +2307,8 @@ public sealed class InputDispatcher
         // Past-the-edge excess (signed in offset space): negative past the top/left, positive past the bottom/right.
         float excess = rawOffset < 0f ? rawOffset : rawOffset > max ? rawOffset - max : 0f;
         float band = OverscrollBand(excess, viewport);
+        if (FluentGpu.Foundation.ScrollLog.On)
+            FluentGpu.Foundation.ScrollLog.Line($"  touchPan {(horizontal ? "x" : "y")} raw={rawOffset:0} max={max:0} excess={excess:0} band={band:0.0} vp={viewport:0}");
 
         float oldBand = sc.OverscrollPx;
         sc.OverscrollPx = band;

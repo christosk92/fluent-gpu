@@ -40,6 +40,17 @@ sealed class ShotScene : Component
                 ],
             },
         }),
+        // Edge-fade subsystem: alpha feather (+ optional blur) following the rounded corners (the curve).
+        "edgefade" => new BoxEl
+        {
+            Grow = 1, Direction = 0, Fill = PageBg, Gap = 28f, Padding = new Edges4(48, 48, 48, 48), AlignItems = FlexAlign.Start,
+            Children =
+            [
+                EfCard("Perimeter — follows the corners", EdgeFadeSpec.Perimeter(40f)),
+                EfCard("Fade + blur", new EdgeFadeSpec(EdgeMask.All, 44f, 44f, 44f, 44f, FadeFalloff.Smoothstep, 1f, EdgeFadeMode.FadeAndBlur, 8f)),
+                EfCard("Bottom only", new EdgeFadeSpec(EdgeMask.Bottom, 64f)),
+            ],
+        },
         // The REAL flyout through OverlayHost + the open animation (reproduces the live dropdown the user sees).
         "flyout" => Embed.Comp(() => new OverlayHost { Child = new BoxEl { Grow = 1, Fill = PageBg, Children = [Embed.Comp(() => new FlyoutLiveShot())] } }),
         "combobox-open" => OverlayShot(Embed.Comp(() => new ComboBoxOpenShot())),
@@ -62,6 +73,7 @@ sealed class ShotScene : Component
         "expander-open" => CenterShot(Embed.Comp(() => new ExpanderOpenShot())),
         "expander-reflow" => CenterShot(Embed.Comp(() => new ExpanderReflowShot())),
         "validation" => CenterShot(Embed.Comp(() => new ValidationShot())),
+        "dropzone" => CenterShot(Embed.Comp(() => new DropZoneShot())),
         "pips" => CenterShot(Embed.Comp(() => new PipsPagerShot())),
         "selectorbar" => CenterShot(Embed.Comp(() => new SelectorBarShot())),
         "pivot" => CenterShot(Embed.Comp(() => new PivotShot())),
@@ -178,6 +190,16 @@ sealed class ShotScene : Component
         Justify = FlexJustify.Center,
         Padding = new Edges4(48, 48, 48, 48),
         Children = [child],
+    };
+
+    // Edge-fade demo card: a bright rounded card whose content alpha dissolves at its edges, following the rounded
+    // corners (the curve) — over the dark page so the feather is unmistakable.
+    static Element EfCard(string label, EdgeFadeSpec spec) => new BoxEl
+    {
+        Direction = 1, Width = 280, Height = 200, Grow = 0, Justify = FlexJustify.Center, AlignItems = FlexAlign.Center,
+        Padding = new Edges4(20, 20, 20, 20),
+        Fill = ColorF.FromRgba(0x4C, 0x8B, 0xF5), Corners = CornerRadius4.All(28f), EdgeFade = spec,
+        Children = [ new TextEl(label) { Size = 15f, Weight = 600, Color = ColorF.FromRgba(0xFF, 0xFF, 0xFF) } ],
     };
 
     static Element OverlayShot(Element child) => Embed.Comp(() => new OverlayHost
@@ -729,6 +751,30 @@ sealed class ValidationShot : Component
 
     static readonly object[] LocOnce = new object[] { "val-shot-loc" };
     static readonly object[] RevealOnce = new object[] { "val-shot-reveal" };
+}
+
+// The DropZone hover overlay (seeded visible) — verifies the opaque accent panel + inset dashed ring + icon/title/
+// subtitle, on the dark page, without needing a live drag.
+sealed class DropZoneShot : Component
+{
+    public override Element Render() => Embed.Comp(() => new DropZone
+    {
+        Accept = ["os.files"],
+        OnDrop = _ => { },
+        InitiallyOver = true,
+        Content = new BoxEl
+        {
+            Direction = 1, Gap = 8f, Width = 460f, Height = 200f,
+            AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Padding = Edges4.All(16), Corners = Radii.ControlAll, Fill = Tok.FillSolidBase,
+            Children =
+            [
+                new TextEl(Icons.Download) { Size = 30f, FontFamily = Theme.IconFont, Color = Tok.TextTertiary },
+                new TextEl("Drop files / folders here") { Size = 14f, Weight = 600, Color = Tok.TextPrimary },
+                new TextEl("0 item(s)") { Size = 12f, Color = Tok.TextSecondary },
+            ],
+        },
+    });
 }
 
 sealed class PipsPagerShot : Component

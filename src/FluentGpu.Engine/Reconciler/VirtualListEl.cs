@@ -74,4 +74,8 @@ public sealed record VirtualListEl : Element
     /// list signals there is more below the fold. <see cref="ScrollEdgeCues.Auto"/> (default) resolves to
     /// <see cref="ScrollEdgeCuesDefaults.Default"/> (ON, fade-only); <see cref="ScrollEdgeCues.None"/> opts out.</summary>
     public ScrollEdgeCues EdgeCues { get; init; } = ScrollEdgeCues.Auto;
+    /// <summary>Explicit edge fade on the virtualized viewport (premium alpha-mask cue; one offscreen RT). Null = none.</summary>
+    public EdgeFadeSpec? EdgeFade { get; init; }
+    /// <summary>Auto edge fade: feather only the overflowing edges, ramped with the offset. Ignored when EdgeFade is set.</summary>
+    public bool AutoEdgeFade { get; init; }
 }

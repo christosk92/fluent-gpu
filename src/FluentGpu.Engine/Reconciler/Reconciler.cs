@@ -1171,6 +1171,8 @@ public sealed class TreeReconciler
                 // static form asserts here (guarded like Fill above) — the common unbound case resets it to none.
                 if (!b.Validation.IsBound) paint.ValidationBorder = b.Validation.Value == ValidationState.Error ? Tok.SystemFillCritical : default;
                 paint.BorderWidth = b.BorderWidth;
+                paint.BorderDashOn = b.BorderDashOn;
+                paint.BorderDashOff = b.BorderDashOff;
                 paint.Corners = b.Corners;
 
                 if (b.Shadow is { } sh) _scene.SetShadow(node, sh); else _scene.ClearShadow(node);
@@ -1182,6 +1184,7 @@ public sealed class TreeReconciler
                 if (b.HoverBorderBrush is { } hbb) _scene.SetHoverBorderBrush(node, hbb); else _scene.ClearHoverBorderBrush(node);
                 if (b.PressedBorderBrush is { } pbb) _scene.SetPressedBorderBrush(node, pbb); else _scene.ClearPressedBorderBrush(node);
                 if (b.Acrylic is { } ac) _scene.SetAcrylic(node, ac); else _scene.ClearAcrylic(node);
+                if (b.EdgeFade is { } bef) _scene.SetEdgeFade(node, bef); else _scene.ClearEdgeFade(node);
 
                 // Transform origin (used by static + animated scale/rotate; default centre). Set unconditionally so an
                 // AnimEngine ScaleX/Y track or a TransformBind pivots about the requested origin (e.g. a menu's top edge).
@@ -1440,6 +1443,8 @@ public sealed class TreeReconciler
                 ss.Zoomable = s.Zoomable;
                 ss.MinZoom = s.MinZoom; ss.MaxZoom = s.MaxZoom;
                 ss.EdgeCueConfig = ResolveEdgeCues(s.EdgeCues);
+                if (s.EdgeFade is { } sef) _scene.SetEdgeFade(node, sef); else _scene.ClearEdgeFade(node);
+                ss.AutoEdgeFade = s.AutoEdgeFade; ss.AutoEdgeFadeBand = s.AutoEdgeFade ? 24f : 0f;
                 break;
             }
             case VirtualListEl v:
@@ -1463,6 +1468,8 @@ public sealed class TreeReconciler
                 sc.Layout = v.Layout;
                 sc.Overscan = v.Overscan;
                 sc.EdgeCueConfig = ResolveEdgeCues(v.EdgeCues);
+                if (v.EdgeFade is { } vef) _scene.SetEdgeFade(node, vef); else _scene.ClearEdgeFade(node);
+                sc.AutoEdgeFade = v.AutoEdgeFade; sc.AutoEdgeFadeBand = v.AutoEdgeFade ? 24f : 0f;
                 break;
             }
             case GridEl g:

@@ -193,12 +193,36 @@ public static class Keys
 public enum DropEffect : byte { None = 0, Move = 1, Copy = 2, Link = 3 }
 
 /// <summary>
+/// Styling for the lifted drag GHOST (the moving visual of a dragged node) — the per-source override of the engine's
+/// hardcoded defaults (opacity 0.80 + a flyout-class shadow). All knobs are optional; an object initializer is safe
+/// (the parameterless ctor seeds the Fluent defaults). Carried on <see cref="DragSource.Style"/>; null there ⇒ default.
+/// </summary>
+public readonly record struct DragVisualStyle
+{
+    public DragVisualStyle() { }
+    /// <summary>Ghost opacity (WinUI ListViewItemDragThemeOpacity = 0.80 default).</summary>
+    public float Opacity { get; init; } = 0.80f;
+    /// <summary>Ghost drop shadow; null ⇒ the engine's default flyout-depth shadow.</summary>
+    public ShadowSpec? Shadow { get; init; } = null;
+    /// <summary>Uniform scale about the ghost's center (1 = none; e.g. 1.03 for a subtle "lift").</summary>
+    public float Scale { get; init; } = 1f;
+    /// <summary>The engine default (opacity 0.80, default shadow, no scale).</summary>
+    public static readonly DragVisualStyle Default = new();
+}
+
+/// <summary>
 /// E5-L2 typed drag SOURCE spec (<c>BoxEl.Draggable</c> — the Flutter Draggable / react-beautiful-dnd model; user
 /// ruling 2026-06-10: deliberately NOT WinUI's OLE DataPackage/DoDragDrop modal loop): <paramref name="Kind"/> is a
 /// string discriminator so target accept-tests are cast-free; <paramref name="PayloadFactory"/> resolves the typed
 /// payload ONCE when the L1 press promotes past the drag box (never per move). Trimming-safe: plain delegates.
 /// </summary>
-public sealed record DragSource(string Kind, Func<object?> PayloadFactory);
+public sealed record DragSource(string Kind, Func<object?> PayloadFactory)
+{
+    /// <summary>Optional ghost styling (opacity/shadow/scale) for the lifted drag visual; null ⇒ the engine default
+    /// (opacity 0.80 + flyout shadow). For a fully CUSTOM floating preview (a card/badge unrelated to the dragged
+    /// node), use a <c>DragPreviewLayer</c> keyed on the live drag <see cref="DragState"/> instead.</summary>
+    public DragVisualStyle? Style { get; init; }
+}
 
 /// <summary>
 /// E5-L2 drop TARGET spec (<c>BoxEl.DropTarget</c> — Flutter DragTarget / SwiftUI dropDestination): receives sessions
@@ -255,6 +279,18 @@ public sealed class DragSession
     public KeyModifiers Mods;
     public PointerKind Pointer;
 }
+
+/// <summary>
+/// A reactive, copied SNAPSHOT of the live drag (the value <c>UseDragState()</c> returns) — safe to hold across a
+/// render, unlike the mutable <see cref="DragSession"/>. A component re-renders when any of these change (drag
+/// begin/move/end), so a <c>DragPreviewLayer</c> can render a custom floating preview that follows the cursor. When
+/// no drag is active, <see cref="Active"/> is false and the rest are default.
+/// </summary>
+/// <param name="Active">A typed drag is in flight.</param>
+/// <param name="Kind">The drag source's kind discriminator (<see cref="DropKinds.Files"/> for an OS file drag).</param>
+/// <param name="Position">The pointer in window (DIP) space.</param>
+/// <param name="Payload">The drag payload (<see cref="FileDropData"/> for OS files; the source's typed payload otherwise).</param>
+public readonly record struct DragState(bool Active, string Kind, Point2 Position, object? Payload);
 
 /// <summary>
 /// Well-known drag KIND discriminators for OS-originated (OLE) drags delivered through the external-drop seam

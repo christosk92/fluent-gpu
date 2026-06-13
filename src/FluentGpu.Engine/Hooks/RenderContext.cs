@@ -280,6 +280,17 @@ public sealed partial class RenderContext
     /// not hop threads), so call sites need no null-check.</summary>
     public Action<Action> UsePost() => UseContext(HostDispatch.Post) ?? (static a => a());
 
+    /// <summary>Reactive snapshot of the live drag — both an in-app <c>DragSource</c> drag and an OS file drag surface
+    /// here. The component re-renders on drag begin/move/end (the host bumps a drag epoch while a drag is live), so a
+    /// <c>DragPreviewLayer</c> can render a custom floating preview that follows the cursor at <see cref="DragState.Position"/>.
+    /// Idle ⇒ <see cref="DragState.Active"/> false. Cheap: only re-renders the subscribing subtree while a drag is live.</summary>
+    public DragState UseDragState()
+    {
+        var hooks = UseContext(InputHooks.Current);
+        if (hooks?.DragEpoch is { } epoch) _ = epoch.Value;   // subscribe → re-render on each bump
+        return hooks?.GetDragState?.Invoke() ?? default;
+    }
+
     /// <summary>
     /// A value that eases toward <paramref name="target"/> one step per render whenever the target changes. It steps ONLY
     /// when this component re-renders for some other reason — for motion prefer the retained engine path

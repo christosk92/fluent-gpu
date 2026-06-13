@@ -45,6 +45,11 @@ public sealed record BoxEl : Element
     public ColorF HoverBorderColor { get; init; }    // A==0 ⇒ recorder auto-lightens BorderColor on hover; else eases to this exact state token
     public ColorF PressedBorderColor { get; init; }  // A==0 ⇒ recorder auto-darkens BorderColor on press; else eases to this exact state token
     public float BorderWidth { get; init; }
+    /// <summary>Dashed (solid) border: the dash ON/OFF run lengths in DIP along the perimeter (e.g. 6/4). Both 0 (the
+    /// default) = a solid stroke. Applies to the plain <see cref="BorderColor"/> stroke only (not a gradient border).
+    /// The "drop zone" look (and the <c>DropZone</c> control) uses this.</summary>
+    public float BorderDashOn { get; init; }
+    public float BorderDashOff { get; init; }
     public CornerRadius4 Corners { get; init; }
     /// <summary>Form-validation visual state (form-validation.md). Bind it to a field's error memo
     /// (<c>Validation = Prop.Of(() =&gt; field.Error.Value.IsValid ? ValidationState.None : ValidationState.Error)</c>):
@@ -64,6 +69,10 @@ public sealed record BoxEl : Element
     public GradientSpec? HoverBorderBrush { get; init; }
     public GradientSpec? PressedBorderBrush { get; init; }
     public AcrylicSpec? Acrylic { get; init; }     // per-node frosted-glass backdrop (blur + tint + noise)
+    /// <summary>Per-element edge fade (gpu-renderer.md): feather this element's content alpha to transparent (+ optional
+    /// blur) near the chosen edges, following its rounded <see cref="Corners"/> (the curve) — it dissolves into whatever
+    /// is behind. One offscreen RT per faded element. Null = none.</summary>
+    public EdgeFadeSpec? EdgeFade { get; init; }
 
     public Action? OnClick { get; init; }
     public Action<KeyEventArgs>? OnKeyDown { get; init; }
@@ -581,4 +590,10 @@ public sealed record ScrollEl : Element
     /// so a clipped list signals there is more below the fold. <see cref="ScrollEdgeCues.Auto"/> (default) resolves to
     /// <see cref="ScrollEdgeCuesDefaults.Default"/> (ON, fade-only); set <see cref="ScrollEdgeCues.None"/> to opt out.</summary>
     public ScrollEdgeCues EdgeCues { get; init; } = ScrollEdgeCues.Auto;
+    /// <summary>Explicit edge fade on the viewport (e.g. <c>EdgeFadeSpec.Horizontal()</c>) — the premium alpha-mask cue:
+    /// content dissolves into anything behind, following the corners. One offscreen RT. Null = none.</summary>
+    public EdgeFadeSpec? EdgeFade { get; init; }
+    /// <summary>Auto edge fade: feather only the edges that currently OVERFLOW (more content past them), ramped with the
+    /// scroll offset — the discoverable-overflow affordance as a true alpha fade. Ignored when <see cref="EdgeFade"/> is set.</summary>
+    public bool AutoEdgeFade { get; init; }
 }

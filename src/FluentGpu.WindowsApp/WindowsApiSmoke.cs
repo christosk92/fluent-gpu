@@ -12,6 +12,7 @@ using FluentGpu.WindowsApi.Media;
 using FluentGpu.WindowsApi.Network;
 using FluentGpu.WindowsApi.Notifications;
 using FluentGpu.WindowsApi.Packaging;
+using FluentGpu.Pal.Windows;
 using FluentGpu.WindowsApi.Power;
 using FluentGpu.WindowsApi.Shell;
 using FluentGpu.WindowsApi.Storage;
@@ -104,6 +105,7 @@ internal static partial class WindowsApiSmoke
             NetworkSuite();
             PowerSuite();
             StorageSuite();
+            DropTargetSuite();
             ShellSuite();
             DialogsAndMediaSuite();
         }
@@ -588,6 +590,22 @@ internal static partial class WindowsApiSmoke
             Check("6b.5 Local/Temp folder paths resolve", folders, store.LocalFolder);
         }
         catch (Exception ex) { Check("6b.1 AppDataStore round-trip", false, ex.Message); }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    // (6c) File drop — hand-vtable IDropTarget CCW: in-process round-trip through its function-pointer vtable, exercising
+    //      the by-value POINTL ABI (the element that crashed the source-gen attempt) without a real drag.
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    private static void DropTargetSuite()
+    {
+        Section("[6c] File drop — hand-vtable IDropTarget CCW (by-value POINTL ABI round-trip)");
+        try
+        {
+            bool ok = Win32DropTarget.SelfTest(out string detail);
+            Check("6c.1 IDropTarget CCW dispatches via its vtable, no crash, sane effects (the crash-fix regression guard)", ok, detail);
+        }
+        catch (Exception ex) { Check("6c.1 IDropTarget CCW vtable round-trip", false, ex.Message); }
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────

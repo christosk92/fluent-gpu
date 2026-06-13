@@ -1097,72 +1097,59 @@ sealed class StorageCard : Component
 }
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-// (11) File drop — the cross-cutting OS file/folder DropTarget (OLE IDropTarget → engine external-drop seam). Drag files
-//      from Explorer onto the zone; OnEnter highlights it, OnDrop lists the paths. DropKinds.Files / FileDropData.
+// (11) File drop — the cross-cutting OS file/folder DROP ZONE. The DropZone control reveals a dashed accent ring + a
+//      "Drop it." overlay WHILE a file hovers (the hand-rolled OLE IDropTarget restores live DragEnter/Over/Leave +
+//      the "+Copy" cursor); the drop reads the paths once. DropKinds.Files / FileDropData.
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 sealed class FileDropCard : Component
 {
     public override Element Render()
     {
-        var over = UseSignal(false);
-        var files = UseSignal("Drag files or folders from Explorer onto the dashed zone.");
+        var files = UseSignal("Drag files or folders from Explorer onto the zone.");
         var status = UseSignal("Nothing dropped yet.");
         var count = UseSignal(0);
 
-        // The DropTarget handlers fire on the UI thread (the dispatcher drives them from the Win32 IDropTarget). A
-        // BoxEl.DropTarget accepting DropKinds.Files receives an OS drop exactly like an in-app drag.
-        var zone = new BoxEl
+        // The resting content under the zone (icon + hint). DropZone overlays the dashed "Drop it." cue while a
+        // compatible drag hovers — for OS file drags AND in-app drags (both flow through the shared DragDropContext).
+        var content = new BoxEl
         {
-            Direction = 1, Gap = 6f, MinWidth = 360f, Height = 132f,
+            Direction = 1, Gap = 8f, MinWidth = 380f, Height = 150f,
             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Padding = Edges4.All(16), Corners = Radii.ControlAll, BorderWidth = 2f,
-            Fill = over.Value ? Tok.SystemFillSuccessBackground : Tok.FillSolidBase,        // ColorF (not a bound channel): reading over.Value during render re-renders the card on hover
-            BorderColor = over.Value ? Tok.SystemFillSuccess : Tok.StrokeCardDefault,
-            DropTarget = new DropTargetSpec(
-                new[] { DropKinds.Files },
-                OnEnter: _ => over.Value = true,
-                OnLeave: _ => over.Value = false,
-                OnDrop: s =>
+            Padding = Edges4.All(16), Corners = Radii.ControlAll,
+            Fill = Tok.FillSolidBase,   // the DropZone owns the (reactive) border — no static one here
+            Children =
+            [
+                new TextEl(Icons.Download) { Size = 30f, FontFamily = Theme.IconFont, Color = Tok.TextTertiary },
+                new TextEl("Drop files / folders here") { Size = 14f, Weight = 600, Color = Tok.TextPrimary },
+                new TextEl("") { Size = 12f, Color = Tok.TextSecondary, Text = Prop.Of(() => $"{count.Value} item(s)") },
+            ],
+        };
+
+        var zone = DropZone.Create(
+            accept: new[] { DropKinds.Files },
+            onDrop: s =>
+            {
+                if (s.Payload is FileDropData d)
                 {
-                    over.Value = false;
-                    if (s.Payload is FileDropData d)
-                    {
-                        count.Value = d.Count;
-                        files.Value = d.Count == 0 ? "(empty)" : string.Join("\n", d.Paths);
-                        status.Value = d.Count == 0 ? "Nothing dropped." : $"Dropped {d.Count} path(s)" + (d.AllFolders ? " (all folders)." : ".");
-                    }
-                }),
-            Children =
-            [
-                new TextEl("") { Size = 26f, FontFamily = Theme.IconFont, Color = Prop.Of(() => over.Value ? Tok.SystemFillSuccess : Tok.TextTertiary), Text = Prop.Of(() => over.Value ? "" : "") },
-                new TextEl("") { Size = 13f, Weight = 600, Color = Tok.TextPrimary, Text = Prop.Of(() => over.Value ? "Release to drop" : "Drop files / folders here") },
-            ],
-        };
+                    count.Value = d.Count;
+                    files.Value = d.Count == 0 ? "(empty)" : string.Join("\n", d.Paths);
+                    status.Value = d.Count == 0 ? "Nothing dropped." : $"Dropped {d.Count} path(s)" + (d.AllFolders ? " (all folders)." : ".");
+                }
+            },
+            content: content);
 
-        var form = new BoxEl
-        {
-            Direction = 1, Gap = 12f,
-            Children =
-            [
-                zone,
-                new TextEl("") { Size = 13f, Color = Tok.TextSecondary, Text = Prop.Of(() => $"{count.Value} item(s)") },
-            ],
-        };
-
-        return ControlExample.Build("File & folder drop",
-            form,
-            description: "A BoxEl.DropTarget that accepts DropKinds.Files receives an OS drag from Explorer through the engine's external-drop seam (OLE IDropTarget → InputHooks → InputDispatcher → DragDropContext). OnEnter/OnLeave/OnDrop fire on the UI thread; the payload is a FileDropData carrying the absolute paths.",
+        return ControlExample.Build("File & folder drop — styled DropZone",
+            zone,
+            description: "DropZone announces droppability by restyling the zone itself — a soft dashed accent ring + glow fade in while a compatible drag is live, and brighten when it hovers (no second labelled panel, so the content's own text never doubles). OS file drags deliver live hover: the Windows backend registers a hand-rolled OLE IDropTarget (DragEnter/Over/Leave → the engine external-drop seam) which also drives the OS \"+Copy\" cursor; the file list is read once, at drop. Lights up for in-app drags too. DropKinds.Files / FileDropData.",
             output: WinApiUi.OutputPanel(status, WinApiUi.Info, files),
             code: """
-            new BoxEl {
-                DropTarget = new DropTargetSpec(
-                    new[] { DropKinds.Files },
-                    OnEnter: _ => highlight.Value = true,
-                    OnLeave: _ => highlight.Value = false,
-                    OnDrop:  s => { if (s.Payload is FileDropData d) Handle(d.Paths); }),
-                // …visuals…
-            };
-            // The Windows backend auto-registers the top-level window as an OLE drop target.
+            DropZone.Create(
+                accept: new[] { DropKinds.Files },
+                onDrop: s => { if (s.Payload is FileDropData d) Handle(d.Paths); },
+                content: body,
+                message: "Drop it.");
+            // The Windows backend registers a hand-rolled OLE IDropTarget → live hover + the +Copy cursor; the
+            // drop reads the file list once. For a custom drag PREVIEW, set DragSource.Style + a DragPreviewLayer.
             """);
     }
 }

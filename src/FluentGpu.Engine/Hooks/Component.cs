@@ -30,6 +30,9 @@ public abstract class Component
     /// <summary>The host UI-thread poster (<see cref="HostDispatch.Post"/>): run an action on the UI thread next frame
     /// from any thread. Use for off-thread data instead of <c>UseContext(FrameClock.Tick)</c> + a per-frame drain.</summary>
     protected Action<Action> UsePost() => Context.UsePost();
+    /// <summary>Reactive snapshot of the live drag (in-app <c>DragSource</c> or OS file drag) — re-renders on drag
+    /// begin/move/end. Render a cursor-following custom preview (see <c>DragPreviewLayer</c>) from it.</summary>
+    protected DragState UseDragState() => Context.UseDragState();
     /// <summary>A persistent per-field async value (Pending|Ready|Failed) — the skeleton-loading spine; flip with SetReady/SetFailed.</summary>
     protected Loadable<T> UseLoadable<T>(Loadable<T>? initial = null) => Context.UseLoadable(initial);
     /// <summary>Kick an async loader once at mount; returns a Loadable&lt;T&gt; (Pending→Ready/Failed via UsePost; cancels on unmount).</summary>

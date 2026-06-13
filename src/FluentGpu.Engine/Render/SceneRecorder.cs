@@ -220,9 +220,29 @@ public static class SceneRecorder
         // — so blur + fade (the transitions.dev recipes) read as one motion. It SUBSUMES the opacity group (already a
         // composite-once-at-group-alpha), so the opacity group is skipped while blurring. Full-RT blur for now (correct;
         // a per-rect bucket is a perf follow-up). Skipped at sigma ≈ 0 (no blur) and when fully clipped out.
-        bool isBlurGroup = p.BlurSigma > 0.01f && deviceBounds.Overlaps(clip);
-        bool isOpacityGroup = !isBlurGroup && p.OpacityGroup && opacity < 0.999f && deviceBounds.Overlaps(clip);
-        if (isBlurGroup)
+        // Edge fade (gpu-renderer.md): feather the subtree's alpha (+ optional blur) near chosen edges, following the
+        // rounded corners (the curve). Takes precedence over the opacity/self-blur groups — it composites once at the
+        // group alpha and blurs via its own sigma. Explicit (BoxEl/ScrollEl.EdgeFade) or a scroller's AutoEdgeFade.
+        EdgeFadeSpec edgeFade = default;
+        bool isEdgeFade = deviceBounds.Overlaps(clip) && TryResolveEdgeFade(scene, node, out edgeFade);
+        bool isBlurGroup = !isEdgeFade && p.BlurSigma > 0.01f && deviceBounds.Overlaps(clip);
+        bool isOpacityGroup = !isEdgeFade && !isBlurGroup && p.OpacityGroup && opacity < 0.999f && deviceBounds.Overlaps(clip);
+        if (isEdgeFade)
+        {
+            // DIP→device px scale from this node's own box (uniform DPI ⇒ sx≈sy); corners + bands scale with it.
+            float efsx = b.W > 0.01f ? deviceBounds.W / b.W : 1f;
+            float efsy = b.H > 0.01f ? deviceBounds.H / b.H : 1f;
+            var efc = new CornerRadius4(p.Corners.TopLeft * efsx, p.Corners.TopRight * efsx, p.Corners.BottomRight * efsx, p.Corners.BottomLeft * efsx);
+            dl.PushEdgeFadeLayer(deviceBounds, efc, opacity, (int)edgeFade.Edges,
+                (edgeFade.Edges & EdgeMask.Left) != 0 ? edgeFade.BandLeft * efsx : 0f,
+                (edgeFade.Edges & EdgeMask.Top) != 0 ? edgeFade.BandTop * efsy : 0f,
+                (edgeFade.Edges & EdgeMask.Right) != 0 ? edgeFade.BandRight * efsx : 0f,
+                (edgeFade.Edges & EdgeMask.Bottom) != 0 ? edgeFade.BandBottom * efsy : 0f,
+                (int)edgeFade.Falloff, edgeFade.Intensity,
+                edgeFade.Mode == EdgeFadeMode.Fade ? 0f : edgeFade.BlurSigma * efsx, key);
+            opacity = 1f;
+        }
+        else if (isBlurGroup)
         {
             dl.PushBlurLayer(deviceBounds, p.Corners, p.BlurSigma, opacity, key);
             opacity = 1f;
@@ -541,7 +561,7 @@ public static class SceneRecorder
                 pendingHasHoverBorderBrush, in pendingPressedBorderBrush, pendingHasPressedBorderBrush,
                 pendingBorderHoverT, pendingBorderPressT, world, opacity, key);
         else if (pendingSolidBorder)
-            EmitBorderRing(dl, local, pb, p.Corners, p.BorderWidth, pendingBorder, world, opacity, key);
+            EmitBorderRing(dl, local, pb, p.Corners, p.BorderWidth, pendingBorder, p.BorderDashOn, p.BorderDashOff, world, opacity, key);
 
         if (isAcrylic) dl.PopLayer(deviceBounds, key);
 
@@ -569,7 +589,7 @@ public static class SceneRecorder
         // scrollable. Drawn BEFORE the scrollbar (under the thumb) and NOT gated on FadeT — the fade is always-on while
         // there is more content (unlike the auto-hiding bar). Self-gates on overflow + per-edge offset + the resolved
         // opaque surface to fade toward (no opaque plate ⇒ skip rather than a wrong-colour fade).
-        if (deviceBounds.Overlaps(clip) && (flags & NodeFlags.Scrollable) != 0 &&
+        if (deviceBounds.Overlaps(clip) && !isEdgeFade && (flags & NodeFlags.Scrollable) != 0 &&
             scene.TryGetScroll(node, out var sec) && sec.EdgeCueConfig != 0 &&
             TryResolveCueSurface(scene, node, in p, out var cueSurface))
             EmitScrollEdgeCues(dl, b, in sec, p.Corners, world, opacity, key | 0x18, cueSurface, scrollThumb);
@@ -581,6 +601,7 @@ public static class SceneRecorder
         // Close the flat opacity / self-blur group LAST: everything this node emitted (shadow, fill, children, border,
         // focus ring, scrollbar) flattens into the offscreen RT and composites once (blurred, for the blur group) at the
         // group alpha. Exactly one of these was pushed (blur subsumes the opacity group).
+        if (isEdgeFade) dl.PopLayer(deviceBounds, key);
         if (isOpacityGroup) dl.PopLayer(deviceBounds, key);
         if (isBlurGroup) dl.PopLayer(deviceBounds, key);
     }
@@ -776,8 +797,15 @@ public static class SceneRecorder
     private static CornerRadius4 InsetCorners(in CornerRadius4 c, float d)
         => new(MathF.Max(0f, c.TopLeft - d), MathF.Max(0f, c.TopRight - d), MathF.Max(0f, c.BottomRight - d), MathF.Max(0f, c.BottomLeft - d));
 
-    private static void EmitBorderRing(DrawList dl, in RectF local, in RectF b, in CornerRadius4 corners, float bw, in ColorF border, in Affine2D world, float opacity, ulong key)
-        => dl.StrokeRoundRect(new RectF(bw * 0.5f, bw * 0.5f, MathF.Max(0f, b.W - bw), MathF.Max(0f, b.H - bw)), InsetCorners(corners, bw * 0.5f), border, bw, world, opacity, key);
+    private static void EmitBorderRing(DrawList dl, in RectF local, in RectF b, in CornerRadius4 corners, float bw, in ColorF border, float dashOn, float dashOff, in Affine2D world, float opacity, ulong key)
+    {
+        var rect = new RectF(bw * 0.5f, bw * 0.5f, MathF.Max(0f, b.W - bw), MathF.Max(0f, b.H - bw));
+        var ins = InsetCorners(corners, bw * 0.5f);
+        if (dashOn > 0f)
+            dl.StrokeRoundRectDashed(rect, ins, border, bw, dashOn, dashOff, world, opacity, key);   // DropZone "drop here" look
+        else
+            dl.StrokeRoundRect(rect, ins, border, bw, world, opacity, key);
+    }
 
     private static void EmitGradient(DrawList dl, in RectF local, in CornerRadius4 corners, in GradientSpec g,
         in GradientSpec hover, bool hasHover, in GradientSpec pressed, bool hasPressed, float hoverT, float pressT,
@@ -1015,6 +1043,37 @@ public static class SceneRecorder
 
     private const float EdgeCueBandPx = 28f;    // fade-band depth along the scroll axis
     private const float EdgeCueRunwayPx = 24f;  // alpha ramps 0→1 over the last Runway px of overflow (smooth in/out, no pop)
+
+    /// <summary>Resolve a node's edge fade: an explicit <c>BoxEl/ScrollEl.EdgeFade</c> spec, or a scroller's
+    /// <c>AutoEdgeFade</c> synthesized from its live overflow (feather only the edges with more content past them, the
+    /// per-edge band ramped to 0 over the last <c>runway</c> px so it appears/disappears smoothly with the offset).</summary>
+    private static bool TryResolveEdgeFade(SceneStore scene, NodeHandle node, out EdgeFadeSpec ef)
+    {
+        if (scene.TryGetEdgeFade(node, out ef) && !ef.IsNone) return true;          // explicit, any element
+        if ((scene.Flags(node) & NodeFlags.Scrollable) != 0 && scene.TryGetScroll(node, out var sc)
+            && sc.AutoEdgeFade && sc.AutoEdgeFadeBand > 0.5f)
+        {
+            float band = sc.AutoEdgeFadeBand;
+            const float runway = 24f;
+            EdgeMask edges = EdgeMask.None;
+            float bl = 0f, bt = 0f, br = 0f, bb = 0f;
+            if (sc.Orientation == 1)   // horizontal
+            {
+                if (sc.OffsetX > 0.5f) { edges |= EdgeMask.Left; bl = band * Math.Clamp(sc.OffsetX / runway, 0f, 1f); }
+                float pastR = sc.ContentW - (sc.OffsetX + sc.ViewportW);
+                if (pastR > 0.5f) { edges |= EdgeMask.Right; br = band * Math.Clamp(pastR / runway, 0f, 1f); }
+            }
+            else                       // vertical
+            {
+                if (sc.OffsetY > 0.5f) { edges |= EdgeMask.Top; bt = band * Math.Clamp(sc.OffsetY / runway, 0f, 1f); }
+                float pastB = sc.ContentH - (sc.OffsetY + sc.ViewportH);
+                if (pastB > 0.5f) { edges |= EdgeMask.Bottom; bb = band * Math.Clamp(pastB / runway, 0f, 1f); }
+            }
+            if (edges != EdgeMask.None) { ef = new EdgeFadeSpec(edges, bl, bt, br, bb); return true; }
+        }
+        ef = default;
+        return false;
+    }
 
     /// <summary>The opaque surface colour the edge fade dissolves into: the viewport's own fill if opaque, else the
     /// nearest opaque self-or-ancestor fill, OR an elevated acrylic/flyout plate's solid <c>Fallback</c> (so a ComboBox /

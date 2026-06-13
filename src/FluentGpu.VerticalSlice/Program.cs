@@ -2680,6 +2680,13 @@ static class Slice
         return c;
     }
 
+    static int CountNodes(SceneStore s, NodeHandle n)
+    {
+        int c = 1;
+        for (var ch = s.FirstChild(n); !ch.IsNull; ch = s.NextSibling(ch)) c += CountNodes(s, ch);
+        return c;
+    }
+
     static void SkeletonChecks(StringTable strings)
     {
         var fonts = new HeadlessFontSystem(strings);
@@ -2818,6 +2825,36 @@ static class Slice
             bool reflowRuns = engine.HasActive;
             Check("SK.h smooth-resize: region is BoundsAnimated + SizeMode.Reflow → a height-changing swap reflows surrounding content (not snap)",
                 boundsAnim && reflowSpec && reflowRuns, $"boundsAnim={boundsAnim} reflowSpec={reflowSpec} reflowRuns={reflowRuns}");
+        }
+
+        // SK.i composes with VIRTUALIZATION: a region whose content is a 10k-row Virtual.List swaps to a WINDOWED list
+        // (only a viewport-worth of rows realized, not 10k materialized) — so skeleton-loading scales to huge lists (the
+        // Wavee track list). Shimmer = a viewport-fill of placeholder rows (NOT 10k); real = the virtualized list.
+        {
+            var scene = new SceneStore();
+            var engine = new AnimEngine(scene);
+            var recon = new TreeReconciler(scene, strings) { Anim = engine };
+            var count = Loadable<int>.Pending(0);
+            var shimmerRows = new Element[8];
+            for (int i = 0; i < shimmerRows.Length; i++) shimmerRows[i] = SkRow(null);
+            recon.ReconcileRoot(new BoxEl
+            {
+                Width = 360f, Height = 400f, ClipToBounds = true,
+                Children =
+                [
+                    Skel.Region(count,
+                        shimmerSource: () => new BoxEl { Direction = 1, Gap = 8f, Children = shimmerRows },
+                        content: n => Virtual.List(n, 44f, i => SkRow(new SkTrack(i + 1, "Track " + (i + 1), "0:00")), keyOf: i => i.ToString())),
+                ],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            int pendingNodes = CountNodes(scene, scene.Root);
+            count.SetReady(10_000);
+            recon.Runtime.Flush();
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            int realNodes = CountNodes(scene, scene.Root);
+            Check("SK.i composes with a 10k-row Virtual.List — swaps to a WINDOWED list (≪10k nodes realized, not 10k)",
+                realNodes < 2000, $"pendingNodes={pendingNodes} realNodes={realNodes} (10k items)");
         }
     }
 
@@ -4121,7 +4158,9 @@ static class Slice
 
         // gate.touch.flick-decay-settle: a touch flick UP over a bound virtual list seeds a friction-decay fling that
         // moves the offset monotonically for many frames, re-realizes the virtual window (FirstRealized advances), then
-        // settles at the content-end clamp. (Small list ⇒ the clamp is reachable; the 0.95/s decay is near-frictionless.)
+        // settles at a BOUNDED natural rest — coast ≈ v0/k under the corrected WinUI-like friction (FlingDecayPerS=0.03,
+        // k≈3.5/s), so it stops SHORT of the far 2800px content-end clamp (NOT the old near-frictionless drift to the
+        // end), and within a bounded number of frames (~<2.5s, not the tens of seconds the old 0.95/s curve took).
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("touch-fling", new Size2(360, 460), 1f)); window.Show();
@@ -4149,11 +4188,114 @@ static class Slice
                 prevOff = sc.OffsetY;
             }
             host.Scene.TryGetScroll(vp, out var settled);
+            float maxOff = MathF.Max(0f, settled.ContentH - settled.ViewportH);
             bool reRealized = settled.FirstRealized != firstAfterUp && decayRendered;
-            bool atClamp = Near(settled.OffsetY, MathF.Max(0f, settled.ContentH - settled.ViewportH), 1.5f);
-            Check("gate.touch.flick-decay-settle a touch flick over a bound virtual list decays the offset monotonically (≥10 frames), re-realizes the window (FirstRealized advances), then settles at the content-end clamp",
-                maxRun >= 10 && settledAt >= 0 && reRealized && atClamp,
-                $"maxMonotonicRun={maxRun} settledAtFrame={settledAt} offset={settled.OffsetY:0}->max={MathF.Max(0f, settled.ContentH - settled.ViewportH):0} first {firstAfterUp}->{settled.FirstRealized} decayRendered={decayRendered}");
+            // Corrected friction: the fling coasts a BOUNDED distance forward and settles SHORT of the far clamp (it does
+            // not drift to the content end), within ~<2.5s. The old near-frictionless 0.95/s curve instead coasted to the
+            // 2800px clamp over tens of seconds — this is the exact behavior change the scroll fix makes.
+            bool coastedForward = settled.OffsetY > afterUp.OffsetY + 20f;
+            bool boundedShortOfClamp = settled.OffsetY < maxOff - 100f;
+            bool settledFast = settledAt >= 0 && settledAt < 150;
+            Check("gate.touch.flick-decay-settle a touch flick decays monotonically (≥10 frames), re-realizes the window, then settles at a BOUNDED rest SHORT of the far clamp (WinUI-like friction, not a near-frictionless coast to the end)",
+                maxRun >= 10 && settledFast && reRealized && coastedForward && boundedShortOfClamp,
+                $"maxRun={maxRun} settledAt={settledAt} offset={afterUp.OffsetY:0}->{settled.OffsetY:0} (clamp={maxOff:0}) reRealized={reRealized}");
+        }
+
+        // gate.scroll.wheel-eases-unified: ALL wheel input — precision touchpad (reported as a hi-res wheel, deltas of any
+        // magnitude) AND a discrete mouse notch — rides ONE eased TargetChase path. There is NO magnitude-based "hi-res"
+        // branch: a precision touchpad's WM_POINTERWHEEL notches span the whole range within a single gesture, so any
+        // threshold straddled a normal flick and flip-flopped the offset between an eased target and a 1:1 jump every
+        // gesture (the "ultra buggy / stops midway" regression this gate guards against). A MIXED stream of small + large
+        // deltas must advance MONOTONICALLY toward the summed target, never enter Fling mode, and converge — no flip-flop.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("wheel-eases", new Size2(360, 460), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
+            host.RunFrame();
+            var vp = host.Scene.Root;
+
+            // A mixed stream like a real precision-touchpad flick: deltas straddling the OLD 120 threshold (some <, some >)
+            // at ~16ms cadence. Under the broken magnitude-split these flip-flopped paths; unified, they must all ease.
+            float[] mixed = { 20f, 60f, 30f, 90f, 15f, 70f, 40f, 25f, 50f, 35f };   // sum = 435
+            uint t = 1000; bool everFlung = false; float prev = 0f; bool monotonic = true;
+            foreach (float d in mixed)
+            {
+                window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0, ScrollDelta: d, TimestampMs: t));
+                host.RunFrame();
+                host.Scene.TryGetScroll(vp, out var s);
+                if (s.ScrollMode == 1) everFlung = true;
+                if (s.OffsetY + 0.01f < prev) monotonic = false;   // never jumps backward (no eased-vs-1:1 desync)
+                prev = s.OffsetY; t += 16;
+            }
+            for (int i = 0; i < 60; i++) host.RunFrame();   // let the ease converge to the accumulated target
+            host.Scene.TryGetScroll(vp, out var settled);
+            float offSettled = settled.OffsetY;
+            bool converged = offSettled >= 433f && offSettled <= 437f && settled.ScrollMode == 0;
+            // After the stream stops, no momentum/coast past the target.
+            float coastMax = offSettled;
+            for (int i = 0; i < 30; i++) { host.RunFrame(); host.Scene.TryGetScroll(vp, out var s); coastMax = MathF.Max(coastMax, s.OffsetY); }
+            bool noMomentum = coastMax <= offSettled + 1f;
+            Check("gate.scroll.wheel-eases-unified a MIXED-magnitude wheel stream (touchpad) eases monotonically via ONE TargetChase path to the summed target — no flip-flop, no fling/momentum",
+                monotonic && !everFlung && converged && noMomentum,
+                $"settled={offSettled:0} (expect 435) monotonic={monotonic} flung={everFlung} coastTo={coastMax:0} mode={settled.ScrollMode}");
+        }
+
+        // gate.scroll.flick-into-edge-bounce: a genuine TOUCH flick whose fling REACHES a clamp converts the residual
+        // velocity into a rubber-band bounce (WinUI/iOS) instead of stopping dead — the real trace showed a finger flick
+        // hit off=0 and stopped flat ("no rubber band"). Reproduces it: scroll down a bit, then a short HARD finger flick
+        // toward the top so the fling coasts into off=0 with residual speed → overscroll excursion (>1px) → springs to ~0.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("flick-bounce", new Size2(360, 460), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
+            host.RunFrame();
+            var vp = host.Scene.Root;
+            // Move down to ~offset 384 via wheel, then let it settle (room above for the flick's fling to coast into off=0).
+            uint t = 1000;
+            for (int i = 0; i < 8; i++) { window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0, ScrollDelta: 48f, TimestampMs: t)); host.RunFrame(); t += 16; }
+            for (int i = 0; i < 60; i++) host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var atStart);
+            float startOff = atStart.OffsetY;
+            // Short HARD finger flick DOWN (finger y increases → content scrolls toward the TOP, offset → 0). 80px move
+            // stays in-range (no overpan during the drag); fast (5ms/step) → high release velocity → the fling overshoots 0.
+            TouchGesture(window, host, new Point2(150, 150), new Point2(150, 230), 4, pointerId: 11, msPerStep: 5f);
+            float maxBand = 0f; int settledAt = -1; bool flung = false;
+            for (int i = 0; i < 200 && settledAt < 0; i++)
+            {
+                host.RunFrame();
+                host.Scene.TryGetScroll(vp, out var s);
+                if (s.ScrollMode == 1) flung = true;
+                maxBand = MathF.Max(maxBand, MathF.Abs(s.OverscrollPx));
+                if (i > 4 && MathF.Abs(s.OverscrollPx) < 0.1f && s.OffsetY <= 0.5f) settledAt = i;
+            }
+            Check("gate.scroll.flick-into-edge-bounce a touch flick whose fling reaches the clamp bounces (overscroll excursion > 1px) then springs back to ~0 (not a dead stop)",
+                flung && maxBand > 1f && settledAt >= 0, $"startOff={startOff:0} flung={flung} maxBand={maxBand:0.0} settledAt={settledAt}");
+        }
+
+        // gate.scroll.touch-overpan-bounce: the surviving rubber band lives on the genuine TOUCH path. A finger pan that
+        // drags PAST the top edge (at offset 0) builds a damped overscroll EXCURSION (>1px) and, on release, the
+        // critically-damped spring carries it back to ~0 (WinUI/iOS). The trackpad/wheel path has no band (a wheel message
+        // carries no manipulation to rubber-band — it hard-clamps).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("overpan-bounce", new Size2(360, 460), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
+            host.RunFrame();
+            var vp = host.Scene.Root;
+            // Drag the finger DOWN inside the viewport while already at the top (offset 0) → pulls past the top edge.
+            TouchGesture(window, host, new Point2(150, 120), new Point2(150, 340), 12, pointerId: 9, msPerStep: 16f);
+            host.Scene.TryGetScroll(vp, out var afterDrag);
+            float maxBand = MathF.Abs(afterDrag.OverscrollPx);
+            int settledAt = -1;
+            for (int i = 0; i < 200 && settledAt < 0; i++)   // release → spring the band back to 0
+            {
+                host.RunFrame();
+                host.Scene.TryGetScroll(vp, out var s);
+                maxBand = MathF.Max(maxBand, MathF.Abs(s.OverscrollPx));
+                if (i > 4 && MathF.Abs(s.OverscrollPx) < 0.1f) settledAt = i;
+            }
+            Check("gate.scroll.touch-overpan-bounce a touch pan past the edge builds a rubber-band excursion (>1px) then springs back to ~0",
+                maxBand > 1f && settledAt >= 0, $"maxBand={maxBand:0.0} settledAt={settledAt}");
         }
 
         // gate.touch.fling-alloc-steady-zero: a 30-frame fling allocates 0 managed bytes on the hot half. A large list
@@ -8525,19 +8667,20 @@ static class Slice
                 $"armed={armed} stillArmed={stillArmed} clicks={clicks} started={started}");
         }
 
-        // e5dragdrop.ext — an OS/OLE file drop driven through the dispatcher's ExternalDrag* seam reaches a DropTarget that
-        // accepts DropKinds.Files exactly like an in-app drag: Enter/Over report Copy (the Explorer convention set by
-        // DragDropContext.ExternalBegin), Drop fires OnDrop with the parsed paths, and dragging off the target reports
-        // None + fires OnLeave. (The Win32 IDropTarget→InputHooks half — Win32DropTarget — is live-drag-only.)
+        // e5dragdrop.ext — the OS file-drop seam matches the hand-vtable IDropTarget backend: HOVER is DATA-FREE
+        // (ExternalDragEnter is given EMPTY paths, so the session payload is an empty FileDropData while hovering — the
+        // backend reads no file data during DragEnter/Over), Enter/Over report Copy + flip OnEnter/OnLeave, and the
+        // PATH-BEARING ExternalDropFiles fills the payload at drop so OnDrop sees the real FileDropData. Off-target
+        // reports None + fires OnLeave.
         {
             var scene = new SceneStore();
-            string[]? dropped = null; int enters = 0, leaves = 0;
+            string[]? dropped = null; int enters = 0, leaves = 0, hoverPayloadCount = -1;
             new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
             {
                 Width = 200, Height = 200, Fill = ColorF.FromRgba(20, 20, 20),
                 DropTarget = new DropTargetSpec(
                     new[] { DropKinds.Files },
-                    OnEnter: _ => enters++,
+                    OnEnter: s => { enters++; if (s.Payload is FileDropData d) hoverPayloadCount = d.Count; },
                     OnLeave: _ => leaves++,
                     OnDrop: s => { if (s.Payload is FileDropData d) dropped = d.Paths; }),
             }, null);
@@ -8548,21 +8691,45 @@ static class Slice
             var inside = new Point2(100, 100);
             var outside = new Point2(400, 400);   // off the 200×200 target
 
-            var eff1 = disp.ExternalDragEnter(inside, paths, KeyModifiers.None);
+            var eff1 = disp.ExternalDragEnter(inside, System.Array.Empty<string>(), KeyModifiers.None);   // DATA-FREE hover
             var eff2 = disp.ExternalDragOver(inside, KeyModifiers.None);
-            bool dropOk = disp.ExternalDrop(inside, KeyModifiers.None);
+            bool dropOk = disp.ExternalDropFiles(inside, paths, KeyModifiers.None);                        // paths arrive at DROP
             bool acceptOk = eff1 == DropEffect.Copy && eff2 == DropEffect.Copy && dropOk
-                            && enters == 1 && dropped is { Length: 2 } && dropped[0] == paths[0] && dropped[1] == paths[1];
+                            && enters == 1 && hoverPayloadCount == 0   // hover saw an EMPTY payload (data-free)
+                            && dropped is { Length: 2 } && dropped[0] == paths[0] && dropped[1] == paths[1];
 
             // off-target: a fresh enter inside, then a move OUTSIDE the target reports None and fires OnLeave; no drop.
-            var eff3 = disp.ExternalDragEnter(inside, paths, KeyModifiers.None);
+            var eff3 = disp.ExternalDragEnter(inside, System.Array.Empty<string>(), KeyModifiers.None);
             var eff4 = disp.ExternalDragOver(outside, KeyModifiers.None);
             disp.ExternalDragLeave();
             bool leaveOk = eff3 == DropEffect.Copy && eff4 == DropEffect.None && leaves == 1;
 
-            Check("e5dragdrop.ext an OS file drop (ExternalDrag* seam) delivers Enter/Over=Copy + Drop with the dropped paths to a DropTarget accepting DropKinds.Files; off-target reports None + fires OnLeave",
+            Check("e5dragdrop.ext an OS file drop (IDropTarget seam) hovers DATA-FREE (empty payload, Enter/Over=Copy) then ExternalDropFiles delivers the real FileDropData to a DropTarget accepting DropKinds.Files; off-target reports None + fires OnLeave",
                 acceptOk && leaveOk,
-                $"enter={eff1} over={eff2} drop={dropOk} paths={(dropped is null ? "null" : string.Join("|", dropped))} off(eff={eff4},leaves={leaves})");
+                $"enter={eff1} over={eff2} drop={dropOk} hoverCount={hoverPayloadCount} paths={(dropped is null ? "null" : string.Join("|", dropped))} off(eff={eff4},leaves={leaves})");
+        }
+
+        // e5dragdrop.style — DragSource.Style overrides the lifted ghost's opacity (the default 0.80 → a custom value).
+        // A drag promotes on a Draggable carrying Style{Opacity=0.5}; after promotion the node's painted opacity is 0.5.
+        {
+            var scene = new SceneStore();
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Width = 200, Height = 60, CanDrag = true,
+                Draggable = new DragSource("chip", () => "p") { Style = new DragVisualStyle { Opacity = 0.5f } },
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            var node = scene.Root;
+
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(100, 30), 0, 0) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(140, 30), 0, 0) });   // cross the box → promote
+            float ghostOpacity = scene.Paint(node).Opacity;
+            bool styledGhost = disp.Drag.IsActive && System.MathF.Abs(ghostOpacity - 0.5f) < 0.001f;
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(140, 30), 0, 0) });
+
+            Check("e5dragdrop.style DragSource.Style.Opacity overrides the lifted ghost opacity (default 0.80 → 0.50)",
+                styledGhost, $"active={disp.Drag.IsActive} ghostOpacity={ghostOpacity:0.00}");
         }
 
         // e5dragdrop.2/.2b — crossing the drag box on a press that began on a CHILD of the CanDrag row promotes the

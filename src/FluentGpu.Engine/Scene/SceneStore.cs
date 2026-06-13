@@ -92,6 +92,9 @@ public sealed class SceneStore : ISceneBackend
     private readonly Dictionary<int, GradientSpec> _hoverBorderBrushes = new();
     private readonly Dictionary<int, GradientSpec> _pressedBorderBrushes = new();
     private readonly Dictionary<int, AcrylicSpec> _acrylics = new();
+    // Per-element edge fade (sparse): feather the subtree's alpha (+ optional blur) near chosen edges; read at record
+    // time → PushLayer{EdgeFade}. Freed on FreeSubtree.
+    private readonly Dictionary<int, EdgeFadeSpec> _edgeFades = new();
     // Per-text-node measure cache (pure-function: (text,style,availW) → size); self-invalidating, freed on FreeSubtree.
     private readonly Dictionary<int, TextMeasureCache> _measureCache = new();
     // Implicit brush transitions (WinUI BrushTransition): sparse, O(transitioning nodes), advanced at phase 7.
@@ -274,6 +277,7 @@ public sealed class SceneStore : ISceneBackend
         _hoverBorderBrushes.Remove(idx);
         _pressedBorderBrushes.Remove(idx);
         _acrylics.Remove(idx);
+        _edgeFades.Remove(idx);
         _measureCache.Remove(idx);
         _brushAnims.Remove(idx);
         _textEdits.Remove(idx);
@@ -799,6 +803,10 @@ public sealed class SceneStore : ISceneBackend
     public void SetAcrylic(NodeHandle h, in AcrylicSpec a) => _acrylics[(int)h.Raw.Index] = a;
     public bool TryGetAcrylic(NodeHandle h, out AcrylicSpec a) => _acrylics.TryGetValue((int)h.Raw.Index, out a);
     public void ClearAcrylic(NodeHandle h) => _acrylics.Remove((int)h.Raw.Index);
+
+    public void SetEdgeFade(NodeHandle h, in EdgeFadeSpec e) => _edgeFades[(int)h.Raw.Index] = e;
+    public bool TryGetEdgeFade(NodeHandle h, out EdgeFadeSpec e) => _edgeFades.TryGetValue((int)h.Raw.Index, out e);
+    public void ClearEdgeFade(NodeHandle h) => _edgeFades.Remove((int)h.Raw.Index);
 
     // ── E5-L2 drag-drop columns (BoxEl.Draggable / BoxEl.DropTarget → Input.DragDropContext) ──────
     /// <summary>Set (or clear, null) the node's typed drag-source spec — the reconciler writes it from

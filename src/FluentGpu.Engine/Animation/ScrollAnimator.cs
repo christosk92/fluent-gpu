@@ -41,10 +41,17 @@ public sealed class ScrollAnimator
     /// <summary>Engine-deliberate hover-flash retire delay (see class remarks): contract-begin + contract.</summary>
     public const float LeaveHideMs = ContractBeginMs + ExpandContractMs;
 
-    /// <summary>Touch-fling friction: per-second exponential survival factor applied to the velocity each tick
-    /// (v *= FlingDecayPerS^dt_s) — the WinUI ScrollPresenter default inertia decay
-    /// (controls\dev\ScrollPresenter\ScrollPresenter.cpp:31, c_scrollPresenterDefaultInertiaDecayRate = 0.95).</summary>
-    public const float FlingDecayPerS = 0.95f;
+    /// <summary>Touch/trackpad-fling friction: the per-second exponential SURVIVAL factor applied to the velocity each
+    /// tick (v *= FlingDecayPerS^dt_s). NOT WinUI's 0.95: WinUI's <c>c_scrollPresenterDefaultInertiaDecayRate</c>
+    /// (ScrollPresenter.cpp:31) is the InteractionTracker's <c>PositionInertiaDecayRate</c> param, integrated inside the
+    /// closed Windows.UI.Composition curve — far more frictional than 0.95 applied per SECOND here. 0.95/s is
+    /// near-frictionless (k = −ln0.95 ≈ 0.05/s ⇒ coast v0/k ≈ 19.5·v0 ⇒ "coasts for tens of seconds" — the wrong-inertia
+    /// bug). The decay constant is <c>k = −ln(FlingDecayPerS)</c> per second; a fling's asymptotic coast is <c>v0/k</c>
+    /// and it settles (≤ <see cref="FlingMinVelocityPxPerS"/>) after ≈ <c>ln(v0/v_min)/k</c> s. At 0.03 ⇒ k ≈ 3.5/s ⇒ a
+    /// 1600 px/s flick coasts ~460 px and settles in ~1 s — a WinUI-like glide. THIS IS THE FEEL KNOB: tune on-device
+    /// against a real WinUI ScrollViewer. The snap-retarget integral below derives k from this value, so it stays
+    /// consistent when only this constant changes.</summary>
+    public const float FlingDecayPerS = 0.03f;   // per-second velocity survival (k ≈ 3.5/s); tune on-device. WAS 0.95 (near-frictionless — the bug)
     /// <summary>Below this speed the fling has settled: it reverts to TargetChase with zero velocity (a slow drift
     /// reads as stopped, and snapping idle keeps the frame loop quiet). px/s.</summary>
     public const float FlingMinVelocityPxPerS = 40f;
@@ -52,6 +59,17 @@ public sealed class ScrollAnimator
     /// the snap value, the integrator writes the exact snap offset and ends (so a snap fling lands ON the snap rather
     /// than v_min/k short). Sub-pixel; deterministic across the integrator dt sweep. px.</summary>
     public const float SnapLandEpsPx = 0.5f;
+    /// <summary>Wheel/scrollbar/keyboard TargetChase smoothing time constant (ms): the eased offset closes ~(1−1/e) of the
+    /// gap to the Target each τ (kOff = 1−exp(−dt/τ) per frame). This is the SINGLE path for ALL wheel input — precision
+    /// touchpad (reported as a hi-res wheel) AND a discrete mouse wheel — because a precision touchpad's notch magnitudes
+    /// span the whole range and can't be classified (so a magnitude-split flip-flopped paths mid-gesture: the "stops
+    /// midway" bug). Short ⇒ near-1:1 crisp touchpad tracking with a small glide tail; long ⇒ floaty. WAS 90ms (floaty).
+    /// THE FEEL KNOB — tune on-device against a Surface touchpad / a real WinUI ScrollViewer.</summary>
+    public const float WheelEaseTauMs = 40f;
+    /// <summary>A touch fling that REACHES a clamp with at least this residual speed converts it into a rubber-band
+    /// overscroll bounce (WinUI/iOS) instead of stopping dead at the edge; below it a slow drift-into-edge just settles.
+    /// px/s. TOUCH ONLY — the wheel path never enters Fling mode, so a wheel hard-clamps with no band.</summary>
+    public const float FlingBounceMinPxPerS = 80f;
 
     private readonly SceneStore _scene;
     private readonly List<NodeHandle> _active = new();
@@ -142,7 +160,7 @@ public sealed class ScrollAnimator
     public void Tick(float dtMs)
     {
         if (_active.Count == 0) return;
-        float kOff = 1f - MathF.Exp(-dtMs / 90f);     // offset smoothing (~150ms feel)
+        float kOff = 1f - MathF.Exp(-dtMs / WheelEaseTauMs);   // unified wheel/scrollbar offset smoothing (the feel knob)
         for (int i = _active.Count - 1; i >= 0; i--)
         {
             NodeHandle n = _active[i];
@@ -220,15 +238,16 @@ public sealed class ScrollAnimator
                     moved = ScrollWrite?.Invoke(n, off + v * dtS) ?? false;   // through SetScrollOffset: clamp + transform + re-realize
                     off = horizontal ? sc.OffsetX : sc.OffsetY;              // re-read the clamped position (Target == Offset)
                     tgt = horizontal ? sc.TargetX : sc.TargetY;
-                    // A free fling INTO the clamp (!moved: SetScrollOffset pinned the offset at 0/max) simply ENDS here.
-                    // NARROWING (engine-deliberate, plan Phase-4 item 5): WinUI converts the remaining inertia at a hard
-                    // boundary into a small overscroll excursion + spring-back; we don't — only a touch-PAN past the edge
-                    // produces the rubber band (Input.ApplyTouchPan), a fling stops dead at the clamp. Folding a fling's
-                    // residual velocity into the band would mean re-entering the OverscrollWrite path with a seeded
-                    // OverscrollVel from here; deferred (the existing gate.touch.flick-decay-settle asserts the clean stop
-                    // at the clamp, and reviving it must keep that contract). A settle (|v| below the cutoff) ends it too.
+                    // A touch fling that REACHES the clamp (!moved: SetScrollOffset pinned the offset at 0/max) converts
+                    // its residual velocity into a rubber-band overscroll bounce (WinUI/iOS) instead of stopping dead at
+                    // the edge — the trace showed a finger flick hitting off=0 and stopping flat, which read as "no rubber
+                    // band." A settle (|v| below the cutoff, short of the edge) just ends. Wheel never enters Fling mode,
+                    // so this is touch-only; the bounce rides the same OverscrollSpringOmega spring as a touch-pan overpan.
                     if (!moved || MathF.Abs(v) < FlingMinVelocityPxPerS)     // a clamp boundary or a settle ends the fling
                     {
+                        if (FluentGpu.Foundation.ScrollLog.On) FluentGpu.Foundation.ScrollLog.Line($"  fling END off={off:0} moved={moved} v={v:0} (from {sc.FlingFromOffset:0}, coast={off - sc.FlingFromOffset:0})");
+                        if (!moved && MathF.Abs(v) >= FlingBounceMinPxPerS && !sc.Overscrolling)
+                            sc.OverscrollVel = v;   // seed the rubber-band spring (offset-space sign points past the hit edge)
                         sc.ScrollMode = 0;
                         sc.FlingVelocity = 0f;
                     }
@@ -280,7 +299,7 @@ public sealed class ScrollAnimator
             // rides the SAME content translation as the unchanged -offset, so the offset/clamp contract is untouched). The
             // band's existence keeps the node armed + the thin indicator revealed until it settles at exactly 0.
             bool bandActive = false;
-            if (sc.OverscrollPx != 0f && !sc.Overscrolling)
+            if ((sc.OverscrollPx != 0f || sc.OverscrollVel != 0f) && !sc.Overscrolling)   // released touch-pan overpan OR a seeded fling-into-edge bounce → spring back to 0
             {
                 float p = sc.OverscrollPx, vsp = sc.OverscrollVel;
                 float remaining = dtMs;
@@ -294,6 +313,7 @@ public sealed class ScrollAnimator
                 if (MathF.Abs(p) <= 0.05f && MathF.Abs(vsp) <= 1f) { p = 0f; vsp = 0f; }   // settled at the edge
                 sc.OverscrollVel = vsp;
                 OverscrollWrite?.Invoke(n, p);            // writes OverscrollPx + re-applies the content transform
+                if (FluentGpu.Foundation.ScrollLog.On) FluentGpu.Foundation.ScrollLog.Line($"  spring band={p:0.00} v={vsp:0}");
                 bandActive = p != 0f;
             }
             else if (sc.Overscrolling && sc.OverscrollPx != 0f)

@@ -68,7 +68,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
     // RT), and the leased (slot, alpha, σ) per open OPACITY/BLUR group — both reused across frames (0 steady alloc). A
     // blur group is an opacity group with Sigma > 0: its RT is separable-Gaussian-blurred before the flat composite.
     private readonly List<int> _layerKinds = new(8);
-    private readonly List<(int Slot, float Alpha, float Sigma)> _opacityGroups = new(4);
+    private readonly List<(int Slot, PushLayerCmd L)> _opacityGroups = new(4);
     private GlyphRenderer? _glyphs;
     private ImageTextureStore? _imageTextures;
     private ImagePipeline? _imagePipe;
@@ -837,12 +837,13 @@ public sealed unsafe class D3D12Device : IGpuDevice
                 var L = MemoryMarshal.Read<PushLayerCmd>(drawList.Slice(p2));
                 pos = p2 + Unsafe.SizeOf<PushLayerCmd>();
                 FlushSegment(lw, lh);                       // draw the backdrop-so-far into the current target
-                if (L.Kind == (int)LayerKind.Opacity || L.Kind == (int)LayerKind.Blur)
+                if (L.Kind == (int)LayerKind.Opacity || L.Kind == (int)LayerKind.Blur || L.Kind == (int)LayerKind.EdgeFade)
                 {
-                    // Lease + clear + bind the group RT; scissor state carries over so the subtree clips identically.
-                    // A Blur group carries its σ; on pop the RT is gaussian-blurred before the flat composite.
+                    // Lease + clear + bind the group RT; scissor state carries over so the subtree clips identically. A
+                    // Blur (or edge-fade-with-blur) group carries its σ — the RT is gaussian-blurred on pop before the
+                    // composite; an edge-fade carries the per-edge bands + corners, applied in EdgeFadeComposite on pop.
                     int slot = _opacity.Acquire(_cmdList, _fenceValue + 1);
-                    _opacityGroups.Add((slot, L.GroupAlpha, L.Kind == (int)LayerKind.Blur ? L.BlurSigma : 0f));
+                    _opacityGroups.Add((slot, L));
                     _layerKinds.Add(L.Kind);
                 }
                 else
@@ -863,18 +864,20 @@ public sealed unsafe class D3D12Device : IGpuDevice
                 pos += sizeof(int) + Unsafe.SizeOf<PopLayerCmd>();
                 int kind = _layerKinds.Count > 0 ? _layerKinds[^1] : (int)LayerKind.Acrylic;
                 if (_layerKinds.Count > 0) _layerKinds.RemoveAt(_layerKinds.Count - 1);
-                if ((kind == (int)LayerKind.Opacity || kind == (int)LayerKind.Blur) && _opacityGroups.Count > 0)
+                if ((kind == (int)LayerKind.Opacity || kind == (int)LayerKind.Blur || kind == (int)LayerKind.EdgeFade) && _opacityGroups.Count > 0)
                 {
                     FlushSegment(lw, lh);                   // finish the subtree into the group RT
-                    var (slot, alpha, sigma) = _opacityGroups[^1];
+                    var (slot, gl) = _opacityGroups[^1];
                     _opacityGroups.RemoveAt(_opacityGroups.Count - 1);
-                    // Self-blur group: gaussian-blur the group RT in place (leaves it readable); else just BeginRead it.
-                    if (kind == (int)LayerKind.Blur && sigma > 0f) _opacity.BlurInPlace(_cmdList, slot, sigma, _fenceValue + 1);
+                    // Self-blur (or edge-fade-with-blur): gaussian-blur the group RT in place (leaves it readable); else BeginRead.
+                    if ((kind == (int)LayerKind.Blur || kind == (int)LayerKind.EdgeFade) && gl.BlurSigma > 0f)
+                        _opacity.BlurInPlace(_cmdList, slot, gl.BlurSigma, _fenceValue + 1);
                     else _opacity.BeginRead(_cmdList, slot);
                     // Composite over the UNDERLYING target: the enclosing group's RT, or the canvas.
                     if (_opacityGroups.Count > 0) _opacity.Bind(_cmdList, _opacityGroups[^1].Slot);
                     else _acrylic.BindCanvas(_cmdList);
-                    _opacity.Composite(_cmdList, slot, alpha);
+                    if (kind == (int)LayerKind.EdgeFade) _opacity.EdgeFadeComposite(_cmdList, slot, in gl, _frameScale);
+                    else _opacity.Composite(_cmdList, slot, gl.GroupAlpha);
                     _opacity.Release(slot);
                     ApplyCurrentScissor();
                 }
@@ -886,13 +889,14 @@ public sealed unsafe class D3D12Device : IGpuDevice
         // Defensive: a malformed stream that left groups open still composites them (full alpha chain preserved).
         while (_opacityGroups.Count > 0)
         {
-            var (slot, alpha, sigma) = _opacityGroups[^1];
+            var (slot, gl) = _opacityGroups[^1];
             _opacityGroups.RemoveAt(_opacityGroups.Count - 1);
-            if (sigma > 0f) _opacity.BlurInPlace(_cmdList, slot, sigma, _fenceValue + 1);
+            if (gl.BlurSigma > 0f) _opacity.BlurInPlace(_cmdList, slot, gl.BlurSigma, _fenceValue + 1);
             else _opacity.BeginRead(_cmdList, slot);
             if (_opacityGroups.Count > 0) _opacity.Bind(_cmdList, _opacityGroups[^1].Slot);
             else _acrylic.BindCanvas(_cmdList);
-            _opacity.Composite(_cmdList, slot, alpha);
+            if (gl.Kind == (int)LayerKind.EdgeFade) _opacity.EdgeFadeComposite(_cmdList, slot, in gl, _frameScale);
+            else _opacity.Composite(_cmdList, slot, gl.GroupAlpha);
             _opacity.Release(slot);
         }
         _layerKinds.Clear();
@@ -946,9 +950,15 @@ public sealed unsafe class D3D12Device : IGpuDevice
 
     internal void Present()
     {
-        // ALLOW_TEARING is valid only with sync-interval 0 on a tearing-capable (non-composited) swapchain.
-        uint interval = _vsync ? 1u : 0u;
-        uint flags = (!_vsync && _tearingSupported) ? DXGI.DXGI_PRESENT_ALLOW_TEARING : 0u;
+        // A keep-alive repaint fired from inside an OS modal move/size loop (host called SuppressVsyncOnce) presents at
+        // SyncInterval 0 so the WndProc thread isn't blocked up to a vblank — the live-resize/move hitch. On the composited
+        // DComp flip swapchain interval-0 is a cheap, tear-free hand-off (DWM still composites at vblank); steady-state
+        // frames keep _vsync's interval. Self-resetting: one unsynced present per call.
+        bool noVsync = _skipVsyncOnce; _skipVsyncOnce = false;
+        // ALLOW_TEARING is valid only with sync-interval 0 on a tearing-capable (non-composited) swapchain; on the
+        // composition path _tearingSupported is false so the modal-tick present is interval 0 with flags 0 (valid + tear-free).
+        uint interval = (_vsync && !noVsync) ? 1u : 0u;
+        uint flags = (interval == 0 && _tearingSupported) ? DXGI.DXGI_PRESENT_ALLOW_TEARING : 0u;
         Check(_swapChain->Present(interval, flags), "Present");
     }
 
@@ -977,6 +987,10 @@ public sealed unsafe class D3D12Device : IGpuDevice
     private bool _skipLatencyOnce;   // set by SuppressLatencyWaitOnce, consumed by the next SubmitDrawList
 
     public void SuppressLatencyWaitOnce() => _skipLatencyOnce = true;
+
+    private bool _skipVsyncOnce;     // set by SuppressVsyncOnce, consumed by the next Present (interval 0 — non-blocking modal-loop tick)
+
+    public void SuppressVsyncOnce() => _skipVsyncOnce = true;
 
     private bool CheckTearingSupport()
     {

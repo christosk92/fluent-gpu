@@ -105,6 +105,8 @@ public sealed class AppHost : IDisposable
     private readonly Signal<object?> _frameClockSig = new(0L);
     private long _frameClock;
     private readonly Signal<int> _imageEpoch = new(0);   // bumped on any image status change → re-renders UseImage consumers
+    private readonly Signal<int> _dragEpoch = new(0);    // bumped each frame while a typed drag is live (+once on end) → UseDragState
+    private bool _dragWasActive;
     private Size2 _lastViewportDip;
 
     // Cross-thread UI dispatch (HostDispatch.Post / UsePost): worker / OS-callback / agile-COM threads enqueue
@@ -135,6 +137,11 @@ public sealed class AppHost : IDisposable
     // The AllocTypeProfiler listener is constructed by the app layer (FluentApp.Run); the host only drives its
     // once-per-second report on the frame cadence (no extra timer thread). Reads are no-ops when not started.
     private static readonly bool s_allocTypes = Diag.EnvFlag("FG_ALLOC_TYPES");
+
+    // ── FG_RESIZE_DIAG=1: per-tick timing of the keep-alive (modal move/size loop) paint, so smoothness is measurable. ──
+    // One line per modal-loop tick to stderr — total/ensureSize/layout/submit+present ms — gated entirely so the normal
+    // hot path and the zero-alloc gates are untouched (no work, no allocation, when the flag is off).
+    private static readonly bool s_resizeDiag = Diag.EnvFlag("FG_RESIZE_DIAG");
     private readonly WakeDiagnostics? _wakeDiag;
     private readonly MemCensus? _memCensus;
 
@@ -167,6 +174,21 @@ public sealed class AppHost : IDisposable
         _segBytes[seg] += nowBytes - sinceBytes;
         _segTicks[seg] += nowTicks - sinceTicks;
         return nowBytes;
+    }
+
+    // FG_RESIZE_DIAG: stopwatch ticks since <paramref name="sinceTicks"/> as milliseconds (modal-loop tick segment timing).
+    private static double ElapsedMs(long sinceTicks) => (Stopwatch.GetTimestamp() - sinceTicks) * 1000.0 / Stopwatch.Frequency;
+
+    // FG_RESIZE_DIAG: one line per modal move/size-loop keep-alive tick — total paint, ensureSize (swapchain resize),
+    // layout (flush/reconcile/relayout), and submit+present spans — so the live-resize cost split is measurable. Only
+    // reached when (keepAlive && s_resizeDiag); the string interpolation here is the lone alloc and it's flag-gated off
+    // on the normal hot path, so the zero-alloc gates are unaffected.
+    private void ReportResizeTick(long frameStart, double ensureMs, double layoutMs, long submitStart)
+    {
+        double submitMs = ElapsedMs(submitStart);
+        double totalMs = (Stopwatch.GetTimestamp() - frameStart) * 1000.0 / Stopwatch.Frequency;
+        Console.Error.WriteLine(
+            $"[FG_RESIZE_DIAG] tick total={totalMs:F2}ms ensureSize={ensureMs:F2}ms layout={layoutMs:F2}ms submit+present={submitMs:F2}ms");
     }
 
     private void DiagMaybeReport()
@@ -412,6 +434,13 @@ public sealed class AppHost : IDisposable
         _inputHooks.WindowChromeEpoch = chromeEpoch;
         _dispatcher.OnWindowActivationChanged = () => chromeEpoch.Value = chromeEpoch.Peek() + 1;
 
+        // Live drag state for UseDragState / DragPreviewLayer (cursor-following custom preview). Wired on the host
+        // instance AND the channel-default (a DragPreviewLayer mounted by a static factory reaches it via Default).
+        _inputHooks.DragEpoch = _dragEpoch;
+        _inputHooks.GetDragState = ReadDragState;
+        InputHooks.Current.Default.DragEpoch = _dragEpoch;
+        InputHooks.Current.Default.GetDragState = ReadDragState;
+
         // E5 drop-settle: the released drag visual glides from the drop point into its (possibly reordered) slot via
         // the same FLIP pipeline that moves displaced siblings — the seeded spring is retargeted velocity-continuously
         // by ApplyProjections when the OnDragCompleted commit re-lays-out. No Animate transition ⇒ the visual snaps.
@@ -429,18 +458,20 @@ public sealed class AppHost : IDisposable
         // single-window v1 host model; headless checks construct hosts sequentially).
         InputHooks.Current.Default.OpenUri = app.OpenUri;
 
-        // OS file/folder drop seam (the inbound twin of OpenUri): the platform's IDropTarget invokes these on the UI
-        // thread during an OLE drag; they drive the dispatcher's external DragSession so a BoxEl.DropTarget accepting
-        // DropKinds.Files receives the drop. Wired on the host instance AND the channel-default (the backend's
-        // Win32DropTarget reaches them via Current.Default — it has no component scope).
+        // OS file/folder drop seam (the inbound twin of OpenUri): the platform's file-drop handler (the Windows backend's
+        // WM_DROPFILES case) invokes these on the UI thread via the normal message pump; they drive the dispatcher's
+        // external DragSession so a BoxEl.DropTarget accepting DropKinds.Files receives the drop. Wired on the host
+        // instance AND the channel-default (the backend reaches them via Current.Default — it has no component scope).
         _inputHooks.ExternalDragEnter = _dispatcher.ExternalDragEnter;
         _inputHooks.ExternalDragOver = _dispatcher.ExternalDragOver;
         _inputHooks.ExternalDragLeave = _dispatcher.ExternalDragLeave;
         _inputHooks.ExternalDrop = _dispatcher.ExternalDrop;
+        _inputHooks.ExternalDropFiles = _dispatcher.ExternalDropFiles;
         InputHooks.Current.Default.ExternalDragEnter = _dispatcher.ExternalDragEnter;
         InputHooks.Current.Default.ExternalDragOver = _dispatcher.ExternalDragOver;
         InputHooks.Current.Default.ExternalDragLeave = _dispatcher.ExternalDragLeave;
         InputHooks.Current.Default.ExternalDrop = _dispatcher.ExternalDrop;
+        InputHooks.Current.Default.ExternalDropFiles = _dispatcher.ExternalDropFiles;
 
         // Inbound twin of OpenUri: a single-instance second-launch redirect (the PAL's WM_COPYDATA → ActivationRedirected,
         // already on the UI thread). Stash + WakeFrame here; Paint() drains _pendingActivation at the top and re-raises
@@ -528,6 +559,16 @@ public sealed class AppHost : IDisposable
     {
         if (_inPaint) _frameAfterPaint = true;
         else _frameNeeded = true;
+    }
+
+    /// <summary>Snapshot the live typed drag for <c>UseDragState</c> — both the in-app <c>DragSource</c> session and the
+    /// OS file-drag session live on <c>DragDropContext</c>. Idle ⇒ <see cref="DragState.Active"/> false.</summary>
+    private DragState ReadDragState()
+    {
+        var dd = _dispatcher.DragDrop;
+        if (!dd.IsActive) return default;
+        var s = dd.Session;
+        return new DragState(true, s.Kind, s.Position, s.Payload);
     }
 
     /// <summary>Run <paramref name="action"/> on the UI thread at the top of the next frame. THREAD-SAFE — callable from
@@ -685,7 +726,28 @@ public sealed class AppHost : IDisposable
             }
 
             long frameStart = Stopwatch.GetTimestamp();
+            // FG_RESIZE_DIAG: per-tick segment timing of the modal-loop keep-alive paint. Captured only when both the flag
+            // is on AND this is a keep-alive tick — zero work / zero alloc otherwise (the normal hot path is untouched).
+            bool diagTick = keepAlive && s_resizeDiag;
+            double ensureMs = 0, layoutMs0 = 0;
+            long segStart = diagTick ? Stopwatch.GetTimestamp() : 0;
             bool resized = EnsureSize();
+            if (diagTick) { ensureMs = ElapsedMs(segStart); segStart = Stopwatch.GetTimestamp(); }
+
+            // Modal-loop keep-alive idle skip. During a title-bar MOVE or edge RESIZE the OS runs its own modal
+            // message loop on THIS (WndProc) thread and drives keep-alive paints — the 8 ms WM_TIMER, WM_SIZE,
+            // WM_MOVE — synchronously. A pure move changes nothing (the composited DComp surface tracks the HWND via
+            // DWM), yet the 125 Hz timer would otherwise fire a full record+submit+present every tick, each blocking
+            // this thread ~a vblank and starving the modal loop's mouse processing — so the window crawls. Render a
+            // keep-alive tick ONLY when something actually needs it: a real resize (resized), a queued UI post, dirty
+            // layout, a pending full layout, or any wake reason (animation / scroll / caret / pending reactive work /
+            // images). Otherwise skip the whole pipeline: the last presented frame stays on screen and DWM repositions
+            // it for free. WM_SIZE still drives crisp live resize (resized == true); WM_EXITSIZEMOVE paints one settle frame.
+            if (keepAlive && !resized && _everLaidOut && !_needFullLayout
+                && _uiPosts.IsEmpty && !_scene.AnyLayoutDirty
+                && ComputeWakeReasons() == WakeReasons.None)
+                return LastStats;
+
             var layoutSize = ClientSizeDip();
             PublishViewport(layoutSize);
 
@@ -715,6 +777,11 @@ public sealed class AppHost : IDisposable
             // Paint-ONLY path (the PaintRequested keep-alive fired from inside an OS modal move/size loop, which bypasses
             // RunFrame entirely) — there a post that arrived mid-drag still applies this frame instead of being stranded.
             if (!_uiPosts.IsEmpty) _runtime.Batch(DrainUiPosts);
+            // Drag epoch: while a typed drag is live, bump each frame so a DragPreviewLayer re-renders and follows the
+            // cursor; bump once more when it ends so the preview tears down. Only the preview subtree re-renders.
+            bool dragActive = _dispatcher.DragDrop.IsActive;
+            if (dragActive || _dragWasActive) _dragEpoch.Value = _dragEpoch.Peek() + 1;
+            _dragWasActive = dragActive;
             _runtime.Flush();                                  // 3–5 apply scheduled re-renders (render-effects reconcile) + bindings
             bool virtualsChanged = _reconciler.ReRealizeVirtuals();   // virtual boundary re-realize (granular)
             if (virtualsChanged && _runtime.HasPending) _runtime.Flush();   // bound-row rebinds (slot signal writes) land THIS frame
@@ -754,6 +821,7 @@ public sealed class AppHost : IDisposable
 
             DrainLayoutEffects();                              // 6.5 layout effects (Bounds valid)
             if (reconciled) DumpSceneOnce(layoutSize);
+            if (diagTick) { layoutMs0 = ElapsedMs(segStart); }   // flush/reconcile/relayout/layout-effects span (FG_RESIZE_DIAG)
             if (s_allocDiag) { db = Probe(SegLayout, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             if (capturedProjections) ApplyProjections();       // FLIP "Last+Invert+Play"
@@ -811,10 +879,18 @@ public sealed class AppHost : IDisposable
             // settle frame: the last moved frame recorded its text unsnapped, so the trailing static record re-snaps crisp.
             if (_scene.AnyTransformWrote) { _frameAfterPaint = true; _scene.ClearTransformDirty(); }
             if (s_allocDiag) { db = Probe(SegRecord, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
-            if (keepAlive) _device.SuppressLatencyWaitOnce();   // modal-loop repaint: don't block the WndProc thread on vblank
+            // Modal-loop repaint: present at SyncInterval 0 so Present is a cheap, tear-free hand-off (the composited DComp
+            // flip surface is still composited at vblank by DWM) instead of blocking the WndProc thread up to a vblank — the
+            // live-resize/move hitch. We KEEP the frame-latency waitable wait (do NOT SuppressLatencyWaitOnce here) as the
+            // pacing gate: with SetMaximumFrameLatency=1 it self-throttles the producer to one in-flight frame so interval-0
+            // presents can't back up the present queue and re-block in Present/back-buffer acquire (DXGI pacing review).
+            if (keepAlive) _device.SuppressVsyncOnce();
+            long subStart = (keepAlive && s_resizeDiag) ? Stopwatch.GetTimestamp() : 0;
             _device.SubmitDrawList(_drawList.Bytes, _drawList.SortKeys,
                 new FrameInfo(_window.ClientSizePx, _window.Scale, Clear)); // 10 submit
             _swapchain.Present();                              // 11 present
+            if (keepAlive && s_resizeDiag)
+                ReportResizeTick(frameStart, ensureMs, layoutMs0, subStart);
             long hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
             if (s_allocDiag) { db = Probe(SegSubmit, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
@@ -1324,6 +1400,13 @@ public sealed class AppHost : IDisposable
             def.ExternalDragOver = null;
             def.ExternalDragLeave = null;
             def.ExternalDrop = null;
+            def.ExternalDropFiles = null;
+        }
+        // Live drag-state seam (GetDragState captures this host): clear when ours is still installed.
+        if (def.GetDragState is { } gds && ReferenceEquals(gds.Target, this))
+        {
+            def.GetDragState = null;
+            def.DragEpoch = null;
         }
 
         // Symmetry for the intern-on-change HUD cache: each cached id holds one host AddRef (RefreshDynText), so a
