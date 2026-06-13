@@ -16,7 +16,7 @@ A loose-registered build reports, read back from outside the process:
 
 ```
 IsPackaged=True
-PackageFullName=FluentGpu.Gallery_1.0.0.0_x64__<publisherhash>
+PackageFullName=FluentGpu.Gallery_1.0.0.0_<arch>__<publisherhash>
 PackageFamilyName=FluentGpu.Gallery_<publisherhash>
 ApplicationUserModelId=FluentGpu.Gallery_<publisherhash>!App
 ```
@@ -24,15 +24,28 @@ ApplicationUserModelId=FluentGpu.Gallery_<publisherhash>!App
 ## Run it
 
 ```powershell
-packaging\pack-and-register.ps1            # publish self-contained -> register -> launch under identity -> assert
-packaging\pack-and-register.ps1 -SkipPublish   # fast re-register (skip the publish)
+packaging\pack-and-register.ps1                 # publish (host arch) -> register -> launch under identity -> assert
+packaging\pack-and-register.ps1 -SkipPublish    # fast re-register (skip the publish)
+packaging\pack-and-register.ps1 -Rid win-x64    # force x64 (emulated on an ARM64 host)
 # teardown (reversible):
 Get-AppxPackage -Name 'FluentGpu.Gallery' | Remove-AppxPackage
 ```
 
-The script publishes self-contained win-x64 to `.pkg-publish\`, lays `AppxManifest.xml`
-+ `Assets\` beside the exe, `Add-AppxPackage -Register`s the loose layout, launches the
-identity alias with `--packaging-probe`, and asserts `IsPackaged=True`.
+The script publishes self-contained for the **host architecture** (`-Rid`; defaults to
+`win-arm64` on an ARM64 machine — a *native* build — else `win-x64`) to
+`.pkg-publish-<arch>\`, patches the manifest `ProcessorArchitecture` to match, lays
+`AppxManifest.xml` + `Assets\` beside the exe, `Add-AppxPackage -Register`s the loose
+layout, launches the identity alias with `--packaging-probe`, and asserts `IsPackaged=True`.
+
+**Verified on both arches** (this machine is ARM64):
+
+| Build | PackageFullName | Identity | Full gallery (D3D12) renders packaged |
+|---|---|---|---|
+| `win-arm64` (native) | `FluentGpu.Gallery_1.0.0.0_arm64__b7ry0z9c4vbc4` | `IsPackaged=True` | ✅ |
+| `win-x64` (emulated) | `FluentGpu.Gallery_1.0.0.0_x64__b7ry0z9c4vbc4` | `IsPackaged=True` | ✅ |
+
+(`fluentgpu-gallery.exe --screenshot <png>` renders a real frame **under identity** — the
+full GUI app works packaged, not just the console probe.)
 
 ## How identity attaches (no signing, no makeappx, no admin)
 
@@ -61,8 +74,14 @@ A console-style gallery mode (`src/FluentGpu.WindowsApp/PackagingProbe.cs`, rout
   subject = the manifest `Publisher` (`CN=FluentGpu Dev`) → `Add-AppxPackage` the signed
   `.msix`. Trusting a self-signed cert needs **admin** (machine Trusted People/Root) — the
   loose-register path above avoids it for the inner loop.
-- **NativeAOT:** this prototype uses regular self-contained CoreCLR publish. AOT packaging
-  changes only the `dotnet publish` step (add `-p:PublishAot=true`); the manifest /
-  register / alias mechanics are identical.
+- **NativeAOT:** this prototype uses regular self-contained CoreCLR publish (`-p:PublishAot`
+  is wired behind the script's `-Aot` switch). AOT changes only the `dotnet publish` step —
+  the manifest / register / alias mechanics are identical and arch-agnostic. **It is
+  currently blocked on this machine by a *toolchain* bug, not by FluentGpu code:** the .NET 10
+  ILCompiler (`microsoft.dotnet.ilcompiler/10.0.5`) emits a malformed native-link command for
+  the installed **VS 2026-preview (v18) / MSVC 14.51-preview** layout, so `link.exe` exits 123
+  (a `vswhere`-output fragment is spliced into the linker path). This reproduces on **both**
+  `win-x64` (x64 cross-link) and `win-arm64` (native link), confirming it is the VS/MSVC
+  preview, not the target arch. It should work unchanged once a stable MSVC toolset is present.
 - **SDK determinism:** publish from a CWD under `src/` (or add a repo-root `global.json`)
   so the pinned `10.0.300` SDK is used rather than the machine default.
