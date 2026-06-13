@@ -11,9 +11,11 @@
   <ItemGroup>
     <ProjectReference Include="..\FluentGpu.Engine\FluentGpu.Engine.csproj" />
     <ProjectReference Include="..\FluentGpu.Controls\FluentGpu.Controls.csproj" />
-    <!-- The [Validatable] source generator (form-validation.md) as an analyzer: emits the Validator<T>[] arrays the
-         ValidationChecks consume. ReferenceOutputAssembly=false → the netstandard2.0 analyzer is never linked into the AOT exe. -->
-    <ProjectReference Include="..\FluentGpu.Validation.SourceGen\FluentGpu.Validation.SourceGen.csproj"
+    <!-- The unified in-repo Roslyn analyzer (FluentGpu.SourceGen) as an analyzer: its [Validatable] ValidatorGenerator
+         (form-validation.md) emits the Validator<T>[] arrays the ValidationChecks consume. Its other generators stay
+         dormant here (no FluentGpuLocBase AdditionalFiles → the loc generator emits nothing).
+         ReferenceOutputAssembly=false → the netstandard2.0 analyzer is never linked into the AOT exe. -->
+    <ProjectReference Include="..\FluentGpu.SourceGen\FluentGpu.SourceGen.csproj"
                       OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 </Project>

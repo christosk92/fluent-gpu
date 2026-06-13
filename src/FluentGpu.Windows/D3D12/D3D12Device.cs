@@ -114,6 +114,10 @@ public sealed unsafe class D3D12Device : IGpuDevice
             : $"glyphs={_glyphs.CachedGlyphCount} runs={_glyphs.CachedRunCount} atlasGen={_glyphs.AtlasResetCount} quadPool={_glyphs.QuadPoolRetained}" +
               $" | tex: atlas={_imageTextures.AtlasImageCount} pooledFree={_imageTextures.PooledTextureCount} retired={_imageTextures.RetiredCount}";
 
+    /// <summary>Operator dump: live D3D12 resources aggregated by name prefix, largest first (to stderr). The empirical
+    /// "which resource class holds the climbing RAM" probe for native/UMA leak hunts. Routes to <see cref="D3D12MemoryDiagnostics"/>.</summary>
+    public void DiagDumpLive(string label) => D3D12MemoryDiagnostics.DumpLive(label);
+
     internal ID3D12Device* Device => _device;
     internal ID3D12GraphicsCommandList* CommandList => _cmdList;
 

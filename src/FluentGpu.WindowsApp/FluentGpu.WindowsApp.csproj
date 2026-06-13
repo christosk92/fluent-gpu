@@ -4,6 +4,14 @@
          FG_*_DIAG output still works when stdout/stderr are redirected to a file (e.g. > run.log);
          a bare terminal launch shows nothing unless AttachConsole(ATTACH_PARENT_PROCESS) is added. -->
     <OutputType>WinExe</OutputType>
+    <!-- Embeds the multi-res app icon into the PE → Explorer/file icon + taskbar/Alt-Tab fallback. Regenerate the
+         art with build/generate-appicon.ps1. The Win32 window also loads this same icon (Win32Window class hIcon). -->
+    <ApplicationIcon>assets\AppIcon\appicon.ico</ApplicationIcon>
+    <!-- NativeAOT is the DEFAULT publish for this app: `dotnet publish -c Release -r win-arm64` (or win-x64) emits a
+         single self-contained native exe (~12 MB, no runtime to install). Scoped to THIS csproj — never passed globally
+         — so the netstandard2.0 SourceGen analyzer ref never sees it (NETSDK1207). AOT compilation only runs at PUBLISH;
+         `dotnet build` / `dotnet run` stay fast JIT for iteration (the flag just turns on the trim/AOT analyzers there). -->
+    <PublishAot>true</PublishAot>
   </PropertyGroup>
   <ItemGroup>
     <!-- Bundled gallery assets (WinUI-Gallery control tile images, header art) copied next to the exe. -->
@@ -11,7 +19,7 @@
   </ItemGroup>
 
   <!-- ── Compile-safe localization keys (source generator) ──────────────────────────────────────────────────
-       The base-culture loc JSON is fed to FluentGpu.Localization.SourceGen as an AdditionalFiles item; the
+       The base-culture loc JSON is fed to FluentGpu.SourceGen (its Localization generator) as an AdditionalFiles item; the
        generator emits a nested `static class Strings` of dotted-key consts (+ typed ICU-format methods) into
        this project at build time, so call sites use L(Strings.Player.Queue) instead of raw strings. -->
   <ItemGroup>
@@ -22,9 +30,11 @@
     <CompilerVisibleItemMetadata Include="AdditionalFiles" MetadataName="FluentGpuLocBase" />
   </ItemGroup>
   <ItemGroup>
-    <!-- OutputItemType=Analyzer loads the generator asm as an analyzer; ReferenceOutputAssembly=false keeps the
-         netstandard2.0 generator OUT of the net10.0 app's runtime references. -->
-    <ProjectReference Include="..\FluentGpu.Localization.SourceGen\FluentGpu.Localization.SourceGen.csproj"
+    <!-- OutputItemType=Analyzer loads the unified generator asm (FluentGpu.SourceGen) as an analyzer;
+         ReferenceOutputAssembly=false keeps the netstandard2.0 generator OUT of the net10.0 app's runtime references.
+         The loc generator fires off the FluentGpuLocBase AdditionalFiles above; the [Validatable] generator stays
+         dormant unless a `[FluentGpu.Forms.Validatable] partial` type is declared in this project. -->
+    <ProjectReference Include="..\FluentGpu.SourceGen\FluentGpu.SourceGen.csproj"
                       OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
   <!-- The composition root: wires the Windows backend (D3D12/Win32/DWrite/WIC) into the portable engine + kit. -->

@@ -2,6 +2,32 @@
 
 **A from-scratch, near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10 — Reactor-style fluent C# markup, React-style hooks, on a signals-first reactive core.**
 
+<p align="center">
+  <a href="https://github.com/christosk92/fluent-gpu/actions/workflows/msix.yml"><img src="https://github.com/christosk92/fluent-gpu/actions/workflows/msix.yml/badge.svg" alt="MSIX build" /></a>
+  <a href="https://github.com/christosk92/fluent-gpu/releases/latest"><img src="https://img.shields.io/github/v/release/christosk92/fluent-gpu?include_prereleases&label=release&color=512BD4" alt="Latest release" /></a>
+  <img src="https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet" alt=".NET 10" />
+  <img src="https://img.shields.io/badge/NativeAOT-~7MB%20MSIX-0078D4?logo=windows" alt="NativeAOT MSIX" />
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License" /></a>
+</p>
+
+## Download
+
+FluentGpu Gallery ships as a signed **MSIX** from GitHub Releases — a single **~7 MB NativeAOT** package with **no .NET runtime to install**. The button installs it through Windows App Installer and keeps it current with background auto‑updates.
+
+<p align="center">
+  <a style="text-decoration:none" href="https://github.com/christosk92/fluent-gpu/releases/latest/download/FluentGpu.x64.appinstaller">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="./docs/media/download/download-x64-dark.png" />
+      <img src="./docs/media/download/download-x64-light.png" height="56" alt="Download for Windows x64" /></picture></a>
+  &nbsp;&nbsp;
+  <a style="text-decoration:none" href="https://github.com/christosk92/fluent-gpu/releases/latest/download/FluentGpu.arm64.appinstaller">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="./docs/media/download/download-arm64-dark.png" />
+      <img src="./docs/media/download/download-arm64-light.png" height="56" alt="Download for Windows ARM64" /></picture></a>
+</p>
+
+> Or build it yourself: `pwsh build/pack-msix.ps1 -Install` (NativeAOT, self‑signed dev cert). Pipeline docs: [`build/README.md`](./build/README.md).
+
 > **Status (June 2026): the engine is built and runs.** A fine-grained **signals-first** reactive core, keyed
 > reconciler, flex/grid layout, the control kit, virtualization (10k+ lists), the async image pipeline, theming +
 > Mica, and animation all pass **60+ end-to-end golden checks** on the headless backends — including a full

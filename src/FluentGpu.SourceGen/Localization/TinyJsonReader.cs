@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace FluentGpu.Localization.SourceGen
+namespace FluentGpu.SourceGen.Localization
 {
     /// <summary>
     /// A tiny, dependency-free JSON scanner that flattens a localization-resource object into an ordered list of

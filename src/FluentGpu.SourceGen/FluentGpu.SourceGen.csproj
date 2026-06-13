@@ -1,8 +1,50 @@
 <Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The single in-repo Roslyn source-generator / analyzer assembly for FluentGpu.
+
+    Every build-time generator lives behind THIS one analyzer project (loaded by a consumer via an
+    OutputItemType=Analyzer ProjectReference with ReferenceOutputAssembly=false, so the netstandard2.0
+    analyzer asm is never linked into the net10.0 app). Each generator is DORMANT unless its trigger is
+    present in the consuming compilation, so referencing this assembly never activates a generator a
+    project does not opt into:
+      Localization/  LocalizationKeysGenerator — fires only when an AdditionalFiles item carries
+                     FluentGpuLocBase=true (the base-culture loc JSON). Emits the compile-safe `Strings`
+                     dotted-key class (+ typed ICU-format methods). See subsystems/localization.
+      Validation/    ValidatorGenerator — fires only on a `[FluentGpu.Forms.Validatable] partial` type.
+                     Emits the `static readonly Validator<T>[]` arrays that lower to the SAME Rules.*
+                     runtime contract. See subsystems/form-validation.md + dsl-aot.md.
+
+    SCAFFOLD (not yet implemented — see Placeholder.cs): the engine DSL/Element/Theme/HookDeps generators
+    + the WGPU####/FG#### analyzers, and the COM-binding generator (hand-vtable IComObject consume + CCW
+    vtables harvested from *.comabi.json). This project stays Win32-free AT THE SOURCE LEVEL — no
+    TerraFX/Win32 PackageReference enters here, so the portable VerticalSlice harness can reference it.
+  -->
+
   <PropertyGroup>
-    <!-- Roslyn analyzers/generators target netstandard2.0 (override the net10.0 baseline). -->
+    <!-- Analyzers/generators MUST target netstandard2.0 (override the net10.0 solution baseline). -->
     <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+
+    <!-- This is an analyzer assembly, not a library reference: don't emit it as a compile ref. -->
+    <IncludeBuildOutput>false</IncludeBuildOutput>
     <IsAotCompatible>false</IsAotCompatible>
     <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+
+    <!-- Override the solution Directory.Build.props (which forces these on for DocFX). A generator
+         needs neither an XML doc file nor the net10.0/LangVersion-14 baseline. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+
+    <!-- RS2008 (analyzer release tracking) is advisory; these generators ship in-repo, not as a NuGet analyzer. -->
+    <NoWarn>$(NoWarn);RS2008</NoWarn>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Roslyn. Pinned to 4.14.0 (present in the offline nuget cache; ships with the .NET 10/11 SDK).
+         PrivateAssets=all keeps the Roslyn dependency from flowing to consumers of this analyzer. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" PrivateAssets="all" />
+  </ItemGroup>
+
 </Project>

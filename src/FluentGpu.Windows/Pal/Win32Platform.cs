@@ -328,6 +328,12 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 wc.lpfnWndProc = &StaticWndProc;
                 wc.hInstance = hinst;
                 wc.hCursor = LoadCursorW(default, (char*)IDC_ARROW);
+                // Window icon (taskbar / Alt-Tab / NC): load the deployed multi-res app .ico explicitly. This sets the
+                // LIVE window's icon (overriding any stale per-exe icon cache) and is id-independent — LoadIcon(hinst,1)
+                // fails because the .NET SDK doesn't fix the <ApplicationIcon> at resource id 1. AppContext.BaseDirectory
+                // is the exe/asset dir for run / AOT-publish / MSIX-install alike. Null-safe (no-op if the .ico is absent).
+                nint appIcon = LoadAppIcon();
+                if (appIcon != 0) { wc.hIcon = (HICON)appIcon; wc.hIconSm = (HICON)appIcon; }
                 wc.lpszClassName = cn;
                 s_atom = RegisterClassExW(&wc);
             }
@@ -632,6 +638,17 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         _textInput?.DisposeSip();   // release the WinRT InputPane refs + SIP event subscriptions before the HWND dies
         if (_hwnd != HWND.NULL) { KillTimer(_hwnd, MoveLoopTimerId); DestroyWindow(_hwnd); }
         if (_self.IsAllocated) _self.Free();
+    }
+
+    [LibraryImport("user32.dll", EntryPoint = "LoadImageW", StringMarshalling = StringMarshalling.Utf16)]
+    private static partial nint LoadImageW_File(nint hInst, string name, uint type, int cx, int cy, uint fuLoad);
+
+    /// <summary>Load the app's deployed multi-res icon (<c>assets/AppIcon/appicon.ico</c>, beside the exe) as an HICON
+    /// for the window class. IMAGE_ICON=1, LR_LOADFROMFILE=0x10 | LR_DEFAULTSIZE=0x40. Returns 0 if the file is absent.</summary>
+    private static nint LoadAppIcon()
+    {
+        string ico = Path.Combine(AppContext.BaseDirectory, "assets", "AppIcon", "appicon.ico");
+        return File.Exists(ico) ? LoadImageW_File(0, ico, 1, 0, 0, 0x10 | 0x40) : 0;
     }
 
     [UnmanagedCallersOnly]
