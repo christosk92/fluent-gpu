@@ -7,7 +7,7 @@ namespace FluentGpu.Animation;
 /// SizeW/SizeH (the "Reveal" presented extent the recorder draws the fill + child-clip at) → PaintDirty. LayoutW/LayoutH
 /// are the one deliberate exception to "animation never relays out": a SizeMode.Reflow track writes the interpolated
 /// size into LayoutInput each tick and the host re-solves the nearest layout boundary, so neighbours reflow smoothly.</summary>
-public enum AnimChannel : byte { TranslateX, TranslateY, ScaleX, ScaleY, Rotation, Opacity, SizeW, SizeH, StrokeTrimStart, StrokeTrimEnd, ClipL, ClipT, ClipR, ClipB, LayoutW, LayoutH }
+public enum AnimChannel : byte { TranslateX, TranslateY, ScaleX, ScaleY, Rotation, Opacity, SizeW, SizeH, StrokeTrimStart, StrokeTrimEnd, ClipL, ClipT, ClipR, ClipB, LayoutW, LayoutH, BlurSigma }
 
 // Easing (the enum + evaluator) now lives in FluentGpu.Foundation (a foundational motion primitive shared by Dsl/Scene/
 // Render + the image cross-fade). Animation imports Foundation, so `Easing` here resolves to FluentGpu.Foundation.Easing.
@@ -102,7 +102,8 @@ public sealed class AnimEngine
         public float Tx, Ty, Sx, Sy, Rot, Op, Sw, Sh, TrimStart, TrimEnd;
         public float ClipL, ClipT, ClipR, ClipB;   // authored clip-rect edges (node-local); NaN = that edge not animated
         public float Lw, Lh;                       // SizeMode.Reflow interpolated LAYOUT size; NaN = axis not reflowing
-        public static Accum Default => new() { Tx = 0, Ty = 0, Sx = 1, Sy = 1, Rot = 0, Op = 1, Sw = float.NaN, Sh = float.NaN, TrimStart = float.NaN, TrimEnd = float.NaN, ClipL = float.NaN, ClipT = float.NaN, ClipR = float.NaN, ClipB = float.NaN, Lw = float.NaN, Lh = float.NaN };
+        public float Blur;                         // per-node self-blur sigma (px); 0 = no blur (composed like Op — always present)
+        public static Accum Default => new() { Tx = 0, Ty = 0, Sx = 1, Sy = 1, Rot = 0, Op = 1, Sw = float.NaN, Sh = float.NaN, TrimStart = float.NaN, TrimEnd = float.NaN, ClipL = float.NaN, ClipT = float.NaN, ClipR = float.NaN, ClipB = float.NaN, Lw = float.NaN, Lh = float.NaN, Blur = 0f };
         public static Accum FromPaint(in NodePaint p)
         {
             // Preserve channels that do NOT have an active track this tick. Without this, a longer scale/size track can
@@ -119,6 +120,7 @@ public sealed class AnimEngine
                 TrimStart = p.StrokeTrimStart, TrimEnd = p.StrokeTrimEnd,
                 ClipL = float.NaN, ClipT = float.NaN, ClipR = float.NaN, ClipB = float.NaN,
                 Lw = float.NaN, Lh = float.NaN,
+                Blur = p.BlurSigma,
             };
             if (!p.ClipRect.IsInfinite)
             {
@@ -150,6 +152,7 @@ public sealed class AnimEngine
                 case AnimChannel.ClipB: ClipB = v; break;
                 case AnimChannel.LayoutW: Lw = v; break;    // reflow layout size — replace (one owner per axis)
                 case AnimChannel.LayoutH: Lh = v; break;
+                case AnimChannel.BlurSigma: Blur = add ? Blur + v : v; break;   // self-blur sigma (replace default; additive layers allowed)
             }
         }
     }
@@ -275,6 +278,7 @@ public sealed class AnimEngine
             AnimChannel.SizeH => !float.IsNaN(p.PresentedH) ? p.PresentedH : _scene.Bounds(node).H,
             AnimChannel.LayoutW => _scene.Bounds(node).W,
             AnimChannel.LayoutH => _scene.Bounds(node).H,
+            AnimChannel.BlurSigma => p.BlurSigma,
             AnimChannel.StrokeTrimStart => !float.IsNaN(p.StrokeTrimStart) ? p.StrokeTrimStart : (_scene.TryGetPolylineStroke(node, out var ps) ? ps.TrimStart : 0f),
             AnimChannel.StrokeTrimEnd => !float.IsNaN(p.StrokeTrimEnd) ? p.StrokeTrimEnd : (_scene.TryGetPolylineStroke(node, out var pe) ? pe.TrimEnd : 1f),
             _ => 0f,   // Rotation: not cleanly recoverable from a scaled matrix; springs from 0
@@ -447,6 +451,7 @@ public sealed class AnimEngine
         if (e.Dy != 0f) SeedTerminal(node, AnimChannel.TranslateY, 0f, dyn, initial: e.Dy, delayMs: spec.DelayMs);
         if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, 1f, dyn, initial: e.Sx, delayMs: spec.DelayMs);
         if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, 1f, dyn, initial: e.Sy, delayMs: spec.DelayMs);
+        if (e.Blur != 0f) SeedTerminal(node, AnimChannel.BlurSigma, 0f, dyn, initial: e.Blur, delayMs: spec.DelayMs);   // self-blur in
     }
 
     /// <summary>A removed node (now an Exiting orphan) animates FROM its current state TO the exit terminal; when all its
@@ -459,6 +464,7 @@ public sealed class AnimEngine
         if (e.Dy != 0f) SeedTerminal(node, AnimChannel.TranslateY, e.Dy, dyn, delayMs: spec.DelayMs);
         if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, e.Sx, dyn, delayMs: spec.DelayMs);
         if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, e.Sy, dyn, delayMs: spec.DelayMs);
+        if (e.Blur != 0f) SeedTerminal(node, AnimChannel.BlurSigma, e.Blur, dyn, delayMs: spec.DelayMs);   // self-blur out (cross-blur the exiting orphan)
     }
 
     private void SeedTerminal(NodeHandle node, AnimChannel ch, float to, in TransitionDynamics dyn, float? initial = null, float delayMs = 0f)
@@ -627,6 +633,7 @@ public sealed class AnimEngine
             if (acc.Sx != 1f || acc.Sy != 1f) tf = tf.Multiply(Affine2D.Scale(acc.Sx, acc.Sy));
             p.LocalTransform = tf;
             p.Opacity = acc.Op;
+            p.BlurSigma = MathF.Max(0f, acc.Blur);   // self-blur sigma (clamp ≥0); 0 = no blur layer (PaintDirty marked below)
             // Presented extent: Reveal draws the fill + child-clip at this size (no layout). Relayout instead feeds it to
             // the host, which writes it to LayoutInput and re-solves the subtree (live reflow).
             if (!float.IsNaN(acc.Sw)) p.PresentedW = acc.Sw;

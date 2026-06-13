@@ -18,8 +18,10 @@ sealed class GalleryApp : Component
     // mount the HUD — the HUD's per-frame dynamic-text refresh is itself a wake source (it runs record+present forever).
     static readonly bool ShowDiagnosticsHud = Diag.EnvFlag("FG_HUD");
 
-    // Mirrors the WinUI 3 Gallery's shape — Home, Fundamentals, Design, Controls (All + an expanded Basic input group) —
-    // with the engine's own capability demos remapped under Fundamentals/Design/Samples. (Accessibility is out of scope.)
+    // Mirrors the WinUI 3 Gallery's shape — Home, Fundamentals, Patterns, App services, Design, Controls (All + an
+    // expanded Basic input group), Samples — with the engine's own capability demos grouped by purpose: Fundamentals =
+    // the engine model, Patterns = motion/loading recipes on top of it, App services = engine features WinUI lacks.
+    // (Accessibility is out of scope.)
     static readonly NavItem[] Items =
     {
         new("welcome", Icons.Home, "Home"),
@@ -34,7 +36,25 @@ sealed class GalleryApp : Component
                 new("virtualization", Icons.List, "List virtualization"),
                 new("animation", Icons.Movie, "Animation"),
                 new("compositor", Icons.Brush, "Compositor"),
+                new("edge-fade", Icons.Brush, "Edge fade"),
                 new("scrolling", Icons.Document, "Scrolling"),
+            ],
+        },
+        new("patterns", Icons.Movie, "Patterns")
+        {
+            Children =
+            [
+                new("motion-recipes", Icons.Movie, "Motion recipes"),
+                new("async-skeletons", Icons.Refresh, "Async & skeletons"),
+            ],
+        },
+        new("app-services", Icons.Globe, "App services")
+        {
+            Children =
+            [
+                new("localization", Icons.Globe, "Localization"),
+                new("validation-guide", Icons.Accept, "Validation"),
+                new("windowsapi", Icons.Globe, "Windows APIs"),
             ],
         },
         new("design", Icons.Brush, "Design")
@@ -43,7 +63,6 @@ sealed class GalleryApp : Component
             [
                 new("typography", Icons.Font, "Typography"),
                 new("icons", Icons.Star, "Iconography"),
-                new("images", Icons.Picture, "Images"),
             ],
         },
         new("h-controls", "", "Controls", IsHeader: true),
@@ -137,6 +156,7 @@ sealed class GalleryApp : Component
         {
             Children =
             [
+                new("Image", Icons.Picture, "Image"),
                 new("PersonPicture", Icons.FavoriteStar, "PersonPicture"),
                 new("MediaPlayerElement", Icons.Movie, "MediaPlayerElement"),
             ],
@@ -177,6 +197,7 @@ sealed class GalleryApp : Component
         },
         new("h-samples", "", "Samples", IsHeader: true),
         new("wavee", Icons.MusicNote, "Wavee skeleton"),
+        new("validation", Icons.Accept, "Sign-up form"),
     };
 
     // Every control page, grouped by nav category — drives the All-controls page and the category overview pages
@@ -192,7 +213,7 @@ sealed class GalleryApp : Component
         ("Navigation", ["BreadcrumbBar", "SelectorBar", "TabView", "Pivot"]),
         ("Dialogs & flyouts", ["Flyout", "ContentDialog", "TeachingTip", "Popup"]),
         ("Text", ["TextBox", "PasswordBox", "AutoSuggestBox", "NumberBox", "TextBlock", "RichTextBlock"]),
-        ("Media", ["PersonPicture", "MediaPlayerElement"]),
+        ("Media", ["Image", "PersonPicture", "MediaPlayerElement"]),
         ("Collections", ["ItemsView", "FlipView", "TreeView"]),
         ("Menus & toolbars", ["MenuBar", "AppBarButton", "AppBarToggleButton", "CommandBar", "AppBarSeparator",
                               "CommandBarFlyout", "SwipeControl"]),
@@ -316,6 +337,8 @@ sealed class GalleryApp : Component
     {
         // Overview / category pages (WinUI-Gallery shape).
         "fundamentals" => Embed.Comp(() => new FundamentalsPage()),
+        "patterns" => Embed.Comp(() => new PatternsPage()),
+        "app-services" => Embed.Comp(() => new AppServicesPage()),
         "design" => Embed.Comp(() => new DesignPage()),
         "all" => Embed.Comp(() => new AllControlsPage()),
         "basic-input" => Embed.Comp(() => new BasicInputOverviewPage()),
@@ -400,13 +423,20 @@ sealed class GalleryApp : Component
         "flex" => Embed.Comp(() => new FlexPage()),
         "grid" => Embed.Comp(() => new GridPage()),
         "repeater" => Embed.Comp(() => new RepeaterPage()),
-        "images" => Embed.Comp(() => new ImagesPage()),
+        "Image" => Embed.Comp(() => new ImagePage()),
         "scrolling" => Embed.Comp(() => new ScrollPage()),
         "virtualization" => Embed.Comp(() => new VirtualizationPage()),
         "animation" => Embed.Comp(() => new AnimationPage()),
+        "motion-recipes" => Embed.Comp(() => new MotionRecipesPage()),
+        "async-skeletons" => Embed.Comp(() => new AsyncSkeletonPage()),
         "compositor" => Embed.Comp(() => new CompositorPage()),
+        "edge-fade" => Embed.Comp(() => new EdgeFadePage()),
         "state" => Embed.Comp(() => new StatePage()),
         "wavee" => Embed.Comp(() => new WaveeShell()),
+        "windowsapi" => Embed.Comp(() => new WindowsApiPage()),
+        "localization" => Embed.Comp(() => new LocalizationPage()),
+        "validation-guide" => Embed.Comp(() => new ValidationGuidePage()),
+        "validation" => Embed.Comp(() => new ValidationPage()),
         _ => Embed.Comp(() => new WelcomePage()),
     };
 }

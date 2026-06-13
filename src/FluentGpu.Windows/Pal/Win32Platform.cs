@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using FluentGpu.Foundation;
+using FluentGpu.Hooks;
 using FluentGpu.Pal;
 using TerraFX.Interop.Windows;
 using static TerraFX.Interop.Windows.Windows;
@@ -79,6 +80,25 @@ public sealed unsafe partial class Win32App : IPlatformApp
     /// <summary>WinUI HyperlinkButton NavigateUri launch (HyperLinkButton_Partial.cpp:172).</summary>
     public void OpenUri(string uri) => ShellExecuteW(0, "open", uri, null, null, 1);
 
+    // ── single-instance activation redirect (IPlatformApp.ActivationRedirected) ──────────────────────────────────────
+    // A second launch of a single-instance app forwards its activation URI to this running instance via WM_COPYDATA
+    // (FluentGpu.WindowsApi.Activation.SingleInstanceGate). The message lands in Win32Window.Handle32 (the WM_COPYDATA
+    // case), which routes it here through s_activationRedirected. Static bridge because the message arrives on the
+    // window (not the app) and the static WndProc has no app instance in hand — the single-window v1 host model means
+    // last-constructed app wins, mirroring how AppHost mirrors OpenUri onto InputHooks.Current.Default.
+    private static Action<string>? s_activationRedirected;
+
+    /// <inheritdoc/>
+    public event Action<string>? ActivationRedirected
+    {
+        add => s_activationRedirected += value;
+        remove => s_activationRedirected -= value;
+    }
+
+    /// <summary>Raise <see cref="ActivationRedirected"/> on the UI thread. Called by <see cref="Win32Window"/>'s
+    /// WM_COPYDATA case (which the OS dispatches on the window's own thread), so subscribers run UI-thread-safe.</summary>
+    internal static void RaiseActivationRedirected(string payload) => s_activationRedirected?.Invoke(payload);
+
     public void Dispose() { }
 }
 
@@ -89,6 +109,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                        WM_PAINT = 0x000F, WM_ERASEBKGND = 0x0014, WM_KEYDOWN = 0x0100, WM_SYSKEYDOWN = 0x0104,
                        WM_KEYUP = 0x0101, WM_SYSKEYUP = 0x0105,
                        WM_CHAR = 0x0102, WM_ACTIVATE = 0x0006, WM_SETCURSOR = 0x0020, WM_CAPTURECHANGED = 0x0215,
+                       WM_COPYDATA = 0x004A,   // single-instance activation redirect (SingleInstanceGate → ActivationRedirected)
                        WM_IME_STARTCOMPOSITION = 0x010D, WM_IME_ENDCOMPOSITION = 0x010E, WM_IME_COMPOSITION = 0x010F,
                        WM_IME_SETCONTEXT = 0x0281,
                        // Modal move/size loop keep-alive: DefWindowProc runs its OWN message pump while the user drags the
@@ -97,7 +118,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                        // the loop (ENTER/EXITSIZEMOVE), repaint per position change (WM_MOVE), and run a timer so animations
                        // stay live even while the mouse is held still mid-drag. Safe only because keep-alive paints no longer
                        // block on vblank (IGpuDevice.SuppressLatencyWaitOnce); a blocking paint here would stall each step.
-                       WM_MOVE = 0x0003, WM_ENTERSIZEMOVE = 0x0231, WM_EXITSIZEMOVE = 0x0232, WM_TIMER = 0x0113;
+                       WM_MOVE = 0x0003, WM_ENTERSIZEMOVE = 0x0231, WM_EXITSIZEMOVE = 0x0232, WM_TIMER = 0x0113,
+                       WM_DROPFILES = 0x0233;   // OS file/folder drop (DragAcceptFiles); wParam = HDROP
 
     private const nuint MoveLoopTimerId = 1;   // SetTimer id for the modal move/size loop keep-alive pump
     // ── Pointer input (EnableMouseInPointer): the WM_MOUSE* client stream is retired — mouse, touch and pen all arrive
@@ -141,6 +163,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     // Synthetic PointerId for caption events the NC path injects into the client stream — high enough never to collide
     // with a real OS pointer id (and past InputEventRing.IdSlots so it is simply not coalesced against a real contact).
     private const uint NcSyntheticPointerId = 0xFFFFFFFE;
+
+    // FG_NC_DIAG=1: trace custom-frame caption-button non-client input — which WM_NC* messages actually arrive over a
+    // button and whether synthesis runs — to stderr. Off by default (zero cost); diagnoses "no hover / clicks don't
+    // fire" with evidence instead of guesses.
+    private static readonly bool s_ncDiag =
+        System.Environment.GetEnvironmentVariable("FG_NC_DIAG") is "1" or "true";
+
     private const uint CS_VREDRAW = 0x0001, CS_HREDRAW = 0x0002;
     private const uint WS_OVERLAPPEDWINDOW = 0x00CF0000;
     private const int CW_USEDEFAULT = unchecked((int)0x80000000);
@@ -152,6 +181,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private const int IDC_ARROW = 32512;
     private const uint SWP_NOMOVE = 0x0002, SWP_NOZORDER = 0x0004, SWP_NOACTIVATE = 0x0010;
     private const uint WS_EX_NOREDIRECTIONBITMAP = 0x00200000;
+
+    // OS file/folder drop is handled by Win32DropTarget (a hand-rolled OLE IDropTarget registered via RegisterDragDrop);
+    // its shell32/ole32 P/Invokes live there. (The WM_DROPFILES constant below is retained but inert — RegisterDragDrop
+    // suppresses WM_DROPFILES.)
 
     // ── pointer-input interop (winuser.h; not in TerraFX's static-import set, declared locally like the Win32App P/Invokes) ──
     // EnableMouseInPointer is process-wide and irreversible: after it, the mouse no longer raises WM_MOUSE*/WM_MOUSEWHEEL —
@@ -241,9 +274,14 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private int _w, _h;
     private float _scale = 1f;
     private bool _closed;
+    private DropRegistration? _dropReg;   // OS file/folder drop registration (Win32DropTarget IDropTarget); null = not registered
 
     // ── custom-frame state (WindowDesc.CustomFrame): engine-reported NC regions + NC-pointer synthesis ──────────────
     private readonly bool _customFrame;
+    // WindowDesc.Composited: the visible pixels are a DComp flip surface bound to the HWND (WS_EX_NOREDIRECTIONBITMAP, no
+    // redirection bitmap). DWM re-composites that surface at the HWND's new screen position on a pure move, so a composited
+    // window needs NO per-step WM_MOVE repaint to track the cursor — the per-step paint is pure overhead/lag there.
+    private readonly bool _composited;
     private TitleBarRegion[] _ncRegions = [];
     private int _ncRegionCount;
     private TitleBarHit _ncHover = TitleBarHit.Client;   // Client = "none of our buttons" sentinel in NC context
@@ -255,6 +293,16 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private bool _wasZoomed;      // WM_SIZE edge-detect → InputKind.WindowStateChanged
     private static readonly Point2 OffscreenDip = new(-10000f, -10000f);
 
+    // ── single-instance activation redirect (WM_COPYDATA receiver) ──────────────────────────────────────────────────
+    // COPYDATASTRUCT is not in the TerraFX static-import surface, so it is declared locally (the file's convention for
+    // ABI shapes TerraFX omits; SetForegroundWindow IS in TerraFX and is used directly, like ShowWindow/SetWindowPos
+    // elsewhere here). The cookie MUST equal FluentGpu.WindowsApi.Activation.SingleInstanceGate.ActivationCopyDataCookie
+    // ('F''G''A''C') — the two assemblies are independent peers and cannot share the constant.
+    private const nuint ActivationCopyDataCookie = 0x46474143;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct COPYDATASTRUCT { public nuint dwData; public uint cbData; public nint lpData; }
+
     public Win32Window(in WindowDesc desc)
     {
         float requestedW = MathF.Max(1f, desc.SizePx.Width);
@@ -262,6 +310,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         _w = (int)requestedW;
         _h = (int)requestedH;
         _customFrame = desc.CustomFrame;   // must be set BEFORE CreateWindowExW: WM_NCCALCSIZE fires during creation
+        _composited = desc.Composited;     // gates the WM_MOVE per-step repaint: DWM relocates the DComp surface on a pure move
         _self = GCHandle.Alloc(this);
 
         HINSTANCE hinst = GetModuleHandleW(null);
@@ -313,6 +362,12 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         ResizeClientPhysical((int)MathF.Round(requestedW * _scale), (int)MathF.Round(requestedH * _scale));
 
         RefreshClientSize();
+
+        // Register this top-level window as an OS file/folder drop target via the SAFE hand-rolled OLE IDropTarget
+        // (Win32DropTarget) — restoring drag-over HOVER feedback (DragEnter/Over/Leave → the engine external-drop seam)
+        // and the OS drop-effect cursor, which WM_DROPFILES cannot. Best-effort: null on a non-STA thread / if it fails
+        // (the window then receives no OS drops). Revoked in Dispose. (RegisterDragDrop SUPPRESSES WM_DROPFILES.)
+        _dropReg = Win32DropTarget.Register(_hwnd);
     }
 
     /// <summary>Desired-client → window-rect outsets. Standard frame: <c>AdjustWindowRectEx</c>. Custom frame: the
@@ -439,6 +494,19 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         _ => TitleBarHit.Client,   // sentinel: not one of the engine-drawn buttons
     };
 
+    /// <summary>Resolve the engine caption-button hit for an NC pointer/mouse message from its SCREEN position
+    /// (lParam) using the SAME region test WM_NCHITTEST uses. The packed hit-test code carried in the message's
+    /// wParam is unreliable here (observed under mouse-in-pointer: the WM_NCPOINTER* wParam high word decodes to
+    /// Client even when WM_NCHITTEST returns HTMIN/HTMAX/HTCLOSE for the identical pixel) — so we re-derive from
+    /// the position, which the live HITTEST trace proves correct.</summary>
+    private TitleBarHit NcHitAtScreen(HWND hWnd, long lp)
+    {
+        POINT pt = new() { x = (short)(lp & 0xFFFF), y = (short)((lp >> 16) & 0xFFFF) };
+        ScreenToClient(hWnd, &pt);
+        if (IsZoomed(hWnd) && pt.y < 0) pt.y = 0;   // maximized: the caption row sits at negative client y — fold to row 0
+        return NcHitFromCode(HitTestRegions(pt.x, pt.y, buttonsOnly: true));
+    }
+
     /// <summary>Center of the reported region for <paramref name="hit"/>, in DIP — the synthetic-pointer target that
     /// drives the engine button's hover/press exactly like a real pointer.</summary>
     private Point2 NcCenterDip(TitleBarHit hit)
@@ -460,6 +528,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private bool NcHover(HWND hWnd, TitleBarHit ncHit, out LRESULT result)
     {
         result = default;
+        if (s_ncDiag) System.Console.Error.WriteLine($"[NC] hover-msg hit={ncHit} ncPointerSeen={_ncPointerSeen} inside={_ncInside}");
         bool changed = !_ncInside;   // client → NC crossing: pull engine hover off whatever was hovered
         _ncInside = true;
         if (ncHit != _ncHover) { _ncHover = ncHit; changed = true; }
@@ -479,6 +548,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private bool NcPress(TitleBarHit ncHit, out LRESULT result)
     {
         result = default;
+        if (s_ncDiag) System.Console.Error.WriteLine($"[NC] press-msg hit={ncHit}");
         if (ncHit == TitleBarHit.Client) return false;
         _ncPress = ncHit;
         _queue.Enqueue(new InputEvent(InputKind.PointerDown, NcCenterDip(ncHit), 0, 0,
@@ -493,6 +563,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private bool NcRelease(TitleBarHit ncHit, out LRESULT result)
     {
         result = default;
+        if (s_ncDiag) System.Console.Error.WriteLine($"[NC] release-msg hit={ncHit} press={_ncPress}");
         if (_ncPress == TitleBarHit.Client) return false;
         _queue.Enqueue(new InputEvent(InputKind.PointerUp,
             ncHit == _ncPress ? NcCenterDip(_ncPress) : OffscreenDip, 0, 0,
@@ -549,8 +620,16 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         MsgWaitForMultipleObjectsEx(0, null, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
     }
 
+    /// <summary>Thread-safe wake (IPlatformWindow.Wake): post a benign WM_NULL so a blocked <see cref="WaitForWork"/>
+    /// returns and the loop drains a cross-thread UI post. PostMessageW is documented thread-safe, so a worker/COM thread
+    /// may call this directly; WM_NULL (0) is discarded by the pump after waking.</summary>
+    public void Wake() => PostMessageW(_hwnd, 0u /* WM_NULL */, 0, 0);
+
     public void Dispose()
     {
+        Win32DropTarget.Revoke(_dropReg);   // RevokeDragDrop + free the CCW before the HWND dies
+        _dropReg = null;
+        _textInput?.DisposeSip();   // release the WinRT InputPane refs + SIP event subscriptions before the HWND dies
         if (_hwnd != HWND.NULL) { KillTimer(_hwnd, MoveLoopTimerId); DestroyWindow(_hwnd); }
         if (_self.IsAllocated) _self.Free();
     }
@@ -629,9 +708,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 if ((nuint)wParam == MoveLoopTimerId) { PaintRequested?.Invoke(); return true; }
                 return false;
             case WM_MOVE:
-                // Per-step repaint so the content tracks the window as it's dragged (no WM_SIZE/WM_PAINT fires on a pure
-                // move). Non-modal moves (programmatic SetWindowPos) also land here — a harmless extra keep-alive paint.
-                PaintRequested?.Invoke();
+                // Composited window: the visible pixels are a DComp flip surface bound to the HWND, which DWM re-composites
+                // at the new screen position on a pure move — no app repaint is needed for the content to track the window,
+                // so the per-step paint is dropped (it's pure record+submit+present overhead that lags the modal loop). The
+                // WM_ENTERSIZEMOVE 8 ms timer keeps animations/caret live mid-drag and WM_EXITSIZEMOVE paints one settle
+                // frame at the final position — both unchanged. Non-composited / redirection-bitmap windows still repaint
+                // per step so their content doesn't trail the cursor.
+                if (!_composited) PaintRequested?.Invoke();
                 return true;
             // ── pointer input (mouse-in-pointer: PT_MOUSE/PT_TOUCH/PT_PEN all arrive here) ──────────────────────────────
             // The client moved means we are no longer in the NC area: if a caption press was held and dragged into the
@@ -677,13 +760,27 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
             case WM_POINTERHWHEEL:
             {
                 // Replaces WM_MOUSEWHEEL/HWHEEL once mouse-in-pointer is on. HIWORD(wParam) = signed notch delta (×120),
-                // lParam = SCREEN px — identical to the old wheel path, so sign/DIP semantics are preserved exactly:
-                // +delta = wheel forward = scroll up = offset↓, flipped to our "positive = toward content end".
+                // lParam = SCREEN px. WM_POINTERWHEEL is the VERTICAL wheel; WM_POINTERHWHEEL is the HORIZONTAL wheel /
+                // trackpad two-finger horizontal — they must land on DIFFERENT axes (else a horizontal swipe scrolls
+                // vertically). Vertical: +notch = wheel forward = scroll up = offsetY↓, flipped to "positive = toward
+                // content end". Horizontal: +notch = tilt/swipe RIGHT = offsetX↑, already "toward content end" (no flip).
                 short notch = unchecked((short)((ulong)(nuint)wParam >> 16));
-                float dip = -(notch / 120f) * WheelDipPerNotch;
-                _queue.Enqueue(new InputEvent(InputKind.Wheel, WheelPt(lp), 0, 0, dip, Mods(),
+                bool horizontal = msg == WM_POINTERHWHEEL;
+                float dipY = horizontal ? 0f : -(notch / 120f) * WheelDipPerNotch;
+                float dipX = horizontal ? (notch / 120f) * WheelDipPerNotch : 0f;
+                // Precision touchpad, free-spin/hi-res mice, AND a clicky wheel ALL arrive here as WM_POINTERWHEEL with a
+                // signed (×120) HIGH-RESOLUTION notch — and the magnitude does NOT cleanly separate them (confirmed: MS
+                // Precision-Touchpad docs + the w3c uievents thread — a precision touchpad streams notches spanning the
+                // whole range, single-digit to 800+, WITHIN one gesture). Any magnitude threshold straddles a normal flick
+                // and makes the scroller flip-flop paths mid-gesture (the "stops midway" bug). So we DON'T classify here:
+                // every wheel delta rides ONE unified eased path (ScrollAnimator.WheelEaseTauMs), exactly as Edge/Chromium
+                // give mousewheel/keyboard/scrollbar a single "smooth personality" curve. The proportional dip scaling
+                // above gives the fractional px move. (True touchpad inertia/bounce is a separate DirectManipulation path.)
+                if (FluentGpu.Foundation.ScrollLog.On)
+                    FluentGpu.Foundation.ScrollLog.Line($"WHEEL {(horizontal ? "H" : "V")} notch={notch} dip={(horizontal ? dipX : dipY):0.0} kind={PointerKindOf(GET_POINTERID_WPARAM(wParam))}");
+                _queue.Enqueue(new InputEvent(InputKind.Wheel, WheelPt(lp), 0, 0, dipY, Mods(),
                     Pointer: PointerKindOf(GET_POINTERID_WPARAM(wParam)), TimestampMs: Now(),
-                    PointerId: GET_POINTERID_WPARAM(wParam)));
+                    PointerId: GET_POINTERID_WPARAM(wParam), ScrollDeltaX: dipX));
                 return true;
             }
             case WM_KEYDOWN:
@@ -706,6 +803,26 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 _active = ((nuint)wParam & 0xFFFF) != 0;
                 _queue.Enqueue(new InputEvent(_active ? InputKind.WindowFocus : InputKind.WindowBlur, default, 0, 0, TimestampMs: Now()));
                 return true;
+            case WM_COPYDATA:
+            {
+                // Single-instance activation redirect: a second launch forwarded its activation URI to us via
+                // SendMessageTimeoutW (FluentGpu.WindowsApi.Activation.SingleInstanceGate). dwData must equal the agreed
+                // cookie (kept in sync with SingleInstanceGate.ActivationCopyDataCookie — the two assemblies are
+                // independent peers and can't share the constant). Delivered on the UI thread (the OS dispatches a sent
+                // message on the receiver's thread), so RaiseActivationRedirected → AppHost.WakeFrame is UI-thread-safe.
+                var cds = (COPYDATASTRUCT*)(nint)lParam;
+                if (cds is not null && cds->dwData == ActivationCopyDataCookie)
+                {
+                    string uri = cds->cbData >= sizeof(char)
+                        ? new string((char*)cds->lpData, 0, (int)(cds->cbData / sizeof(char)))
+                        : string.Empty;
+                    SetForegroundWindow(hWnd);   // bring our window up (the sender granted us foreground via ASFW_ANY)
+                    Win32App.RaiseActivationRedirected(uri);
+                    result = (LRESULT)1;   // TRUE = handled (WM_COPYDATA convention)
+                    return true;
+                }
+                return false;
+            }
             case WM_SETCURSOR:
                 // Re-assert the engine-chosen cursor while over the client area; let DefWindowProc style the chrome.
                 if (((long)(nint)lParam & 0xFFFF) == HTCLIENT) { ApplyCursor(); result = (LRESULT)1; return true; }
@@ -751,6 +868,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 // onto the first hittable row so the Fitts slam-zone still reaches close/max/min and the drag band.
                 if (zoomed && pt.y < 0) pt.y = 0;
                 int button = HitTestRegions(pt.x, pt.y, buttonsOnly: true);
+                if (s_ncDiag && button != 0)
+                    System.Console.Error.WriteLine($"[NC] HITTEST button={button} pt=({pt.x},{pt.y}) regions={_ncRegionCount} zoomed={zoomed}");
                 if (button != 0) { result = (LRESULT)button; return true; }
                 if (!zoomed && pt.y >= 0)
                 {
@@ -784,15 +903,16 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                     TrackMouseEvent(&tme);
                     _ncTracking = true;
                 }
-                return NcHover(hWnd, NcHitFromCode((long)((nuint)wParam >> 16)), out result);
+                if (s_ncDiag) System.Console.Error.WriteLine($"[NC] NCPOINTERUPDATE wParam=0x{(ulong)(nuint)wParam:X} hi-decode={NcHitFromCode((long)((nuint)wParam >> 16))} derived={NcHitAtScreen(hWnd, lp)}");
+                return NcHover(hWnd, NcHitAtScreen(hWnd, lp), out result);
 
             case WM_NCPOINTERDOWN when _customFrame:
                 _ncPointerSeen = true;
-                return NcPress(NcHitFromCode((long)((nuint)wParam >> 16)), out result);
+                return NcPress(NcHitAtScreen(hWnd, lp), out result);
 
             case WM_NCPOINTERUP when _customFrame:
                 _ncPointerSeen = true;
-                return NcRelease(NcHitFromCode((long)((nuint)wParam >> 16)), out result);
+                return NcRelease(NcHitAtScreen(hWnd, lp), out result);
 
             case WM_NCMOUSEMOVE when _customFrame:
             {
@@ -803,7 +923,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                     TrackMouseEvent(&tme);
                     _ncTracking = true;
                 }
-                return NcHover(hWnd, NcHitFromCode((long)(nuint)wParam), out result);
+                return NcHover(hWnd, NcHitAtScreen(hWnd, lp), out result);
             }
 
             case WM_NCMOUSELEAVE when _customFrame:
@@ -829,11 +949,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
             case WM_NCLBUTTONDOWN when _customFrame:
             case WM_NCLBUTTONDBLCLK when _customFrame:
                 if (_ncPointerSeen) { result = 0; return false; }
-                return NcPress(NcHitFromCode((long)(nuint)wParam), out result);
+                return NcPress(NcHitAtScreen(hWnd, lp), out result);
 
             case WM_NCLBUTTONUP when _customFrame:
                 if (_ncPointerSeen) { result = 0; return false; }
-                return NcRelease(NcHitFromCode((long)(nuint)wParam), out result);
+                return NcRelease(NcHitAtScreen(hWnd, lp), out result);
 
             case WM_NCRBUTTONUP when _customFrame && (long)(nuint)wParam == HTCAPTION:
             {
@@ -905,7 +1025,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private void EmitPointerMove(in POINTER_INFO pi)
     {
         Decode(in pi, out PointerKind kind, out float pressure, out uint time);
-        _queue.Enqueue(new InputEvent(InputKind.PointerMove, ScreenPtToDip(pi.ptPixelLocation), 0, 0,
+        var dipPos = ScreenPtToDip(pi.ptPixelLocation);
+        if (FluentGpu.Foundation.ScrollLog.On && kind != PointerKind.Mouse)
+            FluentGpu.Foundation.ScrollLog.Line($"MOVE {kind} id={pi.pointerId} pos=({dipPos.X:0},{dipPos.Y:0})");
+        _queue.Enqueue(new InputEvent(InputKind.PointerMove, dipPos, 0, 0,
             Mods: Mods(), Pointer: kind, TimestampMs: time, PointerId: pi.pointerId, Pressure: pressure));
     }
 
@@ -918,7 +1041,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         if (!GetPointerInfo(pointerId, &pi)) return;
         Decode(in pi, out PointerKind kind, out float pressure, out uint time);
         int button = kind == PointerKind.Mouse ? ButtonForChange(pi.ButtonChangeType) : 0;
-        _queue.Enqueue(new InputEvent(down ? InputKind.PointerDown : InputKind.PointerUp, ScreenPtToDip(pi.ptPixelLocation),
+        var dipPos = ScreenPtToDip(pi.ptPixelLocation);
+        if (FluentGpu.Foundation.ScrollLog.On && kind != PointerKind.Mouse)
+            FluentGpu.Foundation.ScrollLog.Line($"{(down ? "DOWN" : "UP  ")} {kind} id={pointerId} pos=({dipPos.X:0},{dipPos.Y:0})");
+        _queue.Enqueue(new InputEvent(down ? InputKind.PointerDown : InputKind.PointerUp, dipPos,
             button, 0, Mods: Mods(), Pointer: kind, TimestampMs: time, PointerId: pointerId, Pressure: pressure));
     }
 
@@ -932,11 +1058,12 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
 
     // WM_POINTERWHEEL/HWHEEL over the popup: HIWORD(wParam) = signed notch (×120), lParam = SCREEN px — same sign/DIP
     // semantics as the owner's own wheel path, mapped to owner DIP so the forwarded wheel feels identical.
-    internal void ForwardPopupPointerWheel(uint pointerId, long lp, short notch)
+    internal void ForwardPopupPointerWheel(uint pointerId, long lp, short notch, bool horizontal)
     {
-        float dip = -(notch / 120f) * WheelDipPerNotch;
-        _queue.Enqueue(new InputEvent(InputKind.Wheel, WheelPt(lp), 0, 0, dip, Mods(),
-            Pointer: PointerKindOf(pointerId), TimestampMs: Now(), PointerId: pointerId));
+        float dipY = horizontal ? 0f : -(notch / 120f) * WheelDipPerNotch;
+        float dipX = horizontal ? (notch / 120f) * WheelDipPerNotch : 0f;
+        _queue.Enqueue(new InputEvent(InputKind.Wheel, WheelPt(lp), 0, 0, dipY, Mods(),
+            Pointer: PointerKindOf(pointerId), TimestampMs: Now(), PointerId: pointerId, ScrollDeltaX: dipX));
     }
 
     // WM_POINTERCAPTURECHANGED over the popup: the contact's implicit capture broke — cancel just THAT PointerId's

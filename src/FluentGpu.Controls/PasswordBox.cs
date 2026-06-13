@@ -1,4 +1,5 @@
 using FluentGpu.Dsl;
+using FluentGpu.Forms;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
@@ -69,6 +70,7 @@ public sealed class PasswordBox : Component
     public Signal<string>? Password;          // caller-owned (two-way); null → internal
     public Action<string>? OnPasswordChanged; // WinUI PasswordChanged
     public Action<string>? OnCommit;          // Enter
+    public Field<string>? Field;              // form-validation.md: invalid border + touched-on-blur + message row
 
     // WinUI TextControlThemeMinWidth = 64 (generic.xaml:97).
     private const float MinWidth = 64f;
@@ -84,13 +86,14 @@ public sealed class PasswordBox : Component
         Signal<string>? password = null,
         Action<string>? onPasswordChanged = null,
         Action<string>? onCommit = null,
-        TemplateParts? parts = null)
+        TemplateParts? parts = null,
+        Field<string>? field = null)
         => Embed.Comp(() => new PasswordBox
         {
             Placeholder = placeholder, Width = width, Header = header,
             RevealMode = revealMode, PasswordChar = passwordChar, MaxLength = maxLength, IsEnabled = isEnabled,
             Description = description, Password = password,
-            OnPasswordChanged = onPasswordChanged, OnCommit = onCommit, Parts = parts,
+            OnPasswordChanged = onPasswordChanged, OnCommit = onCommit, Parts = parts, Field = field,
         });
 
     private EditableText? _edit;
@@ -169,6 +172,7 @@ public sealed class PasswordBox : Component
                 MaxLength = MaxLength,
                 IsEnabled = IsEnabled,
                 OnCommit = OnCommit,
+                Field = Field?.Binding,
             };
             e.OnFocusChanged = f =>
             {
@@ -219,6 +223,8 @@ public sealed class PasswordBox : Component
             // (BaseMedium, generic.xaml:327+209/4134).
             children.Add(Parts.Apply(PartDescription,
                 new TextEl(Description) { Size = 14f, Color = Tok.TextControlDescriptionForeground }));
+        // form-validation.md: the error message row (reveal-animated; zero space when valid).
+        if (Field is { } vf) children.Add(FieldVisuals.MessageRow(vf.Error));
 
         // Peek release watcher: mounted only while revealed — re-masks the moment the reveal button stops being
         // pressed (engine NodeFlags.Pressed drops on PointerUp/cancel), covering release-outside and drag-off, which

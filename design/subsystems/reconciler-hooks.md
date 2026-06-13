@@ -66,6 +66,18 @@ contracts owned elsewhere:
 - **Reactive control-flow** reuses the keyed `ChildReconciler` as the *structural* engine: `ShowEl` (conditional)
   and `ForEl` (keyed list) are boundary effects that mount/remove/diff their subtree on signal change with no
   parent re-render (`src/FluentGpu.Engine/Hooks/ControlFlow.cs`, check #61).
+- **Native skeleton-loading** (the SK kit, owned here) is a fourth boundary on the same machinery: `SkelRegionEl`
+  (ElementTypeId 13, `src/FluentGpu.Engine/Hooks/SkeletonRegion.cs`) is a `Show`-style boundary effect that reads a
+  `Loadable<T>`'s State signal (`Foundation/Signals/Loadable.cs` — Pending|Ready|Failed + Value, the per-field async
+  spine) and mounts one of three branches: a shimmer DERIVED from the author's ONE real subtree by `SkeletonDeriver`
+  (`Hooks/SkeletonDeriver.cs` — a pure recursive Element→shimmer-bar walk, reading declared statics via `Prop.ValueOr`),
+  the real content, or the `onFailed` UI. The Pending→Ready edge reconciles shimmer→real (the proven `Flow.Show` swap —
+  NO new scene column), orphan-exits the shimmer with an opacity+blur fade (`EnterExit.Blur`, owned by
+  `backdrop-effects-animation.md`) while the real rows blur-reveal in (the `SoftReveal` recipes), and cancels the
+  looping `SkeletonPulse` on the exit so HasTracks drops (the idle wake-stop is not defeated). `.Pending(field)` lowers
+  to a leaf-grain region for incremental per-field arrival. Per-node `SkeletonMode.Off`/`SkeletonOverride` (on the base
+  `Element`, owned by `dsl-aot.md`) tune derivation (checks SK.a–g). `UseAsyncResource` (RenderContext) is the fetch
+  lifecycle (UsePost marshal + CTS-cancel-on-unmount), modelled on `UseImage`.
 - **Context = signals.** A `ContextProviderEl` stores a `Signal<object?>` per provider node; `UseContext` resolves
   the nearest provider by walking ancestors (`SceneStore.Parent`) and subscribes — so a value change re-renders
   exactly the consumers, and a scoped re-render needs no context-stack reconstruction. Ambient contexts

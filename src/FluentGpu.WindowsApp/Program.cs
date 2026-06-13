@@ -82,8 +82,86 @@ sealed class DemoApp : Component
 
 static class Program
 {
+    // [STAThread]: the gallery UI thread must be a single-threaded apartment, the conventional GUI-app apartment
+    // (WinForms/WPF are STA for exactly this reason). The shell common-item dialog (IFileOpenDialog/IFileSaveDialog →
+    // IModalWindow.Show, FilePicker.cs) is an STA-only (ThreadingModel=Apartment) coclass: its Show() does OLE init /
+    // RegisterDragDrop and runs a nested modal loop with STA pump semantics, so invoking it from this thread (which owns
+    // the composited window and runs the message pump in FluentApp.Run) requires STA. Without this attribute the thread
+    // defaults to MTA and Show() wedges (the Dialogs-pillar crash). STA is also what the Shell pillar already assumes —
+    // TaskbarManager/JumpList CoInitializeEx(APARTMENTTHREADED) on this thread and merely tolerate the MTA-degraded path
+    // today. The Media (SMTC RoInitialize SINGLETHREADED), Notifications (toast activator has an E_INVALIDARG→non-AGILE
+    // CoRegisterClassObject fallback that works in any apartment), and Network pillars are apartment-agnostic or run on a
+    // separate MTA reader thread (NetworkStatus.MtaReader), so the MTA→STA flip is safe across the whole WindowsApi surface.
+    [STAThread]
     static void Main(string[] args)
     {
+        // ── FluentGpu.WindowsApi validation harness (runs BEFORE the window/GPU stack spins up). ──────────────────────
+        // The spawned single-instance child mode MUST be first: it is a second process that should never touch the
+        // window path — it acquires the gate, forwards its activation payload via WM_COPYDATA, and exits with a code the
+        // parent asserts on.
+        int childIdx = Array.IndexOf(args, "--windowsapi-smoke-child");
+        if (childIdx >= 0 && OperatingSystem.IsWindowsVersionAtLeast(10, 0, 10240))
+        {
+            string payload = childIdx + 1 < args.Length ? args[childIdx + 1] : string.Empty;
+            Environment.Exit(WindowsApiSmoke.RunChild(payload));
+            return;
+        }
+        // The parent smoke: headless console-style [PASS]/[FAIL] checks over all four pillars; exit code = failure count.
+        if (Array.IndexOf(args, "--windowsapi-smoke") >= 0 && OperatingSystem.IsWindowsVersionAtLeast(10, 0, 10240))
+        {
+            Environment.Exit(WindowsApiSmoke.Run());
+            return;
+        }
+        // Headless NLM-off-thread deadlock probe (regression gate for the "Windows APIs" page hang). Runs the exact
+        // NetworkCard pattern — Task.Run(() => { _ = NetworkStatus.IsOnline; _ = NetworkStatus.GetConnectivity(); }) — on
+        // pool threads with a hard per-read timeout, NO window/GPU. exit 0 = no hang (fixed); exit 2 = hung (reproduced).
+        if (Array.IndexOf(args, "--nlm-deadlock-probe") >= 0 && OperatingSystem.IsWindowsVersionAtLeast(6, 0))
+        {
+            Environment.Exit(NlmDeadlockProbe.Run(args));
+            return;
+        }
+        // Headless dispatcher freeze probe (regression gate for the UsePost() stranding bug): drives a real headless
+        // AppHost, posts from a worker thread, asserts the post applies. exit 0 = applied (fixed); exit 2 = stranded.
+        if (Array.IndexOf(args, "--post-freeze-probe") >= 0)
+        {
+            Environment.Exit(PostFreezeProbe.Run(args));
+            return;
+        }
+        // File-picker crash probe (regression gate for the Dialogs-pillar crash): opens Open/Save/PickFolder against a
+        // real owner window and auto-dismisses each via a watchdog (no human). exit 0 = opened+dismissed, no crash
+        // (fixed); a process fail-fast at IModalWindow.Show on an MTA thread (the bug) is seen as a non-zero crash exit
+        // by the parent launcher. Add --sta to run the pickers on STA workers (the post-fix shape).
+        if (Array.IndexOf(args, "--filepicker-probe") >= 0 && OperatingSystem.IsWindowsVersionAtLeast(6, 0, 6000))
+        {
+            Environment.Exit(FilePickerProbe.Run(args));
+            return;
+        }
+        // FAITHFUL variant: drive the REAL gallery window and run the picker on the UI thread mid-loop (the exact
+        // DialogsCard reentrancy condition). exit 0 = ran + returned, no crash; a Show() fail-fast is a crash exit.
+        if (Array.IndexOf(args, "--filepicker-auto") >= 0 && OperatingSystem.IsWindowsVersionAtLeast(6, 0, 6000))
+        {
+            Environment.Exit(FilePickerProbe.RunAuto(args));
+            return;
+        }
+        // Packaging identity readback probe (the MSIX/package-identity prototype gate): reads PackageIdentity for the
+        // CURRENT process and writes {IsPackaged, PackageFullName, PackageFamilyName, ApplicationUserModelId, Version,
+        // InstalledLocation} to a fixed non-virtualized file (+ %TEMP% + Console), then exits — BEFORE any window/GPU
+        // spins up. Launched under package identity via the AppExecutionAlias (fluentgpu-gallery.exe --packaging-probe),
+        // IsPackaged reports True and a real PackageFullName/AUMID is read back from outside the process.
+        if (Array.IndexOf(args, "--packaging-probe") >= 0)
+        {
+            Environment.Exit(PackagingProbe.Run(args));
+            return;
+        }
+        // Localization (i18n) engine probe: loads the sample JSON resources and runs headless [PASS]/[FAIL] checks over
+        // every feature (dotted-key load, named {name} interp, ICU plural en/pl, select, parent fallback, missing-key/arg
+        // visible forms, pseudo-loc, live SetCulture re-resolution, OS-detected culture). exit code = failure count.
+        if (Array.IndexOf(args, "--loc-probe") >= 0)
+        {
+            Environment.Exit(LocProbe.Run(args));
+            return;
+        }
+
         int frames = -1;   // optional --frames N for headless/CI; omit for a normal interactive window
         string demo = "default";
         string? screenshot = null;   // --screenshot <path> renders a deterministic scene and writes a PNG (visual diff loop)

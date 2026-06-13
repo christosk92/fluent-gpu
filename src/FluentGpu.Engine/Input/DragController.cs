@@ -88,6 +88,11 @@ public sealed class DragController
     private ShadowSpec _restingShadow;
     private bool _wasHitTestVisible;
 
+    // Ghost styling captured at promotion (the dragged node's DragSource.Style, or the engine default). Opacity/shadow/
+    // scale are re-asserted every move (ApplyPresented) because a mid-drag reconcile commit restores authored values.
+    private DragVisualStyle _dragStyle = DragVisualStyle.Default;
+    private float _dragW, _dragH;   // the ghost's box size at promotion — the pivot for a center scale (Style.Scale)
+
     // Pointer-follow anchor (see class remarks): the node's resting visual origin captured at promotion, plus the drag
     // translate currently written into LocalTransform — stripping it from AbsoluteRect recovers the CURRENT resting
     // origin even after a mid-drag order projection moved the slot or an ancestor scrolled.
@@ -275,13 +280,29 @@ public sealed class DragController
     private void ApplyPresented()
     {
         ref NodePaint p = ref _scene.Paint(_node);
-        p.LocalTransform = Affine2D.Translation(_appliedTx, _appliedTy).Multiply(_restingTransform);
-        p.Opacity = DragOpacity;
-        _scene.SetShadow(_node, DragShadow);
+        p.LocalTransform = PresentedTransform();
+        p.Opacity = _dragStyle.Opacity;
+        _scene.SetShadow(_node, _dragStyle.Shadow ?? DragShadow);
         _scene.Flags(_node) &= ~NodeFlags.HitTestVisible;
         _scene.Flags(_node) |= NodeFlags.DragGhost;
         _scene.DragGhost = _node;
         _scene.Mark(_node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+    }
+
+    /// <summary>The presented ghost transform: the spring-eased drag translate over the resting transform, optionally
+    /// composed with a uniform scale ABOUT THE GHOST CENTER (<see cref="DragVisualStyle.Scale"/>). Scale = 1 (the
+    /// default) is a no-op, so an unstyled drag is byte-identical to before.</summary>
+    private Affine2D PresentedTransform()
+    {
+        Affine2D baseT = _restingTransform;
+        float s = _dragStyle.Scale > 0f ? _dragStyle.Scale : 1f;
+        if (s != 1f && (_dragW > 0.5f || _dragH > 0.5f))
+        {
+            float cx = _dragW * 0.5f, cy = _dragH * 0.5f;
+            Affine2D centerScale = Affine2D.Translation(cx, cy).Multiply(Affine2D.Scale(s, s)).Multiply(Affine2D.Translation(-cx, -cy));
+            baseT = _restingTransform.Multiply(centerScale);
+        }
+        return Affine2D.Translation(_appliedTx, _appliedTy).Multiply(baseT);
     }
 
     /// <summary>Release after an active drag: restore the resting visuals, fire <c>OnDragCompleted</c> (the app commits
@@ -356,23 +377,28 @@ public sealed class DragController
         _active = true;
         var grab = _scene.AbsoluteRect(_node);   // resting visual origin at gesture start (no drag translate applied yet)
         _grabVisualAbs = new Point2(grab.X, grab.Y);
+        _dragW = grab.W; _dragH = grab.H;        // ghost box size — the pivot for a center scale
         _appliedTx = 0f;
         _appliedTy = 0f;
         _tgtTx = _tgtTy = 0f;
         _springVx = _springVy = 0f;
         _sprung = false;
+        // Capture the dragged node's ghost style (DragSource.Style), or the engine default. A plain CanDrag reorder
+        // (no DragSource) and any source that leaves Style null both get the default 0.80 opacity + flyout shadow.
+        _dragStyle = _scene.TryGetDragSource(_node, out var src) && src?.Style is { } st ? st : DragVisualStyle.Default;
         ref NodePaint p = ref _scene.Paint(_node);
         _restingTransform = p.LocalTransform;
         _restingOpacity = p.Opacity;
         _hadShadow = _scene.TryGetShadow(_node, out _restingShadow);
         _wasHitTestVisible = (_scene.Flags(_node) & NodeFlags.HitTestVisible) != 0;
 
-        p.Opacity = DragOpacity;                              // ListViewItemDragThemeOpacity 0.80
-        _scene.SetShadow(_node, DragShadow);                  // lifted visual (ThemeShadow-equivalent depth)
+        p.LocalTransform = PresentedTransform();              // applies the center-scale (no-op at Scale=1)
+        p.Opacity = _dragStyle.Opacity;                       // default = ListViewItemDragThemeOpacity 0.80
+        _scene.SetShadow(_node, _dragStyle.Shadow ?? DragShadow);   // default = lifted ThemeShadow-equivalent depth
         _scene.Flags(_node) &= ~NodeFlags.HitTestVisible;     // drop-target hit-tests see through the moving visual
         _scene.Flags(_node) |= NodeFlags.DragGhost;           // recorder hoists the subtree into the unclipped top band
         _scene.DragGhost = _node;
-        _scene.Mark(_node, NodeFlags.PaintDirty);
+        _scene.Mark(_node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
 
         FillArgs(abs, tx, ty);
         _scene.GetDragStarted(_node)?.Invoke(_args);          // WinUI DragStarting — once, before the first delta

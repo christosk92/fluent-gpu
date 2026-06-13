@@ -140,6 +140,35 @@ public sealed class InputHooks
     /// host-less tree → element construction/clicks never launch.</summary>
     public Action<string>? OpenUri;
 
+    // ── OS file/folder drop seam (host → tree; the INBOUND twin of OpenUri) ──────────────────────────────────────────
+    // Host-wired in the AppHost ctor onto BOTH this host instance and the Current.Default channel-default (so the
+    // Windows backend's WM_DROPFILES handler — which has no component scope — reaches them through the default). The host
+    // sets these to the InputDispatcher's ExternalDrag* methods and invokes them on the UI thread via the normal message
+    // pump. Coordinates are window-DIP. Null in a host-less / drop-less tree ⇒ no OS drops. The Over/Leave delegates are
+    // for backends that can supply hover feedback; the WM_DROPFILES backend uses Enter+Drop only.
+
+    /// <summary>OS drag entered the window: window-DIP point + the dragged absolute paths + key modifiers. Returns the
+    /// engine <see cref="DropEffect"/> the OS should reflect as the drag cursor (<see cref="DropEffect.None"/> ⇒ no-drop).</summary>
+    public Func<Point2, string[], KeyModifiers, DropEffect>? ExternalDragEnter;
+    /// <summary>OS drag moved within the window: window-DIP point + modifiers → the live effect (hover-capable backends only).</summary>
+    public Func<Point2, KeyModifiers, DropEffect>? ExternalDragOver;
+    /// <summary>OS drag left the window / was cancelled: end the external session (hover-capable backends only).</summary>
+    public Action? ExternalDragLeave;
+    /// <summary>OS drop committed inside the window: window-DIP point + modifiers. Returns true if a target accepted it.</summary>
+    public Func<Point2, KeyModifiers, bool>? ExternalDrop;
+    /// <summary>OS drop committed WITH the dragged paths (the hover-capable backend's IDropTarget::Drop reads the file
+    /// list once, at drop, and passes it here — hover stayed data-free). Returns true if a target accepted it.</summary>
+    public Func<Point2, string[], KeyModifiers, bool>? ExternalDropFiles;
+
+    // ── Live drag state (host-wired; consumed by UseDragState / a DragPreviewLayer to render a cursor-following custom
+    //    preview). DragEpoch bumps each frame while a typed drag (in-app DragSource OR an OS file drag) is live, plus once
+    //    when it ends; GetDragState reads the live session as a copied snapshot. Mirrors WindowChromeEpoch's pattern. ──
+    /// <summary>Bumped by the host while a drag is live (and once on end): a component reads it to subscribe, then pulls
+    /// <see cref="GetDragState"/> for the current snapshot on re-render.</summary>
+    public Signal<int>? DragEpoch;
+    /// <summary>Snapshot the live drag (active/kind/position/payload) — <see cref="DragState.Active"/> false when idle.</summary>
+    public Func<DragState>? GetDragState;
+
     /// <summary>Arm the caret blinker for a (newly focused) editor's TEXT node; float = blink half-period ms
     /// (<c>IPlatformTextInput.CaretBlinkMs</c>).</summary>
     public Action<NodeHandle, float>? CaretFocus;
@@ -150,6 +179,21 @@ public sealed class InputHooks
     /// <summary>Position the IME candidate window: the caret rect in window DIP — the HOST converts to physical px
     /// (it owns the window scale) before calling <c>IPlatformTextInput.SetCaretRectPx</c>.</summary>
     public Action<RectF>? ImeSetCaretRect;
+
+    // ── SIP (touch keyboard) trigger seam (input-a11y.md §10; consumed by EditableText, host-wired in the AppHost ctor) ──
+    /// <summary>True when the most recent focus-causing pointer was a TOUCH contact (host-wired to the dispatcher's
+    /// <c>LastPointerKind</c>). EditableText gates the SIP show on this so the on-screen keyboard appears only on a touch
+    /// focus, never a mouse/pen focus (the WinUI InputPaneHandler.cpp policy). Null in a host-less tree ⇒ treated as not
+    /// touch (no SIP).</summary>
+    public Func<bool>? LastPointerWasTouch;
+    /// <summary>Request the OS touch keyboard for the focused editor (host-wired to
+    /// <c>IPlatformWindow.TextInput.TryShowTouchKeyboard</c>). Called by EditableText on focus-gain when
+    /// <see cref="LastPointerWasTouch"/> and the field is editable. Returns the platform's success (false on a desktop
+    /// without a touch keyboard); null ⇒ no SIP wired (headless / SIP-less host).</summary>
+    public Func<bool>? ShowTouchKeyboard;
+    /// <summary>Dismiss the OS touch keyboard (host-wired to <c>IPlatformWindow.TextInput.TryHideTouchKeyboard</c>) —
+    /// called by EditableText when focus leaves the editor for a non-editable target.</summary>
+    public Func<bool>? HideTouchKeyboard;
 
     private readonly List<(object Owner, Action Action)> _afterAnimations = new();
 

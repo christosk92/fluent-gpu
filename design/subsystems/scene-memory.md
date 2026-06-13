@@ -279,6 +279,11 @@ public struct NodePaint {
     public byte VisualKind;          // 1 — NodeVisual enum
     public byte Layer;               // 1 — NeedsLayer routing
     public int  EffectAuxRef;        // 4 — -1 none; else EffectAux slab row (backdrop owns semantics)
+    public float BlurSigma;          // 4 — per-node self-blur σ px (default 0); animated by AnimChannel.BlurSigma.
+                                     //     σ>0 ⇒ recorder wraps the subtree in PushLayer{Blur} (gpu-renderer §7.1);
+                                     //     PaintDirty only. Semantics: backdrop-effects-animation.md FA-2 (the
+                                     //     Expressive Motion Kit). As-built dense field; the original sketch routed
+                                     //     blur through EffectAux, but self-blur is a hot, common, animating channel.
 }
 ```
 

@@ -36,6 +36,13 @@ public interface IGpuDevice : IDisposable
     /// loop, where the WndProc thread would otherwise block up to a vblank on the latency waitable — injecting the
     /// drag-start/live-resize hitch. Default no-op: only a backend with a present-latency throttle (D3D12) honors it.</summary>
     void SuppressLatencyWaitOnce() { }
+
+    /// <summary>Present the NEXT frame at SyncInterval 0 instead of the steady-state vsync interval (self-resetting). The
+    /// host calls this for a KEEP-ALIVE repaint fired synchronously from inside an OS modal move/size loop: on a composited
+    /// flip swapchain interval-0 is a cheap, tear-free hand-off (DWM still composites at vblank) so the WndProc thread isn't
+    /// blocked up to a vblank in Present — the live-resize/move hitch the latency-wait skip alone doesn't remove. Default
+    /// no-op: only a backend that presents to a real swapchain (D3D12) honors it.</summary>
+    void SuppressVsyncOnce() { }
 }
 
 public interface ISwapchain : IDisposable

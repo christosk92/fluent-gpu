@@ -142,6 +142,9 @@ internal static unsafe class ComCcw
     public static readonly Guid IID_IUnknown = new(0x00000000, 0x0000, 0x0000, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46);
     public static readonly Guid IID_IDWriteTextAnalysisSource = new(0x688E1A58, 0x5094, 0x47C8, 0xAD, 0xC8, 0xFB, 0xCE, 0xA6, 0x0A, 0xE9, 0x2B);
     public static readonly Guid IID_IDWriteTextAnalysisSink = new(0x5810CD44, 0x0CA0, 0x4701, 0xB3, 0xFA, 0xBE, 0xC5, 0x18, 0x2A, 0xE4, 0xF6);
+    /// <summary>IID_IDropTarget (00000122-0000-0000-C000-000000000046) — the OLE drop-target interface our
+    /// <c>Win32DropTarget</c> CCW implements for <c>RegisterDragDrop</c>.</summary>
+    public static readonly Guid IID_IDropTarget = new(0x00000122, 0x0000, 0x0000, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46);
 }
 
 /// <summary>CCW implementing <c>IDWriteTextAnalysisSource</c> — supplies the (pinned) source text to DirectWrite.</summary>

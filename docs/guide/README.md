@@ -141,6 +141,12 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
 7. **[winui-control-parity-audit.md](./winui-control-parity-audit.md)** - source-backed diff of every FluentGpu
    control against `C:\WAVEE\microsoft-ui-xaml`, including XAML templates, C++ behavior, generated properties, and
    engine blockers.
+8. **[motion-recipes.md](./motion-recipes.md)** — the **Expressive Motion Kit**: named transitions adopted from
+   transitions.dev (number pop-in, error shake, skeleton reveal, success check, …) on the engine's springs + the new
+   per-node self-blur + the expressive curve/token vocabulary. An opt-in app-author palette (controls keep Fluent curves).
+9. **[skeleton-loading.md](./skeleton-loading.md)** — native **skeleton/shimmer-while-loading**: ONE UI source, the
+   framework derives the shimmer from it, keeps partial-known parts real, shimmers the pending region, and blur-reveal
+   swaps to real on load. `Loadable<T>` + `Skel.Region` + `UseAsyncResource`; incremental per-field, onFailed, groups.
 
 ---
 

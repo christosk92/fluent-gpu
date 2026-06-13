@@ -1,5 +1,6 @@
 using System.Globalization;
 using FluentGpu.Dsl;
+using FluentGpu.Forms;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Pal;
@@ -82,6 +83,11 @@ public sealed class EditableText : Component
     public Action? OnCancel;                 // Escape (after the revert-to-snapshot; focus is dropped)
     public Action<bool>? OnFocusChanged;     // focus gained(true)/lost(false): NumberBox validate-on-blur / open-Compact
     public Func<string, string>? Sanitize;   // applied after every user edit (numeric/hex clamp); null = free text
+    /// <summary>Optional validation binding (form-validation.md): when set, the chrome border swaps to the theme critical
+    /// color while the field's error is invalid, the field is marked touched on blur, and the control node is published
+    /// for focus-first-error. Non-generic (a <see cref="FieldBinding"/>), so string/number/combo fields share this path;
+    /// the error MESSAGE row is composed at the wrapper level (TextBox/PasswordBox/NumberBox/AutoSuggestBox).</summary>
+    public FieldBinding? Field;
     public float Width = 120f;
     /// <summary>LIVE width (DIP) — overrides <see cref="Width"/> when set. Component plain fields freeze at mount,
     /// so a field whose width must track runtime layout (the titlebar search box giving way as the window narrows)
@@ -351,7 +357,7 @@ public sealed class EditableText : Component
                 Fill = Tok.AccentDefault, Corners = CornerRadius4.All(0f),
             });
 
-        Action<NodeHandle> rootCapture = h => _rootNode = h;
+        Action<NodeHandle> rootCapture = h => { _rootNode = h; if (Field is { } vf) vf.Node.Value = h; };
         Element[] rootKids = children.ToArray();
         var root = new BoxEl
         {
@@ -380,6 +386,9 @@ public sealed class EditableText : Component
             // (ComboBox_themeresources.xaml:580); the one border is the composer's.
             BorderBrush = Chromeless ? null : (!IsEnabled ? GradientSpec.Solid(Tok.StrokeControlDefault) : Tok.ControlElevationBorder),
             BorderWidth = Chromeless ? 0f : 1f,
+            // form-validation.md: a bound channel — while the field is invalid the recorder forces a solid critical-color
+            // ring over the resting gradient border. Bound (no re-render per keystroke); the write is equality-gated.
+            Validation = Field is { } vfield ? Prop.Of(() => vfield.Error.Value.IsValid ? ValidationState.None : ValidationState.Error) : default,
             ClipToBounds = true,
             IsEnabled = IsEnabled,
             Focusable = IsEnabled,
@@ -391,6 +400,7 @@ public sealed class EditableText : Component
             OnCharInput = HandleChar,
             OnPointerPressed = HandlePressed,
             OnDrag = HandleDrag,
+            OnPointerWheel = HandleWheel,
             Children = rootKids,
         };
         if (Parts is { } rp)
@@ -407,6 +417,7 @@ public sealed class EditableText : Component
                 OnCharInput = HandleChar,
                 OnPointerPressed = HandlePressed,
                 OnDrag = HandleDrag,
+                OnPointerWheel = HandleWheel,
                 Children = rootKids,
                 OnRealized = TemplateParts.Chain(rootCapture, m.OnRealized),
             };
@@ -489,6 +500,11 @@ public sealed class EditableText : Component
                 ti.SetSink(_ime);
                 ti.SetEditable(true);
             }
+            // SIP (touch keyboard): show ON focus-gain when this field is editable AND the focus-moving input was a TOUCH
+            // contact (WinUI InputPaneHandler.cpp keys the panel off the focus pointer's device type — a mouse/Tab focus
+            // never raises it). The host owns the actual InputPane2.TryShow; this is config-only through the seam.
+            if (!IsReadOnly && IsEnabled && hooks?.LastPointerWasTouch?.Invoke() == true)
+                hooks.ShowTouchKeyboard?.Invoke();
             // Keyboard (Tab) focus → select all (WinUI); pointer focus keeps the caret the press just placed.
             if (!_rootNode.IsNull && Context.Scene is { } sc && sc.IsLive(_rootNode)
                 && (sc.Flags(_rootNode) & NodeFlags.FocusVisual) != 0)
@@ -503,12 +519,16 @@ public sealed class EditableText : Component
                 ti.SetEditable(false);   // cancels any in-flight composition through the sink
                 ti.SetSink(null);
             }
+            // SIP: dismiss the touch keyboard when focus leaves the editor (WinUI hides the InputPane on focus loss to a
+            // non-editable target; a focus move to ANOTHER editor re-shows it from that field's own touch focus-gain).
+            hooks?.HideTouchKeyboard?.Invoke();
             if (hooks is not null && !tn.IsNull) hooks.CaretBlur?.Invoke(tn);
             _snapshot = null;
             SyncVisual();                // selection STATE kept; SelectionActive off → highlight hides (simplified WinUI)
         }
         _setFocused(gained);
         OnFocusChanged?.Invoke(gained);
+        if (!gained) Field?.MarkTouched();   // form-validation.md: first blur arms OnTouched-gated error display
     }
 
     // ── keyboard ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -622,6 +642,45 @@ public sealed class EditableText : Component
         // Pointer-rate: display-string cache + pooled rect slab keep the steady drag 0-alloc.
         _core.SetCaret(HitDoc(ToTextLocal(local)), extend: true);
         SyncVisual();
+    }
+
+    // ── mouse-wheel horizontal scroll (single-line) ─────────────────────────────────────────────────────────────────
+    // WinUI scrolls a single-line TextBox horizontally on the wheel; a read-only field that overflows is otherwise only
+    // revealable via the keyboard (End/arrows). We consume the wheel ONLY when it actually moves the view — a field that
+    // fits, or one already at the scroll limit in the wheel's direction, leaves Handled unset so the enclosing viewport
+    // (the page) scrolls instead. The write is a bound -ScrollX channel (no re-render); the caret keeps its position and
+    // SyncVisual re-centres on it the next time it moves.
+    private void HandleWheel(WheelEventArgs e)
+    {
+        if (AcceptsReturn || _scroll is null) return;               // multi-line wraps — nothing to scroll horizontally
+        if (!TryHScrollExtent(out float maxScroll)) return;          // text fits → bubble to the page
+        float cur = _scroll.Peek();
+        float next = Math.Clamp(cur + e.Delta + e.DeltaX, 0f, maxScroll);   // +Delta = scroll toward the content end (right)
+        if (MathF.Abs(next - cur) < 0.01f) return;                  // at the limit in this direction → bubble
+        _scroll.Value = next;                                       // TransformBind applies the new -ScrollX next flush
+        var tn = TextNode();
+        if (Context.Scene is { } sc && !tn.IsNull && sc.IsLive(tn)) sc.TextEditRef(tn).ScrollX = next;
+        e.Handled = true;
+    }
+
+    /// <summary>The horizontal overflow extent of a single-line field: the max <c>-ScrollX</c> that brings the text end
+    /// to the right edge (mirrors <see cref="SyncVisual"/>'s caret-follow clamp). False when the text fits (no scroll).</summary>
+    private bool TryHScrollExtent(out float maxScroll)
+    {
+        maxScroll = 0f;
+        var scene = Context.Scene;
+        var tn = TextNode();
+        if (AcceptsReturn || scene is null || _hooks?.Fonts is not { } fonts || tn.IsNull || !scene.IsLive(tn)
+            || _laneNode.IsNull || !scene.IsLive(_laneNode)) return false;
+        string disp = DisplayText();
+        var style = scene.Layout(tn).TextStyle;
+        float maxW = QueryMaxWidth(scene, tn);
+        ref LayoutInput ll = ref scene.Layout(_laneNode);
+        float vw = scene.Bounds(_laneNode).W - ll.Padding.Left - ll.Padding.Right;
+        if (vw <= 1f) return false;
+        fonts.GetCaret(disp, style, maxW, disp.Length, out float endX, out _, out _, out _);
+        maxScroll = MathF.Max(0f, endX + 2f - vw);
+        return maxScroll > 0.5f;
     }
 
     // ── clipboard ───────────────────────────────────────────────────────────────────────────────────────────────────

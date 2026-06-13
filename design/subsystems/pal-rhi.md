@@ -131,6 +131,20 @@ public interface IImeSession { void SetCompositionRect(in RectPx caret); void En
 `CloseRequested`, and `DeviceLost` (mirrored from the render-thread word — see §6). The host reads these
 in phase 1 (pump) and phase 2 (dispatch).
 
+`IPlatformApp` also exposes `event Action<string>? ActivationRedirected` — the **inbound twin of `OpenUri`**
+(the outbound launch seam). It fires when a *second* launch of a single-instance app is redirected to this
+already-running instance, carrying that launch's activation payload (a deep-link URI like `wavee://callback?…`,
+or the empty string for a focus-only relaunch). Unlike `WindowEvent`, the payload is a managed string, so it
+rides this side channel rather than the POD ring. The contract is **UI-thread delivery**: the Win32 backend
+raises it synchronously from a `WM_COPYDATA` case in its `WndProc` (the OS dispatches a sent message on the
+window's own thread), so subscribers may touch non-thread-safe host state (`AppHost.WakeFrame`) directly — no
+marshal hop. A cross-thread producer (a future toast-COM activator firing on an agile-COM thread) MUST
+`PostMessage` to the window first. It is a default-interface-method event whose default never fires, so the
+headless PAL stays test-neutral and only the Win32 backend opts in. The producer lives outside the PAL in
+`FluentGpu.WindowsApi.Activation` (`SingleInstanceGate` sends the `WM_COPYDATA`; `ProtocolRegistrar` writes the
+`HKCU` scheme keys); `AppHost` subscribes next to the `OpenUri` wiring, stashes the payload, wakes a frame, and
+re-raises its own `AppHost.ActivationRedirected` to app code at the top of `Paint` (see input-a11y / hosting).
+
 ### 1.2 Win32 reference impl (`FluentGpu.Windows` Pal/) — UI thread
 
 - **Window class:** `RegisterClassExW` once. Own redraw via DXGI/DComp, so `CS_HREDRAW|CS_VREDRAW`

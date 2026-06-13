@@ -118,14 +118,26 @@ static class CodeText
         "async", "await", "nameof", "typeof",
     };
 
+    const float LineH = 18f;   // ~12.5px Cascadia line box (generous, so descenders never clip)
+
     public static Element Block(string code)
     {
-        // Plain rows, no scroll viewport: a horizontal ScrollEl has no intrinsic height in a column, so the block
-        // would collapse to zero. Snippets are authored to fit the card width; overflow clips at the card edge.
+        // Horizontally scrollable so long lines are READABLE instead of clipped at the card edge. A horizontal ScrollEl
+        // has no intrinsic height in a column, so we give it an explicit viewport height computed from the line count
+        // (the row heights + gaps + padding); the inner column keeps its natural overflowing width for the pan.
         var lines = code.Replace("\r\n", "\n").Trim('\n').Split('\n');
         var rows = new Element[lines.Length];
-        for (int i = 0; i < lines.Length; i++) rows[i] = Line(lines[i]);
-        return new BoxEl { Direction = 1, Gap = 3f, Padding = new Edges4(16, 8, 16, 14), Children = rows };
+        float h = 8f + 14f;                       // padding top + bottom
+        for (int i = 0; i < lines.Length; i++)
+        {
+            rows[i] = Line(lines[i]);
+            h += lines[i].Trim().Length == 0 ? 8f : LineH;
+            if (i > 0) h += 3f;                   // inter-row gap
+        }
+        var content = new BoxEl { Direction = 1, Gap = 3f, Padding = new Edges4(16, 8, 16, 14), Children = rows };
+        // Horizontal viewport with a fixed height (the column's cross-axis stretch fills the card width). Height is
+        // explicit because a horizontal ScrollEl has no intrinsic height in a column.
+        return new ScrollEl { Horizontal = true, Height = h, Content = content };
     }
 
     static Element Line(string line)

@@ -1,8 +1,10 @@
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
+using FluentGpu.Forms;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
+using FluentGpu.Signals;
 
 namespace FluentGpu;
 
@@ -23,6 +25,32 @@ sealed class ShotScene : Component
         // Full-bleed: the whole gallery (regression check), optionally deep-linked to a nav page via "gallery:<navkey>".
         "gallery" => Embed.Comp(() => new GalleryApp()),
         _ when _id.StartsWith("gallery:") => Embed.Comp(() => new GalleryApp { InitialPage = _id.Substring("gallery:".Length) }),
+        // The "Windows APIs" page's below-the-fold pillar cards (Shell / Power / Network), rendered directly so a
+        // top-anchored screenshot can verify them without scrolling the full page (the device-height clamp hides them).
+        "windowsapi-cards" => Embed.Comp(() => new OverlayHost
+        {
+            Child = new BoxEl
+            {
+                Grow = 1, Direction = 1, Fill = PageBg, Gap = 12f, Padding = new Edges4(28, 28, 28, 28),
+                Children =
+                [
+                    Embed.Comp(() => new ShellCard()),
+                    Embed.Comp(() => new PowerCard()),
+                    Embed.Comp(() => new NetworkCard()),
+                ],
+            },
+        }),
+        // Edge-fade subsystem: alpha feather (+ optional blur) following the rounded corners (the curve).
+        "edgefade" => new BoxEl
+        {
+            Grow = 1, Direction = 0, Fill = PageBg, Gap = 28f, Padding = new Edges4(48, 48, 48, 48), AlignItems = FlexAlign.Start,
+            Children =
+            [
+                EfCard("Perimeter — follows the corners", EdgeFadeSpec.Perimeter(40f)),
+                EfCard("Fade + blur", new EdgeFadeSpec(EdgeMask.All, 44f, 44f, 44f, 44f, FadeFalloff.Smoothstep, 1f, EdgeFadeMode.FadeAndBlur, 8f)),
+                EfCard("Bottom only", new EdgeFadeSpec(EdgeMask.Bottom, 64f)),
+            ],
+        },
         // The REAL flyout through OverlayHost + the open animation (reproduces the live dropdown the user sees).
         "flyout" => Embed.Comp(() => new OverlayHost { Child = new BoxEl { Grow = 1, Fill = PageBg, Children = [Embed.Comp(() => new FlyoutLiveShot())] } }),
         "combobox-open" => OverlayShot(Embed.Comp(() => new ComboBoxOpenShot())),
@@ -44,6 +72,8 @@ sealed class ShotScene : Component
         "text-snap" => new BoxEl { Grow = 1, Fill = PageBg, Children = [Embed.Comp(() => new TextSnapShot())] },
         "expander-open" => CenterShot(Embed.Comp(() => new ExpanderOpenShot())),
         "expander-reflow" => CenterShot(Embed.Comp(() => new ExpanderReflowShot())),
+        "validation" => CenterShot(Embed.Comp(() => new ValidationShot())),
+        "dropzone" => CenterShot(Embed.Comp(() => new DropZoneShot())),
         "pips" => CenterShot(Embed.Comp(() => new PipsPagerShot())),
         "selectorbar" => CenterShot(Embed.Comp(() => new SelectorBarShot())),
         "pivot" => CenterShot(Embed.Comp(() => new PivotShot())),
@@ -160,6 +190,16 @@ sealed class ShotScene : Component
         Justify = FlexJustify.Center,
         Padding = new Edges4(48, 48, 48, 48),
         Children = [child],
+    };
+
+    // Edge-fade demo card: a bright rounded card whose content alpha dissolves at its edges, following the rounded
+    // corners (the curve) — over the dark page so the feather is unmistakable.
+    static Element EfCard(string label, EdgeFadeSpec spec) => new BoxEl
+    {
+        Direction = 1, Width = 280, Height = 200, Grow = 0, Justify = FlexJustify.Center, AlignItems = FlexAlign.Center,
+        Padding = new Edges4(20, 20, 20, 20),
+        Fill = ColorF.FromRgba(0x4C, 0x8B, 0xF5), Corners = CornerRadius4.All(28f), EdgeFade = spec,
+        Children = [ new TextEl(label) { Size = 15f, Weight = 600, Color = ColorF.FromRgba(0xFF, 0xFF, 0xFF) } ],
     };
 
     static Element OverlayShot(Element child) => Embed.Comp(() => new OverlayHost
@@ -673,6 +713,68 @@ sealed class ExpanderReflowShot : Component
             ],
         };
     }
+}
+
+// form-validation.md — the invalid state rendered statically: three deliberately-wrong fields whose errors are revealed
+// on mount (form.Validate()) so the screenshot shows the red border + message row + touched-gating result.
+sealed class ValidationShot : Component
+{
+    static readonly System.Text.RegularExpressions.Regex EmailRx = new(@"^[^@\s]+@[^@\s]+\.[^@\s]+$");
+    readonly Signal<string> _email = new("not-an-email");
+    readonly Signal<string> _pwd = new("12345");
+    readonly Signal<string> _confirm = new("99999");
+
+    public override Element Render()
+    {
+        UseEffect(() =>
+        {
+            FluentGpu.Localization.Localization.DefaultCulture = "en-US";
+            FluentGpu.Localization.Localization.LoadFolder(System.IO.Path.Combine(System.AppContext.BaseDirectory, "assets", "loc"));
+            if (string.IsNullOrEmpty(FluentGpu.Localization.Localization.CurrentCulture))
+                FluentGpu.Localization.Localization.SetCulture("en-US");
+        }, LocOnce);
+
+        var form = UseForm();
+        var email = UseField(_email, Rules.Required("validation.required"), Rules.Matches(EmailRx, "validation.email"));
+        var pwd = UseField(_pwd, Rules.MinLength(8, "validation.minlen"));
+        var confirm = UseField(_confirm, new FieldOptions<string> { Timing = ValidationTiming.OnChange },
+                               Rules.Equals(_pwd, "validation.match"));
+
+        // Reveal the (deliberately invalid) fields on mount so the static capture shows the error styling.
+        UseEffect(() => form.Validate(), RevealOnce);
+
+        return ShotCards.Column(
+            TextBox.Create(header: "Email", width: 340f, text: _email, field: email),
+            TextBox.Create(header: "Password", width: 340f, text: _pwd, field: pwd),
+            TextBox.Create(header: "Confirm password", width: 340f, text: _confirm, field: confirm));
+    }
+
+    static readonly object[] LocOnce = new object[] { "val-shot-loc" };
+    static readonly object[] RevealOnce = new object[] { "val-shot-reveal" };
+}
+
+// The DropZone hover overlay (seeded visible) — verifies the opaque accent panel + inset dashed ring + icon/title/
+// subtitle, on the dark page, without needing a live drag.
+sealed class DropZoneShot : Component
+{
+    public override Element Render() => Embed.Comp(() => new DropZone
+    {
+        Accept = ["os.files"],
+        OnDrop = _ => { },
+        InitiallyOver = true,
+        Content = new BoxEl
+        {
+            Direction = 1, Gap = 8f, Width = 460f, Height = 200f,
+            AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Padding = Edges4.All(16), Corners = Radii.ControlAll, Fill = Tok.FillSolidBase,
+            Children =
+            [
+                new TextEl(Icons.Download) { Size = 30f, FontFamily = Theme.IconFont, Color = Tok.TextTertiary },
+                new TextEl("Drop files / folders here") { Size = 14f, Weight = 600, Color = Tok.TextPrimary },
+                new TextEl("0 item(s)") { Size = 12f, Color = Tok.TextSecondary },
+            ],
+        },
+    });
 }
 
 sealed class PipsPagerShot : Component

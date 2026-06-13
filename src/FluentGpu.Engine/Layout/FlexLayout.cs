@@ -352,6 +352,19 @@ public sealed class FlexLayout
                     else h = main + li.Padding.Vertical;
                 }
             }
+            // Cross-axis hug (non-virtual content) — a viewport clips/scrolls ONLY its scroll axis; its cross axis has
+            // no overflow, so size it to the content when the parent leaves it indefinite. Else a horizontal strip in an
+            // auto-height column (the cross axis is the column's MAIN axis, which neither cross-stretch nor Grow fills)
+            // collapses to 0. The scroll axis is never touched here — it stays parent-assigned (never self-grows).
+            if (sc.ItemCount == 0 && !content.IsNull && _scene.IsLive(content)
+                && (horizontal ? float.IsNaN(h) : float.IsNaN(w)))
+            {
+                float crossAvailW = horizontal ? float.PositiveInfinity
+                                  : (!float.IsNaN(w) ? MathF.Max(0f, w - li.Padding.Horizontal) : float.PositiveInfinity);
+                var cs = Measure(content, crossAvailW);
+                if (horizontal) h = cs.Height + li.Padding.Vertical;
+                else w = cs.Width + li.Padding.Horizontal;
+            }
             if (float.IsNaN(w)) w = 0f;
             if (float.IsNaN(h)) h = 0f;
             w = Clamp(w, li.MinW, li.MaxW);

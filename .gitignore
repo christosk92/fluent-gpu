@@ -23,3 +23,7 @@ fluentgpu-*-counters.csv
 # --screenshot fidelity captures (generated PNGs for visual diffing)
 out/
 .shots/
+.tmp-shots/
+
+# MSIX packaging prototype: self-contained publish output (loose-register install location)
+.pkg-publish*/

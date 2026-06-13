@@ -54,6 +54,8 @@ public sealed class DragDropContext
     private bool _active;
     private NodeHandle _over;            // current accepting target (Null = over nothing that accepts)
     private DropTargetSpec? _overSpec;   // its spec (cached so Leave/Over/Drop never re-query a dead column)
+    private DropEffect _defaultEffect = DropEffect.Move;   // the engine's advisory effect over an accepting target;
+                                                           // Move for in-app drags, Copy for an OS file drop (Explorer convention)
 
     // Edge auto-scroll (armed by Move, driven by the host's Tick).
     private NodeHandle _scrollViewport;
@@ -106,12 +108,44 @@ public sealed class DragDropContext
             _session.Effect = DropEffect.None;
             _session.Mods = mods;
             _session.Pointer = kind;
+            _defaultEffect = DropEffect.Move;   // in-app reorder/transfer
             _active = true;
             _over = NodeHandle.Null;
             _overSpec = null;
             return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// Open a session for an OS-originated (OLE) drag that did NOT promote from an in-tree <see cref="DragSource"/>:
+    /// the host's <c>IDropTarget</c> resolves the payload (e.g. the dropped paths) and calls this on DragEnter, then
+    /// drives <see cref="Move"/>/<see cref="TryDrop"/>/<see cref="Cancel"/> exactly like an in-app gesture. The session
+    /// <c>Source</c> is the live scene ROOT (never <see cref="NodeHandle.Null"/>) so <see cref="PruneDead"/> — which
+    /// <see cref="Cancel"/>s a session whose source died — keeps the external session alive across reconciles. The
+    /// advisory effect over an accepting target is <paramref name="defaultEffect"/> (Copy for a file drop, the Explorer
+    /// convention); targets may still refine it in OnEnter/OnOver. Returns false if a session is already live.
+    /// </summary>
+    public bool ExternalBegin(string kind, object? payload, Point2 abs, KeyModifiers mods,
+                              DropEffect defaultEffect = DropEffect.Copy)
+    {
+        if (_active) return false;
+        if (_scene.Root.IsNull) return false;   // a never-rendered tree has no surface to drop onto
+        _session.Payload = payload;
+        _session.Kind = kind;
+        _session.Position = abs;
+        _session.VelocityX = 0f;
+        _session.VelocityY = 0f;
+        _session.Source = _scene.Root;          // NOT Null — PruneDead Cancels when !IsLive(Source)
+        _session.OverTarget = NodeHandle.Null;
+        _session.Effect = DropEffect.None;
+        _session.Mods = mods;
+        _session.Pointer = PointerKind.Mouse;   // an OLE drag presents as a mouse cursor
+        _defaultEffect = defaultEffect;
+        _active = true;
+        _over = NodeHandle.Null;
+        _overSpec = null;
+        return true;
     }
 
     /// <summary>Per pointer move while the session is live: update the session coords/velocity, resolve the nearest
@@ -136,7 +170,7 @@ public sealed class DragDropContext
             _over = next;
             _overSpec = !next.IsNull && _scene.TryGetDropTarget(next, out var spec) ? spec : null;
             _session.OverTarget = next;
-            _session.Effect = next.IsNull ? DropEffect.None : DropEffect.Move;   // targets may refine in OnEnter/OnOver
+            _session.Effect = next.IsNull ? DropEffect.None : _defaultEffect;   // targets may refine in OnEnter/OnOver
             if (!next.IsNull) _overSpec?.OnEnter?.Invoke(_session);
             _requestRerender();
         }
@@ -166,7 +200,7 @@ public sealed class DragDropContext
         if (dropped)
         {
             _session.OverTarget = target;
-            if (_session.Effect == DropEffect.None) _session.Effect = DropEffect.Move;
+            if (_session.Effect == DropEffect.None) _session.Effect = _defaultEffect;
             spec!.OnDrop?.Invoke(_session);
             settleGlide = spec.SettleOnDrop;
         }
@@ -316,6 +350,7 @@ public sealed class DragDropContext
         _active = false;
         _over = NodeHandle.Null;
         _overSpec = null;
+        _defaultEffect = DropEffect.Move;
         _scrollViewport = NodeHandle.Null;
         _edgeVelocity = 0f;
         _edgeScrolling = false;

@@ -44,8 +44,9 @@ public readonly record struct TitleBarRegion(RectF RectDip, TitleBarHit Hit);
 
 /// <summary>
 /// POD input event drained from the host-owned ring once per frame (no C# events across the seam).
-/// <paramref name="ScrollDelta"/> (Wheel only) is in DIP, oriented so positive = scroll toward the content end
-/// (offset increases). The platform pump converts WM_MOUSEWHEEL notches → DIP and flips the sign there.
+/// <paramref name="ScrollDelta"/> (Wheel only) is the VERTICAL wheel in DIP, oriented so positive = scroll toward the
+/// content end (offset increases); <paramref name="ScrollDeltaX"/> is the HORIZONTAL wheel (WM_POINTERHWHEEL / trackpad
+/// two-finger horizontal), same DIP + sign convention on the X axis. The platform pump converts notches → DIP per axis.
 /// <paramref name="Button"/>: 0 = left, 1 = right, 2 = middle. <paramref name="Mods"/> is the modifier chord at the
 /// time of the event (pump-captured); <paramref name="IsRepeat"/> = keyboard auto-repeat (lParam bit 30);
 /// <paramref name="TimestampMs"/> = the platform message time (drives double/triple-click detection in the dispatcher).
@@ -56,7 +57,8 @@ public readonly record struct TitleBarRegion(RectF RectDip, TitleBarHit Hit);
 public readonly record struct InputEvent(
     InputKind Kind, Point2 PositionPx, int Button, int KeyCode, float ScrollDelta = 0f,
     KeyModifiers Mods = KeyModifiers.None, PointerKind Pointer = PointerKind.Mouse,
-    bool IsRepeat = false, uint TimestampMs = 0, uint PointerId = 0, float Pressure = 1f);
+    bool IsRepeat = false, uint TimestampMs = 0, uint PointerId = 0, float Pressure = 1f,
+    float ScrollDeltaX = 0f);   // trailing-optional (mouse call sites unchanged); the HORIZONTAL wheel delta (DIP)
 
 /// <summary>
 /// Drained by the host each frame (drain-to-empty, single contiguous span — <c>AppHost.RunFrame</c> Clears, the window
@@ -106,7 +108,7 @@ public sealed class InputEventRing
             ref InputEvent prev = ref _buf[_count - 1];
             if (prev.Kind == InputKind.Wheel && prev.PositionPx.Equals(e.PositionPx))
             {
-                prev = prev with { ScrollDelta = prev.ScrollDelta + e.ScrollDelta };
+                prev = prev with { ScrollDelta = prev.ScrollDelta + e.ScrollDelta, ScrollDeltaX = prev.ScrollDeltaX + e.ScrollDeltaX };
                 return;
             }
         }
@@ -185,6 +187,24 @@ public interface IPlatformApp : IDisposable
     void OpenUri(string uri);
 
     /// <summary>
+    /// Raised when a SECOND launch of a single-instance app is redirected to this (already-running) instance, carrying the
+    /// new launch's activation payload — the deep-link URI (<c>wavee://callback?…</c>) or the empty string for a bare
+    /// focus-only relaunch. The inbound producer (<c>FluentGpu.WindowsApi.Activation.SingleInstanceGate</c>) forwards it
+    /// from the exiting second instance via <c>WM_COPYDATA</c>; the Win32 PAL reconstructs the string inside its
+    /// <c>WndProc</c> and invokes this. Mirrors the outbound <see cref="OpenUri"/> seam shape (this is its inbound twin).
+    /// <para>
+    /// THREADING CONTRACT — delivered on the UI thread. The Win32 backend raises it synchronously from
+    /// <c>WM_COPYDATA</c>, which the OS dispatches on the window's own (UI) thread, so subscribers may touch
+    /// non-thread-safe host state (e.g. <c>AppHost.WakeFrame</c>) directly. A cross-thread producer (a notification COM
+    /// activator firing on a threadpool/agile-COM thread) MUST <c>PostMessage</c> to hop onto the UI thread before
+    /// raising it — never invoke it off-thread. The default implementation never fires (headless / non-redirecting
+    /// backends), keeping it test-neutral; it is a default-interface-method event so backends opt in without every
+    /// <see cref="IPlatformApp"/> implementer having to declare it.
+    /// </para>
+    /// </summary>
+    event Action<string>? ActivationRedirected { add { } remove { } }
+
+    /// <summary>
     /// The WORK AREA (desktop minus taskbar/docked bars) of the monitor containing <paramref name="screenPointPx"/>,
     /// in physical virtual-screen px — the multi-monitor placement seam WinUI's windowed popups use
     /// (Popup.cpp monitor-bounds placement; <c>DXamlCore::CalculateAvailableMonitorRect</c>,
@@ -261,6 +281,16 @@ public interface IPlatformWindow : IDisposable
     /// Real windows use this for event-driven idle; headless implementations may return immediately.
     /// </summary>
     void WaitForWork(int timeoutMs);
+
+    /// <summary>
+    /// Break an in-progress <see cref="WaitForWork"/> from ANY thread so the loop runs another frame promptly — the
+    /// thread-safe wake the engine's cross-thread UI dispatch (<c>AppHost.Post</c>) needs. Unlike the host's internal
+    /// <c>WakeFrame</c> (UI-thread-only), this is callable from a worker/COM thread: a background producer enqueues a
+    /// UI-thread action and calls <see cref="Wake"/> so an idle, fully-blocked loop wakes to drain it. Win32 posts a
+    /// benign <c>WM_NULL</c> (PostMessage is thread-safe); headless and other non-blocking backends no-op (their
+    /// <see cref="WaitForWork"/> already returns immediately, so the next loop iteration drains the post anyway).
+    /// </summary>
+    void Wake() { }
 
     /// <summary>
     /// Invoked by the platform when the OS demands an immediate repaint *outside* the app's frame loop —

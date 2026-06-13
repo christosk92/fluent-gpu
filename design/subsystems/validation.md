@@ -2,7 +2,11 @@
 
 > **Subsystem design-of-record for `FluentGpu.Validation` and the CI configuration.**
 > This is the deep design behind [hardened-v1-plan.md](../hardened-v1-plan.md) §4.5 ("Validation — the
-> spine that keeps it true"). It owns the machinery that turns every *claim* the other subsystems make
+> spine that keeps it true").
+>
+> **Not to be confused with [form-validation.md](./form-validation.md)** — *data/form* validation (`FluentGpu.Forms`:
+> `Validator<T>`/`Field`/`UseForm`). This doc is the *engine-correctness* CI machinery (spikes + per-PR gates); that
+> one is the app-facing "is this input valid?" feature. It owns the machinery that turns every *claim* the other subsystems make
 > into an *enforced property*: the two clocks (SPIKES = capability gates, GATES = per-PR regression nets),
 > the trust-ring `[Capability]` attribute + analyzer + runtime assert, the fault-injection harness, and the
 > WaveeMusic worst-case perf benchmarks with regression budgets.

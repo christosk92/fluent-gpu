@@ -1,3 +1,5 @@
+using System.Threading;
+using System.Threading.Tasks;
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -53,6 +55,22 @@ internal sealed class AnimValueCell : HookCell
     public float Current, From, Target, Elapsed;
 }
 
+/// <summary>Backs <see cref="RenderContext.UseLoadable{T}"/> — a persistent per-field async value (the skeleton-loading spine).</summary>
+internal sealed class LoadableCell<T> : HookCell
+{
+    public Loadable<T> Loadable = null!;
+}
+
+/// <summary>Backs <see cref="RenderContext.UseAsyncResource{T}"/>: the loadable + the fetch's CancellationTokenSource,
+/// cancelled on component unmount (IDisposableCell ⇒ RunAllCleanups disposes it) so a back-nav mid-load aborts cleanly.</summary>
+internal sealed class AsyncResourceCell<T> : HookCell, IDisposableCell
+{
+    public Loadable<T> Loadable = null!;
+    public CancellationTokenSource Cts = null!;
+    public bool Started;
+    public void DisposeCell() { try { Cts.Cancel(); } catch { /* already disposed */ } Cts.Dispose(); }
+}
+
 /// <summary>A stable, mutable per-component box that persists across renders (the React <c>useRef</c> container).</summary>
 public sealed class Ref<T>
 {
@@ -105,7 +123,7 @@ internal sealed class GestureHookState
 /// exactly the consumers that read it. High-frequency scalars get <see cref="UseSignal"/> bound straight to a node
 /// channel — no re-render at all.
 /// </summary>
-public sealed class RenderContext
+public sealed partial class RenderContext
 {
     private readonly List<HookCell> _cells = new();
     private int _cursor;
@@ -128,7 +146,13 @@ public sealed class RenderContext
     public IReadSignal<int>? ImageEpoch;        // bumped by the host on any image status change → re-renders UseImage consumers
 
     internal void BeginRender() => _cursor = 0;
-    internal void EndRender() => _mounted = true;
+    internal void EndRender()
+    {
+        _mounted = true;
+        // The "form under construction" thread-local (set by UseForm so same-component UseField calls auto-join) lives
+        // only for this render — clear it so it never leaks into the next component the reconciler renders.
+        FluentGpu.Forms.FormScope.Building = null;
+    }
 
     /// <summary>Run every pending effect cleanup + dispose owned reactive primitives (component unmount).</summary>
     public void RunAllCleanups()
@@ -247,6 +271,26 @@ public sealed class RenderContext
         return context.Default;
     }
 
+    /// <summary>The host's cross-thread UI-thread poster (<see cref="HostDispatch.Post"/>): <c>post(action)</c> runs
+    /// <c>action</c> on the UI thread on the next frame, safe to call from ANY thread (OS callback / worker / agile COM).
+    /// This is the engine-blessed marshal for off-thread data — use it instead of <c>UseContext(FrameClock.Tick)</c> +
+    /// a per-frame drain, which forces a full re-render every frame just to poll a queue. Reading it subscribes this
+    /// component to the (never-changing) host poster signal, so it costs no extra re-renders. When no host published a
+    /// poster (headless / test), the fallback runs the action inline on the calling thread (the synchronous harness does
+    /// not hop threads), so call sites need no null-check.</summary>
+    public Action<Action> UsePost() => UseContext(HostDispatch.Post) ?? (static a => a());
+
+    /// <summary>Reactive snapshot of the live drag — both an in-app <c>DragSource</c> drag and an OS file drag surface
+    /// here. The component re-renders on drag begin/move/end (the host bumps a drag epoch while a drag is live), so a
+    /// <c>DragPreviewLayer</c> can render a custom floating preview that follows the cursor at <see cref="DragState.Position"/>.
+    /// Idle ⇒ <see cref="DragState.Active"/> false. Cheap: only re-renders the subscribing subtree while a drag is live.</summary>
+    public DragState UseDragState()
+    {
+        var hooks = UseContext(InputHooks.Current);
+        if (hooks?.DragEpoch is { } epoch) _ = epoch.Value;   // subscribe → re-render on each bump
+        return hooks?.GetDragState?.Invoke() ?? default;
+    }
+
     /// <summary>
     /// A value that eases toward <paramref name="target"/> one step per render whenever the target changes. It steps ONLY
     /// when this component re-renders for some other reason — for motion prefer the retained engine path
@@ -319,6 +363,88 @@ public sealed class RenderContext
     public void PrefetchImage(string src, int decodePx)
     {
         if (Images is not null && !string.IsNullOrEmpty(src)) Images.Prefetch(src, decodePx, decodePx);
+    }
+
+    // ── Skeleton-loading: the async-value spine + the resource lifecycle ─────────────────────────────────────────────
+
+    /// <summary>A persistent per-field async value (Pending|Ready|Failed + value) — the skeleton-loading spine. Survives
+    /// re-renders; flip it with <c>SetReady</c>/<c>SetFailed</c> (typically from <see cref="UseAsyncResource"/> or an
+    /// off-thread <see cref="UsePost"/>). Use this for a field whose load you drive yourself (or a partial-known seed).</summary>
+    public Loadable<T> UseLoadable<T>(Loadable<T>? initial = null)
+    {
+        LoadableCell<T> cell;
+        if (!_mounted) { cell = new LoadableCell<T> { Loadable = initial ?? Loadable<T>.Pending() }; _cells.Add(cell); }
+        else cell = (LoadableCell<T>)_cells[_cursor];
+        _cursor++;
+        return cell.Loadable;
+    }
+
+    /// <summary>Kick an async <paramref name="loader"/> ONCE at mount and return its <see cref="Loadable{T}"/> (starts
+    /// Pending). Completion is marshalled to the UI thread via <see cref="UsePost"/> so <c>SetReady</c>/<c>SetFailed</c>
+    /// land in the batched flush; the <see cref="CancellationToken"/> is cancelled on unmount (the back-nav-mid-load
+    /// case — the cell is <see cref="IDisposableCell"/>) and a late post is dropped by the cancelled-token guard.
+    /// Modeled on the <see cref="UseImage"/> lifecycle. <paramref name="seed"/> is the placeholder value while pending
+    /// (e.g. an empty array so the region's content lambda is never invoked against null).</summary>
+    public Loadable<T> UseAsyncResource<T>(Func<CancellationToken, Task<T>> loader, T seed = default!)
+    {
+        var post = UsePost();   // UseContext consumes no hook cursor, so calling it here does not shift hook order
+        AsyncResourceCell<T> cell;
+        if (!_mounted) { cell = new AsyncResourceCell<T> { Loadable = Loadable<T>.Pending(seed), Cts = new CancellationTokenSource() }; _cells.Add(cell); }
+        else cell = (AsyncResourceCell<T>)_cells[_cursor];
+        _cursor++;
+
+        if (!cell.Started)
+        {
+            cell.Started = true;
+            var loadable = cell.Loadable;
+            var token = cell.Cts.Token;
+            _ = Run();
+
+            async Task Run()
+            {
+                try
+                {
+                    T v = await loader(token).ConfigureAwait(false);
+                    if (!token.IsCancellationRequested)
+                        post(() => { if (!token.IsCancellationRequested) loadable.SetReady(v); });
+                }
+                catch (OperationCanceledException) { /* unmounted mid-load — the CTS was cancelled */ }
+                catch (Exception ex)
+                {
+                    if (!token.IsCancellationRequested)
+                        post(() => { if (!token.IsCancellationRequested) loadable.SetFailed(ex); });
+                }
+            }
+        }
+        return cell.Loadable;
+    }
+
+    // ── Localization (i18n) hooks ────────────────────────────────────────────────────────────────────────────────────
+    // Bind a localized string into a text node WITHOUT re-rendering: L/Lf return a Prop<string> whose thunk reads the
+    // localization culture-epoch (inside Localization.Get/Format), so the engine's Prop bind effect re-resolves ONLY
+    // that text node when the culture changes (the binding-not-re-render path). UseLocale is the re-render-on-change
+    // form for code that must branch on the active culture (e.g. a language picker's selected item).
+
+    /// <summary>A localized string bound for a text node: <c>new TextEl("") { Text = ctx.L("app.title") }</c>. Returns a
+    /// <see cref="Prop{T}"/> thunk that resolves <paramref name="key"/> through <see cref="FluentGpu.Localization.Localization.Get"/>;
+    /// a culture switch re-resolves just this node (no component re-render). Missing key renders visibly as <c>[key]</c>.</summary>
+    public Prop<string> L(string key) => Prop.Of(() => FluentGpu.Localization.Localization.Get(key));
+
+    /// <summary>A localized + formatted string bound for a text node (named placeholders / ICU plural-select):
+    /// <c>Text = ctx.Lf("player.added", ("name", track))</c>. Returns a <see cref="Prop{T}"/> thunk over
+    /// <see cref="FluentGpu.Localization.Localization.Format(string, ValueTuple{string, object}[])"/>; re-resolves on
+    /// culture change with no re-render. The <paramref name="args"/> are captured by the thunk.</summary>
+    public Prop<string> Lf(string key, params (string Name, object Value)[] args)
+        => Prop.Of(() => FluentGpu.Localization.Localization.Format(key, args));
+
+    /// <summary>The re-rendering culture hook: returns the active culture name and a setter, subscribing THIS component
+    /// to the culture epoch so it re-renders on a culture change (use when render output branches on the culture — a
+    /// language picker's selected index, an RTL flip — rather than just displaying a localized string, which should use
+    /// <see cref="L"/>/<see cref="Lf"/> to avoid the re-render).</summary>
+    public (string Culture, Action<string> SetCulture) UseLocale()
+    {
+        _ = FluentGpu.Localization.Localization.CultureEpoch.Value;   // subscribe the render-effect to culture changes
+        return (FluentGpu.Localization.Localization.CurrentCulture, FluentGpu.Localization.Localization.SetCulture);
     }
 
     /// <summary>A stable mutable box that survives re-renders without triggering them.</summary>

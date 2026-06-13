@@ -21,11 +21,15 @@ namespace FluentGpu.Controls;
 /// can each be hidden; the year range defaults to today ±100 years.
 /// </summary>
 /// <remarks>
-/// FIDELITY NOTE: WinUI's LoopingSelector also supports a touch-fling momentum scroll-snap. The engine's
-/// <c>ScrollEl</c> is layout-free with no programmatic scroll-offset signal and no snap-points seam, so this control
-/// uses WinUI's RepeatButton + click-to-select fallback (which WinUI ships for the keyboard/mouse path) rather than
-/// adding a new engine seam. The visual result — a fixed window with a centered selection and up/down repeat buttons —
-/// is faithful; true touch-fling snapping is a deferred engine seam.
+/// FIDELITY NOTE: WinUI's LoopingSelector also supports a touch-fling momentum scroll-snap. As of the touch-support
+/// Phase 4 the engine DOES carry the snap-points seam (<see cref="FluentGpu.Scene.ScrollSnap"/> — the ScrollPresenter
+/// applicable-zone math — plus the <c>ScrollAnimator</c> fling-retarget that lands a flick exactly on a configured
+/// <c>ScrollState.SnapInterval</c> row): any control built on a real virtualized <c>ScrollEl</c> viewport now gets
+/// touch-fling-snap-to-row for free (set <c>SnapInterval = itemHeight</c>). This DatePicker column is deliberately NOT
+/// a scroll viewport — it is the fixed 9-row RepeatButton + click-to-select model WinUI ALSO ships for the
+/// keyboard/mouse path, keyed off a tentative-index signal (no offset to fling). Converting it to a scrolling looping
+/// strip is a separate control rewrite; the visual result here — a fixed window, centered selection, up/down repeat
+/// buttons — is faithful, and the momentum-snap seam it would consume is the one this phase landed.
 /// </remarks>
 public sealed class DatePicker : Component
 {

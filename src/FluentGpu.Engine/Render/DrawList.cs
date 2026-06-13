@@ -44,6 +44,20 @@ public enum LayerKind : int
     /// — overlapping children do not double-blend (unlike the default per-node multiplied opacity, which matches
     /// WinUI's plain Visual.Opacity). Tint/blur fields are unused for this kind.</summary>
     Opacity = 1,
+    /// <summary>Per-node SELF-blur (the Expressive Motion Kit, <see cref="PushLayerCmd.BlurSigma"/>): the subtree renders
+    /// at FULL alpha into a pooled offscreen RT (like <see cref="Opacity"/>), then a separable Gaussian of radius
+    /// <see cref="PushLayerCmd.BlurSigma"/> is run over it and the result composites ONCE at <see cref="PushLayerCmd.GroupAlpha"/>
+    /// — so a node's own pixels (and its subtree) blur + fade together (CSS <c>filter: blur()</c> on the element). The
+    /// tint/noise/luminosity acrylic fields are unused for this kind (this blurs the element, NOT the backdrop behind it).</summary>
+    Blur = 2,
+
+    /// <summary>EDGE FADE: like <see cref="Opacity"/>/<see cref="Blur"/> the subtree renders at full alpha into a pooled
+    /// offscreen RT, then composites once while a per-edge feather (which follows the rounded corners — the curve)
+    /// attenuates the premultiplied alpha to 0 over a band near each enabled edge, so the content dissolves into whatever
+    /// is behind. The feather fields (<see cref="PushLayerCmd.FadeBandL"/>… / FadeFalloff / FadeIntensity / FadeEdges)
+    /// carry the per-edge bands; <see cref="PushLayerCmd.BlurSigma"/> &gt; 0 Gaussian-blurs the RT first. The acrylic
+    /// tint/noise/luminosity fields are unused for this kind.</summary>
+    EdgeFade = 3,
 }
 
 // POD payloads (unmanaged). Encoded as [int op][payload] in the byte stream.
@@ -101,7 +115,10 @@ public readonly record struct DrawGradientStrokeCmd(RectF Rect, CornerRadius4 Ra
 // over the canvas at <see cref="GroupAlpha"/> (flat group opacity — no double-blend of overlapping children); the
 // acrylic fields (Tint/Fallback/TintOpacity/BlurSigma/NoiseOpacity/LuminosityOpacity) are unused for this kind.
 public readonly record struct PushLayerCmd(RectF DeviceRect, CornerRadius4 Radii, ColorF Tint, ColorF Fallback, float TintOpacity, float BlurSigma, float NoiseOpacity, float LuminosityOpacity,
-    int Kind = 0, float GroupAlpha = 1f);
+    int Kind = 0, float GroupAlpha = 1f,
+    // EdgeFade-only (Kind == 3): per-edge feather band depth in DEVICE px (0 = edge disabled), falloff curve, fade
+    // intensity, and the enabled-edge bit mask. The rounded-corner radii come from Radii (the feather follows them).
+    float FadeBandL = 0f, float FadeBandT = 0f, float FadeBandR = 0f, float FadeBandB = 0f, int FadeFalloff = 0, float FadeIntensity = 1f, int FadeEdges = 0);
 public readonly record struct PopLayerCmd(RectF DeviceRect);
 // A circular-arc stroke (ProgressRing). The arc is centred in <see cref="Rect"/> with radius (min(W,H)-Thickness)/2, a
 // <see cref="Thickness"/>-wide stroke, swept from <see cref="StartDeg"/> for <see cref="SweepDeg"/> degrees (0° = 12 o'clock,
@@ -256,6 +273,36 @@ public sealed class DrawList
         WriteOp(DrawOp.PushLayer);
         WritePayload(new PushLayerCmd(deviceRect, radii, default, default, 0f, 0f, 0f, 0f,
             (int)LayerKind.Opacity, Math.Clamp(groupAlpha, 0f, 1f)));
+        PushSort(sortKey);
+    }
+
+    /// <summary>Begin a per-node SELF-blur group (<see cref="LayerKind.Blur"/>): the subtree until the matching
+    /// <see cref="PopLayer"/> renders at full alpha into a pooled offscreen RT, is separable-Gaussian-blurred by
+    /// <paramref name="blurSigma"/> px, and composites once at <paramref name="groupAlpha"/> (so blur + fade read as one
+    /// motion). The element's OWN pixels blur — not the backdrop behind it. Subtree commands record at opacity relative
+    /// to 1, NOT pre-multiplied by the group alpha.</summary>
+    public void PushBlurLayer(in RectF deviceRect, in CornerRadius4 radii, float blurSigma, float groupAlpha, ulong sortKey = 0)
+    {
+        WriteOp(DrawOp.PushLayer);
+        WritePayload(new PushLayerCmd(deviceRect, radii, default, default, 0f, MathF.Max(0f, blurSigma), 0f, 0f,
+            (int)LayerKind.Blur, Math.Clamp(groupAlpha, 0f, 1f)));
+        PushSort(sortKey);
+    }
+
+    /// <summary>Begin an EDGE-FADE group (<see cref="LayerKind.EdgeFade"/>): the subtree until the matching
+    /// <see cref="PopLayer"/> renders at full alpha into a pooled offscreen RT, then composites once while feathering the
+    /// premultiplied alpha to 0 over a per-edge band near each enabled edge — so the content dissolves into whatever is
+    /// behind. The feather follows the rounded corners in <paramref name="radii"/> (the curve). Bands are DEVICE px (the
+    /// recorder scales the DIP spec by the world scale); <paramref name="blurSigma"/> &gt; 0 Gaussian-blurs the RT before
+    /// the feather. Subtree commands record at opacity relative to 1.</summary>
+    public void PushEdgeFadeLayer(in RectF deviceRect, in CornerRadius4 radii, float groupAlpha,
+        int edges, float bandL, float bandT, float bandR, float bandB, int falloff, float intensity, float blurSigma = 0f, ulong sortKey = 0)
+    {
+        WriteOp(DrawOp.PushLayer);
+        WritePayload(new PushLayerCmd(deviceRect, radii, default, default, 0f, MathF.Max(0f, blurSigma), 0f, 0f,
+            (int)LayerKind.EdgeFade, Math.Clamp(groupAlpha, 0f, 1f),
+            MathF.Max(0f, bandL), MathF.Max(0f, bandT), MathF.Max(0f, bandR), MathF.Max(0f, bandB),
+            falloff, Math.Clamp(intensity, 0f, 1f), edges));
         PushSort(sortKey);
     }
 

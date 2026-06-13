@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Loose-register manifest for the FluentGpu Capability Gallery as a FULL-TRUST Win32 packaged app.
+
+  Registered via `Add-AppxPackage -Register <publishDir>\AppxManifest.xml` (Developer Mode, no signing, no makeappx,
+  no admin) — the "register the unpackaged layout" inner-loop dev workflow. The manifest sits at the publish ROOT
+  alongside FluentGpu.WindowsApp.exe; logo PNGs live under Assets\ matching the relative paths below.
+
+  Schema grounding (WASDK test source under C:\WAVEE\WindowsAppSDK):
+    - Namespace URIs + IgnorableNamespaces + element ORDER:
+      test/TestApps/ToastNotificationsDemoAppPackage/Package.appxmanifest:4-70
+      test/AppLifecycle/Deployment-AppxManifest.xml:4-51
+    - Full-trust desktop entry point Windows.FullTrustApplication + rescap:runFullTrust:
+      docs/plans/windowsapi-implementation-research.md:469 (§3 app-side MSIX recipe appendix)
+    - uap5 namespace (windows.appExecutionAlias):
+      test/BackgroundTaskTests/BackgroundTaskBuilder-AppxManifest.xml:6
+  Element order (Identity, Properties, Dependencies, Resources, Applications, Capabilities) is schema-mandatory.
+  NO PackageDependency on Microsoft.WindowsAppRuntime: FluentGpu is hand-rolled interop, self-contained.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap5 desktop rescap">
+
+  <Identity
+    Name="FluentGpu.Gallery"
+    Publisher="CN=FluentGpu Dev"
+    Version="1.0.0.0"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>FluentGpu Capability Gallery</DisplayName>
+    <PublisherDisplayName>FluentGpu Dev</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="App"
+      Executable="FluentGpu.WindowsApp.exe"
+      EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="FluentGpu Gallery"
+        Description="FluentGpu Capability Gallery (packaged identity prototype)"
+        BackgroundColor="#1F1F1F"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile ShortName="FluentGpu" />
+      </uap:VisualElements>
+      <Extensions>
+        <uap5:Extension Category="windows.appExecutionAlias">
+          <uap5:AppExecutionAlias>
+            <uap5:ExecutionAlias Alias="fluentgpu-gallery.exe" />
+          </uap5:AppExecutionAlias>
+        </uap5:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>

@@ -1,0 +1,45 @@
+{
+  "$culture": "en-US",
+  "$comment": "Base culture. Every key the app uses lives here; other cultures override per-key and fall back to this.",
+
+  "app": {
+    "title": "FluentGpu Gallery",
+    "greeting": "Hello, {name}!",
+    "subtitle": "A modern JSON-based localization engine"
+  },
+
+  "lang": {
+    "picker": "Language",
+    "current": "Active culture: {culture}",
+    "pseudo": "Pseudo-localization (qps-ploc)"
+  },
+
+  "player": {
+    "queue": "Queue",
+    "nowPlaying": "Now playing: {track}",
+    "added": "Added “{track}” to {playlist}",
+    "$comment.songs": "ICU plural — en uses one/other; =0 is an explicit exact-match branch that wins over the category.",
+    "songs": "{count, plural, =0 {No songs} one {# song} other {# songs}}",
+    "songsBy": "{count, plural, =0 {No songs by {artist}} one {# song by {artist}} other {# songs by {artist}}}"
+  },
+
+  "profile": {
+    "$comment.invited": "ICU select on gender (male/female/other), with a nested {name} placeholder inside each branch.",
+    "invited": "{gender, select, male {He invited {name}} female {She invited {name}} other {They invited {name}}}"
+  },
+
+  "files": {
+    "$comment": "Polish proves per-language four-form plurals (one/few/many) — en-US here only has the one/other shape.",
+    "count": "{count, plural, =0 {No files} one {# file} other {# files}}"
+  },
+
+  "validation": {
+    "$comment": "Native form-validation messages (form-validation.md). Rule factories default to these keys; an app may pass its own. Resolved at the bound error TextEl — culture-reactive, zero-alloc on a hit.",
+    "required": "This field is required.",
+    "minlen": "Must be at least 8 characters.",
+    "maxlen": "This value is too long.",
+    "range": "Value is out of range.",
+    "email": "Enter a valid email address.",
+    "match": "Passwords don’t match."
+  }
+}

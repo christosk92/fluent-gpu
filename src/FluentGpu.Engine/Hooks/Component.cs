@@ -1,5 +1,6 @@
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
+using FluentGpu.Forms;
 using FluentGpu.Foundation;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
@@ -26,6 +27,36 @@ public abstract class Component
     protected T UseMemo<T>(Func<T> factory, params object[] deps) => Context.UseMemo(factory, deps);
     protected Ref<T> UseRef<T>(T initial) => Context.UseRef(initial);
     protected T UseContext<T>(Context<T> context) => Context.UseContext(context);
+    /// <summary>The host UI-thread poster (<see cref="HostDispatch.Post"/>): run an action on the UI thread next frame
+    /// from any thread. Use for off-thread data instead of <c>UseContext(FrameClock.Tick)</c> + a per-frame drain.</summary>
+    protected Action<Action> UsePost() => Context.UsePost();
+    /// <summary>Reactive snapshot of the live drag (in-app <c>DragSource</c> or OS file drag) — re-renders on drag
+    /// begin/move/end. Render a cursor-following custom preview (see <c>DragPreviewLayer</c>) from it.</summary>
+    protected DragState UseDragState() => Context.UseDragState();
+    /// <summary>A persistent per-field async value (Pending|Ready|Failed) — the skeleton-loading spine; flip with SetReady/SetFailed.</summary>
+    protected Loadable<T> UseLoadable<T>(Loadable<T>? initial = null) => Context.UseLoadable(initial);
+    /// <summary>Kick an async loader once at mount; returns a Loadable&lt;T&gt; (Pending→Ready/Failed via UsePost; cancels on unmount).</summary>
+    protected Loadable<T> UseAsyncResource<T>(Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>> loader, T seed = default!) => Context.UseAsyncResource(loader, seed);
+
+    /// <summary>Create a reactive validation field over a caller-owned value signal (form-validation.md): pass the
+    /// resulting <see cref="Field{T}"/> to a control's <c>Field</c> prop. Cross-field/conditional rules that read a
+    /// sibling signal re-validate automatically.</summary>
+    protected Field<T> UseField<T>(Signal<T> value, params Validator<T>[] rules) => Context.UseField(value, rules);
+    /// <summary>As <see cref="UseField{T}(Signal{T}, Validator{T}[])"/> with timing/async/compound/explicit-form options.</summary>
+    protected Field<T> UseField<T>(Signal<T> value, FieldOptions<T> options, params Validator<T>[] rules) => Context.UseField(value, options, rules);
+    /// <summary>Establish a <see cref="FormScope"/> for this component (submit gating + focus-first-error); the
+    /// <c>UseField</c> calls that follow in this render auto-join it.</summary>
+    protected FormScope UseForm() => Context.UseForm();
+
+    /// <summary>Bind a localized string into a text node with no re-render (<see cref="RenderContext.L"/>):
+    /// <c>new TextEl("") { Text = L("app.title") }</c>. A culture switch re-resolves only the bound node.</summary>
+    protected FluentGpu.Signals.Prop<string> L(string key) => Context.L(key);
+    /// <summary>Bind a localized, formatted string (named placeholders / ICU plural-select) into a text node with no
+    /// re-render (<see cref="RenderContext.Lf"/>): <c>Text = Lf("player.added", ("name", track))</c>.</summary>
+    protected FluentGpu.Signals.Prop<string> Lf(string key, params (string Name, object Value)[] args) => Context.Lf(key, args);
+    /// <summary>The active culture + a setter, re-rendering this component on a culture change
+    /// (<see cref="RenderContext.UseLocale"/>) — for render that branches on the culture (a language picker).</summary>
+    protected (string Culture, Action<string> SetCulture) UseLocale() => Context.UseLocale();
     protected float UseAnimatedValue(float target, float durationMs = 180f, Easing easing = Easing.EaseInOut) => Context.UseAnimatedValue(target, durationMs, easing);
 
     // Declarative, composited animation of this component's node (no per-frame re-render):
@@ -48,11 +79,21 @@ public abstract class Component
     /// </summary>
     public virtual bool RunsOnce => false;
 
-    /// <summary>Run one render pass with hook bookkeeping.</summary>
+    /// <summary>Run one render pass with hook bookkeeping. In DEBUG / FLUENTGPU_DIAG builds the render duration is fed to
+    /// the <see cref="FluentGpu.Hosting.RenderBudget"/> tripwire (slow-render + every-frame-re-render detection); the
+    /// timing guard folds away entirely in release (<c>CompiledIn</c> is a const <c>false</c>), so the shipping path is
+    /// exactly <c>BeginRender(); Render(); EndRender();</c> at zero cost.</summary>
     public Element RenderWithHooks()
     {
         Context.BeginRender();
-        var el = Render();
+        Element el;
+        if (FluentGpu.Hosting.RenderBudget.CompiledIn)
+        {
+            long rbStart = FluentGpu.Hosting.RenderBudget.Begin();
+            el = Render();
+            FluentGpu.Hosting.RenderBudget.End(this, rbStart);
+        }
+        else el = Render();
         Context.EndRender();
         return el;
     }

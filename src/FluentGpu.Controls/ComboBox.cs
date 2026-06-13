@@ -1,4 +1,5 @@
 using FluentGpu.Dsl;
+using FluentGpu.Forms;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
@@ -105,6 +106,10 @@ public sealed class ComboBox : Component
     /// non-empty → the field border swaps to SystemControlErrorTextForegroundBrush and the message renders below the
     /// field (replacing the Description row, per the InlineErrors setters).</summary>
     public string ErrorText = "";
+    /// <summary>form-validation.md: a reactive validation field (over <see cref="SelectedIndex"/>). When set, its gated
+    /// error drives the SAME InlineErrors visual as <see cref="ErrorText"/> (border swap + message row); an explicit
+    /// <see cref="ErrorText"/> still wins. Marked touched on a selection commit.</summary>
+    public Field<int>? Field;
     /// <summary>WinUI TouchInputMode/GameControllerInputMode: items take ComboBoxItemThemeTouchPadding 11,11,11,13
     /// (generic.xaml:131) instead of the pointer padding 11,5,11,7.</summary>
     public bool TouchInputMode;
@@ -124,13 +129,13 @@ public sealed class ComboBox : Component
                                  bool isEnabled = true, Action<int>? onSelectionChanged = null,
                                  Func<string, bool>? onTextSubmitted = null,
                                  string header = "", string description = "", string errorText = "",
-                                 bool touchInputMode = false)
+                                 bool touchInputMode = false, Field<int>? field = null)
         => Embed.Comp(() => new ComboBox
         {
             Items = items, SelectedIndex = selectedIndex, Editable = editable, Text = text,
             Width = width, Placeholder = placeholder, IsEnabled = isEnabled, OnSelectionChanged = onSelectionChanged,
             OnTextSubmitted = onTextSubmitted,
-            Header = header, Description = description, ErrorText = errorText, TouchInputMode = touchInputMode,
+            Header = header, Description = description, ErrorText = errorText, TouchInputMode = touchInputMode, Field = field,
         });
 
     private EditableText? _edit;
@@ -173,6 +178,7 @@ public sealed class ComboBox : Component
             // after a row click already committed the index.
             if (SelectedIndex.Peek() == i) return;
             SelectedIndex.Value = i;
+            Field?.MarkTouched();   // form-validation.md: a selection commit arms the OnTouched gate
             if (Editable)
             {
                 // Selector_SelectedItem change → SetSearchResultIndex(selectedIndex) (ComboBox_Partial.cpp:1328–1336):
@@ -445,7 +451,12 @@ public sealed class ComboBox : Component
         // Validation error (InputValidationErrorStates InlineErrors, generic.xaml:9118-9127): the field border swaps
         // to SystemControlErrorTextForegroundBrush (= SystemErrorTextColor #FFF000 dark / #C50500 light,
         // generic.xaml:227/:4152) and the message renders below the field, replacing the Description row.
-        bool hasError = ErrorText.Length > 0;
+        // form-validation.md: the error shows EITHER a manually-set ErrorText OR the field's gated error (resolved loc
+        // key). Reading Field.Error.Value subscribes this render so a validity flip (a rare event) re-renders the field.
+        string errorMsg = ErrorText.Length > 0 ? ErrorText
+            : Field is { } vf && !vf.Error.Value.IsValid ? Msg.Resolve(vf.Error.Value.First)
+            : "";
+        bool hasError = errorMsg.Length > 0;
         ColorF errorColor = Tok.Theme == ThemeKind.Light
             ? ColorF.FromRgba(0xC5, 0x05, 0x00)    // SystemErrorTextColor (Light), generic.xaml:4152
             : ColorF.FromRgba(0xFF, 0xF0, 0x00);   // SystemErrorTextColor (Default/dark), generic.xaml:227
@@ -456,7 +467,7 @@ public sealed class ComboBox : Component
             : IsEnabled ? Tok.ControlElevationBorder
             : GradientSpec.Solid(Tok.StrokeControlDefault);
 
-        Action<NodeHandle> anchorCapture = h => anchor.Value = h;
+        Action<NodeHandle> anchorCapture = h => { anchor.Value = h; if (Field is { } fn) fn.Node.Value = h; };
 
         // WinUI DropDownGlyph: AnimatedChevronDownSmall (12×12), foreground TextFillColorSecondary →
         // disabled TextFillColorDisabled. The AnimatedIcon's Pressed segment nudges the chevron — until the real
@@ -500,7 +511,7 @@ public sealed class ComboBox : Component
                 });
             rows.Add(field);
             if (hasError)
-                rows.Add(new TextEl(ErrorText) { Size = 12f, Color = errorColor, Wrap = TextWrap.Wrap, MaxWidth = w, Margin = new Edges4(0, 4, 0, 0) });
+                rows.Add(new TextEl(errorMsg) { Size = 12f, Color = errorColor, Wrap = TextWrap.Wrap, MaxWidth = w, Margin = new Edges4(0, 4, 0, 0) });
             else if (Description.Length > 0)
                 rows.Add(new TextEl(Description) { Size = 12f, Color = Tok.TextControlDescriptionForeground, Wrap = TextWrap.Wrap, MaxWidth = w, Margin = new Edges4(0, 4, 0, 0) });
             return new BoxEl { Direction = 1, AlignItems = FlexAlign.Start, Children = rows.ToArray() };

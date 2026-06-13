@@ -86,3 +86,46 @@ public readonly record struct AcrylicSpec(ColorF Tint, float TintOpacity, float 
     public static AcrylicSpec Flyout => InAppDefault;
     public static AcrylicSpec FlyoutLight => new(ColorF.FromRgba(0xFC, 0xFC, 0xFC), 0.0f, 30f, 0.02f, 0.85f, ColorF.FromRgba(0xF9, 0xF9, 0xF9));
 }
+
+/// <summary>Which edges an <see cref="EdgeFadeSpec"/> feathers (a bit mask).</summary>
+[System.Flags]
+public enum EdgeMask : byte { None = 0, Left = 1, Top = 2, Right = 4, Bottom = 8, Horizontal = Left | Right, Vertical = Top | Bottom, All = 15 }
+
+/// <summary>The alpha falloff curve across an edge-fade band. Smoothstep (default) avoids the visible linear shoulder.</summary>
+public enum FadeFalloff : byte { Linear = 0, Smoothstep = 1, Cubic = 2 }
+
+/// <summary>Edge-fade effect: feather the content alpha (Fade), blur it (Blur), or both near the edge band.</summary>
+public enum EdgeFadeMode : byte { Fade = 0, Blur = 1, FadeAndBlur = 2 }
+
+/// <summary>
+/// A per-element EDGE FADE (gpu-renderer.md / controls.md §8.3): feather the element's content alpha to transparent — and
+/// optionally blur it — over a band near the chosen edges, so it dissolves into whatever is behind (horizontal scrollers,
+/// cards leaving the viewport, panels). Realized as a <c>PushLayer{EdgeFade}</c> offscreen layer (the subtree renders at
+/// full alpha into a pooled RT, then composites once while the per-edge feather attenuates the premultiplied alpha) — one
+/// RT per faded element, so fade the VIEWPORT, never each row.
+///
+/// <para>The feather follows the BOUNDARY, not just straight edges: where a rounded corner's two adjacent edges both
+/// fade, the band hugs the corner ARC (the curve) instead of the straight edge — so a rounded card dissolves cleanly
+/// around its corners. (The corner radii come from the element's <c>Corners</c>.)</para>
+/// </summary>
+public readonly record struct EdgeFadeSpec(
+    EdgeMask Edges, float BandLeft, float BandTop, float BandRight, float BandBottom,
+    FadeFalloff Falloff = FadeFalloff.Smoothstep, float Intensity = 1f,
+    EdgeFadeMode Mode = EdgeFadeMode.Fade, float BlurSigma = 0f)
+{
+    /// <summary>One uniform band depth for every enabled edge (the common case).</summary>
+    public EdgeFadeSpec(EdgeMask edges, float band, FadeFalloff falloff = FadeFalloff.Smoothstep, float intensity = 1f)
+        : this(edges, band, band, band, band, falloff, intensity) { }
+
+    /// <summary>No effect (nothing enabled / fully transparent intensity / zero band with no blur).</summary>
+    public bool IsNone => Edges == EdgeMask.None || Intensity <= 0f
+        || (BandLeft <= 0f && BandTop <= 0f && BandRight <= 0f && BandBottom <= 0f && Mode == EdgeFadeMode.Fade);
+
+    /// <summary>Per-edge band depth (DIP) for an edge bit, 0 when that edge is not enabled.</summary>
+    public readonly float Band(EdgeMask edge) => (Edges & edge) == 0 ? 0f
+        : edge switch { EdgeMask.Left => BandLeft, EdgeMask.Top => BandTop, EdgeMask.Right => BandRight, _ => BandBottom };
+
+    public static EdgeFadeSpec Horizontal(float band = 24f) => new(EdgeMask.Horizontal, band);
+    public static EdgeFadeSpec Vertical(float band = 24f) => new(EdgeMask.Vertical, band);
+    public static EdgeFadeSpec Perimeter(float band = 24f) => new(EdgeMask.All, band);
+}

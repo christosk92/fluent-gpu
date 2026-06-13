@@ -13,4 +13,9 @@
   <ItemGroup>
     <PackageReference Include="TerraFX.Interop.Windows" Version="10.0.26100.6" />
   </ItemGroup>
+  <!-- The gallery smoke harness (the windowsapi-smoke switch) calls Win32DropTarget.SelfTest to exercise the
+       hand-vtable IDropTarget's by-value POINTL ABI in-process (the crash-fix regression guard). -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="FluentGpu.WindowsApp" />
+  </ItemGroup>
 </Project>

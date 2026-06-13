@@ -313,6 +313,13 @@ FluentGpu.Interop.SourceGen.dll  (netstandard2.0, leaf-only)
 > the three concurrent-era lowering generators take #8–#10. The `LocalizationGenerator` (§6.x) is **not**
 > counted in this assembly — it is a tiny, optional generator shipped *with* `FluentGpu.Localization` and only
 > wired in when `<FluentGpuLocalization>` ≠ `Invariant`.
+>
+> Likewise the **`ValidatorGenerator`** (form-validation.md) — `[FluentGpu.Forms.Validatable] partial` +
+> `[Required]`/`[MinLength]`/`[MaxLength]`/`[Range]`/`[RegexMatch]` → a nested `static class Validators` of
+> `Validator<T>[]` arrays — ships in its OWN isolated assembly `FluentGpu.Validation.SourceGen` and is wired in only by
+> projects that author `[Validatable]` types. Both isolated generators are kept OUT of this catalog so activating them
+> does not activate the still-unready engine generators above. The emitted arrays lower to the IDENTICAL runtime
+> `Validator<T>` contract the hand-written `Rules.*` delegate path uses — pure ergonomics, 0 runtime footprint.
 
 ### 2.1 `ElementTypeIdGenerator` — per-element setters / factories
 

@@ -49,6 +49,36 @@ public sealed class HeadlessTextInput : IPlatformTextInput
     }
     public void SetCaretRectPx(in RectF rect) => LastCaretRectPx = rect;
 
+    // ── SIP (touch keyboard) recorder: count show/hide requests and re-fire the OccludedRect callback on a test cue ──
+    /// <summary>How many times <see cref="TryShowTouchKeyboard"/> has been called (the WinUI InputPane2.TryShow). The
+    /// SIP-trigger gate asserts a touch-focus on an editable field requests show exactly once and a mouse focus zero.</summary>
+    public int ShowCount { get; private set; }
+    /// <summary>How many times <see cref="TryHideTouchKeyboard"/> has been called (InputPane2.TryHide).</summary>
+    public int HideCount { get; private set; }
+    /// <summary>True while the simulated panel is shown (a TryShow not yet followed by a TryHide / a Hiding cue).</summary>
+    public bool TouchKeyboardShown { get; private set; }
+
+    public event Action<RectF>? OccludedRectChanged;
+
+    public bool TryShowTouchKeyboard() { ShowCount++; TouchKeyboardShown = true; return true; }
+    public bool TryHideTouchKeyboard()
+    {
+        HideCount++;
+        bool was = TouchKeyboardShown;
+        TouchKeyboardShown = false;
+        FireOccludedRect(default);   // a real InputPane raises Hiding (empty OccludedRect) when dismissed
+        return was;
+    }
+
+    /// <summary>Test driver: simulate the OS <c>InputPane.Showing</c>/<c>Hiding</c> by raising the occluded-rect callback
+    /// with <paramref name="dipRect"/> (CLIENT DIP; <c>default</c> = hidden). The host's reflow subscriber scrolls the
+    /// focused editor's caret above it — the gate asserts the viewport offset moved to expose the caret.</summary>
+    public void FireOccludedRect(in RectF dipRect)
+    {
+        TouchKeyboardShown = !dipRect.IsEmpty;
+        OccludedRectChanged?.Invoke(dipRect);
+    }
+
     // ── test drivers ──────────────────────────────────────────────────────────────────────────────
     public void BeginComposition()
     {

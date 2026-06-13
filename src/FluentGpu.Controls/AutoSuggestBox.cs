@@ -1,4 +1,5 @@
 using FluentGpu.Dsl;
+using FluentGpu.Forms;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
@@ -113,6 +114,7 @@ public sealed class AutoSuggestBox : Component
     /// the field (reason SuggestionChosen); false leaves the field text untouched while cycling — SuggestionChosen
     /// still fires per selection change (cpp:2361–2398 gates only the text write, :2367).</summary>
     public bool UpdateTextOnSelect = true;
+    public Field<string>? Field;                       // form-validation.md: invalid border + touched-on-blur + message row
 
     public static Element Create(
         IReadOnlyList<string> suggestions,
@@ -128,13 +130,14 @@ public sealed class AutoSuggestBox : Component
         Action<string, TextChangeReason>? textChanged = null,
         bool updateTextOnSelect = true,
         TemplateParts? parts = null,
-        IReadSignal<float>? widthSignal = null)
+        IReadSignal<float>? widthSignal = null,
+        Field<string>? field = null)
         => Embed.Comp(() => new AutoSuggestBox
         {
             Suggestions = suggestions, Placeholder = placeholder, Width = width, WidthSignal = widthSignal, Text = text,
             OnTextChanged = onTextChanged, OnSuggestionChosen = onSuggestionChosen,
             OnQuerySubmitted = onQuerySubmitted, QueryIcon = queryIcon, MaxHeight = maxPopupHeight, DebounceMs = debounceMs,
-            TextChanged = textChanged, UpdateTextOnSelect = updateTextOnSelect, Parts = parts,
+            TextChanged = textChanged, UpdateTextOnSelect = updateTextOnSelect, Parts = parts, Field = field,
         });
 
     // The rendered width: the live signal (clamped by Width as the max) over the frozen mount value. Reading it
@@ -369,6 +372,7 @@ public sealed class AutoSuggestBox : Component
                 {
                     Text = query, Width = width - iconCol, WidthSignal = innerWidth, Height = 32f, Placeholder = Placeholder,
                     OnCommit = OnEnter, OnCancel = OnEscape,
+                    OnFocusChanged = f => { if (!f) Field?.MarkTouched(); },   // form-validation.md: arm the OnTouched gate on blur
                 };
                 _edit = e;
                 return e;
@@ -422,13 +426,15 @@ public sealed class AutoSuggestBox : Component
             ? new CornerRadius4(Radii.Control, Radii.Control, 0f, 0f)
             : Radii.ControlAll;
 
-        Action<NodeHandle> anchorCapture = h => anchor.Value = h;
+        Action<NodeHandle> anchorCapture = h => { anchor.Value = h; if (Field is { } fn) fn.Node.Value = h; };
         Element[] rootKids = children.ToArray();
         var root = new BoxEl
         {
             // WinUI AutoSuggestBox field surface: ControlCornerRadius, 1px ControlStrokeColorDefault, ControlFillColorDefault.
             Direction = 0, Width = width, MinHeight = 32f, AlignItems = FlexAlign.Center,
             Corners = fieldCorners, BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, Fill = Tok.FillControlDefault,
+            // form-validation.md: the field chrome owns the invalid border (the inner editor is borderless inside it).
+            Validation = Field is { } fb ? Prop.Of(() => fb.Error.Value.IsValid ? ValidationState.None : ValidationState.Error) : default,
             Role = AutomationRole.ComboBox,
             OnRealized = anchorCapture,
             OnKeyDown = HandleNavKeys,                 // Up/Down bubble up to here from the focused field
@@ -445,6 +451,9 @@ public sealed class AutoSuggestBox : Component
                 OnRealized = TemplateParts.Chain(anchorCapture, m.OnRealized),
             };
         }
+        // form-validation.md: stack the reveal-animated error message row under the field (popup still anchors to `root`).
+        if (Field is { } vfield)
+            return new BoxEl { Direction = 1, Width = width, Children = [root, FieldVisuals.MessageRow(vfield.Error)] };
         return root;
     }
 

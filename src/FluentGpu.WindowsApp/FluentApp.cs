@@ -20,6 +20,24 @@ namespace FluentGpu;
 /// </summary>
 public static class FluentApp
 {
+    /// <summary>
+    /// The live top-level window HWND of the currently-running app, or <see cref="nint.Zero"/> before
+    /// <see cref="Run(Func{Component}, string, int, int, bool, int, string?, bool)"/> creates the window (and after it
+    /// closes). This is the real <c>FluentGpu</c> window handle — the app-layer accessor that
+    /// <c>FluentGpu.WindowsApi</c> consumers (SMTC / file pickers / taskbar) pass as their explicit <c>nint hwnd</c>
+    /// parameter, so a UI page never has to invent a handle on the Engine seam. UI-thread only (the value is set on the
+    /// thread that pumps the window). Single-window by design; the gallery runs exactly one top-level window.
+    /// </summary>
+    public static nint WindowHandle { get; private set; }
+
+    /// <summary>
+    /// Relay of the host's single-instance activation-redirect event (a second app launch's deep-link payload forwarded
+    /// to this running instance). Forwarded from <c>AppHost.ActivationRedirected</c> while a run is active and delivered
+    /// on the UI thread, so handlers may write signals that re-render. App-layer relay (not an Engine-seam accessor) so
+    /// page/app code can subscribe without holding the <c>AppHost</c> instance.
+    /// </summary>
+    public static event Action<string>? ActivationRedirected;
+
     public static void Run(Func<Component> root, string title = "FluentGpu", int width = 800, int height = 600,
                            bool mica = true, int frames = -1, string? screenshot = null, bool customFrame = false)
     {
@@ -35,6 +53,9 @@ public static class FluentApp
         // customFrame: the app draws its own WinUI TitleBar (caption stripped, engine caption buttons, snap layouts) —
         // an explicit opt-in (the gallery): apps without a TitleBar keep the standard OS frame.
         var window = (Win32Window)app.CreateWindow(new WindowDesc(title, new Size2(width, height), 1f, mica, CustomFrame: customFrame));
+        // Publish the real top-level HWND so app-layer callers (the Windows-APIs page: SMTC / pickers / taskbar) can pass
+        // it as their explicit nint hwnd — the host accessor, not an Engine-seam invention. Cleared when the run ends.
+        WindowHandle = window.Handle.Value;
 
         if (Win32Theme.AccentLight2() is { } a) Theme.Accent = ColorF.FromRgba(a.R, a.G, a.B);
         else if (Win32Theme.Accent() is { } b) Theme.Accent = ColorF.FromRgba(b.R, b.G, b.B);
@@ -53,6 +74,11 @@ public static class FluentApp
 
         using var host = new AppHost(app, window, device, fonts, strings, root(), images);
         host.SmoothScroll = true;   // inertial wheel scrolling + auto-hiding scrollbars (the real-app default)
+
+        // Relay the host's UI-thread single-instance redirect to the app-layer static event (the Windows-APIs page
+        // subscribes there). Forwarding the payload, not the handler chain — handlers attach to FluentApp.ActivationRedirected.
+        Action<string> forwardActivation = uri => ActivationRedirected?.Invoke(uri);
+        host.ActivationRedirected += forwardActivation;
 
         // FG_ALLOC_TYPES=1: bring up the per-type allocation profiler (process-global EventListener; the host drives
         // its once-per-second report on the frame cadence). Stopped in the finally so headless/short runs don't leak it.
@@ -93,6 +119,8 @@ public static class FluentApp
             PngWriter.WriteBgra(screenshot, px, cw, ch);
             Console.Error.WriteLine($"screenshot: wrote {screenshot} ({cw}x{ch})");
         }
+
+        WindowHandle = 0;   // the window is gone; don't leave a stale handle for a late SMTC/picker call.
     }
 
     /// <summary><c>FluentApp.Run&lt;MyApp&gt;()</c> — same, for a parameterless root component.</summary>

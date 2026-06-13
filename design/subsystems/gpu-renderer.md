@@ -635,6 +635,13 @@ state: group opacity < 1 over **overlapping** children (per-instance alpha doubl
 non-`SrcOver` blend on a subtree; an effect (backdrop blur, group drop-shadow, color matrix); or a
 clip-to-path applied to a whole subtree with its own AA.
 
+As-built `LayerKind`s on the `PushLayer`/`PopLayer` opcode pair: **`Acrylic`** (backdrop blur+tint recipe),
+**`Opacity`** (flat group alpha — the overlap case above), and **`Blur`** (per-node **self-blur**, the Expressive
+Motion Kit — `NodePaint.BlurSigma > 0`): the subtree renders to a pooled offscreen RT, a separable **dynamic-σ**
+Gaussian runs over it, and it composites once at the group alpha. The `Blur` kind reuses the `Opacity` group's
+`OpacityLayerCompositor` RT pool + composite (it IS an opacity group that blurs first), so it is the cheapest path that
+supports an animating blur. Semantics + the curve/token vocabulary: `backdrop-effects-animation.md` FA-2.
+
 ```
 PushLayer → BeginRenderPass(layerRT, Clear transparent) → [children draw into layerRT]
 PopLayer  → EndRenderPass → (optional IEffectRunner on layerRT) →

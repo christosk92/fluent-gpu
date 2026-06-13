@@ -96,6 +96,29 @@ All engine subsystems now live under the single `src/FluentGpu.Engine` project (
 | Record → DrawList | `src/FluentGpu.Engine/Render/SceneRecorder.cs` |
 | Theming tokens | `src/FluentGpu.Engine/Dsl/Tokens.cs` (`Tok`), `Theme.cs` |
 | Tests | `src/FluentGpu.VerticalSlice/Program.cs` |
+| Windows OS services | `src/FluentGpu.WindowsApi/*` (pillars, refs Engine only) — see below |
+
+## Windows OS services (`FluentGpu.WindowsApi`)
+
+AOT-clean Win32/WinRT interop behind a small managed surface — **no** WindowsAppSDK NuGet, **no** CsWinRT, **no** `ComWrappers` subclassing, **no** reflection. Ten pillars; common entry points:
+
+- **Notifications** (`Notifications/`) — **fluent toasts, no XML**: `Toast.Create().Title(..).Body(..).Button("Open", b => b.Argument("action","open").Success()).DismissButton().Tag("id").ShowVia(notifier)`. Configurable `ToastButton` (Foreground/Background/`Protocol`/`Dismiss`, `Icon`, `Success`/`Critical`, `Tooltip`, `NextToInput`, `InContextMenu`); `TextBox`/`Selection`/`Header`/`Progress` inputs; `ToastNotifier.Show(builder)` reads the carried `Tag`/`Group`. `BuildXml()` is the raw escape hatch. Register an AUMID + COM activator via `ToastNotifier.Register(clsid, displayName)` first.
+- **Storage** (`Storage/`) — `AppDataStore.ForUnpackaged(pub, prod)` typed Get/Set persisted under `HKCU\Software\<pub>\<prod>` (String/Bool/Int/Long/Double/Bytes; Keys/Contains/Remove/Clear; Local/Cache/Temp folders). `SettingsStore.ForUnpackaged(pub, prod, runtime)` wraps it as write-through `Signal<T>` (bind a toggle straight to `settings.Bool("muted")`).
+- **Power** (`Power/`) — `PowerSession.KeepAwake(keepDisplayOn)` (disposable), `Suspending`/`Resumed` events, and `PowerSession.ReadPower()` → `PowerStatus` (AC/DC, battery %, charging, energy-saver, est. discharge) via `GetSystemPowerStatus`.
+- **Media / SMTC** (`Media/`) — `SystemMediaControls.GetForWindow(hwnd)`: `UpdateDisplay`/`SetPlaybackStatus`/`SetEnabledButtons`/`ButtonPressed` (+ `ButtonDispatcher` to hop the OS-thread callback) and **timeline scrub** `UpdateTimeline(position, end)` / `PlaybackRate`.
+- Others: **Credentials** (locker), **Packaging** (identity), **Activation** (protocol/redirect), **Dialogs** (file pickers, owner HWND), **Shell** (taskbar progress/jump list), **Network** (NLM connectivity + change events).
+- **OS file/folder drop is engine-level, not a pillar:** a `BoxEl.DropTarget = new DropTargetSpec(new[]{ DropKinds.Files }, OnEnter, OnLeave, OnDrop: s => { var d = (FileDropData)s.Payload!; … })` receives an Explorer drag. The Windows backend auto-registers the top-level window with a hand-vtable OLE `IDropTarget` (`Win32DropTarget` → `InputHooks.ExternalDrag*` → `InputDispatcher` → `DragDropContext`), so the zone gets **live hover** (DragEnter/Over/Leave) + the OS "+Copy" cursor; the file list is read once, at drop. Handlers fire on the UI thread. Gates: `e5dragdrop.ext` + smoke `6c.1`.
+
+## Drag & drop styling (`FluentGpu.Controls.DropZone` / `DragPreviewLayer`)
+
+Style drag/drop without touching the engine internals:
+- **Drop zone (Vercel "Drop to Deploy" feel):** `DropZone.Create(accept: new[]{ DropKinds.Files }, onDrop: s => …, content: body)` (or `DropZone.Window(…)` for whole-window). It restyles ITSELF — a cross-faded dashed accent ring + accent glow that fades in while a COMPATIBLE drag is live ("you can drop here") and brightens on hover — with **no second labelled panel** (so the content's own text never doubles). Works for in-app AND OS file drags.
+- **Lifted-ghost knobs:** set `DragSource.Style = new DragVisualStyle { Opacity = …, Shadow = …, Scale = … }` on a `BoxEl.Draggable` (default = WinUI 0.80 + flyout shadow). Honored in `DragController`.
+- **Custom floating preview (the "cursor tip"):** mount one `DragPreviewLayer.Of(state => state.Kind == "track" ? new Chip(...) : null)` at the app ROOT (top of a root ZStack); it follows the cursor using `UseDragState()`. Set the source's `DragVisualStyle.Opacity = 0` to hide the lifted node and show only the custom preview.
+- **Dashed borders anywhere:** `BoxEl.BorderDashOn`/`BorderDashOff` (0 = solid) → `SceneRecorder.StrokeRoundRectDashed`.
+- Reactive drag state: `UseDragState()` → `DragState{ Active, Kind, Position, Payload }`, re-renders on drag begin/move/end.
+
+Interop posture is binding (the three allowed modes + the strict NOs): see `docs/plans/wasdk-migration-survey.md`. The live demo of every pillar is `src/FluentGpu.WindowsApp/WindowsApiPage.cs` (one card each).
 
 ## WinUI controls, animations, and states
 
@@ -140,3 +163,8 @@ Design corpus (architecture authority, canon-gated) is `design/`; as-built react
   lookup, state-search pitfalls, the logical-state x interaction-state graph, rounded-rect rendering rules,
   `StateBrush`/`InteractionAnimator` visual states, explicit `AnimEngine` timelines like checkmark stroke trim, and the
   empirical verify workflow (golden checks + `--shot` + slow-motion proof). Read before any control parity work.
+- `docs/guide/motion-recipes.md` — the **Expressive Motion Kit** (`MotionRecipes.*`): named transitions adopted from
+  transitions.dev (number pop-in, error shake, skeleton reveal, success check, icon swap, badge pop, soft/texts reveal,
+  neighbour-falloff hover) on the engine's springs + the new per-node **self-blur** (`BoxEl.Blur`/`AnimChannel.BlurSigma`) +
+  the expressive curves (`Easing.SmoothOut`/`Overshoot`/`Pop`) and `Expressive.*` tokens. An OPT-IN app-author palette —
+  framework controls keep their Fluent curves; do NOT restyle the control kit with these.
