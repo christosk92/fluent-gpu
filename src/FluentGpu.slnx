@@ -16,4 +16,7 @@
     <Project Path="FluentGpu.VerticalSlice/FluentGpu.VerticalSlice.csproj" />
     <Project Path="FluentGpu.WindowsApp/FluentGpu.WindowsApp.csproj" />
   </Folder>
+  <Folder Name="/Packaging/">
+    <Project Path="FluentGpu.Package/FluentGpu.Package.csproj" />
+  </Folder>
 </Solution>

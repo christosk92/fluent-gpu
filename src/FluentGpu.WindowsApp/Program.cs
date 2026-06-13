@@ -162,6 +162,11 @@ static class Program
             return;
         }
 
+        // Wire the gallery's soak / stress diagnostic harness into the engine's batteries-included entry point. The hook
+        // only fires when an FG_SOAK / FG_STRESS_* / FG_WAKE_AUDIT env flag is set; normal runs ignore it. SoakProbe lives
+        // here (in the gallery) because it drives GalleryApp's nav hook, so it cannot move into the engine library.
+        FluentApp.DiagnosticRun = SoakProbe.TryRun;
+
         int frames = -1;   // optional --frames N for headless/CI; omit for a normal interactive window
         string demo = "default";
         string? screenshot = null;   // --screenshot <path> renders a deterministic scene and writes a PNG (visual diff loop)

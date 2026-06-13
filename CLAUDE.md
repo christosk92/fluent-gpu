@@ -6,19 +6,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `fluent-gpu` is a from-scratch, near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10 — the Reactor/React programming model (immutable `Element` records + `Component` + hooks + a keyed reconciler) over a signals-first reactive core and a custom Direct3D 12 + DirectWrite + DirectComposition renderer, behind a swappable PAL/RHI/Text seam (macOS-ready).
 
-**The engine exists: it's in `src/` (7 projects — see below) and it builds, runs, and passes its gates.** The `design/` corpus is no longer the code — it is the **canon authority** for cross-cutting contracts (the precedence rules below still bind the implementation). Usage/how-to lives in `docs/` (start at `docs/guide/README.md`); the architecture spec lives in `design/`. Read `README.md`, then for design work `design/README.md` + `design/SPEC-INDEX.md`, before changing anything.
+**The engine exists: it's in `src/` (8 projects — see below) and it builds, runs, and passes its gates.** The `design/` corpus is no longer the code — it is the **canon authority** for cross-cutting contracts (the precedence rules below still bind the implementation). Usage/how-to lives in `docs/` (start at `docs/guide/README.md`); the architecture spec lives in `design/`. Read `README.md`, then for design work `design/README.md` + `design/SPEC-INDEX.md`, before changing anything.
 
-**The `src/` layout (4 libraries + 1 Roslyn analyzer + 2 exes, in `src/FluentGpu.slnx`):**
+**The `src/` layout (4 libraries + 1 Roslyn analyzer + 1 packaging project + 2 exes, in `src/FluentGpu.slnx`):**
 - `FluentGpu.Engine` — the portable engine core (`RootNamespace=FluentGpu`, no NuGet). One folder per subsystem, namespaces unchanged: `Foundation/` (incl. `Foundation/Signals/`), `Seams/{Rhi,Pal,Text}/`, `Scene/`, `Render/`, `Layout/`, `Dsl/`, `Hooks/`, `Reconciler/`, `Animation/`, `Input/`, `Media/`, `Hosting/`, `Headless/{Rhi,Pal,Text}/`.
 - `FluentGpu.Controls` — the portable control kit (refs `Engine` only; **TerraFX-free** — the zero-alloc harness and the macOS port consume it unchanged).
-- `FluentGpu.Windows` — the swappable Windows backend (refs `Engine` + the one `TerraFX.Interop.Windows` PackageReference). Folders: `Interop/`, `Pal/`, `D3D12/`, `DirectWrite/`, `Wic/`, `Uia/`.
+- `FluentGpu.Windows` — the swappable Windows backend (refs `Engine` + the one `TerraFX.Interop.Windows` PackageReference). Folders: `Interop/`, `Pal/`, `D3D12/`, `DirectWrite/`, `Wic/`, `Uia/`, `Hosting/` (the batteries-included `FluentApp.Run` entry point — moved here from the gallery so it ships in the package).
 - `FluentGpu.WindowsApi` — OS-services pillars (`Notifications/`, `Credentials/`, `Packaging/`, `Activation/`, `Media/` SMTC, `Dialogs/`, `Shell/`, `Power/`, `Network/`, `Storage/` app-data), refs `Engine`. AOT-clean Win32/WinRT interop (no WindowsAppSDK NuGet, no CsWinRT). MSIX packaging is app-side (`.wapproj`), not here.
 - Analyzer: `FluentGpu.SourceGen` (netstandard2.0) — the single in-repo Roslyn generator assembly; subfolders `Localization/` (the compile-safe loc-keys generator) and `Validation/` (the `[Validatable]` validator generator), each dormant unless its trigger is present, plus the unbuilt engine-DSL/Theme + COM-binding generator scaffolds (`Placeholder.cs`). Exes: `FluentGpu.VerticalSlice` (the `PublishAot` validation harness; refs `Engine`+`Controls`; **its transitive closure must stay TerraFX-free** — the portability guard) and `FluentGpu.WindowsApp` (the WinExe gallery / composition root; refs `Engine`+`Controls`+`Windows`).
+- Packaging: `FluentGpu.Package` — a code-free assembler that emits the **single public `FluentGpu` NuGet package**: it bundles the four library DLLs into `lib/net10.0` + the SourceGen analyzer into `analyzers/dotnet/cs`, with `TerraFX.Interop.Windows` as the lone declared dependency (`IncludeBuildOutput=false`; project refs are `PrivateAssets=all` so they don't leak as deps). Ships no assembly of its own. The CI is `.github/workflows/nuget.yml` (pack + push on a `v*` tag); consumer docs are `docs/guide/consuming-via-nuget.md`.
 
 ## Commands
 
 ```powershell
-dotnet build src/FluentGpu.slnx                              # the canonical build (all 7 projects); must be clean
+dotnet build src/FluentGpu.slnx                              # the canonical build (all 8 projects); must be clean
 dotnet run --project src/FluentGpu.VerticalSlice            # the validation suite; expect "ALL CHECKS PASSED" (incl. zero-alloc gates)
 dotnet run --project src/FluentGpu.WindowsApp              # the gallery (composition root)
 dotnet run --project src/FluentGpu.WindowsApp -- --screenshot <path>   # render a deterministic scene to a PNG (visual-diff loop)

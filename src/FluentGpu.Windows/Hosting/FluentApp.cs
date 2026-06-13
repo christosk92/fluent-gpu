@@ -38,6 +38,15 @@ public static class FluentApp
     /// </summary>
     public static event Action<string>? ActivationRedirected;
 
+    /// <summary>
+    /// Optional diagnostic-harness hook. When it is set and returns <see langword="true"/>, it has taken over the run
+    /// (e.g. a soak / stress longevity probe) and the normal interactive frame loop below is skipped. Kept as a generic
+    /// seam so the engine entry point carries no dependency on any app-specific harness: the gallery installs its
+    /// <c>SoakProbe</c> here, gated on its <c>FG_SOAK</c> / <c>FG_STRESS_*</c> env flags. Left <see langword="null"/>
+    /// for normal apps. UI-thread only.
+    /// </summary>
+    public static Func<AppHost, IPlatformWindow, IGpuDevice, bool>? DiagnosticRun;
+
     public static void Run(Func<Component> root, string title = "FluentGpu", int width = 800, int height = 600,
                            bool mica = true, int frames = -1, string? screenshot = null, bool customFrame = false)
     {
@@ -95,15 +104,11 @@ public static class FluentApp
 
         window.Show();
 
-        // Longevity / leak-hunt harness (SoakProbe). Each mode runs instead of the interactive loop and returns to the
-        // clean shutdown below. Pair with FG_D3D_MEM=1 for the per-resource [d3d-mem] create/release trace.
-        if (device is D3D12Device probeGpu)
-        {
-            if (Diag.EnvFlag("FG_SOAK"))          { SoakProbe.RunSoak(host, window, probeGpu);  WindowHandle = 0; return; }
-            if (Diag.EnvFlag("FG_STRESS_RESIZE")) { SoakProbe.RunResize(host, window, probeGpu); WindowHandle = 0; return; }
-            if (Diag.EnvFlag("FG_STRESS_NAV"))    { SoakProbe.RunNav(host, window, probeGpu);    WindowHandle = 0; return; }
-            if (Diag.EnvFlag("FG_WAKE_AUDIT"))    { SoakProbe.RunWakeAudit(host, window, probeGpu); WindowHandle = 0; return; }
-        }
+        // Optional diagnostic-harness takeover (the gallery's SoakProbe longevity / leak-hunt + targeted-stress modes,
+        // gated on FG_SOAK / FG_STRESS_* / FG_WAKE_AUDIT). Installed via FluentApp.DiagnosticRun; when it handles the
+        // run it returns true and we skip the interactive loop, returning to the clean shutdown below. Null for normal
+        // apps. Pair with FG_D3D_MEM=1 for the per-resource [d3d-mem] create/release trace.
+        if (DiagnosticRun is { } diag && diag(host, window, device)) { WindowHandle = 0; return; }
 
         int n = 0;
         while (!window.IsClosed)

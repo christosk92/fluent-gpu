@@ -1,0 +1,78 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+       The single shippable package. This project carries no code of its own; it assembles ONE NuGet package named
+       `FluentGpu` whose payload is the four FluentGpu.* assemblies (lib/net10.0) + the source generator
+       (analyzers/dotnet/cs), with TerraFX.Interop.Windows as the lone declared dependency. Consumers add one
+       <PackageReference Include="FluentGpu" /> and call FluentApp.Run(() => new App()).
+       ──────────────────────────────────────────────────────────────────────────────────────────────────────────────── -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+
+    <IsPackable>true</IsPackable>
+    <!-- This project ships no assembly of its own; the package payload is added explicitly below. -->
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- NU5128: NuGet's "no lib/ref for the declared TFM" heuristic mis-fires here because we populate lib/net10.0
+         from a target (None items) rather than from this project's own build output. The package IS complete. -->
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+
+    <PackageId>FluentGpu</PackageId>
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <Title>FluentGpu</Title>
+    <Description>A near-zero-allocation, NativeAOT, GPU-rendered (Direct3D 12) UI engine for .NET 10, with a React/Reactor + signals-first programming model. One package: the engine, the control kit, the Windows backend (including the batteries-included FluentApp.Run), the Windows OS-services surface, and opt-in source generators. Requires the .NET 10 SDK and Windows 10 21H2+ (x64/arm64).</Description>
+    <Authors>Christos Karapasias</Authors>
+    <Company>MarTeco</Company>
+    <Copyright>Copyright (c) 2026 Christos Karapasias</Copyright>
+    <PackageProjectUrl>https://github.com/christosk92/fluent-gpu</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/christosk92/fluent-gpu.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>ui;gpu;direct3d;d3d12;directwrite;nativeaot;reactive;signals;dotnet;windows;fluent;react;immediate-mode</PackageTags>
+  </PropertyGroup>
+
+  <!-- Build + bundle these; PrivateAssets="all" keeps them from leaking as package *dependencies* (their DLLs travel
+       inside the package instead). The generator is referenced as an analyzer so its netstandard2.0 DLL is built but
+       never copied next to the net10.0 output. -->
+  <ItemGroup>
+    <ProjectReference Include="..\FluentGpu.Engine\FluentGpu.Engine.csproj" PrivateAssets="all" />
+    <ProjectReference Include="..\FluentGpu.Controls\FluentGpu.Controls.csproj" PrivateAssets="all" />
+    <ProjectReference Include="..\FluentGpu.Windows\FluentGpu.Windows.csproj" PrivateAssets="all" />
+    <ProjectReference Include="..\FluentGpu.WindowsApi\FluentGpu.WindowsApi.csproj" PrivateAssets="all" />
+    <ProjectReference Include="..\FluentGpu.SourceGen\FluentGpu.SourceGen.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!-- The package's single declared NuGet dependency (the Windows/WindowsApi backends P/Invoke through it). -->
+  <ItemGroup>
+    <PackageReference Include="TerraFX.Interop.Windows" Version="10.0.26100.6" />
+  </ItemGroup>
+
+  <!-- Package-level docs/branding (root of the .nupkg). -->
+  <ItemGroup>
+    <None Include="..\..\build\nuget\README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\build\nuget\icon.png" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <!-- Assemble the payload after Build (so $(OutputPath) holds the copied FluentGpu.* DLLs + XML docs):
+       the four runtime assemblies → lib/net10.0, the generator → analyzers/dotnet/cs (path resolved via the
+       SourceGen project's own GetTargetPath, no hardcoded bin path). -->
+  <Target Name="_BundleFluentGpuAssemblies" BeforeTargets="_GetPackageFiles" DependsOnTargets="Build">
+    <ItemGroup>
+      <None Include="$(OutputPath)FluentGpu.Engine.dll;$(OutputPath)FluentGpu.Controls.dll;$(OutputPath)FluentGpu.Windows.dll;$(OutputPath)FluentGpu.WindowsApi.dll"
+            Pack="true" PackagePath="lib/$(TargetFramework)" Visible="false" />
+      <None Include="$(OutputPath)FluentGpu.Engine.xml;$(OutputPath)FluentGpu.Controls.xml;$(OutputPath)FluentGpu.Windows.xml;$(OutputPath)FluentGpu.WindowsApi.xml"
+            Pack="true" PackagePath="lib/$(TargetFramework)" Visible="false" Condition="Exists('$(OutputPath)FluentGpu.Engine.xml')" />
+    </ItemGroup>
+    <MSBuild Projects="..\FluentGpu.SourceGen\FluentGpu.SourceGen.csproj" Targets="GetTargetPath" Properties="Configuration=$(Configuration)">
+      <Output TaskParameter="TargetOutputs" ItemName="_SourceGenTargetPath" />
+    </MSBuild>
+    <ItemGroup>
+      <None Include="@(_SourceGenTargetPath)" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+    </ItemGroup>
+  </Target>
+
+</Project>

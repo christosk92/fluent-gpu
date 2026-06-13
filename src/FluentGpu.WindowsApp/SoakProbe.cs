@@ -1,8 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using FluentGpu.Foundation;
 using FluentGpu.Hosting;
+using FluentGpu.Pal;
 using FluentGpu.Pal.Windows;
+using FluentGpu.Rhi;
 using FluentGpu.Rhi.D3D12;
 
 namespace FluentGpu;
@@ -22,6 +25,20 @@ namespace FluentGpu;
 /// </summary>
 internal static class SoakProbe
 {
+    /// <summary>
+    /// Adapter for <see cref="FluentGpu.FluentApp.DiagnosticRun"/>: dispatch to the env-selected soak / stress mode and
+    /// report whether it took over the run (the interactive frame loop is then skipped). Wired in <c>Program.Main</c>.
+    /// Lives in the gallery (not the engine) because the modes drive <c>GalleryApp</c>'s nav hook.
+    /// </summary>
+    public static bool TryRun(AppHost host, IPlatformWindow window, IGpuDevice device)
+    {
+        if (window is not Win32Window w || device is not D3D12Device gpu) return false;
+        if (Diag.EnvFlag("FG_SOAK"))          { RunSoak(host, w, gpu);      return true; }
+        if (Diag.EnvFlag("FG_STRESS_RESIZE")) { RunResize(host, w, gpu);    return true; }
+        if (Diag.EnvFlag("FG_STRESS_NAV"))    { RunNav(host, w, gpu);       return true; }
+        if (Diag.EnvFlag("FG_WAKE_AUDIT"))    { RunWakeAudit(host, w, gpu); return true; }
+        return false;
+    }
     // ── mixed longevity soak ────────────────────────────────────────────────────────────────────────────────────────
     public static void RunSoak(AppHost host, Win32Window window, D3D12Device gpu)
     {

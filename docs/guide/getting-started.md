@@ -2,6 +2,9 @@
 
 [← Guide index](./README.md)
 
+> Building a **new app from the published package**? See **[Consuming FluentGpu via NuGet](./consuming-via-nuget.md)**.
+> This page covers working inside the repo (project references) and driving the loop yourself.
+
 ## Run an app (Windows, batteries-included)
 
 The entire SDK is one call — it creates a DPI-aware window, brings up D3D12, applies Mica + the real system accent,
@@ -9,8 +12,10 @@ wires the font system + frame loop, and renders your root component:
 
 ```csharp
 using FluentGpu;                 // FluentApp
+using FluentGpu.Dsl;             // Element
 using FluentGpu.Hooks;           // Component
-using static FluentGpu.Dsl.Ui;   // VStack, Text, Button…
+using FluentGpu.Controls;        // Button
+using static FluentGpu.Dsl.Ui;   // VStack, Text…
 
 FluentApp.Run(() => new App());
 
@@ -27,7 +32,7 @@ sealed class App : Component
 }
 ```
 
-`FluentApp.Run` signature (`src/FluentGpu.WindowsApp/FluentApp.cs`):
+`FluentApp.Run` signature (`src/FluentGpu.Windows/Hosting/FluentApp.cs`):
 
 ```csharp
 public static void Run(Func<Component> root, string title = "FluentGpu",

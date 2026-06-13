@@ -49,6 +49,7 @@ fluent-gpu keeps the part of [WinUI](https://github.com/microsoft/microsoft-ui-x
 The difference is what's underneath — two things. **(1)** Instead of patching WinUI's heavy C++ XAML/Composition core, the reconciler patches **our own** retained struct-of-arrays render tree, which a custom batched 2D renderer paints on **Direct3D 12 + DirectWrite + DirectComposition** — pure Win32, **no WinRT, no Windows App SDK** — behind a swappable seam so a macOS (Metal + CoreText) backend can drop in later. **(2)** The reactivity is **signals-first** (Solid-style): a `setState` re-renders *only* the owning component's subtree, and a high-frequency value (a slider drag, scroll) can be **bound straight to a node transform** so it updates with *zero* render/reconcile/layout. There is no full-app re-render and no global dirty flag.
 
 ```csharp
+using FluentGpu.Dsl;               // Element
 using static FluentGpu.Dsl.Ui;     // VStack, HStack, Heading, Text…
 using FluentGpu.Hooks;             // Component, UseState
 using FluentGpu.Controls;          // Button, Slider…
@@ -103,6 +104,27 @@ re-render** (one component's subtree + a scoped relayout firewalled at a layout 
 
 Read the [architecture spec](./design/architecture-spec.md) for the full picture, the [subsystem index](./design/subsystems/README.md) for the component designs, or [`reconciler-hooks.md §0bis`](./design/subsystems/reconciler-hooks.md) for the as-built signals model.
 
+## Use it in your app (NuGet)
+
+One package brings the whole SDK — the engine, the control kit, the Windows (D3D12) backend with `FluentApp.Run`, the
+OS-services surface, and the opt-in source generators.
+
+```xml
+<PackageReference Include="FluentGpu" Version="0.1.0" />
+```
+
+```csharp
+using FluentGpu;                 // FluentApp
+using FluentGpu.Hooks;           // Component
+using static FluentGpu.Dsl.Ui;   // VStack, Text, Button…
+
+FluentApp.Run(() => new App());
+```
+
+Needs the **.NET 10 SDK** and **Windows 10 21H2+** (x64/arm64). Publish a single self-contained native exe with
+`dotnet publish -c Release -r win-x64 -p:PublishAot=true`. Full walkthrough:
+[`docs/guide/consuming-via-nuget.md`](./docs/guide/consuming-via-nuget.md).
+
 ## Running it
 
 ```powershell
@@ -122,7 +144,8 @@ dotnet run --project src/FluentGpu.WindowsApp
 Authoring an app is one call — `FluentApp.Run(() => new App())` brings up a DPI-aware window, D3D12, Mica + the OS
 accent, the font + image systems, and the frame loop. The solution (`src/FluentGpu.slnx`) is 4 libraries + 4
 satellites = 8 projects (the portable `FluentGpu.Engine`, `FluentGpu.Controls`, the swappable `FluentGpu.Windows`
-backend, `FluentGpu.WindowsApi`, 2 analyzers, 2 exes), .NET 10 / C# 14 / NativeAOT-ready; see [`src/README.md`](./src/README.md).
+backend, `FluentGpu.WindowsApi`, the `FluentGpu.SourceGen` analyzer, the `FluentGpu.Package` single-package assembler,
+2 exes), .NET 10 / C# 14 / NativeAOT-ready; see [`src/README.md`](./src/README.md).
 
 ## Documentation & agents
 
