@@ -247,6 +247,15 @@ public sealed class RenderContext
         return context.Default;
     }
 
+    /// <summary>The host's cross-thread UI-thread poster (<see cref="HostDispatch.Post"/>): <c>post(action)</c> runs
+    /// <c>action</c> on the UI thread on the next frame, safe to call from ANY thread (OS callback / worker / agile COM).
+    /// This is the engine-blessed marshal for off-thread data — use it instead of <c>UseContext(FrameClock.Tick)</c> +
+    /// a per-frame drain, which forces a full re-render every frame just to poll a queue. Reading it subscribes this
+    /// component to the (never-changing) host poster signal, so it costs no extra re-renders. When no host published a
+    /// poster (headless / test), the fallback runs the action inline on the calling thread (the synchronous harness does
+    /// not hop threads), so call sites need no null-check.</summary>
+    public Action<Action> UsePost() => UseContext(HostDispatch.Post) ?? (static a => a());
+
     /// <summary>
     /// A value that eases toward <paramref name="target"/> one step per render whenever the target changes. It steps ONLY
     /// when this component re-renders for some other reason — for motion prefer the retained engine path

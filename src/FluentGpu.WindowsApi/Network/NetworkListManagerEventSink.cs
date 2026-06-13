@@ -21,15 +21,14 @@ namespace FluentGpu.WindowsApi.Network;
 /// no dispatch of its own.
 /// </para>
 /// <para>
-/// <b>Threading (read this before wiring a handler).</b> NLM raises this on a COM-supplied thread, NOT the UI thread. In
-/// practice the callback arrives on an STA/RPC worker associated with whatever apartment the
-/// <c>INetworkListManager</c> object and its connection point were created on; for the gallery the manager is created on
-/// the UI thread (an STA with a running message pump), so the notification is delivered via that pump and the handler
-/// effectively runs on the UI thread. There is no guarantee of that in the general case — a host that creates the
-/// subscription on an MTA thread, or has no pump, may receive the callback on an arbitrary thread or not at all. This
-/// sink therefore does NO thread marshalling: it invokes the subscriber delegate inline on the callback thread, and the
-/// subscriber is responsible for hopping to its own UI thread if it needs to (the toast pillar's
-/// <c>ActivationDispatcher</c> pattern is the model — kept out of this minimal API by design).
+/// <b>Threading (read this before wiring a handler).</b> NLM raises this on a COM-supplied thread, NOT necessarily the
+/// thread that subscribed. The <c>INetworkListManager</c> coclass is apartment-agile (<c>ThreadingModel=Both</c>,
+/// free-threaded-marshaled), so where the callback lands depends on the subscribing apartment: from an MTA subscriber
+/// (the gallery UI thread is MTA — its <c>Main</c> carries no <c>[STAThread]</c>) it arrives on an RPC worker thread; from
+/// an STA subscriber it would be delivered via that apartment's message pump. Either way it is NOT guaranteed to be the
+/// subscriber's UI thread. This sink therefore does NO thread marshalling: it invokes the subscriber delegate inline on
+/// the callback thread, and the subscriber is responsible for hopping to its own UI thread if it needs to (the toast
+/// pillar's <c>ActivationDispatcher</c> pattern is the model — kept out of this minimal API by design).
 /// </para>
 /// <para>
 /// <b>Exception safety.</b> A managed exception must never cross the COM boundary; the subscriber delegate is invoked

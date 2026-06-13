@@ -26,10 +26,15 @@ namespace FluentGpu.WindowsApi.Dialogs;
 /// worker thread.
 /// </para>
 /// <para>
-/// <b>Apartment.</b> The common-item dialog requires an STA. <see cref="EnsureSta"/> calls
-/// <c>CoInitializeEx(COINIT_APARTMENTTHREADED)</c> once per thread; a UI thread that already initialized STA gets the
-/// benign <c>S_FALSE</c>/<c>RPC_E_CHANGED_MODE</c> which is tolerated (it does not re-initialize or balance with
-/// <c>CoUninitialize</c> — the host owns apartment teardown).
+/// <b>Apartment.</b> The common-item dialog requires an STA — <c>IModalWindow.Show</c> does OLE init /
+/// <c>RegisterDragDrop</c> and runs a nested modal loop with single-threaded-apartment pump semantics, so it must be
+/// called on an STA thread (the gallery UI thread is STA via <c>[STAThread]</c> on <c>Program.Main</c>).
+/// <see cref="EnsureSta"/> calls <c>CoInitializeEx(COINIT_APARTMENTTHREADED)</c> once per thread to assert that: on a
+/// genuine STA thread it returns <c>S_OK</c> (first init) or the benign <c>S_FALSE</c> (already STA, same model) —
+/// both tolerated. <c>RPC_E_CHANGED_MODE</c> is the OPPOSITE signal: it means the thread is already in the
+/// <i>other</i> apartment (the MTA), so the STA request was REFUSED and <c>Show</c> would fail — that HRESULT is
+/// therefore a hard error here, not "already STA". <see cref="EnsureSta"/> does not re-initialize or balance with
+/// <c>CoUninitialize</c> — the host owns apartment teardown.
 /// </para>
 /// <para>
 /// <b>Cancellation.</b> When the user dismisses the dialog, <c>Show</c> returns
@@ -70,9 +75,17 @@ public static unsafe class FilePicker
     // wincred-style local #defines TerraFX does not project as fields (the win32-error codes carry no projection).
     private const int ERROR_CANCELLED = 1223;                 // winerror.h — user dismissed the dialog.
 
-    // Benign CoInitializeEx result on a thread already initialized to a different model (gate on FAILED, not != S_OK).
-    // S_FALSE (already-initialized, same model) is a positive HRESULT, so the `hr < 0` check already tolerates it.
+    // CoInitializeEx result when the calling thread is ALREADY initialized to the OPPOSITE concurrency model — here, an
+    // STA request (COINIT_APARTMENTTHREADED) on a thread that is already MTA. It is a FAILED HRESULT, and unlike S_FALSE
+    // (already-initialized, SAME model — a positive HRESULT the `hr < 0` check already tolerates) it must NOT be treated
+    // as success: it proves the thread is MTA, where the STA-only dialog Show() cannot run. EnsureSta treats it as a hard
+    // error. With [STAThread] on the gallery UI thread this code path is never hit there (CoInitializeEx returns S_OK /
+    // S_FALSE); it only fires if a caller wrongly invokes the picker from an MTA thread, which is exactly what we want to
+    // surface rather than mask.
     private const int RPC_E_CHANGED_MODE = unchecked((int)0x80010106);
+
+    // CoInitializeEx success-with-info: the thread was already initialized to the SAME (STA) model. A positive HRESULT.
+    private const int S_FALSE = 1;
 
     // CLSIDs of the dialog coclasses (Windows SDK ShObjIdl_core.h). TerraFX projects the interfaces and the empty
     // coclass marker types (FileOpenDialog/FileSaveDialog) but NOT a CLSID_* GUID field, so they are restated here in
@@ -374,13 +387,31 @@ public static unsafe class FilePicker
     // ── apartment ──────────────────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Ensure the calling thread is in an STA (the common-item dialog requires it). Tolerates the benign
-    /// already-initialized results; does not balance with <c>CoUninitialize</c> (the host owns apartment lifetime).
+    /// Assert the calling thread is in an STA, which the common-item dialog requires (its <c>Show</c> does OLE init /
+    /// <c>RegisterDragDrop</c> and runs a nested STA modal loop). On the gallery UI thread (STA via <c>[STAThread]</c> on
+    /// <c>Program.Main</c>) <c>CoInitializeEx(APARTMENTTHREADED)</c> returns <c>S_OK</c> or the benign <c>S_FALSE</c> —
+    /// both tolerated. <c>RPC_E_CHANGED_MODE</c> means the thread is already in the OPPOSITE (MTA) apartment, where the
+    /// dialog cannot run; rather than mask that (the prior bug — it left the thread MTA and let <c>Show</c> wedge/crash),
+    /// throw a clear diagnostic so the misuse is surfaced at the call site. Does not balance with <c>CoUninitialize</c>
+    /// (the host owns apartment lifetime).
     /// </summary>
+    /// <exception cref="InvalidOperationException">The thread is MTA (<c>RPC_E_CHANGED_MODE</c>) or <c>CoInitializeEx</c>
+    /// otherwise failed — the dialog requires an STA thread.</exception>
     private static void EnsureSta()
     {
         int hr = (int)CoInitializeEx(null, (uint)COINIT.COINIT_APARTMENTTHREADED);
-        if (hr < 0 && hr != RPC_E_CHANGED_MODE)
+        // S_OK (0, freshly STA) and S_FALSE (1, already STA, same model) are the success path.
+        if (hr == 0 || hr == S_FALSE)
+            return;
+        // RPC_E_CHANGED_MODE proves the thread is MTA: the STA-only dialog cannot run here, so fail loudly instead of
+        // tolerating it (the masked-crash bug — EnsureSta used to swallow this and let Show() wedge/crash on MTA).
+        if (hr == RPC_E_CHANGED_MODE)
+            throw new InvalidOperationException(
+                "FilePicker requires an STA thread, but the calling thread is in the multithreaded apartment (MTA) " +
+                "— CoInitializeEx(APARTMENTTHREADED) returned RPC_E_CHANGED_MODE (0x80010106). The shell common-item " +
+                "dialog (IModalWindow.Show) needs an STA. Call the picker from the UI thread (it is STA via [STAThread] " +
+                "on Program.Main) or marshal the call to an STA thread.");
+        if (hr < 0)
             ThrowIfFailed(hr, "CoInitializeEx(APARTMENTTHREADED)");
     }
 

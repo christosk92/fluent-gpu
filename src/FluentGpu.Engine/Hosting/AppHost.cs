@@ -107,6 +107,13 @@ public sealed class AppHost : IDisposable
     private readonly Signal<int> _imageEpoch = new(0);   // bumped on any image status change → re-renders UseImage consumers
     private Size2 _lastViewportDip;
 
+    // Cross-thread UI dispatch (HostDispatch.Post / UsePost): worker / OS-callback / agile-COM threads enqueue
+    // UI-thread actions and Wake() the loop; drained inside a reactive Batch at the top of each frame's flush so the
+    // posted signal writes coalesce into one re-render. The engine-owned replacement for hand-rolled post-to-UI plumbing
+    // (and for the UseContext(FrameClock.Tick)-to-drain anti-pattern that re-rendered every frame just to poll).
+    private readonly System.Collections.Concurrent.ConcurrentQueue<Action> _uiPosts = new();
+    private readonly Signal<object?> _hostPostSig;
+
     // ── FG_ALLOC_DIAG=1: once-per-second allocation/CPU attribution (stderr) ──
     // UI-thread bytes + ticks per frame segment (GetAllocatedBytesForCurrentThread deltas) and the process-wide
     // allocation total, so scroll-time churn can be pinned to a phase (or to a worker thread) without a profiler.
@@ -480,6 +487,8 @@ public sealed class AppHost : IDisposable
         _reconciler.SetAmbient(FrameDiagnostics.Current, _frameStatsSig);
         _reconciler.SetAmbient(InputHooks.Current, _inputHooksSig);
         _reconciler.SetAmbient(FrameClock.Tick, _frameClockSig);
+        _hostPostSig = new Signal<object?>((Action<Action>)Post);   // ambient UI-thread poster (HostDispatch.Post / UsePost)
+        _reconciler.SetAmbient(HostDispatch.Post, _hostPostSig);
 
         // Keep-alive repaint: the OS fires this synchronously from inside a modal move/size loop (and on NC
         // hover/press transitions while the frame loop idles). Paint with keepAlive so the device skips its
@@ -506,6 +515,29 @@ public sealed class AppHost : IDisposable
     {
         if (_inPaint) _frameAfterPaint = true;
         else _frameNeeded = true;
+    }
+
+    /// <summary>Run <paramref name="action"/> on the UI thread at the top of the next frame. THREAD-SAFE — callable from
+    /// any thread (an OS callback, a worker, an agile-COM apartment), unlike the UI-thread-only <see cref="WakeFrame"/>.
+    /// Enqueues the action and posts a thread-safe wake so a fully-idle, blocked loop runs a frame to drain it; the drain
+    /// happens inside a reactive <c>Batch</c> (see <see cref="Paint"/>), so every signal the posted actions write
+    /// coalesces into a single re-render. This is the engine's UI marshal — surfaced to components as
+    /// <c>HostDispatch.Post</c> / <c>UsePost()</c>.</summary>
+    public void Post(Action action)
+    {
+        if (action is null) return;
+        _uiPosts.Enqueue(action);
+        _window.Wake();   // thread-safe (Win32 PostMessage WM_NULL); breaks a blocked WaitForWork so an idle loop drains promptly
+    }
+
+    private void DrainUiPosts()
+    {
+        // Bounded to a one-frame snapshot of the queue depth: an action that unconditionally re-Posts itself (re-enqueues
+        // + Wake()s) must not livelock this drain into a CPU-spin — its re-post lands in _uiPosts and is picked up by a
+        // LATER frame (the Wake keeps the loop alive). The migrated cards never self-re-post, but the cap is cheap insurance.
+        int budget = _uiPosts.Count;
+        while (budget-- > 0 && _uiPosts.TryDequeue(out var a))
+            try { a(); } catch { /* a posted action must never take down the frame */ }
     }
 
     /// <summary>Wired to <see cref="InputDispatcher.OnFlingStarted"/>: a touch pan released with a flick speed hands its
@@ -564,6 +596,19 @@ public sealed class AppHost : IDisposable
             return LastStats;
         }
 
+        // Cross-thread UI posts (HostDispatch.Post / UsePost): drain BEFORE the idle gate below. A worker that posts an
+        // action Wake()s the loop (PostMessage WM_NULL), but a pending _uiPosts queue is NOT itself a wake term in
+        // ComputeWakeReasons() — so without draining here, an otherwise-idle page (e.g. the migrated WindowsApi cards that
+        // dropped FrameClock.Tick) would early-return at `if (!HasActiveWork)` BEFORE Paint, the only other drain (inside
+        // Paint) would never run, and the posted signal writes would be stranded forever (a structural freeze, not a
+        // deadlock). Running inside _runtime.Batch coalesces the actions' signal writes into one re-render and defers the
+        // FrameRequested wake to the batch's end, where it sets _frameNeeded — so HasActiveWork (FrameNeeded || HasPending)
+        // is true THIS frame and we fall through to Paint, whose _runtime.Flush() applies the coalesced re-render. When the
+        // queue is empty this is a no-op: the loop still idles (RecommendedWaitMs==-1), so render-purity is preserved — a
+        // frame is forced ONLY when a post is actually pending. No lost-wakeup: Post enqueues before Wake, so a post that
+        // arrives after this drain but before the gate still posted its own WM_NULL that re-wakes the loop next iteration.
+        if (!_uiPosts.IsEmpty) _runtime.Batch(DrainUiPosts);
+
         // Wake attribution: snapshot the mask at the idle decision point (before the image pump can flip _frameNeeded).
         WakeReasons wake = s_wakeDiag ? ComputeWakeReasons() : WakeReasons.None;
 
@@ -599,6 +644,7 @@ public sealed class AppHost : IDisposable
         }
         if (_memCensus is not null) _memCensus.MaybeReport();
         if (s_allocTypes) AllocTypeProfiler.MaybeReport();
+        if (RenderBudget.CompiledIn) { RenderBudget.FrameBoundary(); RenderBudget.MaybeReport(); }   // FG_RENDER_DIAG tripwire (folds away in release)
         return painted;
     }
 
@@ -651,6 +697,11 @@ public sealed class AppHost : IDisposable
 
             long before = GC.GetAllocatedBytesForCurrentThread();
 
+            // Drain cross-thread UI posts so their signal writes land in THIS flush. RunFrame already drained them before
+            // its idle gate, so on the normal frame path this is a no-op on an empty queue; it earns its keep on the
+            // Paint-ONLY path (the PaintRequested keep-alive fired from inside an OS modal move/size loop, which bypasses
+            // RunFrame entirely) — there a post that arrived mid-drag still applies this frame instead of being stranded.
+            if (!_uiPosts.IsEmpty) _runtime.Batch(DrainUiPosts);
             _runtime.Flush();                                  // 3–5 apply scheduled re-renders (render-effects reconcile) + bindings
             bool virtualsChanged = _reconciler.ReRealizeVirtuals();   // virtual boundary re-realize (granular)
             if (virtualsChanged && _runtime.HasPending) _runtime.Flush();   // bound-row rebinds (slot signal writes) land THIS frame

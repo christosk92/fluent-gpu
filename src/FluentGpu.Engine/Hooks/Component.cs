@@ -26,6 +26,9 @@ public abstract class Component
     protected T UseMemo<T>(Func<T> factory, params object[] deps) => Context.UseMemo(factory, deps);
     protected Ref<T> UseRef<T>(T initial) => Context.UseRef(initial);
     protected T UseContext<T>(Context<T> context) => Context.UseContext(context);
+    /// <summary>The host UI-thread poster (<see cref="HostDispatch.Post"/>): run an action on the UI thread next frame
+    /// from any thread. Use for off-thread data instead of <c>UseContext(FrameClock.Tick)</c> + a per-frame drain.</summary>
+    protected Action<Action> UsePost() => Context.UsePost();
     protected float UseAnimatedValue(float target, float durationMs = 180f, Easing easing = Easing.EaseInOut) => Context.UseAnimatedValue(target, durationMs, easing);
 
     // Declarative, composited animation of this component's node (no per-frame re-render):
@@ -48,11 +51,21 @@ public abstract class Component
     /// </summary>
     public virtual bool RunsOnce => false;
 
-    /// <summary>Run one render pass with hook bookkeeping.</summary>
+    /// <summary>Run one render pass with hook bookkeeping. In DEBUG / FLUENTGPU_DIAG builds the render duration is fed to
+    /// the <see cref="FluentGpu.Hosting.RenderBudget"/> tripwire (slow-render + every-frame-re-render detection); the
+    /// timing guard folds away entirely in release (<c>CompiledIn</c> is a const <c>false</c>), so the shipping path is
+    /// exactly <c>BeginRender(); Render(); EndRender();</c> at zero cost.</summary>
     public Element RenderWithHooks()
     {
         Context.BeginRender();
-        var el = Render();
+        Element el;
+        if (FluentGpu.Hosting.RenderBudget.CompiledIn)
+        {
+            long rbStart = FluentGpu.Hosting.RenderBudget.Begin();
+            el = Render();
+            FluentGpu.Hosting.RenderBudget.End(this, rbStart);
+        }
+        else el = Render();
         Context.EndRender();
         return el;
     }

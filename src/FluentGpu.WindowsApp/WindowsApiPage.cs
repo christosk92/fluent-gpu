@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.Versioning;
 using FluentGpu.Controls;
@@ -31,10 +30,11 @@ using static FluentGpu.Dsl.Ui;
 // readonly cards (Packaging / Network status) render real values; the modal/interactive demos are click-driven.
 //
 // Cross-thread discipline: SMTC button presses, NLM ConnectivityChanged, and power broadcasts all arrive on arbitrary
-// OS threads. Writing a signal off the UI thread is illegal (the reactive core is UI-thread), so each live card funnels
-// its OS-thread payloads through a thread-safe queue (PageDispatch) and drains them on the UI thread via the frame
-// clock, posting a wake so events surface promptly even while idle. The per-frame drain is scoped to this page's
-// lifetime (it stops the moment you navigate away and the page unmounts).
+// OS threads. Writing a signal off the UI thread is illegal (the reactive core is UI-thread), so each live card hops its
+// OS-thread payloads onto the UI thread through the engine dispatcher (UsePost() → AppHost.Post): the post enqueues +
+// wakes the loop, and the host drains it inside a reactive Batch at the top of the next frame. Crucially this does NOT
+// re-render the card every frame (the earlier UseContext(FrameClock.Tick) drain did, which froze this page); the loop
+// stays idle until an event actually arrives, then runs exactly one frame to apply it.
 
 sealed class WindowsApiPage : Component
 {
@@ -138,34 +138,8 @@ static class WindowsApiLive
     }
 }
 
-/// <summary>
-/// A thread-safe UI-thread marshal for OS-thread callbacks: producers (SMTC / NLM / power worker threads) enqueue a
-/// closure and wake the window pump; the owning card drains the queue on the frame clock and runs each closure on the
-/// UI thread (where writing signals is legal). One queue per card keeps the drains independent.
-/// </summary>
-sealed class PageDispatch
-{
-    private readonly ConcurrentQueue<Action> _q = new();
-
-    /// <summary>Producer side (any thread): queue a UI-thread action and wake the message loop so it drains promptly.</summary>
-    public void Post(Action action)
-    {
-        _q.Enqueue(action);
-        WindowsApiInterop.WakeWindow();
-    }
-
-    /// <summary>Consumer side (UI thread, called from the frame-clock drain): run all pending actions in order.</summary>
-    public void Drain()
-    {
-        while (_q.TryDequeue(out Action? a))
-        {
-            try { a(); } catch { /* a demo handler must never crash the page */ }
-        }
-    }
-}
-
 /// <summary>A small fixed-capacity, newest-first event log surfaced in a card's output panel. Mutated only on the UI
-/// thread (OS-thread events arrive via <see cref="PageDispatch"/>); the backing signal drives the readout.</summary>
+/// thread (OS-thread events arrive via the host UI dispatch, <c>UsePost()</c>); the backing signal drives the readout.</summary>
 sealed class EventLog
 {
     private readonly Signal<string> _text;
@@ -249,21 +223,16 @@ sealed class NotificationsCard : Component
         // Bind the cross-thread toast-activation hop ONCE: the activator fires on a COM thread, so marshal to the UI
         // thread before touching the log signal. AppHost already delivers AppHost.ActivationRedirected on the UI thread,
         // but ToastNotifier.Activated is the in-proc callback — route it through the dispatch queue to be safe.
-        var dispatch = UseRef<PageDispatch?>(null);
-        dispatch.Value ??= new PageDispatch();
+        var post = UsePost();   // engine UI-thread marshal (no per-frame re-render — replaces the FrameClock.Tick drain)
         var lg = UseRef<EventLog?>(null);
         lg.Value ??= new EventLog(log);
 
-        long tick = UseContext(FrameClock.Tick);   // drains the UI-thread queue while this card is mounted
-        UseEffect(() => dispatch.Value!.Drain(), tick);
-
         // Install this mount's toast-activation sink (the one process forwarder calls it). The activation fires on a COM
-        // thread → marshal through the queue before touching the log signal.
+        // thread → post hops it to the UI thread before touching the log signal.
         UseEffect(() =>
         {
-            var d = dispatch.Value!;
             var l = lg.Value!;
-            WindowsApiLive.ToastActivatedSink = arg => d.Post(() => l.Add($"activated: {arg}"));
+            WindowsApiLive.ToastActivatedSink = arg => post(() => l.Add($"activated: {arg}"));
             WindowsApiLive.EnsureToastForwarder();
         }, WinApiUi.MountOnce);
 
@@ -563,15 +532,11 @@ sealed class MediaCard : Component
         var statusColor = UseSignal(WinApiUi.Info);
         var log = UseSignal("—");
 
-        // The SMTC ButtonPressed callback arrives on an OS worker thread → marshal through PageDispatch (which posts a
-        // wake), then drain on the frame clock below.
-        var dispatch = UseRef<PageDispatch?>(null);
-        dispatch.Value ??= new PageDispatch();
+        // The SMTC ButtonPressed callback arrives on an OS worker thread → post hops it to the UI thread (engine marshal;
+        // wakes the loop, drains next frame, no per-frame re-render).
+        var post = UsePost();
         var lg = UseRef<EventLog?>(null);
         lg.Value ??= new EventLog(log);
-
-        long tick = UseContext(FrameClock.Tick);   // drives the UI-thread drain while this card is mounted
-        UseEffect(() => dispatch.Value!.Drain(), tick);
 
         Action enable = () =>
         {
@@ -582,7 +547,7 @@ sealed class MediaCard : Component
 
                 // Idempotent: dispose any prior session (re-clicking Enable rebinds cleanly) then acquire + wire.
                 var smtc = SystemMediaControls.GetForWindow(hwnd);
-                smtc.ButtonDispatcher = raise => dispatch.Value!.Post(raise);   // OS-thread → UI-thread hop
+                smtc.ButtonDispatcher = raise => post(raise);   // OS-thread → UI-thread hop (engine dispatcher)
                 smtc.ButtonPressed += btn => lg.Value!.Add($"button: {btn}");
                 smtc.SetEnabledButtons(play: true, pause: true, next: true, previous: true);
                 smtc.UpdateDisplay(trackTitle.Peek(), artist.Peek(), albumTitle: "Gallery Sessions");
@@ -817,7 +782,11 @@ sealed class ShellCard : Component
                     Children =
                     [
                         new BoxEl { Width = 64f, Children = [new TextEl("Progress") { Size = 13f, Color = Tok.TextSecondary }] },
-                        Slider.Create(progress.Peek(), Apply, 240f),
+                        // .Value (NOT .Peek): Slider.Create is CONTROLLED — its thumb shows the value passed each render.
+                        // Reading .Value subscribes this card so an Apply() write re-renders it with the new value (granular,
+                        // only when progress changes — not every frame). With .Peek the card never re-rendered after the
+                        // FrameClock.Tick drain was removed, so the slider snapped back to the stale initial value on release.
+                        Slider.Create(progress.Value, Apply, 240f),
                     ],
                 },
                 new BoxEl
@@ -873,23 +842,18 @@ sealed class PowerCard : Component
         var statusColor = UseSignal(WinApiUi.Info);
         var log = UseSignal("—");
 
-        // Suspend/resume broadcasts arrive on an OS power-broadcast thread → marshal through PageDispatch + drain on tick.
-        var dispatch = UseRef<PageDispatch?>(null);
-        dispatch.Value ??= new PageDispatch();
+        // Suspend/resume broadcasts arrive on an OS power-broadcast thread → post hops them to the UI thread.
+        var post = UsePost();
         var lg = UseRef<EventLog?>(null);
         lg.Value ??= new EventLog(log);
 
-        long tick = UseContext(FrameClock.Tick);
-        UseEffect(() => dispatch.Value!.Drain(), tick);
-
         // Install this mount's suspend/resume sinks (the process forwarder calls them) and hold ONE NLM-style power
-        // registration via WindowsApiLive so it's torn down on remount. Broadcasts arrive on an OS thread → marshal.
+        // registration via WindowsApiLive so it's torn down on remount. Broadcasts arrive on an OS thread → post marshals.
         UseEffect(() =>
         {
-            var d = dispatch.Value!;
             var l = lg.Value!;
-            WindowsApiLive.SuspendingSink = () => d.Post(() => l.Add("suspending"));
-            WindowsApiLive.ResumedSink = () => d.Post(() => l.Add("resumed"));
+            WindowsApiLive.SuspendingSink = () => post(() => l.Add("suspending"));
+            WindowsApiLive.ResumedSink = () => post(() => l.Add("resumed"));
             WindowsApiLive.EnsurePowerForwarder();
             WindowsApiLive.Swap(ref WindowsApiLive.PowerSub, PowerSession.Subscribe());
         }, WinApiUi.MountOnce);
@@ -921,7 +885,11 @@ sealed class PowerCard : Component
             Direction = 1, Gap = 12f,
             Children =
             [
-                ToggleSwitch.Create(awake.Peek(), toggle, header: "Keep system awake"),
+                // .Value (NOT .Peek): ToggleSwitch.Create is CONTROLLED — it paints exactly the bool passed each render.
+                // Reading .Value subscribes this card so toggle()'s awake.Value write re-renders it (granular). With .Peek
+                // the card didn't re-render after the FrameClock.Tick drain was removed, so the switch froze OFF while the
+                // status text (a bound Prop) read ACTIVE.
+                ToggleSwitch.Create(awake.Value, toggle, header: "Keep system awake"),
                 Body("Holds a power-availability request (SetThreadExecutionState) for as long as it is on. Suspend/resume broadcasts appear in the log — try sleeping and waking the machine.").Secondary() with { MaxWidth = 460f },
             ],
         };
@@ -949,40 +917,49 @@ sealed class NetworkCard : Component
 {
     public override Element Render()
     {
-        var online = UseSignal(NetworkStatus.IsOnline);
-        var level = UseSignal(NetworkStatus.GetConnectivity());
+        // OPTIMISTIC seed — NEVER read NLM in render. NetworkStatus.IsOnline / GetConnectivity each create the NLM COM
+        // object and consult NCSI, which can BLOCK ~1s; doing that in the render body (the old bug) froze navigation, and
+        // because the card also re-rendered every frame (UseContext(FrameClock.Tick) to drain) it re-froze every frame.
+        // The real values are read OFF-THREAD on mount and posted back, so the page paints instantly.
+        var online = UseSignal(true);
+        var level = UseSignal(NetworkConnectivityLevel.InternetAccess);
         var status = UseSignal("—");
         var statusColor = UseSignal(WinApiUi.Info);
         var log = UseSignal("—");
 
-        var dispatch = UseRef<PageDispatch?>(null);
-        dispatch.Value ??= new PageDispatch();
+        var post = UsePost();   // engine UI-thread marshal (replaces the hand-rolled PageDispatch + FrameClock.Tick drain)
         var lg = UseRef<EventLog?>(null);
         lg.Value ??= new EventLog(log);
 
-        long tick = UseContext(FrameClock.Tick);
-        UseEffect(() => dispatch.Value!.Drain(), tick);
-
-        // Subscribe to ConnectivityChanged once; the NLM callback fires on the apartment pump thread → marshal it.
+        // Initial read off the UI thread + the change subscription, once on mount. NLM reads can block (~1s NCSI round
+        // trip), so they NEVER run in render and NEVER on the UI thread — NetworkStatus.ReadAsync() runs them on the pillar's
+        // dedicated long-lived MTA reader (apartment-correct: the agile NLM object lives in the process MTA, no pump, no
+        // STA flip of a pooled thread) and we post the result back to the UI thread (post = UsePost(), drained next frame).
         UseEffect(() =>
         {
-            var d = dispatch.Value!;
             var l = lg.Value!;
+            _ = NetworkStatus.ReadAsync().ContinueWith(t =>
+            {
+                if (t.IsCompletedSuccessfully) { var snap = t.Result; post(() => { online.Value = snap.Online; level.Value = snap.Level; }); }
+            }, System.Threading.Tasks.TaskScheduler.Default);
             WindowsApiLive.Swap(ref WindowsApiLive.NetworkSub, NetworkStatus.Subscribe(isOnline =>
-                d.Post(() =>
+            {
+                // ConnectivityChanged hands us online/offline directly; only the level needs an off-thread refresh.
+                post(() => { online.Value = isOnline; l.Add($"changed: {(isOnline ? "online" : "offline")}"); });
+                _ = NetworkStatus.ReadConnectivityAsync().ContinueWith(t =>
                 {
-                    online.Value = isOnline;
-                    level.Value = NetworkStatus.GetConnectivity();
-                    l.Add($"changed: {(isOnline ? "online" : "offline")}");
-                })));
+                    if (t.IsCompletedSuccessfully) { var lvl = t.Result; post(() => level.Value = lvl); }
+                }, System.Threading.Tasks.TaskScheduler.Default);
+            }));
         }, WinApiUi.MountOnce);
 
         Action refresh = () =>
         {
-            online.Value = NetworkStatus.IsOnline;
-            level.Value = NetworkStatus.GetConnectivity();
-            status.Value = "Refreshed.";
-            statusColor.Value = WinApiUi.Info;
+            status.Value = "Refreshing…"; statusColor.Value = WinApiUi.Info;
+            _ = NetworkStatus.ReadAsync().ContinueWith(t =>
+            {
+                if (t.IsCompletedSuccessfully) { var snap = t.Result; post(() => { online.Value = snap.Online; level.Value = snap.Level; status.Value = "Refreshed."; }); }
+            }, System.Threading.Tasks.TaskScheduler.Default);
         };
 
         var readout = new BoxEl

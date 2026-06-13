@@ -579,6 +579,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         MsgWaitForMultipleObjectsEx(0, null, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
     }
 
+    /// <summary>Thread-safe wake (IPlatformWindow.Wake): post a benign WM_NULL so a blocked <see cref="WaitForWork"/>
+    /// returns and the loop drains a cross-thread UI post. PostMessageW is documented thread-safe, so a worker/COM thread
+    /// may call this directly; WM_NULL (0) is discarded by the pump after waking.</summary>
+    public void Wake() => PostMessageW(_hwnd, 0u /* WM_NULL */, 0, 0);
+
     public void Dispose()
     {
         _textInput?.DisposeSip();   // release the WinRT InputPane refs + SIP event subscriptions before the HWND dies

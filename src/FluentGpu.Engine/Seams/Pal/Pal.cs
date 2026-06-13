@@ -281,6 +281,16 @@ public interface IPlatformWindow : IDisposable
     void WaitForWork(int timeoutMs);
 
     /// <summary>
+    /// Break an in-progress <see cref="WaitForWork"/> from ANY thread so the loop runs another frame promptly — the
+    /// thread-safe wake the engine's cross-thread UI dispatch (<c>AppHost.Post</c>) needs. Unlike the host's internal
+    /// <c>WakeFrame</c> (UI-thread-only), this is callable from a worker/COM thread: a background producer enqueues a
+    /// UI-thread action and calls <see cref="Wake"/> so an idle, fully-blocked loop wakes to drain it. Win32 posts a
+    /// benign <c>WM_NULL</c> (PostMessage is thread-safe); headless and other non-blocking backends no-op (their
+    /// <see cref="WaitForWork"/> already returns immediately, so the next loop iteration drains the post anyway).
+    /// </summary>
+    void Wake() { }
+
+    /// <summary>
     /// Invoked by the platform when the OS demands an immediate repaint *outside* the app's frame loop —
     /// notably during the modal move/size loop (WM_SIZE/WM_PAINT), which otherwise blocks rendering until mouse-up.
     /// The host wires this to a pump-free paint so the window stays live during a live resize.
