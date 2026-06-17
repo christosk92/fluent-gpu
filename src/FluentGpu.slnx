@@ -13,6 +13,8 @@
     <Project Path="FluentGpu.SourceGen/FluentGpu.SourceGen.csproj" />
   </Folder>
   <Folder Name="/Apps/">
+    <Project Path="../app/Wavee.Core/Wavee.Core.csproj" />
+    <Project Path="../app/Wavee/Wavee.csproj" />
     <Project Path="FluentGpu.VerticalSlice/FluentGpu.VerticalSlice.csproj" />
     <Project Path="FluentGpu.WindowsApp/FluentGpu.WindowsApp.csproj" />
   </Folder>

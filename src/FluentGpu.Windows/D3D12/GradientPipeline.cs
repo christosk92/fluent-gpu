@@ -86,7 +86,7 @@ float4 PSMain(VSOut i) : SV_Target
     float2 uv = i.local / (i.halfSize * 2.0) + 0.5;
     float t;
     if (i.shapeCount.x < 0.5) { float2 dir = i.gend - i.gstart; t = saturate(dot(uv - i.gstart, dir) / max(dot(dir, dir), 1e-5)); }
-    else { t = saturate(length((uv - 0.5) * 2.0)); }
+    else { float2 rc = i.gstart; float2 rr = i.gend - i.gstart; t = saturate(length((uv - rc) / max(rr, float2(1e-5, 1e-5)))); }   // radial: origin gstart, per-axis radius gend-gstart (default .5,.5→.5,.5 = old centre-to-edge)
 
     float4 col = i.c0;
     if (i.shapeCount.y >= 1.5) col = lerp(col, i.c1, seg(i.offs.x, i.offs.y, t));

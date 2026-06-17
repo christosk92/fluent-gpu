@@ -18,10 +18,14 @@ public sealed class HeadlessPopupWindow : IPlatformPopupWindow
     {
         Owner = desc.Owner;
         BoundsPx = desc.BoundsPx;
+        Material = desc.Material;
+        Dark = desc.Dark;
         if (!desc.BoundsPx.IsEmpty) _boundsHistory.Add(desc.BoundsPx);
     }
 
     public NativeHandle Owner { get; }
+    public PopupWindowMaterial Material { get; }
+    public bool Dark { get; }
     public NativeHandle Handle => new(0, NativeHandleKind.Headless);
     public RectF BoundsPx { get; private set; }
     public bool IsShown { get; private set; }

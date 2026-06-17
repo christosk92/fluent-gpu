@@ -110,11 +110,15 @@ public sealed class InputHooks
     /// the host creates the PAL popup window + its own swapchain and re-records the subtree into its own DrawList each
     /// frame (SceneRecorder root-override). Returns a token, or -1 when windowed popups are unavailable — callers fall
     /// back to constrained placement (WinUI's <c>DoesPlatformSupportWindowedPopup</c> gate).</summary>
-    public Func<NodeHandle, int>? OpenPopupWindow;
-    /// <summary>Place a leased popup window: token + bounds in main-window DIP (the host converts to physical
-    /// virtual-screen px and shows the window without activating it).</summary>
-    public Action<int, RectF>? SetPopupWindowBounds;
-    /// <summary>Release a leased popup window (hide + dispose the window and its swapchain).</summary>
+    public Func<NodeHandle, PopupWindowMaterial, int>? OpenPopupWindow;
+    /// <summary>Place a leased popup window: token + the logical menu CONTENT bounds in main-window DIP. The host
+    /// inflates by the shadow insets, converts to physical px, shows the window (without activating), and — for a
+    /// desktop-acrylic popup — configures + plays the open motion. <c>opensUp</c> = the menu opens upward (anchored at
+    /// its bottom); <c>closedRatio</c> is the WinUI MenuPopupThemeTransition ratio (0.5 root menu, 0.67 cascaded submenu)
+    /// that drives the open slide distance + the plate ScaleY.</summary>
+    public Action<int, RectF, bool, float>? SetPopupWindowBounds;
+    /// <summary>Begin releasing a leased popup window: plays the close fade, then disposes the window + swapchain once the
+    /// composition motion settles (so the acrylic fades out instead of vanishing).</summary>
     public Action<int>? ClosePopupWindow;
 
     // ── Text-editing seams (host-wired in the AppHost ctor; consumed by EditableText) ───────────────────────────────

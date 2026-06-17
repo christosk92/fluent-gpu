@@ -912,7 +912,7 @@ public sealed class TreeReconciler
                 return true;
             case BoxEl b:
                 if (b.Transform.IsBound || b.Opacity.IsBound || b.Fill.IsBound
-                    || b.Width.IsBound || b.Height.IsBound || b.OnRealized is not null) return false;
+                    || b.Width.IsBound || b.Height.IsBound || b.OnRealized is not null || b.OnBoundsChanged is not null) return false;
                 foreach (var c in b.Children) if (!IsRecyclable(c)) return false;
                 return true;
             case GridEl g:
@@ -1069,6 +1069,15 @@ public sealed class TreeReconciler
         _reconciled = true;
         if (Anim is { } anim && anim.TryGetTransition(node, out var spec) && spec.Exit.Active)
         {
+            // Smooth exit (mirror of the enter-reflow): orphaning DETACHES this node, so its sibling would SNAP into the
+            // freed space. For a SizeMode.Reflow exit, snapshot the surviving PARENT's with-child size + queue it — after
+            // layout the host eases the parent → its without-child size, so the neighbour (the seek bar) reflows instead
+            // of snapping while the orphan fades in the closing space. Not resize-gated (RunReflowLayout drives it).
+            if (spec.Size == SizeMode.Reflow)
+            {
+                var par = _scene.Parent(node);
+                if (!par.IsNull) { var pb = _scene.Bounds(par); anim.PendingExitReflow.Add((par, pb.W, pb.H, spec)); }
+            }
             UnmountSubtree(node);
             // Kill any looping track (the SkeletonPulse) BEFORE orphaning + SeedExit, so only the FINITE exit tracks
             // remain: an orphan is reclaimed when HasTracks(node)→false, and a forever-looping pulse would pin it and
@@ -1127,9 +1136,9 @@ public sealed class TreeReconciler
             case BoxEl b:
             {
                 ref NodePaint paint = ref _scene.Paint(node);
-                bool hasSurface = b.Fill.IsBound || b.Fill.Value.A > 0f || b.HoverFill.A > 0f || b.PressedFill.A > 0f
+                bool hasSurface = b.TabShape || b.Fill.IsBound || b.Fill.Value.A > 0f || b.HoverFill.A > 0f || b.PressedFill.A > 0f
                                   || b.BorderWidth > 0f || b.OnClick is not null || b.Gradient is not null || b.BorderBrush is not null;
-                paint.VisualKind = hasSurface ? VisualKind.Box : VisualKind.None;
+                paint.VisualKind = b.TabShape ? VisualKind.TabShape : hasSurface ? VisualKind.Box : VisualKind.None;
 
                 // Implicit BrushTransition (WinUI, 83ms): a LIVE node re-rendered with a different fill/border cross-fades
                 // from the previously-DISPLAYED color (mid-flight retargets stay continuous) instead of snapping.
@@ -1173,6 +1182,7 @@ public sealed class TreeReconciler
                 paint.BorderWidth = b.BorderWidth;
                 paint.BorderDashOn = b.BorderDashOn;
                 paint.BorderDashOff = b.BorderDashOff;
+                paint.TabFlareRadius = b.TabFlareRadius <= 0f ? 4f : b.TabFlareRadius;
                 paint.Corners = b.Corners;
 
                 if (b.Shadow is { } sh) _scene.SetShadow(node, sh); else _scene.ClearShadow(node);
@@ -1253,11 +1263,18 @@ public sealed class TreeReconciler
                 if (b.ClipToBounds) _scene.Mark(node, NodeFlags.ClipsToBounds); else _scene.Unmark(node, NodeFlags.ClipsToBounds);
                 if (b.CounterScale) _scene.Mark(node, NodeFlags.CounterScaled); else _scene.Unmark(node, NodeFlags.CounterScaled);
                 if (b.StickyTop is { } st) _scene.SetSticky(node, st, b.OnPinned); else _scene.ClearSticky(node);
+                _scene.SetBoundsChangedHandler(node, b.OnBoundsChanged);
                 if (b.Animate is { } at && Anim is { } anim)
                 {
                     anim.SetTransition(node, at);
                     _scene.Mark(node, NodeFlags.BoundsAnimated);
-                    if (isMount && at.Enter.Active) anim.SeedEnter(node, at.Enter, at);
+                    if (isMount && at.Enter.Active)
+                    {
+                        anim.SeedEnter(node, at.Enter, at);
+                        // SizeMode.Reflow enter: ease the layout size 0→natural AFTER layout so neighbours reflow as it
+                        // reveals (host-driven; the natural size isn't known here, pre-layout).
+                        if (at.Size == SizeMode.Reflow) anim.PendingEnterReflow.Add(node);
+                    }
                 }
                 else { Anim?.ClearTransition(node); _scene.Unmark(node, NodeFlags.BoundsAnimated); }
                 if (b.HitTestVisible) _scene.Mark(node, NodeFlags.HitTestVisible); else _scene.Unmark(node, NodeFlags.HitTestVisible);
@@ -1445,6 +1462,7 @@ public sealed class TreeReconciler
                 ss.EdgeCueConfig = ResolveEdgeCues(s.EdgeCues);
                 if (s.EdgeFade is { } sef) _scene.SetEdgeFade(node, sef); else _scene.ClearEdgeFade(node);
                 ss.AutoEdgeFade = s.AutoEdgeFade; ss.AutoEdgeFadeBand = s.AutoEdgeFade ? 24f : 0f;
+                ss.AlwaysShowBar = s.AlwaysShowScrollbar;
                 break;
             }
             case VirtualListEl v:

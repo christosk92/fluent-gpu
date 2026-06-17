@@ -226,10 +226,15 @@ public interface IPlatformApp : IDisposable
     IPlatformPopupWindow? CreatePopupWindow(in PopupWindowDesc desc) => null;
 }
 
+/// <summary>Host-requested material for a popup HWND. <see cref="TransientAcrylic"/> maps to WinUI's desktop acrylic
+/// system backdrop path for windowed MenuFlyout popups; transparent swapchain pixels reveal the OS material.</summary>
+public enum PopupWindowMaterial : byte { None = 0, TransientAcrylic = 1 }
+
 /// <summary>Creation parameters for a popup window. <paramref name="Owner"/> = the owning top-level window (the popup
 /// stays above it in z-order and never takes activation); <paramref name="BoundsPx"/> = initial bounds in physical
 /// virtual-screen px (may be empty — set real bounds via <see cref="IPlatformPopupWindow.SetBoundsPx"/> before Show).</summary>
-public readonly record struct PopupWindowDesc(NativeHandle Owner, RectF BoundsPx);
+public readonly record struct PopupWindowDesc(NativeHandle Owner, RectF BoundsPx,
+    PopupWindowMaterial Material = PopupWindowMaterial.None, bool Dark = true);
 
 /// <summary>
 /// A borderless, non-activating top-level popup surface (the PAL seam for WinUI windowed popups / E4 out-of-bounds
@@ -298,6 +303,13 @@ public interface IPlatformWindow : IDisposable
     /// The host wires this to a pump-free paint so the window stays live during a live resize.
     /// </summary>
     Action? PaintRequested { get; set; }
+
+    /// <summary>True while the OS modal move/size loop is active (between WM_ENTERSIZEMOVE and WM_EXITSIZEMOVE): the
+    /// app's own frame loop is suspended and only WndProc-driven keep-alive paints run. The host uses this to suppress
+    /// REDUNDANT (non-resize) keep-alive paints during a drag — an ambient animation (playback, caret) repainting the
+    /// unchanged content every 8 ms timer tick otherwise floods the WndProc thread and starves the modal loop, which is
+    /// felt as sluggish, low-fps resizing. Default false (standard frame / headless never enter the loop).</summary>
+    bool InModalLoop => false;
 
     void SetCursor(CursorId id);                                   // L10 cursor seam
     void SetTitle(StringId title);

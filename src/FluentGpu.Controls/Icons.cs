@@ -36,6 +36,8 @@ public static class Icons
     public const string RepeatOne = "\uE8ED";
     public const string Volume = "\uE767";
     public const string Mute = "\uE74F";
+    public const string Queue = "\uE93C";    // MediaPlaylist (Segoe Fluent Icons) \u2014 the up-next / play queue
+    public const string Devices = "\uE772";  // Devices (Segoe Fluent Icons) \u2014 the Connect / output-device picker
     public const string Heart = "\uEB51";
     public const string Star = "\uE734";
     public const string List = "\uEA37";

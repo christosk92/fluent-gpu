@@ -27,6 +27,10 @@ public abstract class Component
     protected T UseMemo<T>(Func<T> factory, params object[] deps) => Context.UseMemo(factory, deps);
     protected Ref<T> UseRef<T>(T initial) => Context.UseRef(initial);
     protected T UseContext<T>(Context<T> context) => Context.UseContext(context);
+    /// <summary>Read the nearest context as a signal without subscribing this component render.</summary>
+    protected IReadSignal<T> UseContextSignal<T>(Context<T> context) => Context.UseContextSignal(context);
+    /// <summary>Mount a signal-tracked effect owned by this component.</summary>
+    protected void UseSignalEffect(Action effect) => Context.UseSignalEffect(effect);
     /// <summary>The host UI-thread poster (<see cref="HostDispatch.Post"/>): run an action on the UI thread next frame
     /// from any thread. Use for off-thread data instead of <c>UseContext(FrameClock.Tick)</c> + a per-frame drain.</summary>
     protected Action<Action> UsePost() => Context.UsePost();

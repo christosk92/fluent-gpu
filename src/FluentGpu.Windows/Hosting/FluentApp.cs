@@ -48,7 +48,8 @@ public static class FluentApp
     public static Func<AppHost, IPlatformWindow, IGpuDevice, bool>? DiagnosticRun;
 
     public static void Run(Func<Component> root, string title = "FluentGpu", int width = 800, int height = 600,
-                           bool mica = true, int frames = -1, string? screenshot = null, bool customFrame = false)
+                           bool mica = true, int frames = -1, string? screenshot = null, bool customFrame = false,
+                           bool micaAlt = false)
     {
         bool consoleDiagnostics = Diag.EnvFlag("FG_DIAG") || Diag.EnvFlag("FG_DIAG_CONSOLE");
         if (consoleDiagnostics)
@@ -68,7 +69,7 @@ public static class FluentApp
 
         if (Win32Theme.AccentLight2() is { } a) Theme.Accent = ColorF.FromRgba(a.R, a.G, a.B);
         else if (Win32Theme.Accent() is { } b) Theme.Accent = ColorF.FromRgba(b.R, b.G, b.B);
-        Win32Theme.ApplyWindowMaterial(window.Handle.Value, Theme.Dark, mica, customFrame);
+        Win32Theme.ApplyWindowMaterial(window.Handle.Value, Theme.Dark, mica, customFrame, micaAlt);
         if (mica) Theme.WindowBackground = ColorF.Transparent;
 
         // Text measurement runs through DirectWrite (the same design advances + line-break math the D3D12 GlyphRenderer

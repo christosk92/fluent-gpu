@@ -382,7 +382,19 @@ public sealed class AnimEngine
     // fixed-duration storyboard feel; a spring keeps Pos+Vel). Shrink legs select ExitDynamics (asymmetric open/close).
     private void ReflowSize(NodeHandle node, AnimChannel ch, float from, float to, in LayoutTransition spec)
     {
+        TransitionDynamics dyn = Normalize(to < from && spec.ExitDynamics is { } ed ? ed : spec.Dynamics);
         Track? ex = Find(node, ch);
+        if (dyn.Kind == DynamicsKind.Tween && dyn.DurationMs <= 1f && spec.DelayMs <= 0f)
+        {
+            if (ex is not null) Cancel(node, ch);
+            if (_scene.IsLive(node))
+            {
+                ref NodePaint p = ref _scene.Paint(node);
+                p.ChildShiftX = 0f; p.ChildShiftY = 0f;
+                _scene.Mark(node, NodeFlags.PaintDirty);
+            }
+            return;
+        }
         if (ex is not null)
         {
             if (MathF.Abs(ex.TargetValue - to) < 0.5f) return;
@@ -391,7 +403,6 @@ public sealed class AnimEngine
         }
         else if (MathF.Abs(from - to) < 0.5f) return;         // no change and nothing in flight
 
-        TransitionDynamics dyn = Normalize(to < from && spec.ExitDynamics is { } ed ? ed : spec.Dynamics);
         // Stash the element-DECLARED LayoutInput value before the track starts overwriting it. At seed/retarget time
         // it provably holds the declared value (NaN/auto or explicit): the commit that produced this new target has
         // just rewritten it. Restored at settle so the node returns to normal layout ownership.
@@ -409,6 +420,39 @@ public sealed class AnimEngine
     /// <summary>Nodes whose REFLOW size advanced this tick — the host re-solves their boundary scope, then refreshes
     /// the Trailing child-shift from the fresh bounds. Cleared by the host after it consumes them.</summary>
     public List<NodeHandle> ReflowRoots { get; } = new();
+
+    // TEMP diagnostic (FG_ANIM_TRACE=1): trace enter/exit seeding + the per-tick opacity/width ramp so we can see whether
+    // a responsive show/hide actually animates DURING a real modal-loop resize (synthetic captures lie about this).
+    internal static readonly bool s_animTrace = Diag.EnvFlag("FG_ANIM_TRACE");
+
+    /// <summary>Nodes that mounted THIS frame with a <see cref="SizeMode.Reflow"/> enter — the host seeds their reveal
+    /// reflow AFTER layout (the natural size isn't known at <see cref="SeedEnter"/>, which runs pre-layout). Host-drained.</summary>
+    public List<NodeHandle> PendingEnterReflow { get; } = new();
+
+    /// <summary>A node that just mounted eases its MAIN-axis LAYOUT size 0 → its freshly-solved size, so neighbours
+    /// reflow smoothly as it reveals — the WinUI AddDelete "make room" feel (the entrant pushes its siblings rather than
+    /// the siblings snapping). Processed by the host's <c>RunReflowLayout</c>, which is NOT resize-gated, so a responsive
+    /// show/hide animates even mid window-drag (where the FLIP/projection path is deliberately suppressed).</summary>
+    public void SeedEnterReflow(NodeHandle node, bool horizontal, float toW, float toH)
+    {
+        if (!TryGetTransition(node, out var spec)) return;
+        if (horizontal) { if (toW > 0.5f) ReflowSize(node, AnimChannel.LayoutW, 0f, toW, spec); }
+        else { if (toH > 0.5f) ReflowSize(node, AnimChannel.LayoutH, 0f, toH, spec); }
+    }
+
+    /// <summary>Ease a node's MAIN-axis LAYOUT size from <paramref name="from"/> → <paramref name="to"/> so its parent
+    /// re-solves and SIBLINGS reflow. The smooth-exit lever: when a SizeMode.Reflow child orphans (detaches), the host
+    /// eases the surviving CONTAINER from its with-child size → its without-child size, so the neighbour (e.g. the seek
+    /// bar) absorbs the change instead of snapping while the orphan fades in the closing space. Shrink picks ExitDynamics.</summary>
+    public void SeedReflowResize(NodeHandle node, bool horizontal, float from, float to, in LayoutTransition spec)
+    {
+        if (horizontal) ReflowSize(node, AnimChannel.LayoutW, from, to, spec);
+        else ReflowSize(node, AnimChannel.LayoutH, from, to, spec);
+    }
+
+    /// <summary>Containers queued by the reconciler when a SizeMode.Reflow child orphaned this frame: the host snapshots
+    /// the with-child size (pre-layout, in Remove) and, after layout, eases to the without-child size. Host-drained.</summary>
+    public List<(NodeHandle node, float fromW, float fromH, LayoutTransition spec)> PendingExitReflow { get; } = new();
 
     private bool _reflowWrote;
     /// <summary>True if any reflow track wrote LayoutInput this tick (interp advance or settle restore) — the host
@@ -445,6 +489,7 @@ public sealed class AnimEngine
     /// <summary>An inserted node animates FROM the enter terminal (offset/scale/opacity) TO identity.</summary>
     public void SeedEnter(NodeHandle node, in EnterExit e, in LayoutTransition spec)
     {
+        if (s_animTrace) Console.Error.WriteLine($"[FG_ANIM_TRACE] SEED ENTER node={node.Raw.Index} op={e.Opacity:0.##}->1 dx={e.Dx:0.#} sx={e.Sx:0.##} ch={spec.Channels} size={spec.Size}");
         TransitionDynamics dyn = Normalize(spec.Dynamics);
         if (e.Opacity != 1f) SeedTerminal(node, AnimChannel.Opacity, 1f, dyn, initial: e.Opacity, delayMs: spec.DelayMs);
         if (e.Dx != 0f) SeedTerminal(node, AnimChannel.TranslateX, 0f, dyn, initial: e.Dx, delayMs: spec.DelayMs);
@@ -458,6 +503,7 @@ public sealed class AnimEngine
     /// tracks settle (<see cref="HasTracks"/> == false) the host reclaims it.</summary>
     public void SeedExit(NodeHandle node, in EnterExit e, in LayoutTransition spec)
     {
+        if (s_animTrace) Console.Error.WriteLine($"[FG_ANIM_TRACE] SEED EXIT node={node.Raw.Index} op->{e.Opacity:0.##} ch={spec.Channels} size={spec.Size}");
         TransitionDynamics dyn = Normalize(spec.ExitDynamics ?? spec.Dynamics);   // asymmetric exit timing when set
         SeedTerminal(node, AnimChannel.Opacity, e.Opacity, dyn, delayMs: spec.DelayMs);   // always (the exit-settle signal)
         if (e.Dx != 0f) SeedTerminal(node, AnimChannel.TranslateX, e.Dx, dyn, delayMs: spec.DelayMs);
@@ -601,8 +647,8 @@ public sealed class AnimEngine
                 }
                 else
                 {
-                    if (t.JustSeeded) t.JustSeeded = false;
-                    else t.ElapsedMs += stepMs;
+                    if (t.JustSeeded && (t.DurationMs > 1f || t.DurationMs > stepMs)) t.JustSeeded = false;
+                    else { t.JustSeeded = false; t.ElapsedMs += stepMs; }
                     u = t.DurationMs <= 0f ? 1f : t.ElapsedMs / t.DurationMs;
                     if (t.Loop) u -= MathF.Floor(u); else if (u >= 1f) { u = 1f; t.Done = true; }
                 }
@@ -633,6 +679,8 @@ public sealed class AnimEngine
             if (acc.Sx != 1f || acc.Sy != 1f) tf = tf.Multiply(Affine2D.Scale(acc.Sx, acc.Sy));
             p.LocalTransform = tf;
             p.Opacity = acc.Op;
+            if (s_animTrace && (acc.Op < 0.999f || !float.IsNaN(acc.Lw)))
+                Console.Error.WriteLine($"[FG_ANIM_TRACE] TICK node={kv.Key.Raw.Index} op={acc.Op:0.00} sx={acc.Sx:0.00} lw={(float.IsNaN(acc.Lw) ? -1f : acc.Lw):0.#}");
             p.BlurSigma = MathF.Max(0f, acc.Blur);   // self-blur sigma (clamp ≥0); 0 = no blur layer (PaintDirty marked below)
             // Presented extent: Reveal draws the fill + child-clip at this size (no layout). Relayout instead feeds it to
             // the host, which writes it to LayoutInput and re-solves the subtree (live reflow).

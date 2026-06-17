@@ -3,7 +3,7 @@ using FluentGpu.Text;
 
 namespace FluentGpu.Scene;
 
-public enum VisualKind : byte { None = 0, Box = 1, Text = 2, Image = 3, PolylineStroke = 4 }
+public enum VisualKind : byte { None = 0, Box = 1, Text = 2, Image = 3, PolylineStroke = 4, TabShape = 5 }
 
 /// <summary>Per-text-node measure cache (layout.md §2.3): a pure-function cache of (text, style, availWidth) → size, so a
 /// scoped relayout skips re-shaping a text leaf whose inputs are unchanged. Self-invalidating — any input change makes
@@ -110,6 +110,7 @@ public struct NodePaint
     public ColorF ValidationBorder;
     public float BorderWidth;
     public float BorderDashOn, BorderDashOff;   // 0/0 = solid stroke; >0 = dashed (DropZone look). Solid-border path only.
+    public float TabFlareRadius;
     public CornerRadius4 Corners;
     public ColorF TextColor;
     // Stateful foreground ramps (text/glyph). A==0 ⇒ no state color for that axis; the recorder leaves TextColor as-is.
@@ -235,6 +236,9 @@ public struct ScrollState
     // the scroll offset. Set by the reconciler from ScrollEl/VirtualListEl.AutoEdgeFade. Band 0 = off.
     public bool  AutoEdgeFade;
     public float AutoEdgeFadeBand;        // DIP
+    // Persistent scrollbar: keep the bar visible (thin rail) whenever content overflows, bypassing the auto-hide FadeT
+    // gate at record time (hover still expands it). Set by the reconciler from ScrollEl.AlwaysShowScrollbar.
+    public bool  AlwaysShowBar;
     public float IdleMs;                  // time since the last scroll movement / hover (drives the auto-hide)
     public bool PointerOver;              // pointer is inside this scroll viewport
     public bool PointerOverScrollbar;     // pointer is inside this viewport's scrollbar gutter

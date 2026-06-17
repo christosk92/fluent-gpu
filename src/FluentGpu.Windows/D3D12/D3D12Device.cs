@@ -21,7 +21,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
 {
     // Back buffers == per-frame allocators == frames-in-flight. Canon (budgets.md): 2 (FLIP_DISCARD); configurable 2–3.
     // Every site below keys off this, so 3 (more CPU run-ahead slack, +1 frame latency, +VRAM) is a one-line change.
-    private const uint FRAME_COUNT = 2;
+    internal const uint FRAME_COUNT = 2;
     private const uint INFINITE = 0xFFFFFFFF;
 
     private ID3D12Device* _device;
@@ -46,6 +46,9 @@ public sealed unsafe class D3D12Device : IGpuDevice
     private HWND _hwnd;
     private uint _w, _h;
     private uint _frameIndex;
+    private D3D12Swapchain? _primarySwapchain;
+    private D3D12Swapchain? _activeSwapchain;
+    private readonly List<D3D12Swapchain> _swapchains = new(2);
     private RoundRectPipeline? _rectPipe;
     private readonly List<RectInstance> _rectInsts = new();
     private ShadowPipeline? _shadowPipe;
@@ -100,6 +103,11 @@ public sealed unsafe class D3D12Device : IGpuDevice
 
     public string BackendNameSuffix { get; private set; } = "";
     public string BackendName => "D3D12" + BackendNameSuffix;
+    // Secondary popup swapchains (OS-acrylic windowed menus) submit + present on the shared device/queue alongside the
+    // main window. The earlier DEVICE_REMOVED came from the shared full-window acrylic/opacity canvas being released
+    // without a fence when popup + main submits alternated sizes; popups now stay on the streaming path (SubmitDrawList)
+    // and never touch that canvas. Per-target allocator/instance-bank reuse is already serialized by WaitForFrame(index).
+    public bool SupportsSecondarySwapchains => true;
 
     /// <summary>Tracked live D3D12 resource totals (bytes + count) from <see cref="D3D12MemoryDiagnostics"/> — an O(1)
     /// read of the running tally for the MemCensus sampler.</summary>
@@ -123,11 +131,23 @@ public sealed unsafe class D3D12Device : IGpuDevice
 
     public ISwapchain CreateSwapchain(in SwapchainDesc desc)
     {
-        _hwnd = (HWND)desc.PresentTarget.Value;
-        _w = (uint)Math.Max(1, (int)desc.SizePx.Width);
-        _h = (uint)Math.Max(1, (int)desc.SizePx.Height);
-        InitDevice();
-        InitSwapChain();
+        if (_device == null) InitDevice();
+        EnsurePipelines();
+
+        bool composited = desc.Composited || (_primarySwapchain is null && _composited);
+        var target = new D3D12Swapchain(this, (HWND)desc.PresentTarget.Value,
+            (uint)Math.Max(1, (int)desc.SizePx.Width), (uint)Math.Max(1, (int)desc.SizePx.Height), composited,
+            desc.DesktopAcrylic, desc.AcrylicTint, desc.CornerRadiusPx);
+        InitSwapChain(target);
+        _swapchains.Add(target);
+        _primarySwapchain ??= target;
+        Activate(target);
+        return target;
+    }
+
+    private void EnsurePipelines()
+    {
+        if (_rectPipe is not null) return;
         _rectPipe = new RoundRectPipeline();
         _rectPipe.Init(_device);
         _shadowPipe = new ShadowPipeline();
@@ -149,7 +169,6 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _imageTextures.Init(_device);
         _imagePipe = new ImagePipeline();
         _imagePipe.Init(_device);
-        return new D3D12Swapchain(this);
     }
 
     private static void Check(HRESULT hr, string what)
@@ -217,93 +236,151 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _fenceValue = 0;
         _fenceEvent = CreateEventW(null, BOOL.FALSE, BOOL.FALSE, null);
 
-        D3D12_DESCRIPTOR_HEAP_DESC hd = default;
-        hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-        hd.NumDescriptors = FRAME_COUNT;
-        hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAGS.D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-        ID3D12DescriptorHeap* heap;
-        Check(_device->CreateDescriptorHeap(&hd, __uuidof<ID3D12DescriptorHeap>(), (void**)&heap), "CreateDescriptorHeap");
-        _rtvHeap = heap;
         _rtvSize = _device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-        D3D12MemoryDiagnostics.Track(_rtvHeap, "Device.RtvHeap", (ulong)FRAME_COUNT * _rtvSize);
     }
 
-    private void InitSwapChain()
+    private void InitSwapChain(D3D12Swapchain target)
     {
         DXGI_SWAP_CHAIN_DESC1 sd = default;
-        sd.Width = _w;
-        sd.Height = _h;
+        sd.Width = target.W;
+        sd.Height = target.H;
         sd.Format = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM;
         sd.Stereo = BOOL.FALSE;
         sd.SampleDesc.Count = 1;
         sd.SampleDesc.Quality = 0;
         sd.BufferUsage = DXGI.DXGI_USAGE_RENDER_TARGET_OUTPUT;
         sd.BufferCount = FRAME_COUNT;
-        sd.Scaling = _composited ? DXGI_SCALING.DXGI_SCALING_STRETCH : DXGI_SCALING.DXGI_SCALING_STRETCH;
+        sd.Scaling = DXGI_SCALING.DXGI_SCALING_STRETCH;
         sd.SwapEffect = DXGI_SWAP_EFFECT.DXGI_SWAP_EFFECT_FLIP_DISCARD;
-        sd.AlphaMode = _composited ? DXGI_ALPHA_MODE.DXGI_ALPHA_MODE_PREMULTIPLIED : DXGI_ALPHA_MODE.DXGI_ALPHA_MODE_IGNORE;
+        sd.AlphaMode = target.Composited ? DXGI_ALPHA_MODE.DXGI_ALPHA_MODE_PREMULTIPLIED : DXGI_ALPHA_MODE.DXGI_ALPHA_MODE_IGNORE;
 
         // Latency-waitable swapchain (canon: pal-rhi.md §5.1 / budgets.md) — lets us bound queued frames and wait efficiently
         // for present-readiness instead of blocking deep on the GPU fence. ALLOW_TEARING (hwnd + vsync-off only) needs both the
         // swapchain flag here AND the matching present flag, gated by factory support.
-        _tearingSupported = !_composited && CheckTearingSupport();
+        target.TearingSupported = !target.Composited && CheckTearingSupport();
         uint flags = (uint)DXGI_SWAP_CHAIN_FLAG.DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
-        if (_tearingSupported) flags |= (uint)DXGI_SWAP_CHAIN_FLAG.DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
-        _swapChainFlags = flags;
+        if (target.TearingSupported) flags |= (uint)DXGI_SWAP_CHAIN_FLAG.DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+        target.SwapChainFlags = flags;
         sd.Flags = flags;
 
         IDXGISwapChain1* sc1;
-        if (_composited)
+        if (target.Composited)
             Check(_factory->CreateSwapChainForComposition((IUnknown*)_queue, &sd, null, &sc1), "CreateSwapChainForComposition");
         else
-            Check(_factory->CreateSwapChainForHwnd((IUnknown*)_queue, _hwnd, &sd, null, null, &sc1), "CreateSwapChainForHwnd");
+            Check(_factory->CreateSwapChainForHwnd((IUnknown*)_queue, target.Hwnd, &sd, null, null, &sc1), "CreateSwapChainForHwnd");
 
         IDXGISwapChain3* sc3;
         Check(sc1->QueryInterface(__uuidof<IDXGISwapChain3>(), (void**)&sc3), "QI IDXGISwapChain3");
         sc1->Release();
-        _swapChain = sc3;
+        target.SwapChain = sc3;
 
         // IDXGISwapChain3 : IDXGISwapChain2 — cap the queued frames and grab the latency waitable (created above via the flag).
-        Check(_swapChain->SetMaximumFrameLatency(FRAME_COUNT - 1), "SetMaximumFrameLatency");
-        _frameLatencyWaitable = _swapChain->GetFrameLatencyWaitableObject();
-        _hasLatencyWaitable = _frameLatencyWaitable != HANDLE.NULL;
+        Check(target.SwapChain->SetMaximumFrameLatency(FRAME_COUNT - 1), "SetMaximumFrameLatency");
+        target.FrameLatencyWaitable = target.SwapChain->GetFrameLatencyWaitableObject();
+        target.HasLatencyWaitable = target.FrameLatencyWaitable != HANDLE.NULL;
 
-        if (_composited)
+        D3D12_DESCRIPTOR_HEAP_DESC hd = default;
+        hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        hd.NumDescriptors = FRAME_COUNT;
+        hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAGS.D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        ID3D12DescriptorHeap* heap;
+        Check(_device->CreateDescriptorHeap(&hd, __uuidof<ID3D12DescriptorHeap>(), (void**)&heap), "CreateDescriptorHeap");
+        target.RtvHeap = heap;
+        D3D12MemoryDiagnostics.Track(target.RtvHeap, "Swapchain.RtvHeap", (ulong)FRAME_COUNT * _rtvSize);
+
+        if (target.DesktopAcrylic)
         {
-            IDCompositionDevice* dc;
-            Check(DCompositionCreateDevice(null, __uuidof<IDCompositionDevice>(), (void**)&dc), "DCompositionCreateDevice");
-            _dcomp = dc;
-            IDCompositionTarget* target;
-            Check(_dcomp->CreateTargetForHwnd(_hwnd, BOOL.TRUE, &target), "CreateTargetForHwnd");
-            _dcompTarget = target;
+            // Desktop-sampling acrylic popup (the WinUI MenuFlyout material): host the swapchain in a Windows.UI.Composition
+            // tree over a host-backdrop (blurred desktop) + tint, on the popup HWND — NOT DirectComposition (which has no
+            // host backdrop). Rounded corners are a composition geometric clip on the backdrop group (the HWND carries NO
+            // DWM rounding/shadow — that chrome would be full-size and can't reveal with the open animation).
+            target.Backdrop = new CompositionBackdrop(target.Hwnd, (IUnknown*)target.SwapChain, target.AcrylicTint, target.CornerRadiusPx);
+            target.Backdrop.SetBounds(target.W, target.H);
+        }
+        else if (target.Composited)
+        {
+            EnsureDComp();
+            IDCompositionTarget* dcompTarget;
+            Check(_dcomp->CreateTargetForHwnd(target.Hwnd, BOOL.TRUE, &dcompTarget), "CreateTargetForHwnd");
+            target.DcompTarget = dcompTarget;
             IDCompositionVisual* visual;
             Check(_dcomp->CreateVisual(&visual), "CreateVisual");
-            _dcompVisual = visual;
-            Check(_dcompVisual->SetContent((IUnknown*)_swapChain), "Visual.SetContent");
-            Check(_dcompTarget->SetRoot(_dcompVisual), "Target.SetRoot");
+            target.DcompVisual = visual;
+            Check(target.DcompVisual->SetContent((IUnknown*)target.SwapChain), "Visual.SetContent");
+            Check(target.DcompTarget->SetRoot(target.DcompVisual), "Target.SetRoot");
             Check(_dcomp->Commit(), "DComp.Commit");
         }
 
-        CreateRtvs();
-        _frameIndex = _swapChain->GetCurrentBackBufferIndex();
+        CreateRtvs(target);
+        target.FrameIndex = target.SwapChain->GetCurrentBackBufferIndex();
     }
 
-    private void CreateRtvs()
+    private void EnsureDComp()
     {
-        D3D12_CPU_DESCRIPTOR_HANDLE rtv = _rtvHeap->GetCPUDescriptorHandleForHeapStart();
+        if (_dcomp != null) return;
+        IDCompositionDevice* dc;
+        Check(DCompositionCreateDevice(null, __uuidof<IDCompositionDevice>(), (void**)&dc), "DCompositionCreateDevice");
+        _dcomp = dc;
+    }
+
+    private void CreateRtvs(D3D12Swapchain target)
+    {
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv = target.RtvHeap->GetCPUDescriptorHandleForHeapStart();
         for (uint i = 0; i < FRAME_COUNT; i++)
         {
             ID3D12Resource* buf;
-            Check(_swapChain->GetBuffer(i, __uuidof<ID3D12Resource>(), (void**)&buf), "GetBuffer");
-            _backBuffers[i] = buf;
-            D3D12MemoryDiagnostics.Track(buf, $"Swapchain.BackBuffer[{i}] {_w}x{_h}", (ulong)_w * _h * 4UL);
+            Check(target.SwapChain->GetBuffer(i, __uuidof<ID3D12Resource>(), (void**)&buf), "GetBuffer");
+            target.BackBuffers[i] = buf;
+            D3D12MemoryDiagnostics.Track(buf, $"Swapchain.BackBuffer[{i}] {target.W}x{target.H}", (ulong)target.W * target.H * 4UL);
             _device->CreateRenderTargetView(buf, null, rtv);
             rtv.ptr += _rtvSize;
         }
     }
 
+    private void Activate(D3D12Swapchain target)
+    {
+        _activeSwapchain = target;
+        _hwnd = target.Hwnd;
+        _w = target.W;
+        _h = target.H;
+        _frameIndex = target.FrameIndex;
+        _swapChain = target.SwapChain;
+        _rtvHeap = target.RtvHeap;
+        _frameLatencyWaitable = target.FrameLatencyWaitable;
+        _hasLatencyWaitable = target.HasLatencyWaitable;
+        _swapChainFlags = target.SwapChainFlags;
+        _tearingSupported = target.TearingSupported;
+        for (uint i = 0; i < FRAME_COUNT; i++)
+            _backBuffers[i] = target.BackBuffers[i];
+    }
+
+    private void StoreActive()
+    {
+        if (_activeSwapchain is not { } target) return;
+        target.W = _w;
+        target.H = _h;
+        target.FrameIndex = _frameIndex;
+        target.SwapChain = _swapChain;
+        target.RtvHeap = _rtvHeap;
+        target.FrameLatencyWaitable = _frameLatencyWaitable;
+        target.HasLatencyWaitable = _hasLatencyWaitable;
+        target.SwapChainFlags = _swapChainFlags;
+        target.TearingSupported = _tearingSupported;
+        for (uint i = 0; i < FRAME_COUNT; i++)
+            target.BackBuffers[i] = _backBuffers[i];
+    }
+
     public void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx)
     {
+        if (_primarySwapchain is null) throw new InvalidOperationException("CreateSwapchain must be called before SubmitDrawList.");
+        SubmitDrawList(drawList, sortKeys, in ctx, _primarySwapchain);
+    }
+
+    public void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx, ISwapchain target)
+    {
+        if (target is not D3D12Swapchain sc || sc.Device != this || sc.Disposed)
+            throw new InvalidOperationException("Submit target is not a live D3D12 swapchain from this device.");
+        Activate(sc);
         // Normally throttle to present cadence before producing this frame. A keep-alive repaint fired from inside an
         // OS modal move/size loop (host called SuppressLatencyWaitOnce) skips it so the WndProc thread isn't blocked
         // up to a vblank — the drag-start/live-resize hitch. Self-resetting: one suppressed wait per call.
@@ -341,7 +418,14 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _imagePipe!.BeginFrame((int)_frameIndex);
         float lw = _w / _frameScale, lh = _h / _frameScale;
 
-        if (StreamHasLayer(drawList))
+        // Only the PRIMARY (main-window) swapchain runs the layered compositor. The acrylic/opacity compositors keep ONE
+        // shared full-window canvas sized to the active swapchain and release it WITHOUT a GPU fence on a size change
+        // (EnsureSize assumes size changes only follow a fenced swapchain Resize). A secondary popup swapchain submitting
+        // at a different size would destroy that canvas while the main window's in-flight GPU work still references it →
+        // use-after-free → DXGI_ERROR_DEVICE_REMOVED on the next Present (the prior popup-window crash). OS-backed popups
+        // are transparent (DWM supplies the acrylic), so they carry no engine layers; force them onto the streaming path
+        // — never touching the shared canvas. A stray PushLayer in a popup stream is harmlessly ignored (drawn flat).
+        if (sc == _primarySwapchain && StreamHasLayer(drawList))
         {
             // Layered path (acrylic AND/OR opacity groups): render the scene into an engine-owned canvas, run each
             // layer's passes in stream order, blit to the back buffer.
@@ -381,6 +465,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
         ID3D12CommandList* execList = (ID3D12CommandList*)_cmdList;
         _queue->ExecuteCommandLists(1, &execList);
         SignalFrame(_frameIndex);
+        StoreActive();
     }
 
     // Decode completion → resident GPU texture (media-pipeline §4.1). Staged here (heap/upload only, no command list);
@@ -952,8 +1037,10 @@ public sealed unsafe class D3D12Device : IGpuDevice
 
     internal bool Vsync { get => _vsync; set => _vsync = value; }
 
-    internal void Present()
+    internal void Present(D3D12Swapchain target)
     {
+        if (target.Disposed) return;
+        Activate(target);
         // A keep-alive repaint fired from inside an OS modal move/size loop (host called SuppressVsyncOnce) presents at
         // SyncInterval 0 so the WndProc thread isn't blocked up to a vblank — the live-resize/move hitch. On the composited
         // DComp flip swapchain interval-0 is a cheap, tear-free hand-off (DWM still composites at vblank); steady-state
@@ -963,7 +1050,15 @@ public sealed unsafe class D3D12Device : IGpuDevice
         // composition path _tearingSupported is false so the modal-tick present is interval 0 with flags 0 (valid + tear-free).
         uint interval = (_vsync && !noVsync) ? 1u : 0u;
         uint flags = (interval == 0 && _tearingSupported) ? DXGI.DXGI_PRESENT_ALLOW_TEARING : 0u;
-        Check(_swapChain->Present(interval, flags), "Present");
+        HRESULT pr = _swapChain->Present(interval, flags);
+        if ((int)pr < 0)
+        {
+            // Surface GetDeviceRemovedReason on a device-removed/reset so a GPU fault names its cause instead of a bare
+            // 0x887A0005 (the empirical probe for the popup-swapchain path).
+            uint reason = ((uint)pr == 0x887A0005u || (uint)pr == 0x887A0007u) ? (uint)_device->GetDeviceRemovedReason() : 0u;
+            throw new InvalidOperationException($"Present failed: 0x{(uint)pr:X8}" + (reason != 0u ? $" (device removed reason 0x{reason:X8})" : ""));
+        }
+        StoreActive();
     }
 
     private void SignalFrame(uint frameIndex)
@@ -1024,6 +1119,8 @@ public sealed unsafe class D3D12Device : IGpuDevice
     /// </summary>
     public byte[] CaptureBgra(out int width, out int height)
     {
+        if (_primarySwapchain is null) throw new InvalidOperationException("CreateSwapchain must be called before CaptureBgra.");
+        Activate(_primarySwapchain);
         WaitForGpu();   // ensure the last frame finished rendering before we copy it
         width = (int)_w; height = (int)_h;
         ID3D12Resource* back = _backBuffers[_frameIndex];
@@ -1087,34 +1184,79 @@ public sealed unsafe class D3D12Device : IGpuDevice
         return outp;
     }
 
-    internal void Resize(uint w, uint h)
+    internal void Resize(D3D12Swapchain target, uint w, uint h)
     {
         if (w < 1) w = 1; if (h < 1) h = 1;
-        if (w == _w && h == _h) return;
+        if (target.Disposed || (w == target.W && h == target.H)) return;
+        Activate(target);
         WaitForGpu();
         D3D12MemoryDiagnostics.Resize("Swapchain", w, h);
         for (uint i = 0; i < FRAME_COUNT; i++)
         {
-            if (_backBuffers[i] != null)
+            if (target.BackBuffers[i] != null)
             {
-                D3D12MemoryDiagnostics.Release(_backBuffers[i], $"Swapchain.BackBuffer[{i}]");
-                _backBuffers[i]->Release();
+                D3D12MemoryDiagnostics.Release(target.BackBuffers[i], $"Swapchain.BackBuffer[{i}]");
+                target.BackBuffers[i]->Release();
+                target.BackBuffers[i] = null;
                 _backBuffers[i] = null;
             }
         }
-        Check(_swapChain->ResizeBuffers(FRAME_COUNT, w, h, DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM, _swapChainFlags), "ResizeBuffers");
+        Check(target.SwapChain->ResizeBuffers(FRAME_COUNT, w, h, DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM, target.SwapChainFlags), "ResizeBuffers");
+        target.W = w; target.H = h;
         _w = w; _h = h;
-        CreateRtvs();
-        _frameIndex = _swapChain->GetCurrentBackBufferIndex();
+        CreateRtvs(target);
+        target.FrameIndex = target.SwapChain->GetCurrentBackBufferIndex();
+        target.Backdrop?.SetBounds(w, h);   // resize the WUC backdrop/content visuals to match
+        Activate(target);
     }
 
-    public Size2 SizePx => new(_w, _h);
+    public Size2 SizePx => _primarySwapchain is { } sc ? sc.SizePx : new(_w, _h);
+
+    internal void DisposeSwapchain(D3D12Swapchain target)
+    {
+        if (target.Disposed) return;
+        if (_device != null) WaitForGpu();
+        ReleaseSwapchainResources(target);
+        _swapchains.Remove(target);
+        if (_primarySwapchain == target) _primarySwapchain = null;
+        if (_activeSwapchain == target) _activeSwapchain = null;
+    }
+
+    private void ReleaseSwapchainResources(D3D12Swapchain target)
+    {
+        if (target.Disposed) return;
+        target.Disposed = true;
+        // Tear down the WUC backdrop FIRST (it holds a composition surface wrapping the swapchain).
+        target.Backdrop?.Dispose();
+        target.Backdrop = null;
+        for (uint i = 0; i < FRAME_COUNT; i++)
+        {
+            if (target.BackBuffers[i] != null)
+            {
+                D3D12MemoryDiagnostics.Release(target.BackBuffers[i], $"Swapchain.BackBuffer[{i}]");
+                target.BackBuffers[i]->Release();
+                target.BackBuffers[i] = null;
+            }
+        }
+        if (target.DcompVisual != null) { target.DcompVisual->Release(); target.DcompVisual = null; }
+        if (target.DcompTarget != null) { target.DcompTarget->Release(); target.DcompTarget = null; }
+        if (target.SwapChain != null) { target.SwapChain->Release(); target.SwapChain = null; }
+        if (target.RtvHeap != null)
+        {
+            D3D12MemoryDiagnostics.Release(target.RtvHeap, "Swapchain.RtvHeap");
+            target.RtvHeap->Release();
+            target.RtvHeap = null;
+        }
+    }
 
     public void Dispose()
     {
         if (_device != null) WaitForGpu();
-        if (_dcompVisual != null) _dcompVisual->Release();
-        if (_dcompTarget != null) _dcompTarget->Release();
+        for (int i = _swapchains.Count - 1; i >= 0; i--)
+            ReleaseSwapchainResources(_swapchains[i]);
+        _swapchains.Clear();
+        _primarySwapchain = null;
+        _activeSwapchain = null;
         if (_dcomp != null) _dcomp->Release();
         _glyphs?.Dispose();
         _imagePipe?.Dispose();
@@ -1126,18 +1268,8 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _acrylic?.Dispose();
         _opacity?.Dispose();
         _rectPipe?.Dispose();
-        for (uint i = 0; i < FRAME_COUNT; i++)
-        {
-            if (_backBuffers[i] != null)
-            {
-                D3D12MemoryDiagnostics.Release(_backBuffers[i], $"Swapchain.BackBuffer[{i}]");
-                _backBuffers[i]->Release();
-                _backBuffers[i] = null;
-            }
-        }
+        for (uint i = 0; i < FRAME_COUNT; i++) _backBuffers[i] = null;
         D3D12MemoryDiagnostics.Snapshot("D3D12Device.Dispose");
-        if (_swapChain != null) _swapChain->Release();
-        if (_rtvHeap != null) { D3D12MemoryDiagnostics.Release(_rtvHeap, "Device.RtvHeap"); _rtvHeap->Release(); }
         if (_cmdList != null) _cmdList->Release();
         for (uint i = 0; i < FRAME_COUNT; i++)
             if (_allocators[i] != null) _allocators[i]->Release();
@@ -1151,10 +1283,43 @@ public sealed unsafe class D3D12Device : IGpuDevice
 
 public sealed unsafe class D3D12Swapchain : ISwapchain
 {
-    private readonly D3D12Device _device;
-    public D3D12Swapchain(D3D12Device device) => _device = device;
-    public Size2 SizePx => _device.SizePx;
-    public void Resize(Size2 px) => _device.Resize((uint)px.Width, (uint)px.Height);
-    public void Present() => _device.Present();
-    public void Dispose() { }
+    internal readonly D3D12Device Device;
+    internal readonly HWND Hwnd;
+    internal readonly bool Composited;
+    internal IDXGISwapChain3* SwapChain;
+    internal ID3D12DescriptorHeap* RtvHeap;
+    internal readonly ID3D12Resource*[] BackBuffers = new ID3D12Resource*[(int)D3D12Device.FRAME_COUNT];
+    internal HANDLE FrameLatencyWaitable;
+    internal bool HasLatencyWaitable;
+    internal uint SwapChainFlags;
+    internal bool TearingSupported;
+    internal uint W, H, FrameIndex;
+    internal IDCompositionTarget* DcompTarget;
+    internal IDCompositionVisual* DcompVisual;
+    internal CompositionBackdrop? Backdrop;   // non-null ⇒ WUC desktop-acrylic popup (replaces the DComp path)
+    internal readonly bool DesktopAcrylic;
+    internal readonly ColorF AcrylicTint;
+    internal readonly float CornerRadiusPx;
+    internal bool Disposed;
+
+    internal D3D12Swapchain(D3D12Device device, HWND hwnd, uint w, uint h, bool composited, bool desktopAcrylic, ColorF acrylicTint, float cornerRadiusPx)
+    {
+        Device = device;
+        Hwnd = hwnd;
+        W = w;
+        H = h;
+        Composited = composited;
+        DesktopAcrylic = desktopAcrylic;
+        AcrylicTint = acrylicTint;
+        CornerRadiusPx = cornerRadiusPx;
+    }
+
+    public Size2 SizePx => new(W, H);
+    public void Resize(Size2 px) => Device.Resize(this, (uint)px.Width, (uint)px.Height);
+    public void Present() => Device.Present(this);
+    public void ConfigurePopupChrome(in PopupChromeMetrics m) => Backdrop?.ConfigureChrome(m.ContentRectPx, m.OpensUp, m.ClosedRatio, m.CornerRadiusPx);
+    public void AnimatePopupOpen() => Backdrop?.AnimateOpen();
+    public void AnimatePopupClose() => Backdrop?.AnimateClose();
+    public bool PopupAnimating => Backdrop?.IsAnimating ?? false;
+    public void Dispose() => Device.DisposeSwapchain(this);
 }

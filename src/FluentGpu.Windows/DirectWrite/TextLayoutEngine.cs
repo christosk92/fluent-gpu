@@ -112,6 +112,102 @@ public sealed unsafe class TextLayoutEngine : IDisposable
 
     private struct RunGlyph { public ushort Gid; public nint Face; public float Advance; public int Cluster; public byte Level; public float Size; public short Span; }
 
+    // ── Shape cache ─────────────────────────────────────────────────────────────────────────────────
+    // Shaping (itemize → shape) is width-INDEPENDENT — only WrapAndPosition consumes maxWidth. A drag-resize
+    // re-measures the SAME text at a new width every frame; without this each call re-runs the COM-heavy itemize +
+    // per-glyph fallback + shape phase. Cache the shaped glyphs + break opportunities + line metrics, keyed on a
+    // verified 64-bit hash of the SHAPE inputs (content + family + weight + size + spacing + lineHeight + stacking +
+    // lineBounds); a (text,style) match restores them and replays ONLY WrapAndPosition at the new width. Plain
+    // (no-span) text only — spanned inline runs (rtb-01) re-shape (never a resize hot path). Bounded LRU, instance
+    // reused on eviction. Single-thread-confined: the measure engine (UI thread) and the render engine (render thread)
+    // are SEPARATE instances (DirectWriteFontSystem.cs:13), so each has its own cache — no cross-thread sharing.
+    private sealed class ShapeEntry
+    {
+        public char[] Text = Array.Empty<char>(); public int TextLen;
+        public string Family = ""; public int Weight; public float Size, CharSpacing, LineHeightArg; public int Stacking, LineBounds;
+        public RunGlyph[] Glyphs = new RunGlyph[16]; public int GlyphCount;
+        public BreakOpp[] Breaks = new BreakOpp[16]; public int BreakCount;
+        public float Baseline, UnderlineY, UnderlineThickness, StrikeY, LineH;
+        public ushort EllGid; public float EllAdv; public nint EllFace; public float EllSize;
+        public long Tick;
+    }
+    private readonly Dictionary<long, ShapeEntry> _shapeCache = new();
+    private long _shapeTick;
+    private const int ShapeCacheCap = 256;
+
+    /// <summary>Diagnostics/regression counter: the number of ACTUAL itemize+shape passes. A width-only re-wrap of
+    /// already-shaped text does NOT bump it, so a resize that re-wraps cached text leaves this flat.</summary>
+    public long ShapeCount { get; private set; }
+
+    private static long ShapeHash(ReadOnlySpan<char> text, string? family, int weight, float size, float charSpacing, float lineHeight, int stacking, int lineBounds)
+    {
+        ulong h = 14695981039346656037UL; const ulong P = 1099511628211UL;
+        for (int i = 0; i < text.Length; i++) { h ^= text[i]; h *= P; }
+        if (family != null) for (int i = 0; i < family.Length; i++) { h ^= family[i]; h *= P; }
+        h ^= (uint)weight; h *= P;
+        h ^= (uint)BitConverter.SingleToInt32Bits(size); h *= P;
+        h ^= (uint)BitConverter.SingleToInt32Bits(charSpacing); h *= P;
+        h ^= (uint)BitConverter.SingleToInt32Bits(lineHeight); h *= P;
+        h ^= (uint)stacking; h *= P;
+        h ^= (uint)lineBounds; h *= P;
+        return (long)h;
+    }
+
+    private static bool NanSafeEq(float a, float b) => (float.IsNaN(a) && float.IsNaN(b)) || a == b;
+
+    private static bool ShapeMatches(ShapeEntry e, ReadOnlySpan<char> text, string? family, int weight, float size, float charSpacing, float lineHeight, int stacking, int lineBounds)
+    {
+        if (e.TextLen != text.Length || e.Weight != weight || e.Size != size || e.CharSpacing != charSpacing
+            || e.Stacking != stacking || e.LineBounds != lineBounds || !NanSafeEq(e.LineHeightArg, lineHeight)
+            || !string.Equals(e.Family, family ?? "", StringComparison.Ordinal))
+            return false;
+        for (int i = 0; i < text.Length; i++) if (e.Text[i] != text[i]) return false;
+        return true;
+    }
+
+    // Restore a cached shape into the engine's working buffers so WrapAndPosition runs unchanged. Zero-alloc steady
+    // state (copies into the existing _glyphs buffer + the _breaks list at its retained capacity).
+    private void RestoreShape(ShapeEntry e)
+    {
+        EnsureGlyphs(e.GlyphCount);
+        Array.Copy(e.Glyphs, _glyphs, e.GlyphCount); _glyphCount = e.GlyphCount;
+        _breaks.Clear();
+        if (_breaks.Capacity < e.BreakCount) _breaks.Capacity = e.BreakCount;
+        for (int i = 0; i < e.BreakCount; i++) _breaks.Add(e.Breaks[i]);
+        Baseline = e.Baseline; UnderlineY = e.UnderlineY; UnderlineThickness = e.UnderlineThickness; StrikeY = e.StrikeY;
+        _textLen = e.TextLen; _ellGid = e.EllGid; _ellAdv = e.EllAdv; _ellFace = e.EllFace; _ellSize = e.EllSize;
+    }
+
+    private void StoreShape(long key, ReadOnlySpan<char> text, string? family, int weight, float size, float charSpacing, float lineHeight, int stacking, int lineBounds, float lineH)
+    {
+        if (!_shapeCache.TryGetValue(key, out var e))   // miss (new key) or collision-overwrite (key present but content differed)
+        {
+            e = _shapeCache.Count >= ShapeCacheCap ? EvictLru() : new ShapeEntry();
+            _shapeCache[key] = e;
+        }
+        if (e.Text.Length < text.Length) e.Text = new char[Math.Max(text.Length, e.Text.Length * 2)];
+        text.CopyTo(e.Text);
+        e.TextLen = text.Length; e.Family = family ?? ""; e.Weight = weight; e.Size = size;
+        e.CharSpacing = charSpacing; e.LineHeightArg = lineHeight; e.Stacking = stacking; e.LineBounds = lineBounds;
+        if (e.Glyphs.Length < _glyphCount) e.Glyphs = new RunGlyph[Math.Max(_glyphCount, e.Glyphs.Length * 2)];
+        Array.Copy(_glyphs, e.Glyphs, _glyphCount); e.GlyphCount = _glyphCount;
+        int bc = _breaks.Count;
+        if (e.Breaks.Length < bc) e.Breaks = new BreakOpp[Math.Max(bc, e.Breaks.Length * 2)];
+        for (int i = 0; i < bc; i++) e.Breaks[i] = _breaks[i];
+        e.BreakCount = bc;
+        e.Baseline = Baseline; e.UnderlineY = UnderlineY; e.UnderlineThickness = UnderlineThickness; e.StrikeY = StrikeY;
+        e.LineH = lineH; e.EllGid = _ellGid; e.EllAdv = _ellAdv; e.EllFace = _ellFace; e.EllSize = _ellSize;
+        e.Tick = ++_shapeTick;
+    }
+
+    private ShapeEntry EvictLru()
+    {
+        long oldestKey = 0, oldestTick = long.MaxValue; ShapeEntry? oldest = null;
+        foreach (var kv in _shapeCache) if (kv.Value.Tick < oldestTick) { oldestTick = kv.Value.Tick; oldestKey = kv.Key; oldest = kv.Value; }
+        if (oldest != null) _shapeCache.Remove(oldestKey);
+        return oldest ?? new ShapeEntry();
+    }
+
     public TextLayoutEngine()
     {
         IDWriteFactory* f;
@@ -151,6 +247,24 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     {
         if (weight <= 0) weight = 400; else if (weight > 999) weight = 999;   // DWRITE_FONT_WEIGHT range
         _glyphCount = 0; _laidCount = 0; _clusterCount = 0; _lineRecCount = 0;
+
+        // Shape cache: a width-only change replays only WrapAndPosition (shaping is width-independent). Plain text only
+        // (spanned inline runs re-shape — never the resize hot path). On a hit, restore the shaped state and re-wrap.
+        bool cacheable = spans.IsEmpty && text.Length > 0;
+        long shapeKey = 0;
+        if (cacheable)
+        {
+            shapeKey = ShapeHash(text, family, weight, size, charSpacing, lineHeight, stacking, lineBounds);
+            if (_shapeCache.TryGetValue(shapeKey, out var hit)
+                && ShapeMatches(hit, text, family, weight, size, charSpacing, lineHeight, stacking, lineBounds))
+            {
+                RestoreShape(hit);
+                hit.Tick = ++_shapeTick;
+                WrapAndPosition(size, 1f, hit.LineH, maxWidth, wrap, trim, maxLines, _ellFace);
+                return;
+            }
+        }
+
         var face = ResolveFace(family, weight, out FaceMetrics fm);
         float scale = fm.Em > 0 ? size / fm.Em : size / 2048f;
         // TextLineBounds.Tight (WinUI TextBlock.TextLineBounds; default Full, TextBlock_themeresources.xaml:17):
@@ -262,6 +376,8 @@ public sealed unsafe class TextLayoutEngine : IDisposable
             }
         }
 
+        ShapeCount++;   // an actual itemize+shape pass (this was a cache miss); a re-wrap returns above without bumping it
+        if (cacheable) StoreShape(shapeKey, text, family, weight, size, charSpacing, lineHeight, stacking, lineBounds, lineH);
         WrapAndPosition(size, scale, lineH, maxWidth, wrap, trim, maxLines, (nint)face);
     }
 
@@ -701,6 +817,26 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         var faces = new HashSet<nint>(); int zero = 0;
         foreach (var g in e.Glyphs) { faces.Add(g.Face); if (g.Gid == 0) zero++; }
         Console.WriteLine($"[fallback] \"Hi 你好 😀\" -> {e.Glyphs.Length} glyphs across {faces.Count} face(s), {zero} .notdef");
+
+        // Shape cache: a width-only change must RE-WRAP, not re-shape. On a FRESH engine (clean ShapeCount), shape the
+        // paragraph once at one width, then re-measure at several widths — each must match a FRESH (uncached) engine's
+        // box EXACTLY, while ShapeCount stays at 1 (shaped once, re-wrapped the rest). The resize-perf regression guard.
+        {
+            using var e2 = new TextLayoutEngine();
+            using var fresh = new TextLayoutEngine();
+            const string para = "Hidden content, revealed when the Expander is expanded.";
+            e2.Layout(para.AsSpan(), "Segoe UI", 400, 14f, 320f, 1, 0, 0);   // first measure → 1 shape (cache miss)
+            bool identical = true;
+            foreach (float w in new[] { 220f, 160f, 320f, 480f, 90f })
+            {
+                e2.Layout(para.AsSpan(), "Segoe UI", 400, 14f, w, 1, 0, 0);        // re-wrap (cache hit)
+                fresh.Layout(para.AsSpan(), "Segoe UI", 400, 14f, w, 1, 0, 0);    // fresh shape + wrap
+                if (e2.LineCount != fresh.LineCount || MathF.Abs(e2.Width - fresh.Width) > 0.01f || MathF.Abs(e2.Height - fresh.Height) > 0.01f)
+                { identical = false; Console.WriteLine($"  [shapecache] MISMATCH @ {w:0}: cached {e2.LineCount}L {e2.Width:0.0}x{e2.Height:0.0} vs fresh {fresh.LineCount}L {fresh.Width:0.0}x{fresh.Height:0.0}"); }
+            }
+            bool noReshape = e2.ShapeCount == 1;
+            Console.WriteLine($"[shapecache] re-wrap identity {(identical ? "PASS" : "FAIL")}; no-re-shape {(noReshape ? "PASS" : "FAIL")} (ShapeCount={e2.ShapeCount}, expected 1)");
+        }
     }
 
     private static void Check(HRESULT hr, string what) { if ((int)hr < 0) throw new InvalidOperationException($"{what} failed: 0x{(uint)hr:X8}"); }

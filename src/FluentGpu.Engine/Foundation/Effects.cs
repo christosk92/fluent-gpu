@@ -57,6 +57,15 @@ public readonly record struct GradientSpec(GradientShape Shape, float AngleDeg, 
     /// darker secondary edge sits at the BOTTOM. Only meaningful with <see cref="AxisLengthPx"/> &gt; 0.</summary>
     public bool AnchorEnd { get; init; }
 
+    /// <summary>Radial-only: the gradient origin in node-relative 0..1 space (0,0 = top-left, 0.5,0.5 = centre). The
+    /// default centres the radial (the historical behaviour). Ignored for <see cref="GradientShape.Linear"/>.</summary>
+    public Point2 RadialCenter { get; init; } = new(0.5f, 0.5f);
+
+    /// <summary>Radial-only: the gradient radius in node-relative 0..1 units per axis (a stop offset of 1.0 lands this
+    /// far from <see cref="RadialCenter"/>). Default 0.5,0.5 reproduces the old centre-to-edge ramp. An ellipse in
+    /// pixels when the node isn't square (matches WinUI <c>RadiusX/RadiusY</c> + <c>RelativeToBoundingBox</c>).</summary>
+    public Point2 RadialRadius { get; init; } = new(0.5f, 0.5f);
+
     /// <summary>A solid "gradient" (one stop) - so a flat border and a gradient border are the SAME knob (BorderBrush).</summary>
     public static GradientSpec Solid(ColorF color) => new(GradientShape.Linear, 0f, [new GradientStop(0f, color)]);
 

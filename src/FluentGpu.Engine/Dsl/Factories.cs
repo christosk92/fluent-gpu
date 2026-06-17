@@ -182,6 +182,11 @@ public static partial class Ui
     public static GradientSpec RadialGradient(params GradientStop[] stops)
         => new(GradientShape.Radial, 0f, stops);
 
+    /// <summary>A radial gradient with an explicit origin + radius in node-relative 0..1 space (0,0 = top-left). A
+    /// stop offset of 1.0 lands <paramref name="radius"/> from <paramref name="center"/>. Apply with <c>.Gradient(...)</c>.</summary>
+    public static GradientSpec RadialGradient(Point2 center, Point2 radius, params GradientStop[] stops)
+        => new(GradientShape.Radial, 0f, stops) { RadialCenter = center, RadialRadius = radius };
+
     // Controls (Button, …) live in their own classes under Controls/ — e.g. Button.Accent(...) / Button.Standard(...).
     // VirtualList(...) lives in FluentGpu.Reconciler (it composes the keyed reconciler + scroll) — see Virtual.cs.
 }

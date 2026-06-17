@@ -135,7 +135,7 @@ public static class MenuFlyout
             Element glyph = (it.Kind is MenuItemKind.Toggle or MenuItemKind.Radio) && it.IsChecked
                 ? new TextEl(it.Kind == MenuItemKind.Radio ? RadioGlyph : CheckGlyph) { Size = CheckGlyphSize, Color = checkFg, PressedColor = enabled ? Tok.TextTertiary : checkFg, FontFamily = Theme.IconFont }
                 : new BoxEl();
-            children.Add(new BoxEl { Width = PlaceholderWidth, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Children = [glyph] });
+            children.Add(new BoxEl { Width = PlaceholderWidth, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start, Children = [glyph] });
         }
 
         // Column 1: 16×16 icon (IconRoot Viewbox), painted when this row carries a glyph.
@@ -144,7 +144,7 @@ public static class MenuFlyout
             Element icon = it.Glyph is { Length: > 0 } g
                 ? new TextEl(g) { Size = IconGlyphSize, Color = fg, FontFamily = Theme.IconFont }
                 : new BoxEl();
-            children.Add(new BoxEl { Width = PlaceholderWidth, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Children = [icon] });
+            children.Add(new BoxEl { Width = PlaceholderWidth, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start, Children = [icon] });
         }
 
         // Column 2: the label (TextBlock, "*" column → grows).
@@ -153,7 +153,7 @@ public static class MenuFlyout
         // Column 3: optional keyboard-accelerator hint, right-aligned (HorizontalAlignment=Right),
         // CaptionTextBlock (12px), MenuFlyoutItemKeyboardAcceleratorTextForeground = TextSecondary / Disabled.
         if (it.AcceleratorText is { Length: > 0 } acc)
-            children.Add(new TextEl(acc) { Size = 12f, Color = enabled ? Tok.TextSecondary : Tok.TextDisabled, Margin = new Edges4(24, 0, 0, 0) });
+            children.Add(new TextEl(acc) { Size = 12f, Color = enabled ? Tok.TextSecondary : Tok.TextDisabled, Margin = new Edges4(24, 4, 0, 0) });
 
         // Column 4 (sub-menu rows): the cascade chevron — E974 @12, MenuFlyoutItemChevronMargin 24,0,0,-1, foreground
         // MenuFlyoutSubItemChevron ramp (MenuFlyout_themeresources.xaml:26-30 + :720 SubItemChevron).

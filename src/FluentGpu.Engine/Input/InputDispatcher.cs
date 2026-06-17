@@ -653,7 +653,11 @@ public sealed class InputDispatcher
                     }
                     if (!_dragTarget.IsNull && _scene.IsLive(_dragTarget))   // drag updates while held (slider/scrollbar)
                     {
-                        _scene.GetDrag(_dragTarget)?.Invoke(LocalPos(_dragTarget, e.PositionPx));
+                        // UNCLAMPED pointer-local (PointToLocal, not the box-clamped LocalPos): an OnDrag handler either
+                        // reconstructs the true cursor (the sidebar resize grip does local.X + AbsoluteRect — clamping to
+                        // the 16px grip box gave a dead-band + lag on every direction reversal) or clamps its OWN output
+                        // (Slider value, caret index, selection extent). Clamping here only ever broke the first kind.
+                        _scene.GetDrag(_dragTarget)?.Invoke(PointToLocal(_dragTarget, e.PositionPx));
                         handled++;
                     }
                     else if (!_hovered.IsNull && _scene.GetHoverMove(_hovered) is { } hm)   // bare-hover preview (RatingControl)
@@ -1397,7 +1401,7 @@ public sealed class InputDispatcher
             // velocity so its release has a real flick speed to snap on (SwipeControl 31px/s close / FlipView flick). The
             // eager Slider/EditableText drag samples nothing extra (the sampler is unused on that path).
             if (_dragTarget == _swipeDrag) _panVel.Sample(e.PositionPx, e.TimestampMs);
-            _scene.GetDrag(_dragTarget)?.Invoke(LocalPos(_dragTarget, e.PositionPx));
+            _scene.GetDrag(_dragTarget)?.Invoke(PointToLocal(_dragTarget, e.PositionPx));   // UNCLAMPED — see the mouse PointerMove path
             return true;
         }
 

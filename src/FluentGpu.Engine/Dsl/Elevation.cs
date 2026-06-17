@@ -19,8 +19,13 @@ public static class Elevation
     public static readonly ShadowSpec CardHover = new(Blur: 16f, OffsetY: 4f, OffsetX: 0f, Color: ColorF.FromRgba(0, 0, 0, 0x40));
     /// <summary>ToolTip band (WinUI depth-16 class) — lighter than <see cref="Flyout"/>; tooltips sit on the lowest popup band.</summary>
     public static readonly ShadowSpec Tooltip = new(Blur: 16f, OffsetY: 4f, OffsetX: 0f, Color: ColorF.FromRgba(0, 0, 0, 0x40));
-    /// <summary>Flyout/menu band (WinUI depth-32 class — ElevationHelper.cpp:19 base elevation depth 32).</summary>
-    public static readonly ShadowSpec Flyout = new(Blur: 32f, OffsetY: 8f, OffsetX: 0f, Color: ColorF.FromRgba(0, 0, 0, 0x46));
+    /// <summary>Flyout/menu band (WinUI depth-32 class). The WinUI popup DropShadowRecipe at elevation 16 is directional-
+    /// only (ambient off): blur = elevation = 16, OffsetY = elevation·0.5 = 8, opacity 0.26 dark / 0.14 light
+    /// (DropShadowRecipe.h:118-132,151-152). Theme-split here; only the IN-WINDOW flyout fallback uses this — OS-backed
+    /// windowed menus get DWM's own system shadow.</summary>
+    public static ShadowSpec Flyout => Tok.Theme == ThemeKind.Dark ? FlyoutDark : FlyoutLight;
+    private static readonly ShadowSpec FlyoutDark = new(Blur: 16f, OffsetY: 8f, OffsetX: 0f, Color: ColorF.FromRgba(0, 0, 0, 0x42));   // ~0.26
+    private static readonly ShadowSpec FlyoutLight = new(Blur: 16f, OffsetY: 8f, OffsetX: 0f, Color: ColorF.FromRgba(0, 0, 0, 0x24));  // ~0.14
     /// <summary>Dialog band (WinUI depth-128 class) — ContentDialog and full-window modal surfaces.</summary>
     public static readonly ShadowSpec Dialog = new(Blur: 64f, OffsetY: 16f, OffsetX: 0f, Color: ColorF.FromRgba(0, 0, 0, 0x66));
 }

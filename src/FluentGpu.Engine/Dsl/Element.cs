@@ -69,6 +69,8 @@ public sealed record BoxEl : Element
     public GradientSpec? HoverBorderBrush { get; init; }
     public GradientSpec? PressedBorderBrush { get; init; }
     public AcrylicSpec? Acrylic { get; init; }     // per-node frosted-glass backdrop (blur + tint + noise)
+    public bool TabShape { get; init; }            // selected TabView header: rounded top + bottom flares
+    public float TabFlareRadius { get; init; } = 4f;
     /// <summary>Per-element edge fade (gpu-renderer.md): feather this element's content alpha to transparent (+ optional
     /// blur) near the chosen edges, following its rounded <see cref="Corners"/> (the curve) — it dissolves into whatever
     /// is behind. One offscreen RT per faded element. Null = none.</summary>
@@ -239,6 +241,9 @@ public sealed record BoxEl : Element
     /// <summary>Called once when this box is realized into the scene, with its node handle — for a control factory to
     /// capture the handle (e.g. to wire a signal binding that needs the live node). Fires at mount only.</summary>
     public Action<NodeHandle>? OnRealized { get; init; }
+    /// <summary>Called after layout when this node's arranged local bounds change. Intended for retained leaf controls
+    /// that need their own laid-out width/height without subscribing to raw viewport changes.</summary>
+    public Action<RectF>? OnBoundsChanged { get; init; }
 
     public Element[] Children { get; init; } = [];
 
@@ -596,4 +601,8 @@ public sealed record ScrollEl : Element
     /// <summary>Auto edge fade: feather only the edges that currently OVERFLOW (more content past them), ramped with the
     /// scroll offset — the discoverable-overflow affordance as a true alpha fade. Ignored when <see cref="EdgeFade"/> is set.</summary>
     public bool AutoEdgeFade { get; init; }
+    /// <summary>Keep the scrollbar VISIBLE (a persistent thin rail) whenever the content overflows, instead of the default
+    /// auto-hide that only reveals on hover/scroll. Hover still expands the rail to the full draggable bar. For navigation
+    /// surfaces (a sidebar) where a discoverable, always-present scroll affordance is wanted (WinUI 11 nav behavior).</summary>
+    public bool AlwaysShowScrollbar { get; init; }
 }

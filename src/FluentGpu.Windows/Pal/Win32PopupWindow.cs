@@ -86,6 +86,7 @@ public sealed unsafe class Win32PopupWindow : IPlatformPopupWindow
         }
         s_constructing = null;
         _boundsPx = new RectF(MathF.Round(b.X), MathF.Round(b.Y), w, h);
+        Win32Theme.ApplyPopupMaterial(_hwnd, desc.Dark, desc.Material);
     }
 
     public NativeHandle Handle => new(_hwnd, NativeHandleKind.Hwnd);

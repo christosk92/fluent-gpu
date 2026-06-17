@@ -40,6 +40,10 @@ public sealed class StopwatchFrameTimeSource : IFrameTimeSource
 
         float dt = (now - _last) * 1000f / Stopwatch.Frequency;
         _last = now;
-        return Math.Clamp(dt, 0f, 50f);
+        // Cap the per-tick advance at ~2 frames (60 Hz). A cold/janky frame can accumulate a large delta (e.g. the first
+        // modal-loop tick after WM_ENTERSIZEMOVE, or a GC pause); without a tight cap a 250 ms transition front-loaded by
+        // a decelerate curve would LEAP ~0.67 in a single tick — reading as "it just popped, no animation". 34 ms keeps
+        // every transition to ≥~7 visible steps while still letting a 30 Hz display run essentially real-time.
+        return Math.Clamp(dt, 0f, 34f);
     }
 }

@@ -50,6 +50,19 @@ internal sealed class RefHolderCell : HookCell
     public object? Ref;
 }
 
+internal sealed class ContextSignalCell<T> : HookCell
+{
+    public readonly IReadSignal<T> Signal;
+    public ContextSignalCell(RenderContext ctx, Context<T> context) => Signal = new RenderContext.ContextReadSignal<T>(ctx, context);
+}
+
+internal sealed class SignalEffectCell : HookCell, IDisposableCell
+{
+    public readonly Effect Effect;
+    public SignalEffectCell(Effect effect) => Effect = effect;
+    public void DisposeCell() => Effect.Dispose();
+}
+
 internal sealed class AnimValueCell : HookCell
 {
     public float Current, From, Target, Elapsed;
@@ -166,6 +179,33 @@ public sealed partial class RenderContext
 
     private ReactiveRuntime Rt => Runtime ?? throw new InvalidOperationException("RenderContext.Runtime not set (component not mounted by the host).");
 
+    internal sealed class ContextReadSignal<T> : IReadSignal<T>
+    {
+        private readonly RenderContext _ctx;
+        private readonly Context<T> _context;
+
+        public ContextReadSignal(RenderContext ctx, Context<T> context)
+        {
+            _ctx = ctx;
+            _context = context;
+        }
+
+        public T Value
+        {
+            get
+            {
+                var sig = _ctx.ResolveContextSignal?.Invoke(_ctx.AnchorNode, _context);
+                return sig is not null && sig.Value is T tv ? tv : _context.Default;
+            }
+        }
+
+        public T Peek()
+        {
+            var sig = _ctx.ResolveContextSignal?.Invoke(_ctx.AnchorNode, _context);
+            return sig is not null && sig.Peek() is T tv ? tv : _context.Default;
+        }
+    }
+
     public (T Value, Action<T> Set) UseState<T>(T initial)
     {
         SignalCell<T> cell;
@@ -215,6 +255,16 @@ public sealed partial class RenderContext
 
     /// <summary>Like <see cref="UseEffect"/> but runs after layout, before paint (Bounds are valid). Phase 6.5.</summary>
     public void UseLayoutEffect(Action effect, params object[] deps) => EffectImpl(effect, deps, PendingLayoutEffects);
+
+    /// <summary>Mount a signal-tracked effect owned by this component. The body runs once, then whenever signals it reads
+    /// change. Use sparingly for adapter components that bridge a hot signal into a coarser retained signal.</summary>
+    public void UseSignalEffect(Action effect)
+    {
+        SignalEffectCell cell;
+        if (!_mounted) { cell = new SignalEffectCell(new Effect(Rt, effect)); _cells.Add(cell); }
+        else cell = (SignalEffectCell)_cells[_cursor];
+        _cursor++;
+    }
 
     private void EffectImpl(Action effect, object[] deps, List<Action> target)
     {
@@ -269,6 +319,17 @@ public sealed partial class RenderContext
         var sig = ResolveContextSignal?.Invoke(AnchorNode, context);
         if (sig is not null && sig.Value is T tv) return tv;   // sig.Value subscribes the render-effect
         return context.Default;
+    }
+
+    /// <summary>Return the nearest context as a read signal without subscribing this render. Reading the returned
+    /// signal's <c>.Value</c> subscribes the current reactive computation at the call site.</summary>
+    public IReadSignal<T> UseContextSignal<T>(Context<T> context)
+    {
+        ContextSignalCell<T> cell;
+        if (!_mounted) { cell = new ContextSignalCell<T>(this, context); _cells.Add(cell); }
+        else cell = (ContextSignalCell<T>)_cells[_cursor];
+        _cursor++;
+        return cell.Signal;
     }
 
     /// <summary>The host's cross-thread UI-thread poster (<see cref="HostDispatch.Post"/>): <c>post(action)</c> runs

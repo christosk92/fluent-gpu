@@ -5,7 +5,11 @@ namespace FluentGpu.Rhi;
 /// <summary>Per-frame context handed to the device at submit. POD.</summary>
 public readonly record struct FrameInfo(Size2 SizePx, float Scale, ColorF Clear);
 
-public readonly record struct SwapchainDesc(NativeHandle PresentTarget, Size2 SizePx);
+/// <summary><paramref name="DesktopAcrylic"/> = back this composited popup with a true desktop-sampling acrylic
+/// (Windows.UI.Composition host backdrop) tinted by <paramref name="AcrylicTint"/> — the WinUI MenuFlyout material,
+/// reached without the Windows App SDK. Ignored by backends that don't support it (they fall back to a plain swapchain).</summary>
+public readonly record struct SwapchainDesc(NativeHandle PresentTarget, Size2 SizePx, bool Composited = false,
+    bool DesktopAcrylic = false, ColorF AcrylicTint = default, float CornerRadiusPx = 0f);
 
 /// <summary>
 /// Graphics-first render hardware interface. Zero COM types cross this seam — generational handles + POD + spans only.
@@ -15,10 +19,19 @@ public readonly record struct SwapchainDesc(NativeHandle PresentTarget, Size2 Si
 public interface IGpuDevice : IDisposable
 {
     string BackendName { get; }
+    /// <summary>True when <see cref="CreateSwapchain"/> may be called for secondary popup targets and
+    /// <see cref="SubmitDrawList(ReadOnlySpan{byte}, ReadOnlySpan{ulong}, in FrameInfo, ISwapchain)"/> can render to
+    /// those targets. Headless and D3D12 support this; future backends can opt in without changing the host.</summary>
+    bool SupportsSecondarySwapchains => false;
     ISwapchain CreateSwapchain(in SwapchainDesc desc);
 
     /// <summary>Record + batch + submit the per-frame DrawList. <paramref name="drawList"/> is the POD command stream.</summary>
     void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx);
+
+    /// <summary>Record + batch + submit to a specific swapchain target (windowed popup HWNDs). Backends without
+    /// secondary-swapchain support fall back to the primary target via the legacy overload.</summary>
+    void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx, ISwapchain target)
+        => SubmitDrawList(drawList, sortKeys, in ctx);
 
     /// <summary>Hand decoded PREMULTIPLIED BGRA8 pixels for <paramref name="imageId"/> to the backend (the
     /// media-pipeline §4.1 texture upload). The backend create-or-replaces a resident texture (or atlas page) keyed by
@@ -45,9 +58,35 @@ public interface IGpuDevice : IDisposable
     void SuppressVsyncOnce() { }
 }
 
+/// <summary>Geometry + motion parameters for a desktop-acrylic windowed popup's composition chrome. All px, relative to
+/// the (shadow-inset-inflated) popup window. <paramref name="ContentRectPx"/> is the rounded menu plate inside the
+/// window's shadow margins; the acrylic is rounded to it and the open slide = <c>ContentRectPx.H * ClosedRatio</c>.
+/// <paramref name="OpensUp"/> = menu opens upward (anchored at its bottom). <paramref name="ClosedRatio"/> follows
+/// WinUI's MenuPopupThemeTransition (0.5 root menu, 0.67 cascaded submenu).</summary>
+public readonly record struct PopupChromeMetrics(
+    RectF ContentRectPx, bool OpensUp, float ClosedRatio, float CornerRadiusPx, float BorderPx);
+
 public interface ISwapchain : IDisposable
 {
     Size2 SizePx { get; }
     void Resize(Size2 px);
     void Present();
+
+    /// <summary>Configure the windowed popup's composition chrome (rounded acrylic content rect + outer shadow) for the
+    /// current placement. Called on each placement before show. Default no-op: only a backdrop-backed backend honors it.</summary>
+    void ConfigurePopupChrome(in PopupChromeMetrics m) { }
+
+    /// <summary>Play the open motion: the whole composition root (acrylic + content + shadow) slides from the anchor edge
+    /// to rest over 250ms cubic-bezier(0,0,0,1), no opacity fade — WinUI MenuPopupThemeTransition. Uses the configured
+    /// metrics. Idempotent — runs once per open.</summary>
+    void AnimatePopupOpen() { }
+
+    /// <summary>Play the close motion: fade the WHOLE composition root (so the acrylic fades too, not just the engine
+    /// content) opacity 1→0 over 83ms. The host keeps the window alive until <see cref="PopupAnimating"/> clears.</summary>
+    void AnimatePopupClose() { }
+
+    /// <summary>True while this popup's open/close motion is mid-flight. The host ORs this into <c>WakeReasons.PopupAnim</c>
+    /// so the frame loop keeps presenting the popup until the composition animation commits + settles (and, for close,
+    /// defers disposal until it clears).</summary>
+    bool PopupAnimating => false;
 }

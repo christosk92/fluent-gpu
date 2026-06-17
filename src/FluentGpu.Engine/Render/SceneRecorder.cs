@@ -385,6 +385,13 @@ public static class SceneRecorder
                 }
                 break;
             }
+            case VisualKind.TabShape:
+            {
+                ResolveSurface(scene, node, flags, in p, out ColorF fill, out _);
+                if (fill.A > 0f)
+                    dl.TabShape(local, p.Corners.TopLeft, p.TabFlareRadius, fill, world, opacity, key);
+                break;
+            }
             case VisualKind.Text:
             {
                 ref var li = ref scene.Layout(node);
@@ -811,11 +818,21 @@ public static class SceneRecorder
         in GradientSpec hover, bool hasHover, in GradientSpec pressed, bool hasPressed, float hoverT, float pressT,
         in Affine2D world, float opacity, ulong key)
     {
-        // axis endpoints in local 0..1 from the angle (0 = →, 90 = ↓); radial ignores the axis.
+        // axis endpoints in local 0..1: linear from the angle (0 = →, 90 = ↓); radial carries its origin in `start`
+        // and origin+radius in `end` (the shader reconstructs centre/radius from them).
         float rad = g.AngleDeg * (MathF.PI / 180f);
         float dx = MathF.Cos(rad), dy = MathF.Sin(rad);
-        var start = new Point2(0.5f - dx * 0.5f, 0.5f - dy * 0.5f);
-        var end = new Point2(0.5f + dx * 0.5f, 0.5f + dy * 0.5f);
+        Point2 start, end;
+        if (g.Shape == GradientShape.Radial)
+        {
+            start = g.RadialCenter;
+            end = new Point2(g.RadialCenter.X + g.RadialRadius.X, g.RadialCenter.Y + g.RadialRadius.Y);
+        }
+        else
+        {
+            start = new Point2(0.5f - dx * 0.5f, 0.5f - dy * 0.5f);
+            end = new Point2(0.5f + dx * 0.5f, 0.5f + dy * 0.5f);
+        }
         var s = g.Stops;
         int n = Math.Min(s.Length, GradientSpec.MaxStops);
         ColorF c0 = s[0].Color, c1 = n > 1 ? s[1].Color : c0, c2 = n > 2 ? s[2].Color : c1, c3 = n > 3 ? s[3].Color : c2;
@@ -952,7 +969,9 @@ public static class SceneRecorder
             const float minCollapsed = 32f; // VerticalPanningThumb.MinHeight
             const float radius = 3f;        // ScrollBarCornerRadius
 
-            float fade = Math.Clamp(sc.FadeT, 0f, 1f);
+            // Persistent bar (ScrollEl.AlwaysShowScrollbar): pin the rail visible (fade=1) whenever content overflows,
+            // bypassing the auto-hide FadeT. Hover still drives ExpandT (thin rail → full bar) through the normal arm path.
+            float fade = sc.AlwaysShowBar ? 1f : Math.Clamp(sc.FadeT, 0f, 1f);
             float expand = Math.Clamp(sc.ExpandT, 0f, 1f);
             if (fade <= 0.01f && expand <= 0.01f)
             {

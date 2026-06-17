@@ -64,12 +64,14 @@ public sealed class ScrollAnimator
     /// touchpad (reported as a hi-res wheel) AND a discrete mouse wheel — because a precision touchpad's notch magnitudes
     /// span the whole range and can't be classified (so a magnitude-split flip-flopped paths mid-gesture: the "stops
     /// midway" bug). Short ⇒ near-1:1 crisp touchpad tracking with a small glide tail; long ⇒ floaty. WAS 90ms (floaty).
-    /// THE FEEL KNOB — tune on-device against a Surface touchpad / a real WinUI ScrollViewer.</summary>
-    public const float WheelEaseTauMs = 40f;
+    /// THE FEEL KNOB — tune on-device against a Surface touchpad / a real WinUI ScrollViewer.
+    /// WAS 40ms: still visibly trailed a fast mouse wheel (~150ms to settle ⇒ "doesn't match my hand"). 18ms settles in
+    /// ~3 frames — crisp 1:1-feeling wheel that still spreads a clicky notch over a frame or two (no harsh single-frame jump).</summary>
+    public const float WheelEaseTauMs = 18f;
     /// <summary>A touch fling that REACHES a clamp with at least this residual speed converts it into a rubber-band
     /// overscroll bounce (WinUI/iOS) instead of stopping dead at the edge; below it a slow drift-into-edge just settles.
     /// px/s. TOUCH ONLY — the wheel path never enters Fling mode, so a wheel hard-clamps with no band.</summary>
-    public const float FlingBounceMinPxPerS = 80f;
+    public const float FlingBounceMinPxPerS = 50f;
 
     private readonly SceneStore _scene;
     private readonly List<NodeHandle> _active = new();
@@ -235,19 +237,28 @@ public sealed class ScrollAnimator
 
                 if (!snapLanding)
                 {
-                    moved = ScrollWrite?.Invoke(n, off + v * dtS) ?? false;   // through SetScrollOffset: clamp + transform + re-realize
+                    float requested = off + v * dtS;
+                    float zr = sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f;
+                    float maxOff = horizontal ? MathF.Max(0f, sc.ContentW * zr - sc.ViewportW) : MathF.Max(0f, sc.ContentH * zr - sc.ViewportH);
+                    bool hitClamp = requested < 0f || requested > maxOff;
+                    moved = ScrollWrite?.Invoke(n, requested) ?? false;        // through SetScrollOffset: clamp + transform + re-realize
                     off = horizontal ? sc.OffsetX : sc.OffsetY;              // re-read the clamped position (Target == Offset)
                     tgt = horizontal ? sc.TargetX : sc.TargetY;
-                    // A touch fling that REACHES the clamp (!moved: SetScrollOffset pinned the offset at 0/max) converts
-                    // its residual velocity into a rubber-band overscroll bounce (WinUI/iOS) instead of stopping dead at
+                    // A touch fling that REACHES the clamp (either this integrated step requested past the clamp, or
+                    // SetScrollOffset returned !moved because the offset was already pinned at 0/max) converts its
+                    // residual velocity into a rubber-band overscroll bounce (WinUI/iOS) instead of stopping dead at
                     // the edge — the trace showed a finger flick hitting off=0 and stopping flat, which read as "no rubber
                     // band." A settle (|v| below the cutoff, short of the edge) just ends. Wheel never enters Fling mode,
                     // so this is touch-only; the bounce rides the same OverscrollSpringOmega spring as a touch-pan overpan.
-                    if (!moved || MathF.Abs(v) < FlingMinVelocityPxPerS)     // a clamp boundary or a settle ends the fling
+                    if (hitClamp || !moved || MathF.Abs(v) < FlingMinVelocityPxPerS)     // a clamp boundary or a settle ends the fling
                     {
-                        if (FluentGpu.Foundation.ScrollLog.On) FluentGpu.Foundation.ScrollLog.Line($"  fling END off={off:0} moved={moved} v={v:0} (from {sc.FlingFromOffset:0}, coast={off - sc.FlingFromOffset:0})");
-                        if (!moved && MathF.Abs(v) >= FlingBounceMinPxPerS && !sc.Overscrolling)
+                        if (FluentGpu.Foundation.ScrollLog.On) FluentGpu.Foundation.ScrollLog.Line($"  fling END off={off:0} moved={moved} hitClamp={hitClamp} v={v:0} (from {sc.FlingFromOffset:0}, coast={off - sc.FlingFromOffset:0})");
+                        if ((hitClamp || !moved) && MathF.Abs(v) >= FlingBounceMinPxPerS && !sc.Overscrolling)
+                        {
+                            float viewport = horizontal ? sc.ViewportW : sc.ViewportH;
+                            sc.OverscrollPx = FlingOverscrollBand(v / -MathF.Log(FlingDecayPerS), viewport);
                             sc.OverscrollVel = v;   // seed the rubber-band spring (offset-space sign points past the hit edge)
+                        }
                         sc.ScrollMode = 0;
                         sc.FlingVelocity = 0f;
                     }
@@ -412,6 +423,15 @@ public sealed class ScrollAnimator
         float t = Math.Clamp(clockMs / MathF.Max(1f, durationMs), 0f, 1f);
         if (t >= 1f) return target;
         return from + (target - from) * Easings.Ease(easing, t);
+    }
+
+    private static float FlingOverscrollBand(float excess, float viewport)
+    {
+        if (excess == 0f || viewport <= 0f) return 0f;
+        float limit = 0.1f * viewport;
+        float raw = MathF.Abs(excess);
+        float d = limit * raw / (raw + limit);
+        return excess < 0f ? -d : d;
     }
 
     private void Drop(int i, NodeHandle n, bool forget)

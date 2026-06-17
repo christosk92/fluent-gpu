@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using FluentGpu.Pal;
 
 namespace FluentGpu.Pal.Windows;
 
@@ -10,10 +11,14 @@ public static partial class Win32Theme
 
     // DWMWINDOWATTRIBUTE
     private const uint DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+    private const uint DWMWA_WINDOW_CORNER_PREFERENCE = 33;
     private const uint DWMWA_SYSTEMBACKDROP_TYPE = 38;
     // DWM_SYSTEMBACKDROP_TYPE
-    private const int DWMSBT_MAINWINDOW = 2;   // Mica
+    private const int DWMSBT_MAINWINDOW = 2;   // Mica (WinUI MicaKind.Base)
     private const int DWMSBT_TRANSIENTWINDOW = 3; // Acrylic
+    private const int DWMSBT_TABBEDWINDOW = 4; // Mica Alt (WinUI MicaKind.BaseAlt — the flatter, neutral File-Explorer tint)
+    private const int DWMWCP_ROUND = 2;
+    private const int DWMWCP_DONOTROUND = 1;   // square window: the engine/composition draws the rounded chrome, not DWM
 
     private const uint RRF_RT_REG_BINARY = 0x00000008;
 
@@ -34,6 +39,24 @@ public static partial class Win32Theme
 
     [StructLayout(LayoutKind.Sequential)]
     private struct MARGINS { public int cxLeftWidth, cxRightWidth, cyTopHeight, cyBottomHeight; }
+
+    // Undocumented user32 host-backdrop enable. Windows.UI.Composition's CreateHostBackdropBrush only samples the
+    // content behind a Win32 window if that window is host-backdrop-enabled via SetWindowCompositionAttribute with an
+    // ACCENT_POLICY of ACCENT_ENABLE_HOSTBACKDROP. Without it the brush is EMPTY and renders dark/transparent — which is
+    // why the windowed-popup acrylic looked dark. This is the UWP-era mechanism that the lifted ContentExternalBackdropLink
+    // replaced for WinAppSDK; but we use SYSTEM composition (CreateDesktopWindowTarget), where DWM already has access to
+    // everything behind the window, so this is the no-WinAppSDK way to feed a CLIPPABLE host-backdrop brush.
+    private const int WCA_ACCENT_POLICY = 19;
+    private const int ACCENT_ENABLE_HOSTBACKDROP = 5;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ACCENT_POLICY { public int AccentState; public int AccentFlags; public uint GradientColor; public int AnimationId; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private unsafe struct WINDOWCOMPOSITIONATTRIBDATA { public int Attrib; public void* pvData; public uint cbData; }
+
+    [LibraryImport("user32.dll")]
+    private static unsafe partial int SetWindowCompositionAttribute(nint hwnd, WINDOWCOMPOSITIONATTRIBDATA* data);
 
     /// <summary>The Settings &gt; Colors accent (registry AccentColorMenu), falling back to the DWM colorization color.</summary>
     public static (byte R, byte G, byte B)? Accent()
@@ -72,11 +95,13 @@ public static partial class Win32Theme
     /// the client (a -1 sheet-of-glass composites its OWN min/max/close — the "double caption buttons" bug; even a 1px
     /// sliver draws a DWM strip and re-anchors the Win11 snap flyout off the extended frame). The Mica backdrop fills
     /// the whole window from DWMWA_SYSTEMBACKDROP_TYPE alone — no frame extension needed.</summary>
-    public static void ApplyWindowMaterial(nint hwnd, bool dark, bool mica = true, bool customFrame = false)
+    /// <param name="micaAlt">true = Mica <b>BaseAlt</b> (DWMSBT_TABBEDWINDOW, the flatter File-Explorer tint, matching
+    /// WaveeMusic's <c>MicaBackdrop Kind="BaseAlt"</c>); false = Mica Base (DWMSBT_MAINWINDOW). Ignored when mica is false.</param>
+    public static void ApplyWindowMaterial(nint hwnd, bool dark, bool mica = true, bool customFrame = false, bool micaAlt = false)
     {
         int d = dark ? 1 : 0;
         DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, in d, sizeof(int));
-        int backdrop = mica ? DWMSBT_MAINWINDOW : DWMSBT_TRANSIENTWINDOW;
+        int backdrop = mica ? (micaAlt ? DWMSBT_TABBEDWINDOW : DWMSBT_MAINWINDOW) : DWMSBT_TRANSIENTWINDOW;
         DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, in backdrop, sizeof(int));
 
         if (customFrame)
@@ -95,6 +120,38 @@ public static partial class Win32Theme
             // with the STANDARD frame the DWM-drawn caption buttons land inside the real OS titlebar, not the client.)
             MARGINS m = new() { cxLeftWidth = -1, cxRightWidth = -1, cyTopHeight = -1, cyBottomHeight = -1 };
             DwmExtendFrameIntoClientArea(hwnd, in m);
+        }
+    }
+
+    /// <summary>Apply the OS material used by windowed popup HWNDs. WinUI MenuFlyout uses a transparent presenter over
+    /// <c>AcrylicBackgroundFillColorDefaultBackdrop</c> (DesktopAcrylicBackdrop); for Win32 that maps to DWM's transient
+    /// window backdrop, with the client glass-extended so transparent DirectComposition pixels reveal it.</summary>
+    public static void ApplyPopupMaterial(nint hwnd, bool dark, PopupWindowMaterial material)
+    {
+        int d = dark ? 1 : 0;
+        DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, in d, sizeof(int));
+        if (material != PopupWindowMaterial.TransientAcrylic) return;
+
+        // The popup HWND is a near-bare composition VIEWPORT — WinUI does the same for windowed popups
+        // (popup-system-backdrop.md): border, shadow, rounded corners and acrylic are all composition visuals under one
+        // animated root so they reveal WITH the menu. DWM's *rounded-window* chrome (the rounded border + its drop
+        // shadow) is drawn full-size and can't follow the open clip, so we turn rounding OFF (DONOTROUND): the engine
+        // draws the rounded plate + 1px border into the swapchain, and CompositionBackdrop rounds the host-acrylic
+        // sprite. We KEEP the glass-extend (the host-backdrop brush samples through it) but set NO DWMSBT_* system
+        // backdrop, so nothing grey fills the window.
+        int corner = DWMWCP_DONOTROUND;
+        DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, in corner, sizeof(int));
+        MARGINS m = new() { cxLeftWidth = -1, cxRightWidth = -1, cyTopHeight = -1, cyBottomHeight = -1 };
+        DwmExtendFrameIntoClientArea(hwnd, in m);
+
+        // THE missing piece: enable host-backdrop sampling so CreateHostBackdropBrush (CompositionBackdrop) actually
+        // feeds the content behind the popup instead of rendering dark/empty. Without this the whole windowed-popup
+        // acrylic was inert — the frost we saw earlier was the (now-removed) DWMSBT_TRANSIENTWINDOW system backdrop.
+        unsafe
+        {
+            ACCENT_POLICY accent = new() { AccentState = ACCENT_ENABLE_HOSTBACKDROP };
+            WINDOWCOMPOSITIONATTRIBDATA data = new() { Attrib = WCA_ACCENT_POLICY, pvData = &accent, cbData = (uint)sizeof(ACCENT_POLICY) };
+            SetWindowCompositionAttribute(hwnd, &data);
         }
     }
 }

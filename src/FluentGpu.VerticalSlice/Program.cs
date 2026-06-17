@@ -1925,6 +1925,108 @@ sealed class ItemsViewMultipleProbe : Component
         };
 }
 
+// Frozen-shell resize probe (check S3): mirrors WaveeShell's frozen frame. A Component that reads NO signal renders ONCE
+// and never re-renders; it returns Embed.Comp(() => new OverlayHost { Child = the shell column }). OverlayHost pins its
+// root ZStack to Viewport.Size (OverlayHost.cs:885 — Width=vp.Width, Height=vp.Height). On a window resize OverlayHost
+// re-renders (it reads Viewport.Size) and updates ITS ZStack node — but this frozen shell does NOT re-render, so
+// MirrorParticipation never propagates the new size up to the scene root (Reconciler.cs:385-393 runs only on a
+// component's own reconcile). FlexLayout.Run(root, window) then reads the root's STALE explicit li.Width/Height
+// (FlexLayout.cs:39-40) and lays the whole app out at the PRE-resize size. This probe drives that exact path through the
+// live AppHost so the bug is reproducible headlessly and guarded against regression.
+sealed class ResizeShellProbe : Component
+{
+    public NodeHandle Bar, Middle;
+
+    public override Element Render() => Embed.Comp(() => new OverlayHost { Child = BuildColumn() });
+
+    Element BuildColumn()
+    {
+        var rows = new Element[30];
+        for (int i = 0; i < rows.Length; i++) rows[i] = new BoxEl { Height = 44f, Fill = ColorF.FromRgba(40, 40, 40) };
+        var tall = new BoxEl { Direction = 1, Children = rows };   // ~1320px sidebar content (taller than any viewport here)
+
+        var sidebar = new BoxEl
+        {
+            Direction = 1, Shrink = 0f, Width = 240f, ClipToBounds = true,
+            Children = [ Ui.ScrollView(tall) with { Grow = 1f, AutoEdgeFade = true } ],   // matches WaveeSidebar.cs:121
+        };
+        var content = new BoxEl { Grow = 1f };
+        // The FIX form (Grow=1 + Shrink=1). The resize bug is independent of this — it is the stale-root-size mirror —
+        // so this guard intentionally uses the fixed middle to prove the resize fault survives the Shrink fix.
+        var middle = Ui.ZStack(new BoxEl { Direction = 0, Grow = 1f, Children = [sidebar, content] })
+            with { Grow = 1f, Shrink = 1f, OnRealized = h => Middle = h };
+
+        return new BoxEl
+        {
+            Direction = 1, Grow = 1f,
+            Children =
+            [
+                new BoxEl { Height = 48f },                              // titlebar chrome
+                new BoxEl { Height = 48f },                              // toolbar chrome
+                middle,                                                 // bounded fill
+                new BoxEl { Height = 56f, OnRealized = h => Bar = h },   // player bar dock
+            ],
+        };
+    }
+}
+
+// Sidebar drag-resize simulation probe. Mirrors WaveeShell's resizable sidebar: a width-BOUND pane (the width is a
+// live FloatSignal binding, like _sidebarWidth) holding a tall, NON-virtual ScrollView of wrapping text rows (the
+// playlist list), beside a Grow=1 content card — all under a frozen OverlayHost (WaveeShell builds the frame once).
+// Driving Width over frames reproduces a grip drag's downstream: signal → binding → scoped relayout → pane width.
+sealed class ResizeSidebarProbe : Component
+{
+    public readonly FluentGpu.Signals.FloatSignal WidthSig = new(400f);
+    public readonly FluentGpu.Signals.Signal<bool> Dragging = new(false);
+    public NodeHandle Pane;
+    // IDENTICAL to WaveeShell.SidebarReflow — the pane's collapse spring (SizeMode.Reflow, 0.30s). The drag is meant to
+    // SNAP it via the global reduced-motion gate; reproducing that exact path is what makes a "subsequent drag" state
+    // regression observable headlessly (a stale/un-restored reflow track, or the gate not re-arming after drag #1).
+    static readonly LayoutTransition SidebarReflow = new(
+        TransitionChannels.Size, TransitionDynamics.Spring(0.30f, 1f), SizeMode.Reflow);
+
+    public void BeginDrag()
+    {
+        FluentGpu.Dsl.Motion.ReducedMotion = true;
+        Dragging.Value = true;
+    }
+
+    public void EndDrag() => Dragging.Value = false;
+
+    public override Element Render()
+    {
+        bool dragging = Dragging.Value;
+        // Exactly WaveeShell's gate: flip the global reduced-motion ON while dragging so the pane's reflow spring snaps,
+        // restore it on release (OS default = false). A bug here makes drag #1 snap but later drags ease (= the lag).
+        UseEffect(() => FluentGpu.Dsl.Motion.ReducedMotion = dragging, dragging);
+        return Embed.Comp(() => new OverlayHost { Child = BuildRow() });
+    }
+
+    Element BuildRow()
+    {
+        var rows = new Element[24];
+        for (int i = 0; i < rows.Length; i++)
+            rows[i] = new BoxEl
+            {
+                Direction = 0, Height = 44f, AlignItems = FlexAlign.Center, Gap = 12f,
+                Children =
+                [
+                    new BoxEl { Width = 32f, Height = 32f },                                                       // artwork
+                    new TextEl("mellow pop wistful saturday late night " + i) { Size = 14f, Wrap = TextWrap.Wrap, Trim = TextTrim.CharacterEllipsis, Grow = 1f },
+                    new BoxEl { Width = 22f, Height = 16f },                                                       // count badge
+                ],
+            };
+        var pane = new BoxEl
+        {
+            Direction = 1, Shrink = 0f, ClipToBounds = true, OnRealized = h => Pane = h,
+            Width = Prop.Of(() => WidthSig.Value),
+            Animate = SidebarReflow,                                   // the real shell carries the spring; the gate must snap it
+            Children = [ Ui.ScrollView(new BoxEl { Direction = 1, Children = rows }) with { Grow = 1f } ],
+        };
+        return new BoxEl { Direction = 0, Grow = 1f, Children = [ pane, new BoxEl { Grow = 1f } ] };
+    }
+}
+
 static class Slice
 {
     static int s_failures;
@@ -2085,10 +2187,15 @@ static class Slice
         return NodeHandle.Null;
     }
 
-    // D67 menu chrome: the acrylic lives on the stretch PLATE (first child of the channel-carrying surface).
+    // D67 menu chrome: constrained menus carry acrylic on the stretch PLATE; OS-backed windowed menus clear that
+    // acrylic and keep the same childless 1px presenter plate over the DWM transient backdrop.
     static bool ChildHasAcrylic(SceneStore s, NodeHandle n)
     {
-        for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c)) if (s.TryGetAcrylic(c, out _)) return true;
+        for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+        {
+            if (s.TryGetAcrylic(c, out _)) return true;
+            if (s.FirstChild(c).IsNull && s.Paint(c).BorderWidth > 0.5f) return true;
+        }
         return false;
     }
 
@@ -2302,6 +2409,244 @@ static class Slice
         var p0 = pg.AbsoluteRect(Child(pg, pg.Root, 0));
         var p1 = pg.AbsoluteRect(Child(pg, pg.Root, 1));
         Check("13. padding + gap stacking", Near(p0.Y, 10) && Near(p1.Y, 38) && Near(p0.X, 10), $"y0={p0.Y:0.#} y1={p1.Y:0.#}");
+    }
+
+    // ── Shell chrome/fill/dock column (regression guard for the WaveeShell dock + sidebar-scroll bug) ──
+    //
+    // Mirrors WaveeShell.cs: OverlayHost wraps the shell column in a root ZStack sized to the live window
+    // (OverlayHost.cs:885 — Ui.ZStack(...) with { Width=vp.Width, Height=vp.Height }). The column is a flex COLUMN
+    // (Direction=1, Grow=1) with [ titlebar(H=40) , toolbar(H=48) , middle ZStack(Grow=1) , playerbar(H=56) ]. The
+    // middle ZStack holds a ROW [ sidebar-pane(Width=240, ScrollView(tall) Grow=1) , content(Grow=1) ]. AlignItems
+    // defaults to Stretch (Element.cs:292) so the sidebar pane height == the middle region height; a plain (non-virtual)
+    // ScrollView measures to height 0 when unconstrained (FlexLayout MeasureViewport, lines ~359-369) and relies on its
+    // parent assigning a definite bounded height.
+    //
+    // The bug: BoxEl.Shrink defaults to 0 (Element.cs:288). FlexLayout only redistributes OVERFLOW through children with
+    // FlexShrink>0 (FlexLayout.cs:263; finalMain floors at 0 via MathF.Max, line 264). With the middle as Grow=1 only and
+    // no shrinkable child, when the column overflows a short window NOTHING yields: the player bar spills below the window
+    // (not docked), and the over-tall middle hands the sidebar's ScrollView a viewport TALLER than its content (so it
+    // never reports overflow → never scrolls). The fix: make the middle the BOUNDED fill (Grow=1 + Shrink=1); chrome rows
+    // and the player-bar host stay Shrink=0 (default) so ONLY the middle yields and the bar stays a fixed 56px dock.
+
+    const float ShellTitleH = 40f, ShellToolbarH = 48f, ShellPlayerH = 56f;
+    const int ShellSidebarRows = 30;
+    const float ShellRowH = 44f, ShellSidebarW = 240f;
+
+    // Build the shell chrome/fill/dock column inside an OverlayHost-style root ZStack sized to (W,H).
+    // withShrink=false reproduces the suspected-buggy form (middle Grow=1 only); true is the fix form (Grow=1, Shrink=1).
+    // tallMiddle injects an INTRINSIC tall layer into the middle ZStack (modeling real content-card / sidebar content that
+    // is NOT zeroed by a viewport): a ZStack measures to its tallest child (MeasureZStack, FlexLayout.cs:591), so this
+    // drives the middle's base main size ABOVE the window's free space — the overflow case the dock/scroll bug needs.
+    static Element ShellColumnTree(float w, float h, bool withShrink, bool tallMiddle = false)
+    {
+        var rows = new Element[ShellSidebarRows];
+        for (int i = 0; i < rows.Length; i++)
+            rows[i] = new BoxEl { Height = ShellRowH, Fill = ColorF.FromRgba(40, 40, 40) };
+        var tallContent = new BoxEl { Direction = 1, Children = rows };   // ~30 rows × 44px = 1320px, taller than any viewport here
+
+        var sidebarPane = new BoxEl
+        {
+            Direction = 1, Shrink = 0f, Width = ShellSidebarW,
+            Children = [ Ui.ScrollView(tallContent) with { Grow = 1f } ],   // ScrollView factory already sets Grow=1f
+        };
+        var contentCard = new BoxEl { Direction = 1, Grow = 1f };
+        var mainRow = new BoxEl { Direction = 0, Grow = 1f, Children = [sidebarPane, contentCard] };
+
+        // The middle ZStack's layers: the main row, plus (optionally) a tall intrinsic-height layer. A ZStack sizes to
+        // its tallest child, so the tall layer makes the middle's MEASURED (base) height ~1320px — far above the window's
+        // free space — without going through a viewport that would zero it.
+        Element middle = tallMiddle
+            ? Ui.ZStack(mainRow, new BoxEl { Height = ShellSidebarRows * ShellRowH }) with { Grow = 1f }
+            : Ui.ZStack(mainRow) with { Grow = 1f };
+        if (withShrink) middle = ((BoxEl)middle) with { Shrink = 1f };
+
+        var column = new BoxEl
+        {
+            Direction = 1, Grow = 1f,
+            Children =
+            [
+                new BoxEl { Height = ShellTitleH },        // titlebar
+                new BoxEl { Height = ShellToolbarH },      // toolbar
+                middle,                                    // fill
+                new BoxEl { Height = ShellPlayerH },       // playerbar
+            ],
+        };
+        return Ui.ZStack(column) with { Grow = 1f, Width = w, Height = h };
+    }
+
+    // Locate the lone non-virtual scroll viewport (the sidebar ScrollView) anywhere in the subtree.
+    static NodeHandle PlainViewport(SceneStore s, NodeHandle n)
+    {
+        if (n.IsNull) return NodeHandle.Null;
+        if (s.TryGetScroll(n, out var sc) && sc.ItemCount == 0) return n;
+        for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+        {
+            var r = PlainViewport(s, c);
+            if (!r.IsNull) return r;
+        }
+        return NodeHandle.Null;
+    }
+
+    // Resolve the key nodes + their absolute rects for one (W,H,withShrink) cell of the matrix.
+    static (RectF col, RectF mid, RectF row, RectF side, RectF bar, ScrollState sc, NodeHandle vp)
+        ShellLayout(StringTable strings, float w, float h, bool withShrink, bool tallMiddle = false)
+    {
+        var s = LayoutTree(strings, ShellColumnTree(w, h, withShrink, tallMiddle));
+        var column = Child(s, s.Root, 0);
+        var middle = Child(s, column, 2);
+        var bar = Child(s, column, 3);
+        var mainRow = Child(s, middle, 0);
+        var side = Child(s, mainRow, 0);
+        var vp = PlainViewport(s, s.Root);
+        s.TryGetScroll(vp, out var sc);
+        return (s.AbsoluteRect(column), s.AbsoluteRect(middle), s.AbsoluteRect(mainRow),
+                s.AbsoluteRect(side), s.AbsoluteRect(bar), sc, vp);
+    }
+
+    // Permanent regression guard for the WaveeShell dock + sidebar-scroll bug. Builds the FIX form (middle Grow=1+Shrink=1)
+    // over a TALL-MEASURING middle (a ZStack layer whose intrinsic height ~1320px exceeds the window's free space — the
+    // overflow case the bug needs) at a SHORT window height, and asserts the real invariants: the player bar is pinned to
+    // the window bottom at its fixed height, the middle is bounded to (H − chrome), and the sidebar ScrollView gets a
+    // viewport == the bounded middle with content taller than the viewport (so it is genuinely scrollable). These are RED
+    // on the no-shrink form (the middle stays 1320, the bar spills to bottom=1464, the viewport == content so it can't
+    // scroll — verified in the diagnostic matrix) and GREEN on the fix form. tallMiddle is REQUIRED: with an empty middle
+    // the column never overflows, so the guard would pass even without the fix (a tautology).
+    static void ShellDockChecks(StringTable strings)
+    {
+        const float W = 1180f, H = 420f;   // short: free < 0 (40+48+56 + a 1320px-content middle overflows H)
+        var (col, mid, row, side, bar, sc, vp) = ShellLayout(strings, W, H, withShrink: true, tallMiddle: true);
+
+        float expectMid = H - ShellTitleH - ShellToolbarH - ShellPlayerH;   // 420 − 144 = 276
+
+        bool barDocked = Near(bar.Y + bar.H, H) && Near(bar.H, ShellPlayerH);
+        bool midBounded = Near(mid.H, expectMid) && Near(mid.Y, ShellTitleH + ShellToolbarH);
+        Check("S1. shell dock: player bar pinned to window bottom",
+            barDocked && midBounded,
+            $"bar.Y+H={bar.Y + bar.H:0.#} (want {H:0}) bar.H={bar.H:0.#} mid.H={mid.H:0.#} (want {expectMid:0})");
+
+        bool vpFound = !vp.IsNull;
+        bool vpBounded = Near(sc.ViewportH, expectMid, 1f) && Near(side.H, expectMid, 1f);
+        bool scrollable = sc.ContentH > sc.ViewportH + 1f;   // content (1320px) overflows the bounded viewport ⇒ scrolls
+        Check("S2. shell sidebar: ScrollView bounded + scrollable",
+            vpFound && vpBounded && scrollable,
+            $"vpH={sc.ViewportH:0.#} (want {expectMid:0}) contentH={sc.ContentH:0.#} side.H={side.H:0.#}");
+    }
+
+    // S3 — the WaveeShell RESIZE bug. S1/S2 are STATIC (a fresh, explicit-sized root ZStack, no Embed chain, no resize),
+    // so they pass while the real app is broken. The real fault only appears on a live resize: OverlayHost pins its root
+    // ZStack to Viewport.Size, but a frozen outer shell (WaveeShell builds the frame once) never re-renders, so the new
+    // size is never mirrored up to the scene root and Run(root, window) lays out at the STALE pre-resize size. This drives
+    // the actual AppHost resize path (EnsureSize → PublishViewport → Flush → Run) through a HeadlessWindow whose
+    // ClientSizePx we shrink between frames, and asserts the player bar re-docks to the NEW window bottom.
+    static void ShellResizeChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("resizeshell", new Size2(1180, 900), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var probe = new ResizeShellProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, probe);
+
+        host.RunFrame();                                            // first full layout at 1180×900
+        RectF barBig = host.Scene.AbsoluteRect(probe.Bar);
+        bool dockedBig = Near(barBig.Y + barBig.H, 900f, 1f) && Near(barBig.H, 56f);
+
+        window.ClientSizePx = new Size2(1180, 440);                 // resize DOWN (the reported repro: shrink from big)
+        // The real app resizes via WM_SIZE → PaintRequested → Paint (which runs EnsureSize); RunFrame would idle-skip
+        // (HasActiveWork is false — a bare ClientSizePx write fires no wake), so drive Paint directly to model the resize.
+        host.Paint(0, keepAlive: true);                             // resize tick: EnsureSize → PublishViewport → Flush → Run
+        host.Paint(0, keepAlive: true);                             // one settle frame
+
+        RectF rootR = host.Scene.AbsoluteRect(host.Scene.Root);
+        RectF barR = host.Scene.AbsoluteRect(probe.Bar);
+        bool rootTracks = Near(rootR.H, 440f, 1f);
+        bool dockedSmall = Near(barR.Y + barR.H, 440f, 1f) && Near(barR.H, 56f);
+
+        Check("S3. shell resize-down: root tracks the window + player bar re-docks",
+            dockedBig && rootTracks && dockedSmall,
+            $"big:bar.bottom={barBig.Y + barBig.H:0.#}(want 900) | small:root.H={rootR.H:0.#}(want 440) bar.bottom={barR.Y + barR.H:0.#}(want 440)");
+
+    }
+
+    // RZ — sidebar GRIP-resize speed (the "resizing is still shit / doesn't match the mouse" report). Drives the pane
+    // Width signal exactly as the grip's OnMove does (cursor delta → width) over 20 frames and measures, PER FRAME, the
+    // ACTUAL pane width vs the EXPECTED target — the empirical "resize delta vs mouse delta" comparison — plus the
+    // per-frame relayout/record cost. A 1:1 resize tracks the target exactly every frame with bounded per-frame cost.
+    static void SidebarResizeSimChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("resizesim", new Size2(1180, 760), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var probe = new ResizeSidebarProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, probe);
+        host.RunFrame();   // mount + first layout at width 400
+
+        long maxHotAlloc = 0; int maxNodes = 0; int maxCmds = 0;
+        var trace = new System.Text.StringBuilder();
+        // One full grip-drag cycle: down (Dragging=true → reduced-motion ON, snap) → N moves (one frame each) → up
+        // (Dragging=false → restored) → settle frames. Returns the WORST per-frame |actualPaneWidth − target|: 0 means
+        // the (animated) pane width tracks the cursor exactly; > 0 means the reflow spring is easing instead of snapping.
+        float DragCycle(int idx, float fromW, float toW, int steps, bool record)
+        {
+            probe.BeginDrag();
+            bool rm = FluentGpu.Dsl.Motion.ReducedMotion;   // DIAGNOSTIC: is the reduced-motion gate already ON before frame #1?
+            float worst = 0f;
+            for (int s = 1; s <= steps; s++)
+            {
+                float target = fromW + (toW - fromW) * s / steps;
+                probe.WidthSig.Value = target;
+                var fs = host.RunFrame();
+                if (s == 1) rm = FluentGpu.Dsl.Motion.ReducedMotion;
+                float actual = host.Scene.AbsoluteRect(probe.Pane).W;
+                worst = MathF.Max(worst, MathF.Abs(actual - target));
+                if (record && s > 1) { if (fs.HotPhaseAllocBytes > maxHotAlloc) maxHotAlloc = fs.HotPhaseAllocBytes; if (fs.NodesVisited > maxNodes) maxNodes = fs.NodesVisited; if (fs.DrawCommandCount > maxCmds) maxCmds = fs.DrawCommandCount; }
+              }
+              probe.EndDrag();
+            for (int k = 0; k < 6; k++) host.RunFrame();   // release-settle frames
+            trace.Append($" drag{idx}={worst:0.#}(rm={rm})");
+            return worst;
+        }
+
+        float err1 = DragCycle(1, 400f, 280f, 12, record: true);    // FIRST resize ("ok")
+        float err2 = DragCycle(2, 280f, 380f, 12, record: false);   // SECOND resize (reported "dogshit")
+        float err3 = DragCycle(3, 380f, 240f, 12, record: false);   // THIRD
+        FluentGpu.Dsl.Motion.ReducedMotion = false;                  // defensive: never leak the gate to later checks
+        Console.WriteLine($"  [resize-sim]{trace}  maxNodes={maxNodes} maxCmds={maxCmds} maxHotAlloc={maxHotAlloc}B");
+        Check("RZ1. FIRST sidebar resize tracks the cursor 1:1 (pane width == target, reflow spring snaps)",
+            err1 < 1f, $"drag1 worstErr={err1:0.##}");
+        Check("RZ3. SUBSEQUENT sidebar resizes track 1:1 too — no degradation after drag #1 (the reported bug)",
+            err2 < 1f && err3 < 1f, $"drag2={err2:0.##} drag3={err3:0.##} (drag1={err1:0.##})");
+        Check("RZ2. sidebar resize re-flow is bounded per frame (no per-frame growth in alloc / nodes / draw commands)",
+            maxHotAlloc < 256 && maxNodes < 200 && maxCmds < 60, $"maxHotAlloc={maxHotAlloc}B nodes={maxNodes} cmds={maxCmds}");
+    }
+
+    // S4 — the navview scrollbar. At a short (overflow) window, a wheel over the sidebar must scroll it AND reveal the
+    // auto-hiding (conscious) scrollbar (FadeT>0). Guards "the sidebar scrolls + shows a scrollbar when it overflows".
+    static void ShellSidebarScrollChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("navscroll", new Size2(1180, 440), 1f));   // short ⇒ sidebar overflows
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var probe = new ResizeShellProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, probe);
+        host.RunFrame();
+
+        var vpn = PlainViewport(host.Scene, host.Scene.Root);
+        window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(120f, 250f), 0, 0, 240f));
+        for (int i = 0; i < 8; i++) host.RunFrame();
+        host.Scene.TryGetScroll(vpn, out var ssc);
+
+        bool overflow = ssc.ContentH > ssc.ViewportH + 1f;
+        bool scrolled = ssc.OffsetY > 1f;
+        bool barRevealed = ssc.FadeT > 0.01f;
+        Check("S4. navview: overflowing sidebar scrolls on wheel + reveals the auto-hiding scrollbar",
+            !vpn.IsNull && overflow && scrolled && barRevealed,
+            $"offY={ssc.OffsetY:0.#} contentH={ssc.ContentH:0.#} vpH={ssc.ViewportH:0.#} fadeT={ssc.FadeT:0.00}");
     }
 
     // UseReducer / UseMemo / UseRef exercised through a real Component across renders.
@@ -11052,18 +11397,22 @@ static class Slice
             }
             void SettleAll() { for (int i = 0; i < 40; i++) { clock.Advance(16f); host.RunFrame(); } }
 
-            // 64g — menus (MenuPopupThemeTransition load, LayoutTransition_partial.cpp:441-473): clip-translate and
-            // content translate BOTH go ±H·ClosedRatio(0.5) → 0 over s_OpenDuration=250ms cubic-bezier(0,0,0,1)
-            // (MenuPopupThemeTransition_Partial.h:24; cpp:443-444), with NO presenter opacity at load (only the
-            // overlay element fades, cpp:508-519). Unload = 83ms linear fade (cpp:525-531, _Partial.h:23).
+            // 64g — menus (MenuPopupThemeTransition load, LayoutTransition_partial.cpp:465-473): a DOWNWARD menu
+            // (AnimationDirection_Top) slides its content TranslateY from −openedLength·ClosedRatio(0.5) → 0 while a
+            // counter-translated clip animates — node-local, the NEAR/TOP clip edge (ClipT = ClipRect.Y) slides
+            // slide → 0 with the BOTTOM edge resting at H — over s_OpenDuration=250ms cubic-bezier(0,0,0,1), with NO
+            // presenter opacity at load. Unload = 83ms linear fade.
             {
                 var (s, _) = OpenKind(PopupChrome.Flyout);
                 float menuH = host.Scene.Bounds(s).H, slide = menuH * 0.5f;
                 var p0 = host.Scene.Paint(s);
-                bool t0 = Near(p0.ClipRect.Y, slide, 1f) && Near(p0.LocalTransform.Dy, -slide, 1f) && p0.Opacity > 0.99f;
+                // t=0: content translated up by slide; the top clip edge sits at slide (near edge glued), bottom = H.
+                bool t0 = !p0.ClipRect.IsInfinite && Near(p0.ClipRect.Y, slide, 1f) && Near(p0.ClipRect.Bottom, menuH, 1f)
+                    && Near(p0.LocalTransform.Dy, -slide, 0.5f) && p0.Opacity > 0.99f;
                 clock.Advance(128f); host.RunFrame();
                 var p1 = host.Scene.Paint(s);
-                bool t128 = Near(p1.ClipRect.Y, slide * (1f - 0.8960f), 1f)
+                // t=128: ClipT = slide·(1−E) and TranslateY = −slide·(1−E), E(128/250)=0.8960 for cb(0,0,0,1).
+                bool t128 = !p1.ClipRect.IsInfinite && Near(p1.ClipRect.Y, slide * (1f - 0.8960f), 1f)
                     && Near(p1.LocalTransform.Dy, -slide * (1f - 0.8960f), 1f) && p1.Opacity > 0.99f;
                 clock.Advance(160f); host.RunFrame();   // t=288 > 250 → settled
                 var p2 = host.Scene.Paint(s);
@@ -11073,10 +11422,10 @@ static class Slice
                 float op48 = host.Scene.IsLive(s) ? host.Scene.Paint(s).Opacity : -1f;
                 bool close48 = Near(op48, 1f - 48f / 83f, 0.02f);   // 83ms LINEAR fade → 0.4217 at t=48
                 SettleAll();
-                Check("64g. menu motion samples: clip+translate H/2→0 over 250ms cb(0,0,0,1), no open fade; close = 83ms linear fade",
+                Check("64g. menu motion: content TranslateY −slide→0 + top clip ClipT slide→0 over 250ms cb(0,0,0,1), no open fade; close = 83ms linear fade",
                     t0 && t128 && tEnd && close48,
-                    $"t0={t0} (clipT={p0.ClipRect.Y:0.0}/{slide:0.0} dy={p0.LocalTransform.Dy:0.0}) t128={t128} " +
-                    $"(clipT={p1.ClipRect.Y:0.0}≈{slide * 0.104f:0.0}) end={tEnd} close48={close48} (op={op48:0.000}≈{1f - 48f / 83f:0.000})");
+                    $"t0={t0} (clipT={p0.ClipRect.Y:0.0}/{slide:0.0} clipB={p0.ClipRect.Bottom:0.0} dy={p0.LocalTransform.Dy:0.0}/{-slide:0.0}) t128={t128} " +
+                    $"(clipT={p1.ClipRect.Y:0.0}≈{slide * (1f - 0.8960f):0.0} dy={p1.LocalTransform.Dy:0.0}) end={tEnd} close48={close48} (op={op48:0.000}≈{1f - 48f / 83f:0.000})");
             }
 
             // 64h — ComboBox dropdown (SplitOpen/SplitCloseThemeAnimation, generic.xaml:9047/9056). Open: the clip
@@ -11319,6 +11668,8 @@ static class Slice
                 && slot.BoundsDip.W >= 180f && slot.BoundsDip.H >= 80f
                 && Near(pal.BoundsPx.X, slot.BoundsDip.X) && Near(pal.BoundsPx.Y, slot.BoundsDip.Y)
                 && Near(pal.BoundsPx.W, slot.BoundsDip.W) && Near(pal.BoundsPx.H, slot.BoundsDip.H);
+            bool osBackdrop = slot is { Material: PopupWindowMaterial.TransientAcrylic }
+                && pal is { Material: PopupWindowMaterial.TransientAcrylic, Dark: true };
 
             for (int i = 0; i < 20; i++) host.RunFrame();   // the 250ms open clip-reveal settles → full content records
 
@@ -11327,8 +11678,12 @@ static class Slice
                 scratch.SubmitDrawList(slot.DrawList.Bytes, slot.DrawList.SortKeys,
                     new FrameInfo(new Size2(slot.BoundsDip.W, slot.BoundsDip.H), 1f, default));
             bool routed = HasGlyph(scratch, strings, "popup-window-body");
-            bool reorigined = scratch.LastLayers.Count > 0   // the acrylic surface layer sits at the popup's own (0,0)
-                && Near(scratch.LastLayers[0].DeviceRect.X, 0f, 1.5f) && Near(scratch.LastLayers[0].DeviceRect.Y, 0f, 1.5f);
+            bool noEngineAcrylic = scratch.LastLayers.Count == 0;   // OS-backed menu acrylic: no in-engine PushLayer blur.
+            bool reorigined = false;
+            foreach (var g in scratch.LastGlyphs)
+                if (strings.Resolve(g.Text) == "popup-window-body")
+                    reorigined = slot is not null && g.Bounds.X >= -1f && g.Bounds.Y >= -1f
+                        && g.Bounds.Right <= slot.BoundsDip.W + 1f && g.Bounds.Bottom <= slot.BoundsDip.H + 1f;
             bool mainSkips = !HasGlyph(device, strings, "popup-window-body") && HasGlyph(device, strings, "anchor")
                 && !FindTextNode(host.Scene, strings, host.Scene.Root, "popup-window-body").IsNull;   // scene keeps it (hit-test)
             bool presented = slot?.Swapchain is HeadlessSwapchain sc && sc.PresentCount >= 1;
@@ -11360,9 +11715,9 @@ static class Slice
             for (int i = 0; i < 20; i++) host.RunFrame();
 
             Check("e4popup.3 windowed popup: PAL lease + own DrawList/swapchain, main record skips the subtree; default + disabled stay in-window",
-                leased && shown && placed && routed && reorigined && mainSkips && presented
+                leased && shown && placed && osBackdrop && routed && noEngineAcrylic && reorigined && mainSkips && presented
                 && defaultInWindow && keptWhileFading && released && fallback,
-                $"leased={leased} shown={shown} placed={placed} routed={routed} reorig={reorigined} skip={mainSkips} present={presented} def={defaultInWindow} kept={keptWhileFading} rel={released} fb={fallback}");
+                $"leased={leased} shown={shown} placed={placed} os={osBackdrop} routed={routed} noAcrylic={noEngineAcrylic} reorig={reorigined} skip={mainSkips} present={presented} def={defaultInWindow} kept={keptWhileFading} rel={released} fb={fallback}");
         }
 
         // e4popup.4 — the GetWorkArea seam through the host: the work-area query lands at the anchor's centre in
@@ -15492,7 +15847,7 @@ static class Slice
             {
                 if (sc.TryGetAcrylic(n, out _)) return n;
                 for (var c = sc.FirstChild(n); !c.IsNull; c = sc.NextSibling(c))
-                    if (sc.TryGetAcrylic(c, out _)) return n;
+                    if (sc.TryGetAcrylic(c, out _) || (sc.FirstChild(c).IsNull && sc.Paint(c).BorderWidth > 0.5f)) return n;
             }
             return NodeHandle.Null;
         }
@@ -15582,9 +15937,13 @@ static class Slice
             void Settle() { for (int i = 0; i < 40; i++) { clock.Advance(16f); host.RunFrame(); } }
             var anchorRect = host.Scene.AbsoluteRect(root.Anchor);
 
-            // cp6.c — the EXACT open call DropDownButton/SplitButton make (BottomLeft + FocusTrap + windowed): placed
-            // at (anchor.X, anchor.Bottom+4); menu-kind open channels = TranslateY<0 + ClipT>0 with ClipB resting at
-            // the box bottom (edge reveal, NOT seam) and opacity pinned 1.
+            // cp6.c — the EXACT open call DropDownButton/SplitButton make (BottomLeft + FocusTrap + WINDOWED): placed at
+            // (anchor.X, anchor.Bottom+4). For a windowed (OS-backed desktop-acrylic) popup the WinUI model slides the
+            // WHOLE composition root (CompositionBackdrop, real backend) + stretches the presenter plate — so the ENGINE
+            // must leave the SurfaceNode STATIC here (no content TranslateY, no node-local clip), or it would
+            // double-animate against the composition slide. (The plate ScaleY stretch is asserted by cp7.d.) The presenter
+            // never fades on open (opacity pinned 1). The composition slide itself isn't observable on the headless device
+            // (no CompositionBackdrop); the metrics it receives are asserted by cp6.h.
             {
                 var hd = svc.Open(() => root.Anchor,
                     () => MenuFlyout.Build(new[] { new MenuFlyoutItem("One"), new MenuFlyoutItem("Two") }, () => svc.CloseTop()),
@@ -15596,20 +15955,43 @@ static class Slice
                 var wrapper = s.IsNull ? NodeHandle.Null : host.Scene.Parent(s);
                 var wr = wrapper.IsNull ? default : host.Scene.AbsoluteRect(wrapper);
                 var p0 = s.IsNull ? default : host.Scene.Paint(s);
-                float sh = s.IsNull ? 0f : host.Scene.Bounds(s).H;
                 bool placed = !wrapper.IsNull && Near(wr.X, anchorRect.X, 0.75f) && Near(wr.Y, anchorRect.Bottom + 4f, 0.75f);
-                bool channels = !s.IsNull && p0.LocalTransform.Dy < -1f && !p0.ClipRect.IsInfinite
-                    && p0.ClipRect.Y > 1f && Near(p0.ClipRect.Bottom, sh, 1f) && p0.Opacity > 0.99f;
+                // Windowed: the engine leaves the surface static (Dy≈0, clip infinite) — the composition root carries the slide.
+                bool staticSurface = !s.IsNull && Near(p0.LocalTransform.Dy, 0f, 0.5f) && p0.ClipRect.IsInfinite && p0.Opacity > 0.99f;
                 hd.Close();
                 Settle();
-                Check("cp6.c — DropDownButton-path menu: placed at (anchor.X, anchor.Bottom+4); open channels TranslateY+ClipT, opacity 1",
-                    placed && channels,
-                    $"wrapper=({wr.X:0.0},{wr.Y:0.0}) exp=({anchorRect.X:0.0},{anchorRect.Bottom + 4f:0.0}) dy={p0.LocalTransform.Dy:0.0} " +
-                    $"clipT={p0.ClipRect.Y:0.0} clipB={p0.ClipRect.Bottom:0.0}/{sh:0.0} op={p0.Opacity:0.00}");
+                Check("cp6.c — DropDownButton-path WINDOWED menu: placed at (anchor.X, anchor.Bottom+4); engine leaves the surface static (no clip/translate — the composition root carries the slide), opacity 1",
+                    placed && staticSurface,
+                    $"wrapper=({wr.X:0.0},{wr.Y:0.0}) exp=({anchorRect.X:0.0},{anchorRect.Bottom + 4f:0.0}) dy={p0.LocalTransform.Dy:0.0} clipInf={p0.ClipRect.IsInfinite} op={p0.Opacity:0.00}");
             }
 
-            // cp7.d — menu plate (WinUI MenuFlyoutPresenterBorder ScaleY): mid-flight STRICTLY between (1−ratio) and 1
-            // about the bottom pivot (downward menu), settled at 1 by 250ms; the surface stays opaque, TranslateY<0.
+            // cp6.h — the windowed-popup CHROME METRICS the engine hands across the RHI seam (ConfigurePopupChrome — the
+            // no-WinAppSDK stand-in for WinUI's SystemBackdrop placement). A downward (BottomLeft) root menu ⇒ OpensUp=false,
+            // ClosedRatio=0.5 (MenuPopupThemeTransition root constant), a non-empty content rect + a corner radius, and the
+            // open motion is played exactly once. The composition slide (initialTranslateY = (opensUp?+:−)·contentH·ClosedRatio)
+            // runs on the real D3D12 backend; here we assert the RHI receives the correct parameters.
+            {
+                var hd = svc.Open(() => root.Anchor,
+                    () => MenuFlyout.Build(new[] { new MenuFlyoutItem("One"), new MenuFlyoutItem("Two") }, () => svc.CloseTop()),
+                    FlyoutPlacement.BottomLeft,
+                    new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
+                host.RunFrame(); host.RunFrame();
+                var hs = host.PopupWindows.Count == 1 ? host.PopupWindows[0].Swapchain as HeadlessSwapchain : null;
+                var m = hs?.LastPopupChrome;
+                bool gotMetrics = m is { } mm && !mm.OpensUp && Near(mm.ClosedRatio, 0.5f, 0.01f)
+                    && mm.ContentRectPx.H > 1f && mm.ContentRectPx.W > 1f && mm.CornerRadiusPx > 0f;
+                bool played = hs?.PopupOpenPlayed == true;
+                hd.Close();
+                Settle();
+                Check("cp6.h — windowed popup: RHI receives chrome metrics (downward, closedRatio 0.5, content rect, corner radius) + open played once",
+                    gotMetrics && played,
+                    $"metrics={(m is { } x ? $"up={x.OpensUp} cr={x.ClosedRatio:0.00} w={x.ContentRectPx.W:0.0} h={x.ContentRectPx.H:0.0} corner={x.CornerRadiusPx:0.0}" : "null")} played={played}");
+            }
+
+            // cp7.d — menu plate (WinUI MenuFlyoutPresenterBorder ScaleY, LayoutTransition_partial.cpp:497-503):
+            // ScaleY (1−ratio)→1 mid-flight about the BOTTOM pivot (AnimationDirection_Top sets CenterY=openedLength —
+            // a downward menu scales about its bottom/anchor-far edge), settled at 1 by 250ms; the surface stays opaque
+            // and its content TranslateY slides in (Dy<0 mid-flight, MenuPopupThemeTransition).
             {
                 svc.Open(() => root.Anchor,
                     () => MenuFlyout.Build(new[] { new MenuFlyoutItem("One"), new MenuFlyoutItem("Two"), new MenuFlyoutItem("Three") }, () => svc.CloseTop()),
@@ -15622,15 +16004,16 @@ static class Slice
                 clock.Advance(16f); host.RunFrame();   // mid-flight (E(16/250)=0.3517 → scale ≈ 0.676)
                 var sp = s.IsNull ? default : host.Scene.Paint(s);
                 float midScale = plate.IsNull ? 0f : host.Scene.Paint(plate).LocalTransform.M22;
-                bool mid = !plate.IsNull && midScale > 0.51f && midScale < 0.99f && sp.Opacity > 0.99f && sp.LocalTransform.Dy < -1f;
-                bool pivot = !plate.IsNull && Near(host.Scene.Paint(plate).OriginY, 1f, 0.01f);   // opens DOWN → CenterY=openedLength (bottom)
+                // Surface translates in (Dy<0) mid-flight; plate scale strictly between (1−ratio) and 1; opacity 1.
+                bool mid = !plate.IsNull && midScale > 0.51f && midScale < 0.99f && sp.Opacity > 0.99f && sp.LocalTransform.Dy < -0.1f;
+                bool pivot = !plate.IsNull && Near(host.Scene.Paint(plate).OriginY, 1f, 0.01f);   // opens DOWN → CenterY=openedLength (BOTTOM pivot)
                 for (int i = 0; i < 24; i++) { clock.Advance(16f); host.RunFrame(); }            // > 250ms
                 bool settledScale = !plate.IsNull && Near(host.Scene.Paint(plate).LocalTransform.M22, 1f, 0.01f);
                 svc.CloseTop();
                 Settle();
-                Check("cp7.d — menu plate ScaleY (1−ratio)→1 over 250ms about the bottom pivot; opacity 1 + TranslateY<0 mid-flight",
+                Check("cp7.d — menu plate ScaleY (1−ratio)→1 over 250ms about the BOTTOM pivot; opacity 1 + content TranslateY sliding (Dy<0) mid-flight",
                     plateChrome && mid && pivot && settledScale,
-                    $"plate={plateChrome} mid={midScale:0.000} pivot={pivot} settled={settledScale} op={sp.Opacity:0.00} dy={sp.LocalTransform.Dy:0.0}");
+                    $"plate={plateChrome} mid={midScale:0.000} pivot={pivot}(originY={(plate.IsNull ? -1f : host.Scene.Paint(plate).OriginY):0.00}) settled={settledScale} op={sp.Opacity:0.00} dy={sp.LocalTransform.Dy:0.0}");
             }
 
             // cp7.e — Dropdown SEAM (SplitOpen/SplitClose around the selected-row centre): both clip edges animate, the
@@ -15708,8 +16091,9 @@ static class Slice
                     $"t120={t120} (dy={p120.LocalTransform.Dy:0.0} op={p120.Opacity:0.000})");
             }
 
-            // cp7.g — menu close mid-open: 83ms linear fade with the clip AND plate frozen at the interrupt offset;
-            // the entry finalizes once the fade settles.
+            // cp7.g — menu close mid-open: 83ms linear fade with the clip, content translate AND plate scale frozen at
+            // the interrupt offset; the entry finalizes once the fade settles. The downward menu's reveal animates the
+            // TOP clip edge (ClipRect.Y) + content TranslateY, so BOTH are held fixed through the fade (along with ClipB).
             {
                 svc.Open(() => root.Anchor,
                     () => MenuFlyout.Build(new[] { new MenuFlyoutItem("One"), new MenuFlyoutItem("Two") }, () => svc.CloseTop()),
@@ -15721,20 +16105,24 @@ static class Slice
                 var plate = s.IsNull ? NodeHandle.Null : host.Scene.FirstChild(s);
                 svc.CloseTop(); host.RunFrame();       // freeze (cancel) the load tracks + seed the 83ms fade
                 var f0 = s.IsNull ? default : host.Scene.Paint(s);
-                float frozenT = f0.ClipRect.IsInfinite ? -1f : f0.ClipRect.Y;
+                float frozenY = f0.ClipRect.IsInfinite ? -1f : f0.ClipRect.Y;
+                float frozenB = f0.ClipRect.IsInfinite ? -1f : f0.ClipRect.Bottom;
+                float frozenDy = f0.LocalTransform.Dy;
                 float frozenScale = plate.IsNull ? -1f : host.Scene.Paint(plate).LocalTransform.M22;
                 clock.Advance(32f); host.RunFrame();   // 32ms into the fade → opacity ≈ 1−32/83 = 0.614
                 var f1 = s.IsNull ? default : host.Scene.Paint(s);
-                bool frozen = !s.IsNull && frozenT > 1f && !f1.ClipRect.IsInfinite && Near(f1.ClipRect.Y, frozenT, 0.01f)
+                bool frozen = !s.IsNull && frozenB > 1f && frozenY > 0.5f && frozenDy < -0.5f && !f1.ClipRect.IsInfinite
+                    && Near(f1.ClipRect.Bottom, frozenB, 0.01f) && Near(f1.ClipRect.Y, frozenY, 0.01f)
+                    && Near(f1.LocalTransform.Dy, frozenDy, 0.01f)
                     && !plate.IsNull && frozenScale > 0.5f && frozenScale < 1f
                     && Near(host.Scene.Paint(plate).LocalTransform.M22, frozenScale, 0.001f);
                 bool fading = !s.IsNull && Near(f1.Opacity, 1f - 32f / 83f, 0.03f);
                 clock.Advance(64f); host.RunFrame();   // 96ms > 83 → fade settled
                 for (int i = 0; i < 6; i++) { clock.Advance(16f); host.RunFrame(); }
                 bool finalized = FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem).IsNull;
-                Check("cp7.g — menu close: 83ms linear fade with clip + plate frozen; entry finalized after settle",
+                Check("cp7.g — menu close: 83ms linear fade with clip (frozen ClipT/ClipB) + content translate + plate scale frozen; finalized after settle",
                     frozen && fading && finalized,
-                    $"frozenT={frozenT:0.0} clipNow={(f1.ClipRect.IsInfinite ? -1f : f1.ClipRect.Y):0.0} plate={frozenScale:0.000} op32={f1.Opacity:0.000}≈{1f - 32f / 83f:0.000} finalized={finalized}");
+                    $"frozenY={frozenY:0.0} frozenB={frozenB:0.0} frozenDy={frozenDy:0.0} clipYNow={(f1.ClipRect.IsInfinite ? -1f : f1.ClipRect.Y):0.0} plate={frozenScale:0.000} op32={f1.Opacity:0.000}≈{1f - 32f / 83f:0.000} finalized={finalized}");
             }
         }
     }
@@ -16602,6 +16990,10 @@ static class Slice
         Check("9. ZERO managed alloc on the paint half (phases 6–11)", steady.HotPhaseAllocBytes == 0, $"{steady.HotPhaseAllocBytes} bytes");
 
         FlexChecks(strings);
+        ShellDockChecks(strings);
+        ShellResizeChecks(strings);
+        SidebarResizeSimChecks(strings);
+        ShellSidebarScrollChecks(strings);
         HookChecks();
         ValidationChecks();
         KeyedChecks(strings);

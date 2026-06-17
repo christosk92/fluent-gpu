@@ -29,6 +29,7 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     private readonly List<int> _evictions = new(16);
 
     public string BackendName => "Headless";
+    public bool SupportsSecondarySwapchains => true;
     public int FrameCount { get; private set; }
     public ColorF LastClear { get; private set; }
     public IReadOnlyList<FillRoundRectCmd> LastRects => _rects;
@@ -176,6 +177,9 @@ public sealed class HeadlessGpuDevice : IGpuDevice
         LayerBalance = layerBalance;
     }
 
+    public void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx, ISwapchain target)
+        => SubmitDrawList(drawList, sortKeys, in ctx);
+
     public void Dispose() { }
 }
 
@@ -187,4 +191,11 @@ public sealed class HeadlessSwapchain : ISwapchain
     public void Resize(Size2 px) => SizePx = px;
     public void Present() => PresentCount++;
     public void Dispose() { }
+
+    // Windowed desktop-acrylic popup chrome (the real D3D12 backend drives Windows.UI.Composition; headless captures the
+    // parameters so the cross-seam wiring — content rect, open direction, closedRatio, corner — is verifiable).
+    public PopupChromeMetrics? LastPopupChrome { get; private set; }
+    public bool PopupOpenPlayed { get; private set; }
+    public void ConfigurePopupChrome(in PopupChromeMetrics m) => LastPopupChrome = m;
+    public void AnimatePopupOpen() => PopupOpenPlayed = true;
 }

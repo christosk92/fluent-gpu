@@ -82,21 +82,41 @@ public sealed class TitleBar : Component
     /// SHAPE per render but cannot resize an already-mounted component; content that must track the slot at runtime
     /// subscribes to this instead (e.g. <see cref="AutoSuggestBox.WidthSignal"/>).</summary>
     public IReadSignal<float> ContentAvail => _availDip;
+    /// <summary>A LEFT-aligned tab strip (browser-style tabs, e.g. a music app's open pages). When set it REPLACES the
+    /// centered <see cref="Content"/> column: the strip is reported as a single <see cref="TitleBarHit.Client"/> island
+    /// hugging the left, and the flexible space after it (before the caption buttons) becomes the Caption drag band — the
+    /// WinUI TabView + TabStripFooter shape. A <c>Func</c> (not a frozen Element) so it can read the app's tab signals and
+    /// re-render the bar when tabs change. Pair with <see cref="TabsVersion"/> so the non-client regions re-push too.</summary>
+    public Func<Element>? Tabs;
+    /// <summary>A monotonic revision of the tab set (e.g. a version signal's value) read each render. Because component
+    /// fields freeze at mount, the bar only re-renders/re-pushes its regions when a signal it READ changes — reading this
+    /// each render makes adding/removing/reordering a tab re-report the (now wider/narrower) strip island. Required with
+    /// <see cref="Tabs"/>.</summary>
+    public Func<int>? TabsVersion;
     /// <summary>False = a standard OS frame owns the caption buttons; the bar keeps a right inset clear of them.</summary>
     public bool ShowCaptionButtons = true;
     public TemplateParts? Parts;
 
     // Captured part handles (OnRealized fires at mount; the component instance persists across re-renders, so plain
     // fields are the stable store) → the WM_NCHITTEST region report.
-    NodeHandle _root, _back, _pane, _contentCol, _content, _min, _max, _close;
-    // Reused region buffer: filled in place on each relayout push — no steady-state allocation (7 = islands(3)+buttons(3)+caption).
-    readonly TitleBarRegion[] _regions = new TitleBarRegion[7];
+    NodeHandle _root, _back, _pane, _contentCol, _content, _tabs, _min, _max, _close;
+    // Reused region buffer: filled in place on each relayout push — no steady-state allocation
+    // (8 = islands(back/pane/content-or-tabs) + buttons(3) + caption, with headroom for the tabs island).
+    readonly TitleBarRegion[] _regions = new TitleBarRegion[8];
     // The content column's MEASURED width (DIP), fed back from the layout effect: the column is the row's ONE
     // Grow=1 + Shrink=1 child, so its laid-out width IS the true available space between the clusters in BOTH
     // directions — no text-width estimating, and on a narrowing window the column (never the caption cluster) gives
     // way. Starts unmeasured (infinity → content renders at its natural max); the first layout corrects it within
     // one frame, as does every resize.
     readonly Signal<float> _availDip = new(float.PositiveInfinity);
+
+    // Render memo: the bar's TREE is viewport-independent for a tabbed bar (the tab strip + a Grow=1 caption band absorb
+    // a resize; a non-tabbed bar's content column tracks _availDip, which IS in the key). The viewport subscription below
+    // still re-renders this component every resize tick — but ONLY so the region-report layout effect re-runs; rebuilding
+    // the element tree each time was ~12-24KB/resize, the dominant GC source behind the drag hiccup. So we cache the built
+    // tree keyed on everything that affects it (NOT the viewport) and return it alloc-free when nothing real changed.
+    Element? _cachedTree;
+    int _cacheKey = int.MinValue;
 
     public override Element Render()
     {
@@ -105,12 +125,19 @@ public sealed class TitleBar : Component
         var viewport = UseContext(Viewport.Size);                 // subscribe: re-report regions on window resize/DPI hop
         bool active = hooks.IsWindowActive?.Invoke() ?? true;
         bool maximized = hooks.GetWindowState?.Invoke() == WindowState.Maximized;
+        int tabsVer = TabsVersion?.Invoke() ?? 0;                 // subscribe: re-render + re-push regions on tab add/remove
 
         // Report the drag/button regions after THIS render's layout settles (phase 6.5) — deps cover everything that
-        // moves the parts (resize, maximize→WM_SIZE→viewport, DPI hop→DIP viewport change, and the measured-width
-        // feedback render, whose island rect must re-push too).
+        // moves the parts (resize, maximize→WM_SIZE→viewport, DPI hop→DIP viewport change, the measured-width feedback
+        // render whose island rect must re-push, and the tab-set revision so the strip island re-reports on change).
         UseLayoutEffect(() => PushRegions(hooks),
-            viewport.Width, viewport.Height, epoch, _availDip.Peek(), ShowBackButton, ShowPaneToggle, ShowCaptionButtons);
+            viewport.Width, viewport.Height, epoch, _availDip.Peek(), tabsVer, ShowBackButton, ShowPaneToggle, ShowCaptionButtons);
+
+        // Memo gate: a resize-only re-render returns the cached tree alloc-free (the layout effect above already re-ran
+        // — its viewport deps changed — so regions re-push without a rebuild). Key excludes the viewport on purpose.
+        int key = unchecked((((epoch * 397 ^ tabsVer) * 397 ^ _availDip.Peek().GetHashCode()) * 397)
+            ^ ((active ? 1 : 0) | (maximized ? 2 : 0) | (ShowBackButton ? 4 : 0) | (ShowPaneToggle ? 8 : 0) | (ShowCaptionButtons ? 16 : 0) | (BackEnabled ? 32 : 0)));
+        if (_cachedTree is { } cached && key == _cacheKey) return cached;
 
         // WinUI back/pane: 40w × 44h with Margin 2 (the hover backplate spans y=2..46 of the 48px bar; adjacent
         // margins give the 4px back↔pane gap and the 2px before the 14px header pad = the 16px pane→icon gap).
@@ -183,32 +210,46 @@ public sealed class TitleBar : Component
             kids.Add(new BoxEl { Width = 16f });                  // WinUI subtitle margin-right
         }
 
-        // The content column's available width — the MEASURED Grow=1 column width from the previous layout
-        // (subscribing here re-renders this component when the measurement changes, e.g. on window resize).
-        // WinUI sizing contract: the content area shrinks first; the caption buttons never move.
-        float contentAvail = _availDip.Value;
+        if (Tabs is { } tabsFunc)
+        {
+            // A LEFT-aligned tab strip hugging its content (Shrink=1 so a too-full strip gives way before the captions).
+            // It is the ONE Client island; the Grow=1 spacer after it is the Caption drag band (WinUI TabStripFooter).
+            var tabsIsland = new BoxEl
+            {
+                Direction = 0, AlignItems = FlexAlign.Stretch, Shrink = 1, Height = ExpandedHeight,
+                OnRealized = h => _tabs = h,
+                Children = [tabsFunc()],
+            };
+            kids.Add(tabsIsland);
+            kids.Add(new BoxEl { Grow = 1, Shrink = 1, Height = ExpandedHeight });   // flexible Caption drag band
+        }
+        else
+        {
+            // The content column's available width — the MEASURED Grow=1 column width from the previous layout
+            // (subscribing here re-renders this component when the measurement changes, e.g. on window resize).
+            // WinUI sizing contract: the content area shrinks first; the caption buttons never move.
+            float contentAvail = _availDip.Value;
 
-        // The centered, flexible content column. The interactive island (HTCLIENT) is the inner box that HUGS the
-        // content's natural width (the gallery's search box) — NOT the flexible column: the empty flex space
-        // flanking the search box must stay part of the Caption drag band.
-        var island = new BoxEl
-        {
-            Direction = 0, AlignItems = FlexAlign.Center,
-            OnRealized = h => _content = h,
-            Children = Content is { } c ? [c(contentAvail)] : [],
-        };
-        var content = new BoxEl
-        {
-            // Grow + Shrink: the column is the row's ONE flexible child, so it absorbs all free space AND all
-            // overflow — the fixed caption cluster after it never moves or clips (the WinUI sizing contract), and
-            // the arranged width PushRegions feeds back is the honest available space even on resize-down (without
-            // Shrink the column could only track the viewport UP and _availDip would floor at the content's width).
-            Grow = 1, Shrink = 1, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Height = ExpandedHeight,
-            Opacity = active ? 1f : 0.5f,                          // WinUI deactivated content dim
-            Children = [island],
-        };
-        {
+            // The centered, flexible content column. The interactive island (HTCLIENT) is the inner box that HUGS the
+            // content's natural width (the gallery's search box) — NOT the flexible column: the empty flex space
+            // flanking the search box must stay part of the Caption drag band.
+            var island = new BoxEl
+            {
+                Direction = 0, AlignItems = FlexAlign.Center,
+                OnRealized = h => _content = h,
+                Children = Content is { } c ? [c(contentAvail)] : [],
+            };
+            var content = new BoxEl
+            {
+                // Grow + Shrink: the column is the row's ONE flexible child, so it absorbs all free space AND all
+                // overflow — the fixed caption cluster after it never moves or clips (the WinUI sizing contract), and
+                // the arranged width PushRegions feeds back is the honest available space even on resize-down (without
+                // Shrink the column could only track the viewport UP and _availDip would floor at the content's width).
+                Grow = 1, Shrink = 1, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Height = ExpandedHeight,
+                Opacity = active ? 1f : 0.5f,                          // WinUI deactivated content dim
+                Children = [island],
+            };
             var applied = Parts.Apply(PartContent, content);
             kids.Add(applied with
             {
@@ -243,11 +284,14 @@ public sealed class TitleBar : Component
             Children = kids.ToArray(),
         };
         var appliedRoot = Parts.Apply(PartRoot, root);
-        return appliedRoot with
+        var result = appliedRoot with
         {
             Height = ExpandedHeight, Children = root.Children,
             OnRealized = TemplateParts.Chain<NodeHandle>(h => _root = h, appliedRoot.OnRealized),
         };
+        _cachedTree = result;
+        _cacheKey = key;
+        return result;
     }
 
     BoxEl Caption(string part, string glyph, Action onClick, CaptionButton.Style style, bool active,
@@ -280,6 +324,7 @@ public sealed class TitleBar : Component
         int n = 0;
         if (ShowBackButton && !_back.IsNull) _regions[n++] = new TitleBarRegion(rectOf(_back), TitleBarHit.Client);
         if (ShowPaneToggle && !_pane.IsNull) _regions[n++] = new TitleBarRegion(rectOf(_pane), TitleBarHit.Client);
+        if (Tabs is not null && !_tabs.IsNull) _regions[n++] = new TitleBarRegion(rectOf(_tabs), TitleBarHit.Client);
         if (Content is not null && !_content.IsNull) _regions[n++] = new TitleBarRegion(rectOf(_content), TitleBarHit.Client);
         if (ShowCaptionButtons)
         {

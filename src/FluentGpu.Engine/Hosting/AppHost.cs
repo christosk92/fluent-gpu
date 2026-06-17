@@ -41,11 +41,12 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
 /// </summary>
 public sealed class PopupWindowSlot
 {
-    internal PopupWindowSlot(int token, IPlatformPopupWindow window, NodeHandle root)
+    internal PopupWindowSlot(int token, IPlatformPopupWindow window, NodeHandle root, PopupWindowMaterial material)
     {
         Token = token;
         Window = window;
         Root = root;
+        Material = material;
     }
 
     public int Token { get; }
@@ -54,6 +55,10 @@ public sealed class PopupWindowSlot
     public NodeHandle Root { get; }
     /// <summary>Popup bounds in main-window DIP space (origin = main-window client (0,0)) — the record origin.</summary>
     public RectF BoundsDip { get; internal set; }
+    /// <summary>Actual popup-window bounds in main-window DIP. OS-backed acrylic flyouts inflate this beyond
+    /// <see cref="BoundsDip"/> so transparent shadow margins survive the separate HWND/swapchain clip.</summary>
+    public RectF WindowBoundsDip { get; internal set; }
+    public PopupWindowMaterial Material { get; }
     public ISwapchain? Swapchain { get; internal set; }
     /// <summary>The popup's own command stream, re-recorded each frame via <c>SceneRecorder.RecordSubtree</c>.</summary>
     public DrawList DrawList { get; } = new();
@@ -183,12 +188,15 @@ public sealed class AppHost : IDisposable
     // layout (flush/reconcile/relayout), and submit+present spans — so the live-resize cost split is measurable. Only
     // reached when (keepAlive && s_resizeDiag); the string interpolation here is the lone alloc and it's flag-gated off
     // on the normal hot path, so the zero-alloc gates are unaffected.
-    private void ReportResizeTick(long frameStart, double ensureMs, double layoutMs, long submitStart)
+    private void ReportResizeTick(long frameStart, double ensureMs, double layoutMs, long submitStart,
+                                  bool resized, string layoutPath, int componentsRendered,
+                                  int nodesVisited, int drawCommands, long hotAlloc)
     {
         double submitMs = ElapsedMs(submitStart);
         double totalMs = (Stopwatch.GetTimestamp() - frameStart) * 1000.0 / Stopwatch.Frequency;
         Console.Error.WriteLine(
-            $"[FG_RESIZE_DIAG] tick total={totalMs:F2}ms ensureSize={ensureMs:F2}ms layout={layoutMs:F2}ms submit+present={submitMs:F2}ms");
+            $"[FG_RESIZE_DIAG t={Environment.TickCount64}] tick total={totalMs:F2}ms ensureSize={ensureMs:F2}ms layout={layoutMs:F2}ms submit+present={submitMs:F2}ms " +
+            $"resized={resized} path={layoutPath} comps={componentsRendered} nodes={nodesVisited} cmds={drawCommands} hotAlloc={hotAlloc}");
     }
 
     private void DiagMaybeReport()
@@ -357,6 +365,11 @@ public sealed class AppHost : IDisposable
         if (_dispatcher.Drag.HasActiveWork || _dispatcher.DragDrop.HasActiveWork) r |= WakeReasons.DragDropWork;   // E5: ghost spring easing / edge auto-scroll
         if (_dispatcher.Drag.IsActive) r |= WakeReasons.DragActive;   // E5 reorder dwell keep-alive: a live drag keeps frames coming so the 200/300ms FrameClock dwell tickers advance even on a motionless pointer (DragController.cs:118)
         if (_dispatcher.HasArmedHold) r |= WakeReasons.GestureHold;   // §7A touch long-press: a STATIONARY held finger emits no input, so keep frames coming until TickGestureArenas fires the ~500ms Hold (then this clears and the loop idles)
+        // A windowed popup's desktop-acrylic open reveal is driven per-frame on Present (CompositionBackdrop.TickAnimation),
+        // so it needs the loop to keep presenting until it settles — otherwise (no engine animation active for windowed
+        // menus) the loop idle-skips and the reveal freezes at its seed. O(popups) ≈ O(1) (typically 0–1 menus open).
+        for (int i = 0; i < _popupWindows.Count; i++)
+            if (_popupWindows[i].Swapchain?.PopupAnimating == true) { r |= WakeReasons.PopupAnim; break; }
         return r;
     }
 
@@ -399,7 +412,7 @@ public sealed class AppHost : IDisposable
     {
         _app = app;
         _window = window;
-        PopupWindowsEnabled = window.Handle.Kind == NativeHandleKind.Headless;   // see the property doc (needs-pixels D3D12)
+        PopupWindowsEnabled = window.Handle.Kind == NativeHandleKind.Headless || device.SupportsSecondarySwapchains;
         _device = device;
         _root = root;
         _strings = strings;
@@ -468,7 +481,17 @@ public sealed class AppHost : IDisposable
         _inputHooks.GetNodeRect = _scene.AbsoluteRect;
         var chromeEpoch = new Signal<int>(0);
         _inputHooks.WindowChromeEpoch = chromeEpoch;
-        _dispatcher.OnWindowActivationChanged = () => chromeEpoch.Value = chromeEpoch.Peek() + 1;
+        // Mica deactivation parity (WinUI): a Mica window paints a flat dark fallback when INACTIVE — DWM stops the live
+        // blur, so without this the transparent client lets the desktop wallpaper bleed through, giving a too-light,
+        // wallpaper-tinted chrome whenever the window isn't focused. Active → Transparent (the real Mica shows);
+        // inactive → SolidBackgroundFillColorBase. Only a Mica window (FluentApp set WindowBackground=Transparent) swaps.
+        bool micaWindow = Theme.WindowBackground.A <= 0.004f;
+        var micaInactiveBg = ColorF.FromRgba(0x20, 0x20, 0x20);
+        _dispatcher.OnWindowActivationChanged = () =>
+        {
+            if (micaWindow) Theme.WindowBackground = _window.IsActive ? ColorF.Transparent : micaInactiveBg;
+            chromeEpoch.Value = chromeEpoch.Peek() + 1;
+        };
 
         // Live drag state for UseDragState / DragPreviewLayer (cursor-following custom preview). Wired on the host
         // instance AND the channel-default (a DragPreviewLayer mounted by a static factory reaches it via Default).
@@ -773,16 +796,26 @@ public sealed class AppHost : IDisposable
 
             // Modal-loop keep-alive idle skip. During a title-bar MOVE or edge RESIZE the OS runs its own modal
             // message loop on THIS (WndProc) thread and drives keep-alive paints — the 8 ms WM_TIMER, WM_SIZE,
-            // WM_MOVE — synchronously. A pure move changes nothing (the composited DComp surface tracks the HWND via
-            // DWM), yet the 125 Hz timer would otherwise fire a full record+submit+present every tick, each blocking
-            // this thread ~a vblank and starving the modal loop's mouse processing — so the window crawls. Render a
-            // keep-alive tick ONLY when something actually needs it: a real resize (resized), a queued UI post, dirty
-            // layout, a pending full layout, or any wake reason (animation / scroll / caret / pending reactive work /
-            // images). Otherwise skip the whole pipeline: the last presented frame stays on screen and DWM repositions
-            // it for free. WM_SIZE still drives crisp live resize (resized == true); WM_EXITSIZEMOVE paints one settle frame.
+            // WM_MOVE — synchronously, with the app's own frame loop suspended. Render a keep-alive tick ONLY when
+            // something actually needs it; otherwise skip the whole pipeline (the last presented frame stays on screen).
+            //
+            // Two bail cases:
+            //  (1) Nothing is awake at all (ComputeWakeReasons == None) — the classic pure-move idle skip.
+            //  (2) We're INSIDE the modal loop and this tick isn't a real resize, has no pending layout/UI work, AND no
+            //      one-shot transition is in flight — bail even though an AMBIENT wake (playback seek-ticker, caret
+            //      blink, perpetual brush/spinner loop) is live. Measured: a single edge-resize-while-playing fired 69
+            //      real resizes but 564 REDUNDANT present-only paints (~1.8s of wasted WndProc time, present-blocked up
+            //      to 62ms each) because the seek-ticker wake kept defeating case (1). Those PERPETUAL animations can't
+            //      advance mid-drag anyway (the frame loop is suspended), so painting the unchanged content for them is
+            //      pure waste that starves the modal loop → felt as sluggish resizing.
+            //      The AnimIsAmbient() guard is the exception that keeps responsive-control motion alive: a ONE-SHOT
+            //      layout transition (a PlayerBar button's Enter/Exit pop when it crosses a responsive breakpoint mid-
+            //      resize) is a finite track, so AnimIsAmbient() is false and we DON'T bail — the button animates in/out
+            //      while only the perpetual playback ticker is dropped. A real resize / band-crossing relayout still
+            //      paints; WM_EXITSIZEMOVE flushes any deferred work in one settle frame, so nothing visible is lost.
             if (keepAlive && !resized && _everLaidOut && !_needFullLayout
                 && _uiPosts.IsEmpty && !_scene.AnyLayoutDirty
-                && ComputeWakeReasons() == WakeReasons.None)
+                && (ComputeWakeReasons() == WakeReasons.None || (_window.InModalLoop && AnimIsAmbient())))
                 return LastStats;
 
             var layoutSize = ClientSizeDip();
@@ -826,16 +859,19 @@ public sealed class AppHost : IDisposable
             if (s_allocDiag) { db = Probe(SegFlush, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             bool layoutNeeded = _needFullLayout || reconciled || _scene.AnyLayoutDirty;
+            string layoutPath = "none";
             if (layoutNeeded && !_scene.Root.IsNull)
             {
                 if (_needFullLayout || !_everLaidOut)
                 {
+                    layoutPath = "full";
                     _layout.Run(_scene.Root, layoutSize);      // 6 full layout: first frame / resize / DPI / root change
                     _needFullLayout = false;
                     _everLaidOut = true;
                 }
                 else
                 {
+                    layoutPath = "scoped";
                     _invalidator.RunDirty(layoutSize);         // 6 scoped relayout: only dirty subtrees, firewalled at boundaries
                 }
                 _scene.ClearLayoutDirty();
@@ -857,6 +893,41 @@ public sealed class AppHost : IDisposable
             }
 
             DrainLayoutEffects();                              // 6.5 layout effects (Bounds valid)
+            // Responsive show/hide "make room": nodes that mounted with a SizeMode.Reflow enter now have their natural
+            // size — ease the main-axis LAYOUT size 0→that so neighbours reflow as the entrant reveals. Seeded here
+            // (post-layout, BEFORE the anim tick) so the first ticked size is ~0 and RunReflowLayout re-solves siblings
+            // before record — no 1-frame snap. RunReflowLayout is NOT resize-gated, so this animates even mid window-drag.
+            if (_anim.PendingEnterReflow.Count > 0)
+            {
+                var pend = _anim.PendingEnterReflow;
+                for (int i = 0; i < pend.Count; i++)
+                {
+                    var pn = pend[i];
+                    if (!_scene.IsLive(pn)) continue;
+                    var par = _scene.Parent(pn);
+                    bool horiz = !par.IsNull && _scene.Layout(par).Direction == 0;
+                    ref RectF pb = ref _scene.Bounds(pn);
+                    _anim.SeedEnterReflow(pn, horiz, pb.W, pb.H);
+                }
+                pend.Clear();
+            }
+            // Exit-reflow mirror: a container that lost a SizeMode.Reflow child this frame eases from its with-child size
+            // (snapshotted in Remove, pre-layout) → its now-solved without-child size, so the sibling reflows smoothly
+            // instead of snapping into the freed space.
+            if (_anim.PendingExitReflow.Count > 0)
+            {
+                var pex = _anim.PendingExitReflow;
+                for (int i = 0; i < pex.Count; i++)
+                {
+                    var (pn, fromW, fromH, spec) = pex[i];
+                    if (!_scene.IsLive(pn)) continue;
+                    var row = _scene.Parent(pn);
+                    bool horiz = !row.IsNull && _scene.Layout(row).Direction == 0;
+                    var nb = _scene.Bounds(pn);
+                    _anim.SeedReflowResize(pn, horiz, horiz ? fromW : fromH, horiz ? nb.W : nb.H, spec);
+                }
+                pex.Clear();
+            }
             if (reconciled) DumpSceneOnce(layoutSize);
             if (diagTick) { layoutMs0 = ElapsedMs(segStart); }   // flush/reconcile/relayout/layout-effects span (FG_RESIZE_DIAG)
             if (s_allocDiag) { db = Probe(SegLayout, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
@@ -926,8 +997,6 @@ public sealed class AppHost : IDisposable
             _device.SubmitDrawList(_drawList.Bytes, _drawList.SortKeys,
                 new FrameInfo(_window.ClientSizePx, _window.Scale, Clear)); // 10 submit
             _swapchain.Present();                              // 11 present
-            if (keepAlive && s_resizeDiag)
-                ReportResizeTick(frameStart, ensureMs, layoutMs0, subStart);
             long hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
             if (s_allocDiag) { db = Probe(SegSubmit, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
@@ -936,6 +1005,10 @@ public sealed class AppHost : IDisposable
             if (s_allocDiag) { db = Probe(SegEffects, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             UpdateFrameTiming(frameStart);
+            int componentsRendered = _reconciler.ConsumeRenderCount();
+            if (keepAlive && s_resizeDiag)
+                ReportResizeTick(frameStart, ensureMs, layoutMs0, subStart, resized, layoutPath,
+                    componentsRendered, recordStats.NodesVisited, _drawList.CommandCount, hotAlloc);
             LastStats = new FrameStats(_drawList.CommandCount, clicks, hotAlloc, reconciled || layoutNeeded)
             {
                 NodesVisited = recordStats.NodesVisited,
@@ -943,7 +1016,7 @@ public sealed class AppHost : IDisposable
                 CulledNodeCount = recordStats.CulledNodeCount,
                 Fps = _fps,
                 FrameMs = _frameMs,
-                ComponentsRendered = _reconciler.ConsumeRenderCount(),
+                ComponentsRendered = componentsRendered,
             };
             PublishFrameStats(LastStats);
             if (_frameClockSig.HasSubscribers) _frameClockSig.Value = ++_frameClock;   // drive per-frame pollers (overlay close) only when watched
@@ -979,14 +1052,22 @@ public sealed class AppHost : IDisposable
 
     /// <summary>Lease a popup window for an overlay subtree. Returns -1 when windowed popups are unavailable
     /// (<see cref="PopupWindowsEnabled"/> false, or the PAL declined) — callers fall back to constrained placement.</summary>
-    private int OpenPopupWindow(NodeHandle subtreeRoot)
+    private int OpenPopupWindow(NodeHandle subtreeRoot, PopupWindowMaterial material)
     {
         if (!PopupWindowsEnabled || subtreeRoot.IsNull) return -1;
-        var palWindow = _app.CreatePopupWindow(new PopupWindowDesc(_window.Handle, default));
+        var palWindow = _app.CreatePopupWindow(new PopupWindowDesc(_window.Handle, default, material, Tok.Theme == ThemeKind.Dark));
         if (palWindow is null) return -1;
-        var slot = new PopupWindowSlot(++_popupTokenSeq, palWindow, subtreeRoot)
+        bool acrylic = material == PopupWindowMaterial.TransientAcrylic;
+        // Flat tint over the host-backdrop (blurred desktop): the dark MenuFlyout fallback color at ~0.5 so the desktop
+        // reads through as a frosted grey (WinUI DesktopAcrylicBackdrop look). Tunable.
+        ColorF tint = acrylic ? Tok.AcrylicFlyout.Fallback with { A = 0.5f } : default;
+        // Round the composition acrylic to the flyout corner radius (WinUI OverlayCornerRadius = 8 DIP) so it matches
+        // the engine-drawn rounded plate/border in the swapchain content.
+        float cornerPx = acrylic ? 8f * (_window.Scale <= 0f ? 1f : _window.Scale) : 0f;
+        var slot = new PopupWindowSlot(++_popupTokenSeq, palWindow, subtreeRoot, material)
         {
-            Swapchain = _device.CreateSwapchain(new SwapchainDesc(palWindow.Handle, new Size2(1, 1))),
+            Swapchain = _device.CreateSwapchain(new SwapchainDesc(palWindow.Handle, new Size2(1, 1),
+                Composited: true, DesktopAcrylic: acrylic, AcrylicTint: tint, CornerRadiusPx: cornerPx)),
         };
         _popupWindows.Add(slot);
         WakeFrame();
@@ -996,19 +1077,27 @@ public sealed class AppHost : IDisposable
     /// <summary>Place a leased popup window: bounds arrive in main-window DIP (the overlay's placement space); the
     /// host converts to physical virtual-screen px (client origin + scale), resizes the popup swapchain, and shows the
     /// window (never activating — focus stays here).</summary>
-    private void SetPopupWindowBounds(int token, RectF dipBounds)
+    private void SetPopupWindowBounds(int token, RectF dipBounds, bool opensUp, float closedRatio)
     {
         for (int i = 0; i < _popupWindows.Count; i++)
         {
             var slot = _popupWindows[i];
             if (slot.Token != token) continue;
             slot.BoundsDip = dipBounds;
+            slot.WindowBoundsDip = dipBounds;   // (no shadow-inset inflation yet — window == menu rect; added with the shadow)
             float s = _window.Scale <= 0f ? 1f : _window.Scale;
             var origin = _window.ClientOriginPx;
             var px = new RectF(origin.X + dipBounds.X * s, origin.Y + dipBounds.Y * s, dipBounds.W * s, dipBounds.H * s);
             slot.Window.SetBoundsPx(in px);
-            slot.Swapchain?.Resize(new Size2(MathF.Max(1f, px.W), MathF.Max(1f, px.H)));
-            if (!slot.Window.IsShown) slot.Window.Show();
+            float wpx = MathF.Max(1f, px.W), hpx = MathF.Max(1f, px.H);
+            slot.Swapchain?.Resize(new Size2(wpx, hpx));
+            // Configure the desktop-acrylic composition chrome for this placement (content rect = whole window for now;
+            // it becomes the inset plate once the shadow margin lands), then play the open slide on first show.
+            slot.Swapchain?.ConfigurePopupChrome(new PopupChromeMetrics(
+                new RectF(0f, 0f, wpx, hpx), opensUp, closedRatio > 0f ? closedRatio : 0.5f, 8f * s, 1f * s));
+            bool firstShow = !slot.Window.IsShown;
+            if (firstShow) slot.Window.Show();
+            if (firstShow) slot.Swapchain?.AnimatePopupOpen();
             WakeFrame();
             return;
         }
@@ -1037,19 +1126,33 @@ public sealed class AppHost : IDisposable
         {
             var slot = _popupWindows[i];
             if (slot.Root.IsNull || !_scene.IsLive(slot.Root)) continue;
+            var origin = slot.WindowBoundsDip.IsEmpty ? slot.BoundsDip : slot.WindowBoundsDip;
             SceneRecorder.RecordSubtree(_scene, slot.DrawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicFlyout.Fallback, in textEdit,
-                slot.Root, new Point2(slot.BoundsDip.X, slot.BoundsDip.Y));
-            // needs-pixels: the popup DrawList is recorded and its swapchain presented, but NOT GPU-submitted —
-            // IGpuDevice.SubmitDrawList has no present-target parameter and D3D12Device.CreateSwapchain is a one-shot
-            // device init (D3D12Device.cs:95-122: it stores ONE hwnd and inits the device + pipelines), so a second
-            // swapchain cannot be rendered yet. The exact remaining D3D12 step:
-            //   1) RHI: give SubmitDrawList a present-target (or an ISwapchain-scoped submit) — Rhi.cs:21,
-            //   2) D3D12Device: hoist backbuffer/RTV/DComp-visual state into a per-swapchain struct (device,
-            //      pipelines, glyph/image stores stay shared; the render thread owns every ComPtr as today),
-            //   3) here: _device.SubmitDrawList(slot.DrawList.Bytes, slot.DrawList.SortKeys, popupFrameInfo, slot.Swapchain).
-            // Until then PopupWindowsEnabled stays false on D3D12 (constrained fallback). Headless verification is
-            // complete: decode slot.DrawList with a scratch HeadlessGpuDevice and assert the swapchain PresentCount.
-            slot.Swapchain?.Present();
+                slot.Root, new Point2(origin.X, origin.Y));
+            if (slot.Swapchain is { } sc)
+            {
+                try
+                {
+                    _device.SubmitDrawList(slot.DrawList.Bytes, slot.DrawList.SortKeys,
+                        new FrameInfo(sc.SizePx, _window.Scale, ColorF.Transparent), sc);
+                    sc.Present();
+                }
+                catch (Exception ex)
+                {
+                    // A windowed popup failed to render (e.g. a swapchain fault on a zombie HWND). Tear THIS popup down
+                    // and disable the windowed path so menus fall back to in-window engine acrylic — never crash-loop the
+                    // frame. (A true device-loss is still fatal at the main present; that's a separate recovery gap.)
+                    Console.Error.WriteLine($"[popup] windowed render failed, falling back to in-window: {ex.Message}");
+                    Diag.Sink?.Invoke($"[popup] windowed render failed, falling back to in-window: {ex}");
+                    PopupWindowsEnabled = false;
+                    slot.Window.Hide();
+                    slot.Swapchain?.Dispose();
+                    slot.Window.Dispose();
+                    slot.Swapchain = null;
+                    _popupWindows.RemoveAt(i);
+                    i--;
+                }
+            }
         }
     }
 

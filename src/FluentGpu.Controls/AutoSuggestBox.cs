@@ -115,6 +115,10 @@ public sealed class AutoSuggestBox : Component
     /// still fires per selection change (cpp:2361–2398 gates only the text write, :2367).</summary>
     public bool UpdateTextOnSelect = true;
     public Field<string>? Field;                       // form-validation.md: invalid border + touched-on-blur + message row
+    /// <summary>Field surface min-height (WinUI default 32). Raise for a tall "pill" search box (e.g. an Omnibar at 38).</summary>
+    public float FieldMinHeight = 32f;
+    /// <summary>Field corner radius (0 = ControlCornerRadius). Set ≈ half the height for a full pill.</summary>
+    public float FieldRadius;
 
     public static Element Create(
         IReadOnlyList<string> suggestions,
@@ -131,13 +135,16 @@ public sealed class AutoSuggestBox : Component
         bool updateTextOnSelect = true,
         TemplateParts? parts = null,
         IReadSignal<float>? widthSignal = null,
-        Field<string>? field = null)
+        Field<string>? field = null,
+        float minHeight = 32f,
+        float cornerRadius = 0f)
         => Embed.Comp(() => new AutoSuggestBox
         {
             Suggestions = suggestions, Placeholder = placeholder, Width = width, WidthSignal = widthSignal, Text = text,
             OnTextChanged = onTextChanged, OnSuggestionChosen = onSuggestionChosen,
             OnQuerySubmitted = onQuerySubmitted, QueryIcon = queryIcon, MaxHeight = maxPopupHeight, DebounceMs = debounceMs,
             TextChanged = textChanged, UpdateTextOnSelect = updateTextOnSelect, Parts = parts, Field = field,
+            FieldMinHeight = minHeight, FieldRadius = cornerRadius,
         });
 
     // The rendered width: the live signal (clamped by Width as the max) over the frozen mount value. Reading it
@@ -371,6 +378,7 @@ public sealed class AutoSuggestBox : Component
                 var e = new EditableText
                 {
                     Text = query, Width = width - iconCol, WidthSignal = innerWidth, Height = 32f, Placeholder = Placeholder,
+                    Chromeless = true,
                     OnCommit = OnEnter, OnCancel = OnEscape,
                     OnFocusChanged = f => { if (!f) Field?.MarkTouched(); },   // form-validation.md: arm the OnTouched gate on blur
                 };
@@ -421,18 +429,23 @@ public sealed class AutoSuggestBox : Component
             }));
 
         // KeepInteriorCornersSquare: while the list is open (open-down), square the field's BOTTOM corners so it joins the
-        // popup; full ControlCornerRadius otherwise.
+        // popup; full radius (ControlCornerRadius, or the caller's pill radius) otherwise.
+        float fieldR = FieldRadius > 0f ? FieldRadius : Radii.Control;
         var fieldCorners = open.Value
-            ? new CornerRadius4(Radii.Control, Radii.Control, 0f, 0f)
-            : Radii.ControlAll;
+            ? new CornerRadius4(fieldR, fieldR, 0f, 0f)
+            : CornerRadius4.All(fieldR);
 
         Action<NodeHandle> anchorCapture = h => { anchor.Value = h; if (Field is { } fn) fn.Node.Value = h; };
         Element[] rootKids = children.ToArray();
         var root = new BoxEl
         {
             // WinUI AutoSuggestBox field surface: ControlCornerRadius, 1px ControlStrokeColorDefault, ControlFillColorDefault.
-            Direction = 0, Width = width, MinHeight = 32f, AlignItems = FlexAlign.Center,
+            Direction = 0, Width = width, MinHeight = FieldMinHeight, AlignItems = FlexAlign.Center,
             Corners = fieldCorners, BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, Fill = Tok.FillControlDefault,
+            // The field surface (WinUI TextBox BorderElement) owns the PointerOver fill at the field's CORNER RADIUS, and
+            // CLIPS — so the inner Chromeless editor's square hover fill follows the (possibly pill) corners instead of
+            // bleeding past them as a rectangle (the squaring is intentional per EditableText: "the composer rounds + clips").
+            HoverFill = Tok.FillControlSecondary, ClipToBounds = true,
             // form-validation.md: the field chrome owns the invalid border (the inner editor is borderless inside it).
             Validation = Field is { } fb ? Prop.Of(() => fb.Error.Value.IsValid ? ValidationState.None : ValidationState.Error) : default,
             Role = AutomationRole.ComboBox,

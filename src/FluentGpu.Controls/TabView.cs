@@ -534,9 +534,9 @@ public sealed class TabView : Component
                 // Unselected rest: LayerOnMicaBaseAltFillColorTransparent (:84); hover/pressed
                 // LayerOnMicaBaseAltFillColorSecondary/Default (:87-88) → nearest engine tokens
                 // FillControlSecondary/Tertiary (no LayerOnMicaBaseAlt ramp in Tok).
-                Fill = isSel || dragging ? Tok.FillSolidTertiary : ColorF.Transparent,
-                HoverFill = isSel || dragging ? Tok.FillSolidTertiary : Tok.FillControlSecondary,
-                PressedFill = isSel || dragging ? Tok.FillSolidTertiary : Tok.FillControlTertiary,
+                Fill = dragging ? Tok.FillSolidTertiary : ColorF.Transparent,
+                HoverFill = dragging ? Tok.FillSolidTertiary : isSel ? ColorF.Transparent : Tok.FillControlSecondary,
+                PressedFill = dragging ? Tok.FillSolidTertiary : isSel ? ColorF.Transparent : Tok.FillControlTertiary,
                 BorderColor = dragging ? Tok.StrokeCardDefault : default,   // drag plate border = TabViewBorderBrush (TabView.xaml:558)
                 BorderWidth = dragging ? 1f : 0f,
                 Role = AutomationRole.Tab,
@@ -595,6 +595,7 @@ public sealed class TabView : Component
             }
             if (isSel && !dragging)
             {
+                float shapeW = (float.IsNaN(equalW) ? TabMinWidth : equalW) + 8f;
                 // 4px curve-out "feet": WinUI's TabGeometry flares the selected background 4px outward at both
                 // bottom corners (TabViewItem.cpp:106-123; Left/RightRadiusRenderArc, TabView.xaml:547-548). No
                 // Path primitive here — a 4×4 plate in the selected fill rounded on its top-OUTER corner is the
@@ -606,9 +607,17 @@ public sealed class TabView : Component
                     Direction = 0, AlignItems = FlexAlign.End, HitTestVisible = false,
                     Children =
                     [
-                        new BoxEl { Width = 4f, Height = 4f, Margin = new Edges4(-4, 0, 0, 0), Corners = new CornerRadius4(4f, 0f, 0f, 0f), Fill = Tok.FillSolidTertiary },
-                        new BoxEl { Grow = 1f },
-                        new BoxEl { Width = 4f, Height = 4f, Margin = new Edges4(0, 0, -4, 0), Corners = new CornerRadius4(0f, 4f, 0f, 0f), Fill = Tok.FillSolidTertiary },
+                        new BoxEl
+                        {
+                            Width = shapeW,
+                            Height = 32f,
+                            OffsetX = -4f,
+                            AlignSelf = FlexAlign.End,
+                            TabShape = true,
+                            TabFlareRadius = 4f,
+                            Corners = Radii.OverlayTop,
+                            Fill = Tok.FillSolidTertiary,
+                        },
                     ],
                 });
             }

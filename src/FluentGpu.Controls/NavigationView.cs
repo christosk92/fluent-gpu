@@ -20,6 +20,8 @@ public sealed record NavItem(string Key, string Glyph, string Label, bool IsHead
 {
     public NavItem[]? Children { get; init; }
     public bool InitiallyExpanded { get; init; }
+    /// <summary>Optional visual content for the icon slot. When set, it replaces the font glyph.</summary>
+    public Element? IconContent { get; init; }
     /// <summary>Renders as the WinUI NavigationViewItemSeparator instead of an item.</summary>
     public bool IsSeparator { get; init; }
     /// <summary>InfoBadge slot (the WinUI InfoBadgePresenter): pass <c>InfoBadge.Dot(...)/Count(...)</c> etc.</summary>
@@ -85,6 +87,8 @@ public sealed class NavigationView : Component
     public const string PartPane = "Pane";
     /// <summary>The pane title row (back + hamburger + title). Owned: Children.</summary>
     public const string PartPaneHeader = "PaneHeader";
+    /// <summary>The page/content frame beside the pane. Owned: Children, Animate, ClipToBounds.</summary>
+    public const string PartContentFrame = "ContentFrame";
     /// <summary>The sliding 3×16 selection pill (WinUI SelectionIndicator). Owned: Key (the NavPill reconcile
     /// identity). The slide spring (<see cref="MotionSprings.NavPill"/>) and opacity fade are HOOK-driven AnimEngine
     /// channels — a modifier cannot clobber them; do not add a Position-channel Animate here.</summary>
@@ -120,6 +124,8 @@ public sealed class NavigationView : Component
     public Signal<string>? NavigateRequest;
     /// <summary>WinUI <c>PaneDisplayMode</c>: Auto (adaptive), forced Left modes, or Top.</summary>
     public NavPaneDisplayMode PaneDisplayMode = NavPaneDisplayMode.Auto;
+    /// <summary>Extra padding inside the content frame. Apps with custom chrome use this to line content up under the toolbar.</summary>
+    public Edges4 ContentPadding;
     /// <summary>WinUI <c>SelectionFollowsFocus</c> (cpp:3408-3411): arrow-key focus selects.</summary>
     public bool SelectionFollowsFocus;
     /// <summary>Append the WinUI auto settings footer item (gear E713, key "settings"). See the class doc.</summary>
@@ -528,7 +534,7 @@ public sealed class NavigationView : Component
     {
         Action<string> nav = key => select(key, false);
         var child = Ctx.Provide(Nav, nav, Content?.Invoke(selected) ?? new BoxEl());
-        return new BoxEl
+        var frame = new BoxEl
         {
             Direction = 1,
             Grow = 1,
@@ -540,10 +546,18 @@ public sealed class NavigationView : Component
             BorderColor = Tok.StrokeCardDefault,
             BorderWidth = 1f,
             Corners = mode == PaneMode.Minimal ? default : ContentLeftTopCorner,
+            Padding = ContentPadding,
             // Clip the page subtree to the 8,0,0,0 corner (WinUI's ContentGrid is a Grid+CornerRadius, which clips its
             // content). Without this the corner renders square and an opaque page background overdraws the 1px stroke.
             ClipToBounds = true,
             Children = [child],
+        };
+        var applied = Parts.Apply(PartContentFrame, frame);
+        return applied with
+        {
+            Children = frame.Children,
+            Animate = frame.Animate,
+            ClipToBounds = true,
         };
     }
 
@@ -806,7 +820,8 @@ public sealed class NavigationView : Component
     Element TopItem(NavItem it, bool sel, Action onClick, Action<NodeHandle> capture)
     {
         var rowChildren = new List<Element>(3);
-        if (it.Glyph.Length > 0) rowChildren.Add(AnimatedIcon.Glyph(it.Glyph, IconSize, Tok.TextPrimary, Theme.IconFont));
+        if (it.IconContent is { } iconContent) rowChildren.Add(iconContent);
+        else if (it.Glyph.Length > 0) rowChildren.Add(AnimatedIcon.Glyph(it.Glyph, IconSize, Tok.TextPrimary, Theme.IconFont));
         if (it.Label.Length > 0)
         {
             if (rowChildren.Count > 0) rowChildren.Add(new BoxEl { Width = 8 });
@@ -992,6 +1007,10 @@ public sealed class NavigationView : Component
         // plate and visibly detached the sliding pill from the row.
         float contentIndent = expandedLayout ? depth * IndentStep : 0f;
 
+        Element iconVisual = it.IconContent ?? (it.Glyph.Length > 0
+            ? AnimatedIcon.Glyph(it.Glyph, IconSize, foreground, Theme.IconFont)
+            : new BoxEl { Width = IconSize, Height = IconSize });
+
         var iconCell = new BoxEl
         {
             Width = IconColumnWidth - IndicatorW,
@@ -1008,12 +1027,12 @@ public sealed class NavigationView : Component
                         ZStack = true,
                         Children =
                         [
-                            AnimatedIcon.Glyph(it.Glyph, IconSize, foreground, Theme.IconFont),
+                            iconVisual,
                             new BoxEl { OffsetX = 10f, OffsetY = -6f, HitTestVisible = false, Children = [it.InfoBadge] },
                         ],
                     },
                 ]
-                : [AnimatedIcon.Glyph(it.Glyph, IconSize, foreground, Theme.IconFont)],
+                : [iconVisual],
         };
         if (parts is not null)
             iconCell = parts.Apply(PartItemIcon, iconCell) with { Children = iconCell.Children };   // structure = icon + badge mount
@@ -1039,7 +1058,16 @@ public sealed class NavigationView : Component
         if (expandedLayout)
         {
             var label = AnimatedLabel(labelsVisible, new NavLabelSpec(
-                new TextEl(it.Label) { Size = 14f, Color = foreground, PressedColor = Tok.TextSecondary },
+                new TextEl(it.Label)
+                {
+                    Size = 14f,
+                    Color = foreground,
+                    PressedColor = Tok.TextSecondary,
+                    Grow = 1f,
+                    Shrink = 1f,
+                    Trim = TextTrim.CharacterEllipsis,
+                    MaxLines = 1,
+                },
                 ItemHeight, 1f, new Edges4(4, 0, 8, 0)));
             if (parts is not null && label is BoxEl lb)
             {
@@ -1113,6 +1141,7 @@ public sealed class NavigationView : Component
     {
         Direction = 0,
         Grow = spec.Grow,
+        Shrink = spec.Grow > 0f ? 1f : 0f,
         Height = spec.Height,
         AlignItems = FlexAlign.Center,
         Padding = spec.Padding,

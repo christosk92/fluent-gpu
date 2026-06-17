@@ -15,6 +15,38 @@ public sealed class FlexLayout
     private readonly SceneStore _scene;
     private readonly IFontSystem _fonts;
 
+    // FG_LAYOUT_DIAG=1: per-Run layout-cost diagnostic — Measure/Arrange node-visit counts + text-shape hit/miss. A
+    // regression guard for the measure-call explosion this memo cures: a healthy pass keeps measure≈O(nodes); a runaway
+    // measure≫arrange flags a redundant-measure blow-up. Gated to a single bool check (zero work/alloc) when off.
+    private static readonly bool s_layoutDiag = Diag.EnvFlag("FG_LAYOUT_DIAG");
+    private int _dMeasure, _dTextHit, _dTextMiss, _dArrange;
+
+    // Within-pass Measure memo. Measure(node, availW) is a PURE function of the node's subtree content + availW within
+    // ONE layout solve (it has no external mutable input; its only side effect is writing the node's Bounds W/H). But the
+    // flex algorithm calls it redundantly — a row's fixed-size pre-pass AND the main loop each measure a non-grow child
+    // at the SAME width, and that doubling COMPOUNDS with depth (~45x per node measured here on the Wavee tree: 10k calls
+    // for 227 nodes). Memoizing per (node, availW) for the current pass collapses the explosion — the box-level twin of
+    // the per-leaf text measure cache. A hit re-asserts the Bounds W/H so Arrange (which reads Bounds for base sizes) is
+    // byte-identical to the unmemoized result. Reset by bumping the generation at each top-level solve (cross-pass tree
+    // mutations are thereby never reused; within a pass the tree is immutable, so the function stays pure).
+    private struct MeasureMemo { public uint Gen; public float AvailW; public float W, H; }
+    private MeasureMemo[] _memo = System.Array.Empty<MeasureMemo>();
+    private uint _measureGen;
+
+    private void BeginMeasurePass()
+    {
+        _measureGen++;
+        int cap = _scene.Capacity;
+        if (_memo.Length < cap) _memo = new MeasureMemo[cap];
+    }
+
+    private Size2 StoreMemo(NodeHandle node, float availW, Size2 size)
+    {
+        uint i = node.Raw.Index;
+        if (i < (uint)_memo.Length) _memo[i] = new MeasureMemo { Gen = _measureGen, AvailW = availW, W = size.Width, H = size.Height };
+        return size;
+    }
+
     public FlexLayout(SceneStore scene, IFontSystem fonts)
     {
         _scene = scene;
@@ -24,6 +56,7 @@ public sealed class FlexLayout
     public void Run(NodeHandle root)
     {
         if (root.IsNull) return;
+        BeginMeasurePass();
         var size = Measure(root);
         Arrange(root, 0f, 0f, size.Width, size.Height);
     }
@@ -34,11 +67,14 @@ public sealed class FlexLayout
     public void Run(NodeHandle root, Size2 window)
     {
         if (root.IsNull) return;
+        if (s_layoutDiag) { _dMeasure = _dTextHit = _dTextMiss = _dArrange = 0; }
+        BeginMeasurePass();
         Measure(root, window.Width);
         ref LayoutInput li = ref _scene.Layout(root);
         float w = float.IsNaN(li.Width) ? window.Width : li.Width;
         float h = float.IsNaN(li.Height) ? window.Height : li.Height;
         Arrange(root, 0f, 0f, w, h);
+        if (s_layoutDiag) Console.Error.WriteLine($"[FG_LAYOUT_DIAG] measure={_dMeasure} arrange={_dArrange} textHit={_dTextHit} textMiss={_dTextMiss}");
     }
 
     /// <summary>Re-solve ONLY the subtree rooted at <paramref name="node"/> against its current Bounds (or its
@@ -47,6 +83,7 @@ public sealed class FlexLayout
     public void RunSubtree(NodeHandle node)
     {
         if (node.IsNull) return;
+        BeginMeasurePass();
         ref LayoutInput li = ref _scene.Layout(node);
         ref RectF b = ref _scene.Bounds(node);
         float w = float.IsNaN(li.Width) ? b.W : li.Width;
@@ -72,14 +109,39 @@ public sealed class FlexLayout
         return w;
     }
 
+    private void SetArrangedBounds(NodeHandle node, in RectF next)
+    {
+        ref RectF b = ref _scene.Bounds(node);
+        bool changed = b.X != next.X || b.Y != next.Y || b.W != next.W || b.H != next.H;
+        b = next;
+        if (changed) _scene.GetBoundsChangedHandler(node)?.Invoke(next);
+    }
+
     // ── Measure: fill Bounds.W/H with each node's base (hypothetical) border-box size ──
     private Size2 Measure(NodeHandle node, float availW = float.PositiveInfinity)
     {
+        if (s_layoutDiag) _dMeasure++;
+        // Within-pass memo: same (node, availW) already solved this pass ⇒ reuse it, re-asserting the Bounds W/H so the
+        // Arrange pass (which reads Bounds for base main/cross sizes) sees exactly what an unmemoized recompute would.
+        uint mi = node.Raw.Index;
+        if (mi < (uint)_memo.Length)
+        {
+            ref MeasureMemo hit = ref _memo[mi];
+            if (hit.Gen == _measureGen && hit.AvailW == availW)
+            {
+                ref RectF hb = ref _scene.Bounds(node);
+                hb = new RectF(hb.X, hb.Y, hit.W, hit.H);
+                return new Size2(hit.W, hit.H);
+            }
+        }
         ref LayoutInput li = ref _scene.Layout(node);
         ref NodePaint paint = ref _scene.Paint(node);
 
         // A scroll/virtual viewport is a layout boundary: its size is its own box (explicit/flex), independent of
         // content — content overflow is what scrolls. (layout.md §4.3/§6.)
+        // NOTE: the viewport/grid/zstack measure paths are NOT memoized (only the pure general flex path below is) — they
+        // recompute every call. Their SUBTREES still benefit (the general-path nodes inside them memoize). Conservative:
+        // the flex-row pre-pass/main-loop redundancy that compounds is entirely in the general path.
         if (_scene.HasScroll(node)) return MeasureViewport(node, in li, availW);
         if (_scene.HasGrid(node)) return MeasureGrid(node, in li, availW);
         if ((_scene.Flags(node) & NodeFlags.ZStack) != 0) return MeasureZStack(node, in li, availW);
@@ -94,10 +156,12 @@ public sealed class FlexLayout
             ref TextMeasureCache mc = ref _scene.MeasureCacheRef(node);
             if (mc.Valid && mc.Text == paint.Text && mc.MaxW == maxW && mc.Style == li.TextStyle)
             {
+                if (s_layoutDiag) _dTextHit++;
                 w = mc.Size.Width; h = mc.Size.Height;
             }
             else
             {
+                if (s_layoutDiag) _dTextMiss++;
                 var m = _fonts.Measure(paint.Text, li.TextStyle, maxW);
                 w = m.Size.Width; h = m.Size.Height;
                 // Retain the face's decoration metrics alongside the size: the recorder places underline/strikethrough
@@ -190,14 +254,14 @@ public sealed class FlexLayout
 
         ref RectF b = ref _scene.Bounds(node);
         b = new RectF(b.X, b.Y, w, h);
-        return new Size2(w, h);
+        return StoreMemo(node, availW, new Size2(w, h));
     }
 
     // ── Arrange: position + size children within the node's final box ──
     private void Arrange(NodeHandle node, float x, float y, float finalW, float finalH)
     {
-        ref RectF b = ref _scene.Bounds(node);
-        b = new RectF(x, y, finalW, finalH);
+        if (s_layoutDiag) _dArrange++;
+        SetArrangedBounds(node, new RectF(x, y, finalW, finalH));
 
         ref LayoutInput li = ref _scene.Layout(node);
         if (_scene.HasScroll(node)) { ArrangeViewport(node, finalW, finalH, in li); return; }

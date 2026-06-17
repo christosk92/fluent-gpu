@@ -56,6 +56,7 @@ public sealed class SceneStore : ISceneBackend
     private InteractionInfo[] _interaction;
     private NodeFlags[] _flags;
     private Action?[] _click;         // managed edge payload (GC ref at the edge only)
+    private Action<RectF>?[] _boundsChanged;   // post-layout arranged-bounds callback
     private Action<KeyEventArgs>?[] _keyHandler;
     private Action<CharEventArgs>?[] _charHandler;   // text (character) input handler
     private Action<Point2>?[] _pointerDown;   // position-aware (local coords) press / drag handlers
@@ -162,6 +163,7 @@ public sealed class SceneStore : ISceneBackend
         _interaction = new InteractionInfo[capacity];
         _flags = new NodeFlags[capacity];
         _click = new Action?[capacity];
+        _boundsChanged = new Action<RectF>?[capacity];
         _keyHandler = new Action<KeyEventArgs>?[capacity];
         _charHandler = new Action<CharEventArgs>?[capacity];
         _pointerDown = new Action<Point2>?[capacity];
@@ -209,6 +211,7 @@ public sealed class SceneStore : ISceneBackend
         _interaction[idx] = default;
         _flags[idx] = NodeFlags.Visible | NodeFlags.HitTestVisible | NodeFlags.NewThisFrame;
         _click[idx] = null;
+        _boundsChanged[idx] = null;
         _keyHandler[idx] = null;
         _charHandler[idx] = null;
         _pointerDown[idx] = null;
@@ -247,6 +250,7 @@ public sealed class SceneStore : ISceneBackend
         }
         ReleaseSpanRun(_layout[idx].TextStyle.SpanRunId);   // span-run + per-span family lifetime (rtb-01)
         _click[idx] = null;
+        _boundsChanged[idx] = null;
         _keyHandler[idx] = null;
         _charHandler[idx] = null;
         _pointerDown[idx] = null;
@@ -403,6 +407,8 @@ public sealed class SceneStore : ISceneBackend
 
     public void SetClickHandler(NodeHandle h, Action? handler) => _click[LiveIndex(h)] = handler;
     public Action? GetClickHandler(NodeHandle h) => _click[LiveIndexOrZero(h)];
+    public void SetBoundsChangedHandler(NodeHandle h, Action<RectF>? handler) => _boundsChanged[LiveIndex(h)] = handler;
+    public Action<RectF>? GetBoundsChangedHandler(NodeHandle h) => _boundsChanged[LiveIndexOrZero(h)];
     public void SetKeyHandler(NodeHandle h, Action<KeyEventArgs>? handler) => _keyHandler[LiveIndex(h)] = handler;
     public Action<KeyEventArgs>? GetKeyHandler(NodeHandle h) => _keyHandler[LiveIndexOrZero(h)];
     public void SetCharHandler(NodeHandle h, Action<CharEventArgs>? handler) => _charHandler[LiveIndex(h)] = handler;
@@ -909,7 +915,7 @@ public sealed class SceneStore : ISceneBackend
         Array.Resize(ref _prevSib, n); Array.Resize(ref _nextSib, n); Array.Resize(ref _childCount, n);
         Array.Resize(ref _elementTypeId, n); Array.Resize(ref _layout, n); Array.Resize(ref _bounds, n);
         Array.Resize(ref _paint, n); Array.Resize(ref _dynamicText, n); Array.Resize(ref _interaction, n); Array.Resize(ref _flags, n);
-        Array.Resize(ref _click, n); Array.Resize(ref _keyHandler, n); Array.Resize(ref _charHandler, n);
+        Array.Resize(ref _click, n); Array.Resize(ref _boundsChanged, n); Array.Resize(ref _keyHandler, n); Array.Resize(ref _charHandler, n);
         Array.Resize(ref _pointerDown, n); Array.Resize(ref _drag, n); Array.Resize(ref _hoverMove, n); Array.Resize(ref _pointerExit, n);
         Array.Resize(ref _pointerPressed, n); Array.Resize(ref _pointerWheel, n); Array.Resize(ref _contextRequested, n);
         Array.Resize(ref _focusChanged, n);

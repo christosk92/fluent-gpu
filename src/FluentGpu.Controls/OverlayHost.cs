@@ -2,6 +2,7 @@ using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Pal;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 
@@ -11,7 +12,7 @@ namespace FluentGpu.Controls;
 public sealed class OverlayHandle
 {
     internal Action<OverlayCloseCause>? CloseAction;
-    internal Action? ClosedAction;
+    public Action? ClosedAction;
     internal Action<OverlayCloseCause>? ClosedWithCauseAction;
     internal Func<OverlayCloseCause, bool>? ClosingAction;
     public bool IsOpen { get; internal set; }
@@ -419,6 +420,10 @@ internal sealed class OverlayServiceImpl : IOverlayService
             if (!e.PlateNode.IsNull && scene.IsLive(e.PlateNode))
                 anim.Cancel(e.PlateNode, AnimChannel.ScaleY);
             scene.Mark(e.SurfaceNode, NodeFlags.PaintDirty);
+            // NOTE: windowed (OS-backed) menus currently close with this same engine fade of the swapchain content; the
+            // composition acrylic (CompositionBackdrop) is torn down with the window at finalize. Fading the acrylic out
+            // too (CompositionBackdrop.AnimateClose) lands with the shadow step (it needs the group-opacity fade synced
+            // here so content + acrylic fade once each, not a double-fade).
             float fadeMs = e.Chrome == PopupChrome.Raw ? RawFadeMs : OpacityMs;
             anim.Animate(e.SurfaceNode, AnimChannel.Opacity, currentOpacity, 0f, fadeMs, Easing.Linear);
         }
@@ -431,6 +436,9 @@ internal sealed class OverlayServiceImpl : IOverlayService
     public void AfterAnimations()
     {
         if (Scene is not { } scene || Anim is not { } anim) return;
+        // Keep the viewport rect live without re-rendering OverlayHost on resize (the host now reads root bounds, not
+        // UseContext(Viewport.Size)): refresh from the laid-out root each frame so anchor-follow placement clamps correctly.
+        if (!scene.Root.IsNull) { var rb = scene.Bounds(scene.Root); ViewportRect = new RectF(0f, 0f, rb.W, rb.H); }
         for (int i = Entries.Count - 1; i >= 0; i--)
         {
             var e = Entries[i];
@@ -465,7 +473,8 @@ internal sealed class OverlayServiceImpl : IOverlayService
                 FlyoutPositioner.Place(in aRect, in popupSize, in container, e.Placement, isWindowed: windowed),
                 e.AnchorOffsetX, in aRect);
             if (windowed)
-                Hooks!.SetPopupWindowBounds?.Invoke(e.PopupWindowToken, new RectF(place.X, place.Y, e.MeasuredW, e.MeasuredH));
+                Hooks!.SetPopupWindowBounds?.Invoke(e.PopupWindowToken, new RectF(place.X, place.Y, e.MeasuredW, e.MeasuredH), place.OpensUp,
+                    e.ParentId >= 0 ? 0.67f : 0.5f);
 
             e.OpensUp = place.OpensUp;
             e.CornerJoin = place.CornerJoin;
@@ -481,6 +490,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
                 scene.Paint(e.SurfaceNode).Corners = FlyoutSurface.CornersFor(e.CornerJoin);
                 scene.Mark(e.SurfaceNode, NodeFlags.PaintDirty);
             }
+            OverlayHost.SyncWindowedMenuBackdrop(scene, e);
         }
     }
 
@@ -555,6 +565,42 @@ public sealed class OverlayHost : Component
     // through when sub-menus land in Wave 3).
     const float OpenMs = 250f, OpacityMs = 83f, ClosedRatio = 0.5f;
 
+    // WinUI MenuFlyout renders into its OWN windowed popup over DesktopAcrylicBackdrop (it samples the desktop). The
+    // Win32 analogue is a transparent composited popup HWND carrying DWM's DWMSBT_TRANSIENTWINDOW acrylic + rounded
+    // corners + system shadow (native Windows 11 menu). Only PopupChrome.Flyout opts into that today; other chromes
+    // stay in-window with the engine acrylic compositor (no regression).
+    private static PopupWindowMaterial WindowMaterialFor(OverlayEntry e)
+        => e.Chrome == PopupChrome.Flyout ? PopupWindowMaterial.TransientAcrylic : PopupWindowMaterial.None;
+
+    /// <summary>Reconcile the menu presenter plate to its placement: an OS-backed windowed flyout (a popup HWND was
+    /// leased) renders TRANSPARENT over DWM acrylic — clear the engine acrylic AND the engine drop shadow (the
+    /// transparent plate would otherwise reveal the shadow primitive drawn behind it, and DWM draws the window shadow),
+    /// keeping just the 1px border + content. A constrained / in-window flyout keeps the engine acrylic + drop shadow.
+    /// Idempotent: only mutates + marks paint-dirty when the state actually changes (no per-frame repaint churn).</summary>
+    internal static void SyncWindowedMenuBackdrop(SceneStore scene, OverlayEntry e)
+    {
+        if (e.Chrome != PopupChrome.Flyout || e.PlateNode.IsNull || !scene.IsLive(e.PlateNode)) return;
+        bool osBacked = e.PopupWindowToken >= 0;
+        bool hasAcrylic = scene.TryGetAcrylic(e.PlateNode, out _);
+        bool hasShadow = scene.TryGetShadow(e.PlateNode, out _);
+        bool changed = false;
+        if (osBacked)
+        {
+            if (hasAcrylic) { scene.ClearAcrylic(e.PlateNode); changed = true; }
+            if (hasShadow) { scene.ClearShadow(e.PlateNode); changed = true; }
+        }
+        else
+        {
+            if (!hasAcrylic) { scene.SetAcrylic(e.PlateNode, Tok.AcrylicFlyout); changed = true; }
+            if (!hasShadow) { scene.SetShadow(e.PlateNode, Elevation.Flyout); changed = true; }
+        }
+        if (changed)
+        {
+            scene.Paint(e.PlateNode).Fill = ColorF.Transparent;   // bg comes from acrylic (in-window) or DWM (OS-backed)
+            scene.Mark(e.PlateNode, NodeFlags.PaintDirty);
+        }
+    }
+
     public override Element Render()
     {
         var version = UseSignal(0);
@@ -572,8 +618,13 @@ public sealed class OverlayHost : Component
         svc.RestoreFocus = hooks.RestoreFocus;
         svc.Hooks = hooks;                      // popup-window + work-area seams (E4 out-of-bounds popups)
         hooks.WindowBlurred = svc.OnWindowBlur; // window deactivation → light-dismiss overlays close (modal stays)
-        var vp = UseContext(Viewport.Size);
-        svc.ViewportRect = new RectF(0f, 0f, vp.Width, vp.Height);   // the live-anchor follow places against it
+        // Viewport size read from the laid-out ROOT bounds, NOT UseContext(Viewport.Size): subscribing re-rendered this
+        // (app-root) overlay host on EVERY window-resize tick (~12KB/resize → GC stutter felt as a hiccup mid-drag).
+        // `version` (a popup opening/closing) is now the only re-render trigger. Open popups still track a live resize:
+        // their anchor nodes move with layout and AfterAnimations re-places them every frame against the live root size.
+        var rootSz = Context.Scene is { } sc0 && !sc0.Root.IsNull ? sc0.Bounds(sc0.Root) : default;
+        var vp = new Size2(rootSz.W, rootSz.H);
+        svc.ViewportRect = new RectF(0f, 0f, vp.Width, vp.Height);   // seed; AfterAnimations refreshes it post-layout
 
         // After layout (Bounds valid): place each popup, then seed its open (clip-unfold + slide) / close (fade) animation.
         UseLayoutEffect(() =>
@@ -581,7 +632,8 @@ public sealed class OverlayHost : Component
             var scene = Context.Scene;
             var anim = Context.Anim;
             if (scene is null || anim is null) return;
-            var vpRect = new RectF(0f, 0f, vp.Width, vp.Height);
+            var rb = !scene.Root.IsNull ? scene.Bounds(scene.Root) : default;   // live (post-layout) root size
+            var vpRect = new RectF(0f, 0f, rb.W, rb.H);
 
             // WinUI OverlayInputPassThroughElement: register the first open entry's pass-through subtree on the
             // scrim — hover/press over its rendered bounds bypass the light-dismiss layer (the MenuBar keeps
@@ -628,7 +680,11 @@ public sealed class OverlayHost : Component
                         // (WinUI FlyoutBase_Partial.cpp:3382-3392 useMonitorBounds = IsWindowedPopup()); constrained
                         // popups place against the viewport. The work-area seam is host-wired (AppHost → IPlatformApp
                         // GetWorkArea via MonitorFromPoint/GetMonitorInfo).
-                        bool wantWindowed = !e.ConstrainToRootBounds && svc.Hooks is { OpenPopupWindow: not null };
+                        // Windowed only when we have an OS material to back the transparent popup HWND (Flyout today).
+                        // A non-backed chrome with ConstrainToRootBounds=false stays in-window (engine acrylic) — a
+                        // transparent popup window with no DWM backdrop would render content on bare desktop.
+                        bool wantWindowed = !e.ConstrainToRootBounds && svc.Hooks is { OpenPopupWindow: not null }
+                                            && WindowMaterialFor(e) != PopupWindowMaterial.None;
                         RectF container = vpRect;
                         if (wantWindowed && svc.Hooks!.GetWorkArea is { } workArea)
                             container = workArea(new Point2(aRect.X + aRect.W * 0.5f, aRect.Y + aRect.H * 0.5f));
@@ -643,13 +699,15 @@ public sealed class OverlayHost : Component
                             // swapchain; the subtree is skipped from the main-window record). -1 = the platform/device
                             // can't (WinUI's DoesPlatformSupportWindowedPopup == false) → constrained fallback.
                             if (e.PopupWindowToken < 0)
-                                e.PopupWindowToken = svc.Hooks!.OpenPopupWindow!(e.WrapperNode);
+                                e.PopupWindowToken = svc.Hooks!.OpenPopupWindow!(e.WrapperNode, WindowMaterialFor(e));
                             if (e.PopupWindowToken >= 0)
-                                svc.Hooks!.SetPopupWindowBounds?.Invoke(e.PopupWindowToken, new RectF(place.X, place.Y, pRect.W, pRect.H));
+                                svc.Hooks!.SetPopupWindowBounds?.Invoke(e.PopupWindowToken, new RectF(place.X, place.Y, pRect.W, pRect.H), place.OpensUp,
+                                    e.ParentId >= 0 ? 0.67f : 0.5f);
                             else
                                 place = ApplyAnchorOffsetX(
                                     FlyoutPositioner.Place(in aRect, in popupSize, in vpRect, e.Placement, isWindowed: false),
                                     e.AnchorOffsetX, in aRect);
+                            SyncWindowedMenuBackdrop(scene, e);
                         }
 
                         e.OpensUp = place.OpensUp;
@@ -796,39 +854,38 @@ public sealed class OverlayHost : Component
                     // MenuFlyoutSubItem popups (a parent entry in the chain) unfold from 67%
                     // (MenuFlyoutSubItem_Partial.cpp:741 closedRatioConstant 0.67).
                     float closedRatio = e.ParentId >= 0 ? 0.67f : ClosedRatio;
-                    // WinUI MenuPopupThemeTransition load (LayoutTransition_partial.cpp:441-506): BOTH a content
-                    // TranslateY (initialTranslateY = openedLength × ClosedRatio, signed by direction → 0) and a
-                    // counter-translated clip animate over s_OpenDuration=250ms cubic-bezier(0,0,0,1)
-                    // (cpp:443-444 easing.cp3.X=0; MenuPopupThemeTransition_Partial.h:24). The menu unfolds from the
-                    // anchor edge WITH its content sliding in — and there is NO opacity keyframe on the presenter at
-                    // load (only the overlay element fades, cpp:508-519): it appears at 50% height instantly.
-                    // Our clip rect is node-local (it rides the surface's translate), so the counter-translation is
-                    // expressed by animating the NEAR clip edge against the slide — the anchor-side edge of the
-                    // visible window stays glued in parent space while the far edge expands.
                     float slide = fullH * closedRatio;
-                    if (e.OpensUp)
+
+                    // WINDOWED (OS-backed desktop-acrylic) popups: the whole presenter — acrylic + content + border —
+                    // slides as ONE composition animation root (CompositionBackdrop.AnimateOpen — WinUI's windowed-popup
+                    // model, popup-system-backdrop.md), and the popup HWND clips the overflow. So the engine must NOT also
+                    // clip/translate the SurfaceNode here, or the content double-animates against the composition slide.
+                    // IN-WINDOW popups have no composition root, so they DO drive the engine clip/translate (WinUI
+                    // MenuPopupThemeTransition load, LayoutTransition_partial.cpp:441-506: a content TranslateY
+                    // initialTranslateY = openedLength × ClosedRatio signed by direction → 0, plus a counter-translated
+                    // node-local clip edge, over s_OpenDuration=250ms cubic-bezier(0,0,0,1), no presenter opacity fade).
+                    if (e.PopupWindowToken < 0)
                     {
-                        // Opens upward (WinUI AnimationDirection_Bottom): content slides UP into place; the visible
-                        // window's BOTTOM edge stays glued to the anchor while the top edge reveals upward.
-                        anim.Animate(e.SurfaceNode, AnimChannel.TranslateY, slide, 0f, OpenMs, Easing.FluentPopOpen);
-                        anim.Animate(e.SurfaceNode, AnimChannel.ClipB, fullH - slide, fullH, OpenMs, Easing.FluentPopOpen);
-                    }
-                    else
-                    {
-                        // Opens downward (WinUI AnimationDirection_Top): content slides DOWN into place; the visible
-                        // window's TOP edge stays glued to the anchor while the bottom edge reveals downward.
-                        anim.Animate(e.SurfaceNode, AnimChannel.TranslateY, -slide, 0f, OpenMs, Easing.FluentPopOpen);
-                        anim.Animate(e.SurfaceNode, AnimChannel.ClipT, slide, 0f, OpenMs, Easing.FluentPopOpen);
+                        if (e.OpensUp)
+                        {
+                            // placement Top -> AnimationDirection_Bottom: TranslateY=+slide, ClipTranslateY=-slide → 0.
+                            anim.Animate(e.SurfaceNode, AnimChannel.TranslateY, slide, 0f, OpenMs, Easing.FluentPopOpen);
+                            anim.Animate(e.SurfaceNode, AnimChannel.ClipB, fullH - slide, fullH, OpenMs, Easing.FluentPopOpen);
+                        }
+                        else
+                        {
+                            // placement Bottom -> AnimationDirection_Top: TranslateY=-slide, ClipTranslateY=+slide → 0.
+                            anim.Animate(e.SurfaceNode, AnimChannel.TranslateY, -slide, 0f, OpenMs, Easing.FluentPopOpen);
+                            anim.Animate(e.SurfaceNode, AnimChannel.ClipT, slide, 0f, OpenMs, Easing.FluentPopOpen);
+                        }
                     }
 
                     // Presenter-plate stretch — the second half of MenuPopupThemeTransition's load storyboard
-                    // (LayoutTransition_partial.cpp:497-503): "MenuFlyoutPresenterBorder" (the childless chrome ring
-                    // OVER the items, generic.xaml:23810) animates ScaleY (1 − ClosedRatio) → 1 over the SAME
-                    // s_OpenDuration=250ms cubic-bezier(0,0,0,1), pivoted at CenterY = openedLength when
-                    // direction == AnimationDirection_Top — i.e. the BOTTOM edge for a DOWNWARD-opening menu
-                    // (MenuFlyout_Partial.cpp:259 maps placement Bottom → AnimationDirection_Top), the default top
-                    // (CenterY 0) for an upward one. The plate (acrylic + 1px stroke + shadow) thereby frames exactly
-                    // the revealed band every frame: H·(1 − scale(t)) == the animated near clip edge.
+                    // (LayoutTransition_partial.cpp:497-503): "MenuFlyoutPresenterBorder" animates ScaleY (1 − ClosedRatio)
+                    // → 1 over s_OpenDuration=250ms cubic-bezier(0,0,0,1), pivoted at CenterY = openedLength for
+                    // AnimationDirection_Top (the BOTTOM edge for a DOWNWARD-opening menu), top (CenterY 0) for upward.
+                    // This runs for BOTH paths: the plate is engine-drawn into the popup swapchain, so for a windowed
+                    // popup its ScaleY rides the same composition slide — the border ring stretches in like WinUI.
                     if (!e.PlateNode.IsNull && scene.IsLive(e.PlateNode))
                     {
                         ref NodePaint platePaint = ref scene.Paint(e.PlateNode);
@@ -878,11 +935,17 @@ public sealed class OverlayHost : Component
                 layers.Add(Positioned(e) with { Key = "overlay:" + e.Id });
         }
 
-        // Pin the overlay stack to the viewport so a tall popup (a flyout/menu is a POPOUT by design) can't grow the stack
-        // and re-flow the page underneath — MeasureZStack otherwise sizes to the tallest child, which would resize the app
-        // shell and reset the nav scroll. The popup still floats/overflows freely; it just no longer affects the layout.
+        // The overlay stack FILLS the window via Grow + the parent's cross-stretch cascade. Do NOT pin Width/Height to a
+        // vp literal here: this ZStack's size is mirrored up to the scene root (MirrorParticipation, Reconciler.cs:385-393)
+        // at MOUNT, through the app shell (WaveeShell) which builds its frame ONCE and never re-renders on resize. A pinned
+        // vp literal is therefore captured at the launch size and goes STALE on every later resize — FlexLayout.Run(root,
+        // window) then reads the stale root li.Height (FlexLayout.cs:39-40) and lays the whole app out at the PRE-resize
+        // size (player bar off-screen, sidebar/content clipped). Leaving the size indefinite (NaN) keeps the root tracking
+        // the live window each frame. A tall popup still overflows freely: every node from the root down is sized by
+        // Run(root, window) + cross-stretch, so the stack stays window-sized regardless of a tall child (no page reflow).
+        // Reproduced + guarded by the real-Win32 resize harness; do not re-add the pin.
         return Ctx.Provide(Overlay.Service, (IOverlayService)svc,
-            Ui.ZStack(layers.ToArray()) with { Grow = 1, Width = vp.Width, Height = vp.Height });
+            Ui.ZStack(layers.ToArray()) with { Grow = 1 });
     }
 
     /// <summary>Cascading-menu overlap (CascadingMenuHelper.cpp:678 — sub-menu lands at owner edge − 4): nudge the
