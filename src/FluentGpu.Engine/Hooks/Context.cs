@@ -117,8 +117,10 @@ public sealed class InputHooks
     /// its bottom); <c>closedRatio</c> is the WinUI MenuPopupThemeTransition ratio (0.5 root menu, 0.67 cascaded submenu)
     /// that drives the open slide distance + the plate ScaleY.</summary>
     public Action<int, RectF, bool, float>? SetPopupWindowBounds;
-    /// <summary>Begin releasing a leased popup window: plays the close fade, then disposes the window + swapchain once the
-    /// composition motion settles (so the acrylic fades out instead of vanishing).</summary>
+    /// <summary>Begin the desktop-acrylic close fade on a leased popup window's composition chrome (acrylic + shadow),
+    /// synced with the engine's content fade. The window is disposed separately at finalize (<see cref="ClosePopupWindow"/>).</summary>
+    public Action<int>? AnimatePopupClose;
+    /// <summary>Release a leased popup window (hide + dispose the window and its swapchain) once the close fade has settled.</summary>
     public Action<int>? ClosePopupWindow;
 
     // ── Text-editing seams (host-wired in the AppHost ctor; consumed by EditableText) ───────────────────────────────

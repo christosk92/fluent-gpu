@@ -74,6 +74,18 @@ public static partial class Win32Theme
         return null;
     }
 
+    /// <summary>True when the OS "app" theme is Light — Settings ▸ Colors (registry <c>AppsUseLightTheme</c>, the value
+    /// WinUI's <c>ElementTheme.Default</c> resolves against). Defaults to FALSE (dark) when the value is absent/unreadable,
+    /// matching the engine's default theme. Re-read on <c>WM_SETTINGCHANGE("ImmersiveColorSet")</c> to follow the OS live.</summary>
+    public static bool SystemUsesLightTheme()
+    {
+        uint data = 0, cb = 4;
+        int rc = RegGetValueW(HKEY_CURRENT_USER,
+            @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme",
+            RRF_RT_REG_DWORD, 0, out data, ref cb);
+        return rc == 0 && data != 0;
+    }
+
     /// <summary>
     /// The OS-derived <c>SystemAccentColorLight2</c> shade — what WinUI uses for the dark-theme accent button fill
     /// (lighter than the base accent). Read from the AccentPalette blob: 8×RGBA entries, index 1 = Light2 (bytes 4..6).

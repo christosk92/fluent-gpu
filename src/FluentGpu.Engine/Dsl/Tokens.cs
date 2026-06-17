@@ -161,15 +161,27 @@ public static class Tok
     public static TokenSet T = Dark;
     public static ThemeKind Theme { get; private set; } = ThemeKind.Dark;
 
+    /// <summary>Monotonic version bumped by every theme mutation (<see cref="Use"/>/<see cref="SetAccent"/>/
+    /// <see cref="SetWindowBackground"/>). The host watches this counter and, on a change, re-renders every mounted
+    /// component IN PLACE and cross-fades the resulting color diffs — a live, animated theme switch with no remount.
+    /// A plain counter, NOT a <c>Signal</c>: <see cref="Tok"/> is a process-global static, so a signal would bind to a
+    /// single host's reactive runtime and cross-contaminate multi-window / headless. The mutators are no-op-guarded so a
+    /// redundant set (e.g. toggling to the already-active theme, re-injecting the same OS accent) doesn't churn a frame.</summary>
+    public static int Epoch { get; private set; }
+
     private static ColorF? _accent;       // live OS accent override (folds into AccentDefault/Secondary/Tertiary/Subtle)
     private static ColorF? _windowBg;     // Mica → Transparent override
 
-    public static void Use(ThemeKind kind) { Theme = kind; T = kind == ThemeKind.Light ? Light : Dark; }
+    public static void Use(ThemeKind kind)
+    {
+        if (kind == Theme) return;
+        Theme = kind; T = kind == ThemeKind.Light ? Light : Dark; Epoch++;
+    }
 
     /// <summary>Inject the OS accent (host startup) or a developer global override; all accent tokens (fill + text +
     /// subtle + hero + attention) recompute from it. Pass <c>null</c> to clear the override and revert to the theme default.</summary>
-    public static void SetAccent(ColorF? c) => _accent = c;
-    public static void SetWindowBackground(ColorF c) => _windowBg = c;
+    public static void SetAccent(ColorF? c) { if (c == _accent) return; _accent = c; Epoch++; }
+    public static void SetWindowBackground(ColorF c) { if (_windowBg == c) return; _windowBg = c; Epoch++; }
 
     // Fill
     public static ColorF FillControlDefault => T.FillControlDefault;

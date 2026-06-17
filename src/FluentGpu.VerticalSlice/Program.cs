@@ -11662,12 +11662,16 @@ static class Slice
             PopupWindowSlot? slot = host.PopupWindows.Count > 0 ? host.PopupWindows[0] : null;
             HeadlessPopupWindow? pal = app.PopupWindows.Count > 0 ? app.PopupWindows[0] : null;
             bool shown = pal is { IsShown: true } && pal.ShowCount >= 1;
-            // BottomLeft = below the anchor + FlyoutMargin 4; window scale 1 + client origin (0,0) ⇒ px == DIP.
+            // BottomLeft = below the anchor + FlyoutMargin 4; window scale 1 + client origin (0,0) ⇒ px == DIP. BoundsDip
+            // stays the logical menu rect; the popup WINDOW (WindowBoundsDip == pal px) is inflated by the WinUI medium-popup
+            // shadow insets (L10 T2 R10 B18 DIP) so the composition drop shadow has margin to render into.
             bool placed = slot is not null && pal is not null
                 && Near(slot.BoundsDip.X, anchorRect.X) && Near(slot.BoundsDip.Y, anchorRect.Bottom + FlyoutPositioner.FlyoutMargin)
                 && slot.BoundsDip.W >= 180f && slot.BoundsDip.H >= 80f
-                && Near(pal.BoundsPx.X, slot.BoundsDip.X) && Near(pal.BoundsPx.Y, slot.BoundsDip.Y)
-                && Near(pal.BoundsPx.W, slot.BoundsDip.W) && Near(pal.BoundsPx.H, slot.BoundsDip.H);
+                && Near(slot.WindowBoundsDip.X, slot.BoundsDip.X - 10f) && Near(slot.WindowBoundsDip.Y, slot.BoundsDip.Y - 2f)
+                && Near(slot.WindowBoundsDip.W, slot.BoundsDip.W + 20f) && Near(slot.WindowBoundsDip.H, slot.BoundsDip.H + 20f)
+                && Near(pal.BoundsPx.X, slot.WindowBoundsDip.X) && Near(pal.BoundsPx.Y, slot.WindowBoundsDip.Y)
+                && Near(pal.BoundsPx.W, slot.WindowBoundsDip.W) && Near(pal.BoundsPx.H, slot.WindowBoundsDip.H);
             bool osBackdrop = slot is { Material: PopupWindowMaterial.TransientAcrylic }
                 && pal is { Material: PopupWindowMaterial.TransientAcrylic, Dark: true };
 
@@ -11754,9 +11758,10 @@ static class Slice
             // below-anchor bottom ⇒ flips ABOVE the anchor, past the window top (negative DIP Y).
             bool flipped = slot is not null
                 && Near(slot.BoundsDip.Y, anchorRect.Y - hDip - FlyoutPositioner.FlyoutMargin) && slot.BoundsDip.Y < 0f;
+            // The popup WINDOW px is the inflated WindowBoundsDip (menu rect + shadow insets) × scale + client origin.
             bool px = slot is not null && pal is not null
-                && Near(pal.BoundsPx.X, 1000f + anchorRect.X * 2f) && Near(pal.BoundsPx.Y, 600f + slot.BoundsDip.Y * 2f)
-                && Near(pal.BoundsPx.W, slot.BoundsDip.W * 2f) && Near(pal.BoundsPx.H, hDip * 2f);
+                && Near(pal.BoundsPx.X, 1000f + slot.WindowBoundsDip.X * 2f) && Near(pal.BoundsPx.Y, 600f + slot.WindowBoundsDip.Y * 2f)
+                && Near(pal.BoundsPx.W, slot.WindowBoundsDip.W * 2f) && Near(pal.BoundsPx.H, slot.WindowBoundsDip.H * 2f);
             bool inWork = pal is not null && pal.BoundsPx.Y >= 0f && pal.BoundsPx.Y + pal.BoundsPx.H <= 800f;
 
             var hIn = svc.Open(() => root.Anchor,

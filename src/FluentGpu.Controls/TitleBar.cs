@@ -135,7 +135,9 @@ public sealed class TitleBar : Component
 
         // Memo gate: a resize-only re-render returns the cached tree alloc-free (the layout effect above already re-ran
         // — its viewport deps changed — so regions re-push without a rebuild). Key excludes the viewport on purpose.
-        int key = unchecked((((epoch * 397 ^ tabsVer) * 397 ^ _availDip.Peek().GetHashCode()) * 397)
+        // Tok.Epoch is in the key so a live theme switch busts the cache — otherwise RethemeAll re-runs this effect but
+        // the memo returns the OLD-theme tree (the caption glyphs/foregrounds would stay stale).
+        int key = unchecked(((((epoch * 397 ^ tabsVer) * 397 ^ _availDip.Peek().GetHashCode()) * 397 ^ Tok.Epoch) * 397)
             ^ ((active ? 1 : 0) | (maximized ? 2 : 0) | (ShowBackButton ? 4 : 0) | (ShowPaneToggle ? 8 : 0) | (ShowCaptionButtons ? 16 : 0) | (BackEnabled ? 32 : 0)));
         if (_cachedTree is { } cached && key == _cacheKey) return cached;
 

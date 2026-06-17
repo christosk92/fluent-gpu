@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- WinExe = Windows GUI subsystem: no console window spawns on launch. -->
+    <OutputType>WinExe</OutputType>
+    <!-- NativeAOT is the publish target (single self-contained native exe). Scoped to THIS csproj so
+         the net10 app build/run stay JIT; AOT/trim analyzers engage here, never on Wavee.Core's path. -->
+    <PublishAot>true</PublishAot>
+  </PropertyGroup>
+
+  <!-- Composition root: the Windows backend (D3D12 / Win32 / DirectWrite / WIC) wired into the
+       portable engine + control kit, plus the framework-neutral Wavee.Core backend seam. -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\FluentGpu.Engine\FluentGpu.Engine.csproj" />
+    <ProjectReference Include="..\..\src\FluentGpu.Controls\FluentGpu.Controls.csproj" />
+    <ProjectReference Include="..\..\src\FluentGpu.Windows\FluentGpu.Windows.csproj" />
+    <ProjectReference Include="..\..\src\FluentGpu.WindowsApi\FluentGpu.WindowsApi.csproj" />
+    <ProjectReference Include="..\Wavee.Core\Wavee.Core.csproj" />
+  </ItemGroup>
+
+  <!-- Bundled fake-catalog cover art: copied next to the exe so cards show real art OFFLINE
+       (FakeData.Cover resolves AppContext.BaseDirectory/assets/covers/coverNN.jpg). -->
+  <ItemGroup>
+    <Content Include="assets\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="Features\Diagnostics\" />
+    <Folder Include="Features\Home\" />
+    <Folder Include="Features\Library\" />
+    <Folder Include="Features\Player\" />
+    <Folder Include="Features\Search\" />
+    <Folder Include="Features\Shell\" />
+  </ItemGroup>
+
+</Project>

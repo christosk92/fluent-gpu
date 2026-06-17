@@ -205,6 +205,16 @@ public interface IPlatformApp : IDisposable
     event Action<string>? ActivationRedirected { add { } remove { } }
 
     /// <summary>
+    /// Raised when the OS color settings change — the user flips Windows' app dark/light mode or changes the system
+    /// accent (Settings ▸ Colors). Carries no payload: subscribers re-read the current OS state (the host facade exposes
+    /// it) and decide what to apply, so a single signal covers both the theme and the accent. The Win32 backend raises it
+    /// from <c>WM_SETTINGCHANGE</c> with the <c>"ImmersiveColorSet"</c> area, dispatched on the window's own (UI) thread,
+    /// so subscribers may touch non-thread-safe host state (e.g. <c>AppHost.WakeFrame</c>) directly. A default-interface
+    /// no-op so headless / non-Windows backends opt out for free.
+    /// </summary>
+    event Action? SystemColorsChanged { add { } remove { } }
+
+    /// <summary>
     /// The WORK AREA (desktop minus taskbar/docked bars) of the monitor containing <paramref name="screenPointPx"/>,
     /// in physical virtual-screen px — the multi-monitor placement seam WinUI's windowed popups use
     /// (Popup.cpp monitor-bounds placement; <c>DXamlCore::CalculateAvailableMonitorRect</c>,

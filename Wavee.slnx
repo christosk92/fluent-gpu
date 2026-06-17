@@ -1,0 +1,14 @@
+<Solution>
+  <!-- The Wavee Music app solution: the engine projects it consumes (project references, built together)
+       plus the two new app projects. The engine's own src/FluentGpu.slnx is untouched. -->
+  <Folder Name="/engine/">
+    <Project Path="src/FluentGpu.Engine/FluentGpu.Engine.csproj" />
+    <Project Path="src/FluentGpu.Controls/FluentGpu.Controls.csproj" />
+    <Project Path="src/FluentGpu.Windows/FluentGpu.Windows.csproj" />
+    <Project Path="src/FluentGpu.WindowsApi/FluentGpu.WindowsApi.csproj" />
+  </Folder>
+  <Folder Name="/app/">
+    <Project Path="app/Wavee/Wavee.csproj" />
+    <Project Path="app/Wavee.Core/Wavee.Core.csproj" />
+  </Folder>
+</Solution>

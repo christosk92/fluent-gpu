@@ -99,6 +99,22 @@ public sealed unsafe partial class Win32App : IPlatformApp
     /// WM_COPYDATA case (which the OS dispatches on the window's own thread), so subscribers run UI-thread-safe.</summary>
     internal static void RaiseActivationRedirected(string payload) => s_activationRedirected?.Invoke(payload);
 
+    // ── OS color settings change (IPlatformApp.SystemColorsChanged) ─────────────────────────────────────────────────
+    // WM_SETTINGCHANGE("ImmersiveColorSet") lands in Win32Window.Handle32 and routes here (static bridge, same single-
+    // window rationale as the activation redirect above). The host re-reads OS dark/accent and re-themes live.
+    private static Action? s_systemColorsChanged;
+
+    /// <inheritdoc/>
+    public event Action? SystemColorsChanged
+    {
+        add => s_systemColorsChanged += value;
+        remove => s_systemColorsChanged -= value;
+    }
+
+    /// <summary>Raise <see cref="SystemColorsChanged"/> on the UI thread (the OS dispatches WM_SETTINGCHANGE on the
+    /// window's own thread), so subscribers run UI-thread-safe.</summary>
+    internal static void RaiseSystemColorsChanged() => s_systemColorsChanged?.Invoke();
+
     public void Dispose() { }
 }
 
@@ -110,6 +126,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                        WM_KEYUP = 0x0101, WM_SYSKEYUP = 0x0105,
                        WM_CHAR = 0x0102, WM_ACTIVATE = 0x0006, WM_SETCURSOR = 0x0020, WM_CAPTURECHANGED = 0x0215,
                        WM_COPYDATA = 0x004A,   // single-instance activation redirect (SingleInstanceGate → ActivationRedirected)
+                       WM_SETTINGCHANGE = 0x001A,   // OS settings change; lParam names the area ("ImmersiveColorSet" = dark-mode/accent)
                        WM_IME_STARTCOMPOSITION = 0x010D, WM_IME_ENDCOMPOSITION = 0x010E, WM_IME_COMPOSITION = 0x010F,
                        WM_IME_SETCONTEXT = 0x0281,
                        // Modal move/size loop keep-alive: DefWindowProc runs its OWN message pump while the user drags the
@@ -735,6 +752,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 PaintRequested?.Invoke();
                 ValidateRect(hWnd, null);
                 return true;
+            case WM_SETTINGCHANGE:
+                // OS Settings change. When the changed area is the immersive color set (Settings ▸ Colors: app dark/light
+                // flip or accent change) notify the host so it can re-read OS state and re-theme live. lParam is an
+                // LPCWSTR naming the area (may be null for some broadcasts). Don't consume it — let DefWindowProc run too.
+                if ((nint)lParam != 0 && Marshal.PtrToStringUni((nint)lParam) == "ImmersiveColorSet")
+                    Win32App.RaiseSystemColorsChanged();
+                return false;
             case WM_ENTERSIZEMOVE:
                 // Entered the OS modal move/size loop. Arm a ~120 Hz timer so frames keep flowing (animations, caret,
                 // scroll settle) even when the user holds the window still mid-drag — WM_MOVE alone fires only on motion.

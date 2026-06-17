@@ -94,7 +94,7 @@ All engine subsystems now live under the single `src/FluentGpu.Engine` project (
 | Layout / scoped relayout | `src/FluentGpu.Engine/Layout/FlexLayout.cs`, `LayoutInvalidator.cs` |
 | Retained scene (SoA, dirty flags) | `src/FluentGpu.Engine/Scene/{SceneStore,Columns}.cs` |
 | Record → DrawList | `src/FluentGpu.Engine/Render/SceneRecorder.cs` |
-| Theming tokens | `src/FluentGpu.Engine/Dsl/Tokens.cs` (`Tok`), `Theme.cs` |
+| Theming tokens + LIVE theme switching (animated, in-place; gotchas) | `src/FluentGpu.Engine/Dsl/Tokens.cs` (`Tok`), `Theme.cs` — **read `theming.md` before any theme work** |
 | Tests | `src/FluentGpu.VerticalSlice/Program.cs` |
 | Windows OS services | `src/FluentGpu.WindowsApi/*` (pillars, refs Engine only) — see below |
 
@@ -155,6 +155,7 @@ Design corpus (architecture authority, canon-gated) is `design/`; as-built react
 (must exit 0). Usage docs go in `docs/`, not `design/`.
 
 ## Deeper docs (read for the relevant task)
+- `theming.md` (this skill dir) — **how theming + LIVE theme switching work end-to-end**: tokens, the `Epoch`/`RethemeAll`/transition-window mechanism, the OS-follow + persistence wiring, what updates vs what's frozen, and the gotchas (frozen constructor-arg literals, `Flow.For`/bound colors, control `ColorF` props, app-local color constants, Mica/DWM). **Read before any theme work or "X won't change theme" debugging.**
 - `docs/guide/reactivity.md` — signals, hooks, `Component` vs `ReactiveComponent`, bindings, context (the core).
 - `docs/guide/components-elements-layout.md` — element zoo, layout, controls, navigation, virtualization, theming.
 - `docs/guide/rendering-and-performance.md` — frame pipeline, scoped relayout + boundary firewall, optimization guide.

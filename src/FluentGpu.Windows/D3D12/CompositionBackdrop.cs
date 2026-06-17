@@ -31,9 +31,11 @@ internal sealed unsafe class CompositionBackdrop : IDisposable
     private static bool s_roInit;
     private static IDispatcherQueueController* s_dq;
     private static ICompositor* s_comp;
+    private static ICompositor2* s_comp2;   // CreateDropShadow
     private static ICompositor3* s_comp3;
     private static ICompositor5* s_comp5;   // CreateRoundedRectangleGeometry
     private static ICompositor6* s_comp6;   // CreateGeometricClipWithGeometry
+    private static ICompositorWithVisualSurface* s_compVS;   // CreateVisualSurface (rounded-shadow mask)
     private static ICompositorDesktopInterop* s_deskInterop;
     private static ICompositorInterop* s_interop;
 
@@ -63,9 +65,11 @@ internal sealed unsafe class CompositionBackdrop : IDisposable
         ICompositor* comp;
         Check(insp->QueryInterface(__uuidof<ICompositor>(), (void**)&comp), "QI ICompositor");
         s_comp = comp;
+        ICompositor2* c2; Check(comp->QueryInterface(__uuidof<ICompositor2>(), (void**)&c2), "QI ICompositor2"); s_comp2 = c2;
         ICompositor3* c3; Check(comp->QueryInterface(__uuidof<ICompositor3>(), (void**)&c3), "QI ICompositor3"); s_comp3 = c3;
         ICompositor5* c5; Check(comp->QueryInterface(__uuidof<ICompositor5>(), (void**)&c5), "QI ICompositor5"); s_comp5 = c5;
         ICompositor6* c6; Check(comp->QueryInterface(__uuidof<ICompositor6>(), (void**)&c6), "QI ICompositor6"); s_comp6 = c6;
+        ICompositorWithVisualSurface* cvs; Check(comp->QueryInterface(__uuidof<ICompositorWithVisualSurface>(), (void**)&cvs), "QI ICompositorWithVisualSurface"); s_compVS = cvs;
         ICompositorDesktopInterop* di; Check(comp->QueryInterface(__uuidof<ICompositorDesktopInterop>(), (void**)&di), "QI ICompositorDesktopInterop"); s_deskInterop = di;
         ICompositorInterop* ci; Check(comp->QueryInterface(__uuidof<ICompositorInterop>(), (void**)&ci), "QI ICompositorInterop"); s_interop = ci;
         insp->Release();
@@ -83,8 +87,13 @@ internal sealed unsafe class CompositionBackdrop : IDisposable
     private ICompositionTarget* _ctarget;
     private IContainerVisual* _root;
     private IVisual* _rootVisual;
-    private IContainerVisual* _animRoot;        // the ONE node that animates: slides on open, fades on close
+    private IContainerVisual* _animRoot;        // slides on open (Offset.Y)
     private IVisual* _animRootVisual;
+    private IContainerVisual* _chrome;          // shadow + acrylic group; fades together on close (Opacity). NOT clipped — the shadow extends past the plate
+    private IVisual* _chromeVisual;
+    private ISpriteVisual* _shadow;             // transparent body; its DropShadow (masked to the rounded acrylic shape) IS the menu drop shadow
+    private IDropShadow* _shadowDrop;
+    private ICompositionVisualSurface* _maskSurface;   // captures the rounded acrylic group's alpha → the shadow's rounded shape
     private IContainerVisual* _group;           // backdrop + tint, rounded-clipped to the content rect
     private IVisual* _groupVisual;
     private ISpriteVisual* _backdrop;
@@ -119,24 +128,44 @@ internal sealed unsafe class CompositionBackdrop : IDisposable
         _rootVisual = AsVisual((IUnknown*)root);
         Check(_ctarget->put_Root(_rootVisual), "put_Root");
 
-        // The animation root: open slides its Offset.Y, close fades its Opacity — so the acrylic, content (and shadow, when
-        // added) move/fade as one. The popup HWND clips the slide overflow, exactly like WinUI's windowed popup viewport.
+        // animation root — open slides its Offset.Y (the popup HWND clips the overflow, WinUI's windowed-popup viewport).
         IContainerVisual* ar; Check(s_comp->CreateContainerVisual(&ar), "CreateContainerVisual(animRoot)"); _animRoot = ar;
         _animRootVisual = AsVisual((IUnknown*)ar);
         AddChild(_root, _animRootVisual);
 
+        // chrome — holds the drop shadow + the acrylic group and fades them TOGETHER on close (Opacity). Unclipped, so the
+        // shadow extends past the plate into the window's shadow-inset margins.
+        IContainerVisual* chr; Check(s_comp->CreateContainerVisual(&chr), "CreateContainerVisual(chrome)"); _chrome = chr;
+        _chromeVisual = AsVisual((IUnknown*)chr);
+        AddChild(_animRoot, _chromeVisual);
+
+        // acrylic group (rounded-clipped to the content rect). Created now so the shadow mask can capture it; added to chrome
+        // AFTER the shadow so it sits ON TOP and (being opaque) occludes the shadow's center, leaving only the outer ring.
         IContainerVisual* grp; Check(s_comp->CreateContainerVisual(&grp), "CreateContainerVisual(group)"); _group = grp;
         _groupVisual = AsVisual((IUnknown*)grp);
-
-        // Round the backdrop group to the menu corner radius (host-acrylic is a rectangle; its square corners would poke
-        // past the engine-drawn rounded plate/border). Geometry rect + radius are set in ConfigureChrome (the content rect).
         ICompositionRoundedRectangleGeometry* rg; Check(s_comp5->CreateRoundedRectangleGeometry(&rg), "CreateRoundedRectangleGeometry"); _roundGeo = rg;
         ICompositionGeometry* rgGeom; Check(rg->QueryInterface(__uuidof<ICompositionGeometry>(), (void**)&rgGeom), "QI ICompositionGeometry");
         ICompositionGeometricClip* rc; Check(s_comp6->CreateGeometricClipWithGeometry(rgGeom, &rc), "CreateGeometricClipWithGeometry"); _roundClip = rc;
         rgGeom->Release();
         ICompositionClip* rcc; Check(rc->QueryInterface(__uuidof<ICompositionClip>(), (void**)&rcc), "QI ICompositionClip(round)");
         Check(_groupVisual->put_Clip(rcc), "put_Clip(group round)"); rcc->Release();
-        AddChild(_animRoot, _groupVisual);
+
+        // drop shadow — a transparent sprite whose DropShadow is MASKED by the acrylic group's rendered alpha (captured via a
+        // VisualSurface), so the shadow takes the rounded plate's exact shape. Blur/offset/opacity are set in ConfigureChrome.
+        _shadow = MakeSprite();
+        ICompositionVisualSurface* msv; Check(s_compVS->CreateVisualSurface(&msv), "CreateVisualSurface"); _maskSurface = msv;
+        Check(msv->put_SourceVisual(_groupVisual), "put_SourceVisual");
+        ICompositionSurface* msurf; Check(msv->QueryInterface(__uuidof<ICompositionSurface>(), (void**)&msurf), "QI ICompositionSurface(mask)");
+        ICompositionSurfaceBrush* msb; Check(s_comp->CreateSurfaceBrushWithSurface(msurf, &msb), "CreateSurfaceBrushWithSurface(mask)"); msurf->Release();
+        ICompositionBrush* maskBrush; Check(msb->QueryInterface(__uuidof<ICompositionBrush>(), (void**)&maskBrush), "QI ICompositionBrush(mask)"); msb->Release();
+        IDropShadow* ds; Check(s_comp2->CreateDropShadow(&ds), "CreateDropShadow"); _shadowDrop = ds;
+        Check(ds->put_Color(new Color { A = 255, R = 0, G = 0, B = 0 }), "shadow put_Color");
+        Check(ds->put_Mask(maskBrush), "shadow put_Mask"); maskBrush->Release();
+        ICompositionShadow* dsBase; Check(ds->QueryInterface(__uuidof<ICompositionShadow>(), (void**)&dsBase), "QI ICompositionShadow");
+        ISpriteVisual2* sh2; Check(_shadow->QueryInterface(__uuidof<ISpriteVisual2>(), (void**)&sh2), "QI ISpriteVisual2");
+        Check(sh2->put_Shadow(dsBase), "put_Shadow"); sh2->Release(); dsBase->Release();
+        AddChild(_chrome, AsVisual((IUnknown*)_shadow));   // shadow at the BOTTOM of chrome
+        AddChild(_chrome, _groupVisual);                    // acrylic group ON TOP of the shadow
 
         // 1) host-backdrop (desktop-sampling, pre-blurred) sprite
         _backdrop = MakeSprite();
@@ -195,10 +224,13 @@ internal sealed unsafe class CompositionBackdrop : IDisposable
         var size = new Vector2(w, h);
         Check(_rootVisual->put_Size(size), "put_Size(root)");
         Check(_animRootVisual->put_Size(size), "put_Size(animRoot)");
+        Check(_chromeVisual->put_Size(size), "put_Size(chrome)");
         Check(_groupVisual->put_Size(size), "put_Size(group)");
         PutSpriteSize(_backdrop, size);
         PutSpriteSize(_tint, size);
         PutSpriteSize(_content, size);
+        PutSpriteSize(_shadow, size);
+        Check(_maskSurface->put_SourceSize(size), "mask put_SourceSize");   // capture the whole group (rounded acrylic + transparent margins)
         if (_contentHPx <= 0f)   // not configured yet — round to the whole window as a sane default
         {
             Check(_roundGeo->put_Size(size), "round put_Size");
@@ -224,6 +256,13 @@ internal sealed unsafe class CompositionBackdrop : IDisposable
         Check(_roundGeo->put_Offset(new Vector2(contentPx.X, contentPx.Y)), "round put_Offset");
         Check(_roundGeo->put_Size(new Vector2(contentPx.W, contentPx.H)), "round put_Size");
         Check(_roundGeo->put_CornerRadius(new Vector2(cornerRadiusPx, cornerRadiusPx)), "round put_CornerRadius");
+
+        // Drop-shadow recipe to fit the WinUI medium-popup insets (L10 T2 R10 B18 DIP): blur ≈ side inset (10), offset down
+        // ≈ (B−T)/2 (8) — at scale, blur extends ~10 sideways, ~2 up, ~18 down. cornerRadiusPx = OverlayCornerRadius(8 DIP)·scale.
+        float scale = cornerRadiusPx > 0f ? cornerRadiusPx / 8f : 1f;
+        Check(_shadowDrop->put_BlurRadius(10f * scale), "shadow put_BlurRadius");
+        Check(_shadowDrop->put_Offset(new Vector3(0f, 8f * scale, 0f)), "shadow put_Offset");
+        Check(_shadowDrop->put_Opacity(0.26f), "shadow put_Opacity");
     }
 
     /// <summary>True for a short window while an open/close motion commits + settles — the host keeps pumping the
@@ -268,8 +307,9 @@ internal sealed unsafe class CompositionBackdrop : IDisposable
         ca->Release(); obj->Release(); kf->Release(); ef->Release(); ease->Release(); anim->Release();
     }
 
-    /// <summary>Close motion: fade the WHOLE animation root (acrylic + content) opacity 1→0 over 83ms linear. The host
-    /// keeps the window alive until <see cref="IsAnimating"/> clears, then disposes — so the acrylic fades, not vanishes.</summary>
+    /// <summary>Close motion: fade the CHROME (acrylic + shadow) opacity 1→0 over 83ms linear. The engine fades the content
+    /// (swapchain) over the same 83ms, so content + acrylic each fade exactly once (no double-fade). The host keeps the
+    /// window alive until <see cref="IsAnimating"/> clears, then disposes — so the acrylic fades out instead of vanishing.</summary>
     public void AnimateClose()
     {
         if (_closing) return;
@@ -281,7 +321,7 @@ internal sealed unsafe class CompositionBackdrop : IDisposable
         IKeyFrameAnimation* kf; Check(anim->QueryInterface(__uuidof<IKeyFrameAnimation>(), (void**)&kf), "QI IKeyFrameAnimation(close)");
         Check(kf->put_Duration(TimeSpan.FromMilliseconds(CloseMs)), "put_Duration(close)");
 
-        ICompositionObject* obj; Check(_animRootVisual->QueryInterface(__uuidof<ICompositionObject>(), (void**)&obj), "QI ICompositionObject(close)");
+        ICompositionObject* obj; Check(_chromeVisual->QueryInterface(__uuidof<ICompositionObject>(), (void**)&obj), "QI ICompositionObject(close)");
         ICompositionAnimation* ca; Check(anim->QueryInterface(__uuidof<ICompositionAnimation>(), (void**)&ca), "QI ICompositionAnimation(close)");
         HSTRING prop = H("Opacity");
         Check(obj->StartAnimation(prop, ca), "StartAnimation(Opacity)");
@@ -296,10 +336,15 @@ internal sealed unsafe class CompositionBackdrop : IDisposable
         if (_tint != null) { _tint->Release(); _tint = null; }
         if (_backdrop != null) { _backdrop->Release(); _backdrop = null; }
         if (_surface != null) { _surface->Release(); _surface = null; }
+        if (_shadowDrop != null) { _shadowDrop->Release(); _shadowDrop = null; }
+        if (_maskSurface != null) { _maskSurface->Release(); _maskSurface = null; }
+        if (_shadow != null) { _shadow->Release(); _shadow = null; }
         if (_roundClip != null) { _roundClip->Release(); _roundClip = null; }
         if (_roundGeo != null) { _roundGeo->Release(); _roundGeo = null; }
         if (_groupVisual != null) { _groupVisual->Release(); _groupVisual = null; }
         if (_group != null) { _group->Release(); _group = null; }
+        if (_chromeVisual != null) { _chromeVisual->Release(); _chromeVisual = null; }
+        if (_chrome != null) { _chrome->Release(); _chrome = null; }
         if (_animRootVisual != null) { _animRootVisual->Release(); _animRootVisual = null; }
         if (_animRoot != null) { _animRoot->Release(); _animRoot = null; }
         if (_rootVisual != null) { _rootVisual->Release(); _rootVisual = null; }

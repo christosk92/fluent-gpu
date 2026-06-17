@@ -55,6 +55,8 @@ public sealed class TreeReconciler
     private Effect? _rootEffect;
     private bool _reconciled;   // set when any structural/column change happened → the host runs (scoped) layout
     private int _renderCount;   // component render-effects that ran since the last frame (granularity metric)
+    private float _themeTransitionMs = float.NaN;        // live-re-theme cross-fade duration; armed only during a RethemeAll flush
+    private readonly List<CompEntry> _rethemeScratch = new();   // snapshot of _comps.Values for RethemeAll (defensive vs reentrancy)
 
     /// <summary>True (and reset) if any mount/update/remove happened since the last call — the host's "layout needed" gate.</summary>
     public bool ConsumeReconciled() { var r = _reconciled; _reconciled = false; return r; }
@@ -104,6 +106,57 @@ public sealed class TreeReconciler
 
     /// <summary>Publish an ambient context (e.g. Viewport.Size) as a host-owned signal consumers can read.</summary>
     public void SetAmbient(object channel, Signal<object?> sig) => _ambient[channel] = sig;
+
+    // ── Live re-theme (host-driven) ────────────────────────────────────────────────────────────────
+    // Re-render every mounted component IN PLACE so it re-reads the active token set after a Tok.Use/SetAccent, with the
+    // resulting fill/border/text color diffs cross-faded. No remount — node identity + component state survive.
+
+    /// <summary>Arm/disarm the live-re-theme cross-fade window. While &gt; 0, <c>WriteColumns</c> seeds a
+    /// <see cref="FluentGpu.Scene.BrushAnim"/> for EVERY fill/border/text color diff at this duration — overriding the
+    /// element's own <c>BrushTransitionMs</c> default (<c>NaN</c> = snap) — so a whole-app token swap animates uniformly.
+    /// The host sets it around exactly the flush that runs the <see cref="RethemeAll"/>-scheduled re-renders, then clears
+    /// it (<c>NaN</c>) so ordinary logical-state flips keep their own per-element timing afterward.</summary>
+    public void SetThemeTransition(float ms) => _themeTransitionMs = ms;
+
+    /// <summary>The live-re-theme cross-fade duration when armed, else the element's own value — the one chokepoint the
+    /// BrushAnim seeding blocks below consult so the override is applied identically to fill, border, and text.</summary>
+    private float ThemeTransitionOr(float elementMs)
+        => (!float.IsNaN(_themeTransitionMs) && _themeTransitionMs > 0f) ? _themeTransitionMs : elementMs;
+
+    /// <summary>Schedule a live re-theme after a <c>Tok.Use</c>/<c>SetAccent</c>: re-run EVERY reactive computation that
+    /// reads the token set so each picks up the new theme, IN PLACE (diff, not remount — state + node identity survive):
+    /// <list type="bullet">
+    /// <item>every mounted component's render-effect (and the root) — <see cref="ReactiveComponent"/>s are invalidated
+    /// first so their cached <c>Setup</c> re-runs with preserved positional hook cells;</item>
+    /// <item>every node binding + control-flow boundary in <c>_nodeBindings</c> — <c>Flow.For</c>/<c>Flow.Show</c>/skeleton
+    /// boundary effects (which build their rows/branches reading tokens, and are NOT component re-renders) and bound
+    /// color channels (<c>Fill</c>/<c>Color</c> = <c>Prop.Of(() =&gt; Tok.X)</c>, owned by their effect, never reached by a
+    /// re-render). Without this, Flow.For lists and bound/frozen surfaces keep the old theme.</item>
+    /// </list>
+    /// <c>Schedule()</c> only enqueues — the re-runs happen in the host's next flush; wrap that flush in
+    /// <see cref="SetThemeTransition"/> so the resulting color diffs cross-fade (re-rendered nodes cross-fade; bound
+    /// channels snap, as they bypass the BrushAnim path by design).</summary>
+    public void RethemeAll()
+    {
+        if (_root is ReactiveComponent rr) rr.InvalidateTree();
+        _rootEffect?.Schedule();
+        _rethemeScratch.Clear();
+        foreach (var e in _comps.Values) _rethemeScratch.Add(e);   // snapshot: Schedule won't mutate _comps, but be defensive
+        for (int i = 0; i < _rethemeScratch.Count; i++)
+        {
+            var e = _rethemeScratch[i];
+            if (e.Comp is ReactiveComponent rc) rc.InvalidateTree();
+            e.Effect?.Schedule();
+        }
+        _rethemeScratch.Clear();
+        // Re-run bindings + control-flow boundaries (Flow.For rows, bound colors, Show/skeleton branches). They read
+        // tokens but are not component renders, so a component re-render alone leaves them on the old theme. Scheduling
+        // is enqueue-only (no _nodeBindings mutation here); harmless for token-independent binds (they re-fire to the
+        // same value, equality-gated). The host's transition window cross-fades the re-rendered diffs these produce.
+        foreach (var list in _nodeBindings.Values)
+            for (int i = 0; i < list.Count; i++)
+                list[i].Schedule();
+    }
 
     // ── Root ──────────────────────────────────────────────────────────────────────────────────────
 
@@ -1145,11 +1198,12 @@ public sealed class TreeReconciler
                 // A BOUND fill is excluded per-channel: its effect owns paint.Fill, so diffing against the static would
                 // arm a phantom fade toward a color the channel doesn't own (the border sub-block is unaffected).
                 bool fillOwned = !b.Fill.IsBound;
-                if (!isMount && !float.IsNaN(b.BrushTransitionMs) && b.BrushTransitionMs > 0f
+                float fillMs = ThemeTransitionOr(b.BrushTransitionMs);   // live re-theme overrides the element's NaN/own duration
+                if (!isMount && !float.IsNaN(fillMs) && fillMs > 0f
                     && ((fillOwned && paint.Fill != b.Fill.Value) || paint.BorderColor != b.BorderColor))
                 {
                     bool midFlight = _scene.TryGetBrushAnim(node, out var prev);
-                    var ba = new BrushAnim { DurationMs = b.BrushTransitionMs };
+                    var ba = new BrushAnim { DurationMs = fillMs };
                     if (fillOwned && paint.Fill != b.Fill.Value)
                     {
                         ba.FillFrom = midFlight && (prev.Channels & BrushAnim.FillBit) != 0
@@ -1578,12 +1632,13 @@ public sealed class TreeReconciler
                 // Implicit BrushTransition on the resting foreground (WinUI BrushTransition on a logical state flip).
                 // Skipped when ColorBind owns the channel (same per-channel rule as the BoxEl fill block above).
                 bool colorOwned = !t.Color.IsBound;
-                if (!isMount && colorOwned && !float.IsNaN(t.BrushTransitionMs) && t.BrushTransitionMs > 0f && paint.TextColor != t.Color.Value)
+                float textMs = ThemeTransitionOr(t.BrushTransitionMs);   // live re-theme overrides the element's NaN/own duration
+                if (!isMount && colorOwned && !float.IsNaN(textMs) && textMs > 0f && paint.TextColor != t.Color.Value)
                 {
                     bool midFlight = _scene.TryGetBrushAnim(node, out var prev);
                     var ba = new BrushAnim
                     {
-                        DurationMs = t.BrushTransitionMs,
+                        DurationMs = textMs,
                         Channels = BrushAnim.TextBit,
                         TextFrom = midFlight && (prev.Channels & BrushAnim.TextBit) != 0
                             ? ColorF.LerpLinear(prev.TextFrom, paint.TextColor, prev.T)

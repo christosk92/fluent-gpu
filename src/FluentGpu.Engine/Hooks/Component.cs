@@ -121,4 +121,12 @@ public abstract class ReactiveComponent : Component
     public abstract Element Setup();
 
     public sealed override Element Render() => _tree ??= Setup();
+
+    /// <summary>Drop the cached tree so the next render re-runs <see cref="Setup"/>. Used by the host's live re-theme
+    /// (<c>Reconciler.RethemeAll</c>) to refresh construction-resolved token colors (e.g. a <c>Tok.*</c> read directly in
+    /// <c>Setup</c>) without a remount: the render-effect re-runs <c>Setup</c> against the SAME <see cref="Component.Context"/>,
+    /// so positional hook cells (state signals, effects, refs) are reused — state and signal identity survive, exactly like
+    /// a plain <see cref="Component"/> re-render. Safe when <c>Setup</c>'s hook call-order and root element type are
+    /// theme-invariant (no hook call gated on a token value), which holds for all in-repo ReactiveComponents.</summary>
+    public void InvalidateTree() => _tree = null;
 }

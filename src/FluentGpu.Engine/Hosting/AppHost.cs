@@ -162,6 +162,14 @@ public sealed class AppHost : IDisposable
     private string? _pendingActivation;
     private Action<string>? _onActivationRedirected;   // cached subscription (unsubscribed in Dispose)
     private Action<RectF>? _onOccludedRectChanged;     // SIP OccludedRect → caret reflow (unsubscribed in Dispose)
+    private bool _pendingSystemColors;                 // OS color-settings change (WM_SETTINGCHANGE) pending; drained at Paint top
+    private Action? _onSystemColorsChanged;            // cached subscription (unsubscribed in Dispose)
+
+    /// <summary>Raised on the UI thread when the OS color settings change (Windows app dark/light flip or accent change),
+    /// delivered at the top of the next frame so handlers may freely mutate the theme / write signals. App code reacts by
+    /// re-reading the OS state and calling <see cref="RequestThemeTransition"/> (typically only while it follows the OS).
+    /// Wired from <see cref="FluentGpu.Pal.IPlatformApp.SystemColorsChanged"/>; never fires under the headless PAL.</summary>
+    public event Action? SystemColorsChanged;
 
     /// <summary>
     /// Raised on the UI thread when a SECOND launch of a single-instance app is redirected to this running instance,
@@ -171,6 +179,24 @@ public sealed class AppHost : IDisposable
     /// <c>FluentGpu.WindowsApi.Activation.SingleInstanceGate</c> on the sender side; never fires under the headless PAL.
     /// </summary>
     public event Action<string>? ActivationRedirected;
+
+    // ── live re-theme (Tok.Use/SetAccent → animated in-place re-render, no remount) ──────────────────
+    // A theme mutation bumps Tok.Epoch. Paint() detects the change at the top of the flush, re-renders every mounted
+    // component in place (so each re-reads the new token set), and arms a cross-fade window around exactly that flush so
+    // the fill/border/text color diffs animate. RequestThemeTransition is the explicit entry (app toggle / OS follow).
+    private int _lastThemeEpoch;                 // last Tok.Epoch the host rethemed for (seeded just after the root mount)
+    private float _pendingThemeMs = float.NaN;   // explicit RequestThemeTransition duration for this frame; NaN = none requested
+
+    /// <summary>Host seam set by the windowing backend: re-apply the OS window material (DWM immersive-dark + Mica) when
+    /// the theme flips. Invoked on the UI thread on every theme change with the new "is dark" flag. Headless leaves it null;
+    /// the material flip is instant (the OS cannot cross-fade it) while the in-app content cross-fades.</summary>
+    public Action<bool>? OnApplyThemeMaterial { get; set; }
+
+    /// <summary>Request a live, animated theme switch: re-render every mounted component IN PLACE and cross-fade the
+    /// resulting color diffs over <paramref name="ms"/> (default 250ms — WinUI ControlNormalAnimationDuration). Call AFTER
+    /// mutating the theme (<c>Theme.Dark = …</c>, <c>Tok.Use</c>/<c>SetAccent</c>). Pass 0 to snap. UI-thread only; wakes an
+    /// idle loop. Reachable from app code via the ambient <see cref="FluentGpu.Hooks.ThemeControl.Request"/> context.</summary>
+    public void RequestThemeTransition(float ms = 250f) { _pendingThemeMs = ms; WakeFrame(); }
 
     private long Probe(int seg, long sinceBytes, long sinceTicks)
     {
@@ -538,6 +564,11 @@ public sealed class AppHost : IDisposable
         // delivers this on the UI thread (no PostMessage hop needed, unlike a cross-thread notification activator).
         _onActivationRedirected = uri => { _pendingActivation = uri; WakeFrame(); };
         app.ActivationRedirected += _onActivationRedirected;
+        // Inbound OS color-settings change (dark-mode/accent flip): the PAL raises this on the UI thread from
+        // WM_SETTINGCHANGE. Stash + WakeFrame; Paint() drains the flag at the top and re-raises the public event so app
+        // code (which owns the System/Light/Dark mode decision) re-reads the OS state and triggers a live re-theme.
+        _onSystemColorsChanged = () => { _pendingSystemColors = true; WakeFrame(); };
+        app.SystemColorsChanged += _onSystemColorsChanged;
         _inputHooks.TextInput = window.TextInput;
         _inputHooks.Fonts = fonts;
         _inputHooks.CaretFocus = (n, blinkMs) => _caretBlinker.Focus(n, blinkMs);
@@ -570,6 +601,7 @@ public sealed class AppHost : IDisposable
         _inputHooks.OpenPopupWindow = OpenPopupWindow;
         _inputHooks.SetPopupWindowBounds = SetPopupWindowBounds;
         _inputHooks.ClosePopupWindow = ClosePopupWindow;
+        _inputHooks.AnimatePopupClose = AnimatePopupCloseWindow;
 
         _reconciler.Anim = _anim;
         // Symmetric teardown of INDEX-keyed per-node side-tables on slot free (mem-06): a freed node's slot is reused,
@@ -592,6 +624,7 @@ public sealed class AppHost : IDisposable
         _reconciler.SetAmbient(FrameClock.Tick, _frameClockSig);
         _hostPostSig = new Signal<object?>((Action<Action>)Post);   // ambient UI-thread poster (HostDispatch.Post / UsePost)
         _reconciler.SetAmbient(HostDispatch.Post, _hostPostSig);
+        _reconciler.SetAmbient(ThemeControl.Request, new Signal<object?>((Action<float>)RequestThemeTransition));   // live re-theme trigger for app code
 
         // Keep-alive repaint: the OS fires this synchronously from inside a modal move/size loop (and on NC
         // hover/press transitions while the frame loop idles). Paint with keepAlive so the device skips its
@@ -612,6 +645,9 @@ public sealed class AppHost : IDisposable
 
         // Mount the root component as a reactive render-effect (initial render builds the scene).
         _reconciler.MountRoot(_root);
+        // Baseline the re-theme epoch AFTER the root mount — startup theme injection (OS accent / Mica window background,
+        // applied before this ctor returns) has already bumped Tok.Epoch, so the FIRST paint must not see a spurious change.
+        _lastThemeEpoch = Tok.Epoch;
     }
 
     private void WakeFrame()
@@ -784,6 +820,13 @@ public sealed class AppHost : IDisposable
                 _pendingActivation = null;
                 ActivationRedirected?.Invoke(activation);
             }
+            // OS color-settings change: deliver to app code BEFORE the flush (same rationale as activation above) so the
+            // handler's Tok.Use/SetAccent + RequestThemeTransition are picked up by THIS frame's theme detection + flush.
+            if (_pendingSystemColors)
+            {
+                _pendingSystemColors = false;
+                SystemColorsChanged?.Invoke();
+            }
 
             long frameStart = Stopwatch.GetTimestamp();
             // FG_RESIZE_DIAG: per-tick segment timing of the modal-loop keep-alive paint. Captured only when both the flag
@@ -852,9 +895,28 @@ public sealed class AppHost : IDisposable
             bool dragActive = _dispatcher.DragDrop.IsActive;
             if (dragActive || _dragWasActive) _dragEpoch.Value = _dragEpoch.Peek() + 1;
             _dragWasActive = dragActive;
-            _runtime.Flush();                                  // 3–5 apply scheduled re-renders (render-effects reconcile) + bindings
-            bool virtualsChanged = _reconciler.ReRealizeVirtuals();   // virtual boundary re-realize (granular)
-            if (virtualsChanged && _runtime.HasPending) _runtime.Flush();   // bound-row rebinds (slot signal writes) land THIS frame
+            // Live re-theme: a Tok.Use/SetAccent bumped Tok.Epoch (or RequestThemeTransition was called). Re-render every
+            // mounted component IN PLACE so each re-reads the new token set, and arm the cross-fade window around EXACTLY
+            // the flush that runs those re-renders (and the virtuals re-flush) so the color diffs animate uniformly —
+            // then disarm so ordinary logical-state flips keep their per-element timing. No remount: state survives.
+            bool themeChanged = Tok.Epoch != _lastThemeEpoch || !float.IsNaN(_pendingThemeMs);
+            float themeMs = !float.IsNaN(_pendingThemeMs) ? _pendingThemeMs : 250f;
+            _pendingThemeMs = float.NaN;
+            if (themeChanged)
+            {
+                _lastThemeEpoch = Tok.Epoch;
+                OnApplyThemeMaterial?.Invoke(Tok.Theme == ThemeKind.Dark);   // instant OS material flip (cannot cross-fade)
+                _reconciler.SetThemeTransition(themeMs);
+                _reconciler.RethemeAll();
+            }
+            bool virtualsChanged = false;
+            try
+            {
+                _runtime.Flush();                              // 3–5 apply scheduled re-renders (render-effects reconcile) + bindings
+                virtualsChanged = _reconciler.ReRealizeVirtuals();   // virtual boundary re-realize (granular)
+                if (virtualsChanged && _runtime.HasPending) _runtime.Flush();   // bound-row rebinds (slot signal writes) land THIS frame
+            }
+            finally { if (themeChanged) _reconciler.SetThemeTransition(float.NaN); }
             bool reconciled = _reconciler.ConsumeReconciled() || virtualsChanged;
             if (s_allocDiag) { db = Probe(SegFlush, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
@@ -1084,23 +1146,39 @@ public sealed class AppHost : IDisposable
             var slot = _popupWindows[i];
             if (slot.Token != token) continue;
             slot.BoundsDip = dipBounds;
-            slot.WindowBoundsDip = dipBounds;   // (no shadow-inset inflation yet — window == menu rect; added with the shadow)
+            // Inflate the popup WINDOW by the WinUI medium-popup shadow insets (L10 T2 R10 B18 DIP) so the composition drop
+            // shadow has margin to render into; the menu plate sits inset at (insL,insT) within the window. RecordPopupWindows
+            // records the subtree at WindowBoundsDip's top-left, so the content lands at the inset offset, and the per-frame
+            // re-glue + the window px both derive from WindowBoundsDip.
+            const float insL = 10f, insT = 2f, insR = 10f, insB = 18f;
+            slot.WindowBoundsDip = new RectF(dipBounds.X - insL, dipBounds.Y - insT, dipBounds.W + insL + insR, dipBounds.H + insT + insB);
             float s = _window.Scale <= 0f ? 1f : _window.Scale;
             var origin = _window.ClientOriginPx;
-            var px = new RectF(origin.X + dipBounds.X * s, origin.Y + dipBounds.Y * s, dipBounds.W * s, dipBounds.H * s);
+            var wb = slot.WindowBoundsDip;
+            var px = new RectF(origin.X + wb.X * s, origin.Y + wb.Y * s, wb.W * s, wb.H * s);
             slot.Window.SetBoundsPx(in px);
             float wpx = MathF.Max(1f, px.W), hpx = MathF.Max(1f, px.H);
             slot.Swapchain?.Resize(new Size2(wpx, hpx));
-            // Configure the desktop-acrylic composition chrome for this placement (content rect = whole window for now;
-            // it becomes the inset plate once the shadow margin lands), then play the open slide on first show.
+            // Content rect = the menu plate inset by the shadow margins (window px): the acrylic rounds to it + the shadow
+            // is masked to it; the engine draws the plate/border/items there too (recorded at the inset origin).
+            var contentPx = new RectF(insL * s, insT * s, dipBounds.W * s, dipBounds.H * s);
             slot.Swapchain?.ConfigurePopupChrome(new PopupChromeMetrics(
-                new RectF(0f, 0f, wpx, hpx), opensUp, closedRatio > 0f ? closedRatio : 0.5f, 8f * s, 1f * s));
+                contentPx, opensUp, closedRatio > 0f ? closedRatio : 0.5f, 8f * s, 1f * s));
             bool firstShow = !slot.Window.IsShown;
             if (firstShow) slot.Window.Show();
             if (firstShow) slot.Swapchain?.AnimatePopupOpen();
             WakeFrame();
             return;
         }
+    }
+
+    /// <summary>Begin the desktop-acrylic CLOSE fade on a popup window's composition chrome (acrylic + shadow). The engine
+    /// fades the content swapchain over the same 83ms; the window itself is disposed at finalize (<see cref="ClosePopupWindow"/>),
+    /// by which time the fade has settled — so the acrylic fades out instead of vanishing.</summary>
+    private void AnimatePopupCloseWindow(int token)
+    {
+        for (int i = 0; i < _popupWindows.Count; i++)
+            if (_popupWindows[i].Token == token) { _popupWindows[i].Swapchain?.AnimatePopupClose(); WakeFrame(); return; }
     }
 
     private void ClosePopupWindow(int token)
@@ -1127,6 +1205,20 @@ public sealed class AppHost : IDisposable
             var slot = _popupWindows[i];
             if (slot.Root.IsNull || !_scene.IsLive(slot.Root)) continue;
             var origin = slot.WindowBoundsDip.IsEmpty ? slot.BoundsDip : slot.WindowBoundsDip;
+            // Re-glue the popup window to the owner's CURRENT screen position. It's a separate top-level HWND in
+            // virtual-screen px; the overlay only re-places it when the anchor's window-DIP moves, so a pure window MOVE
+            // (client origin shifts, anchor-DIP unchanged) — or a resize from the top/left edge — strands it at its old
+            // screen position. Re-derive screen px from the live client origin + the placed DIP each frame (cheap; only
+            // moves the window when it actually drifted >0.5px).
+            if (slot.Swapchain is not null && !origin.IsEmpty)
+            {
+                float os = _window.Scale <= 0f ? 1f : _window.Scale;
+                var co = _window.ClientOriginPx;
+                float wx = co.X + origin.X * os, wy = co.Y + origin.Y * os;
+                var cur = slot.Window.BoundsPx;
+                if (MathF.Abs(wx - cur.X) > 0.5f || MathF.Abs(wy - cur.Y) > 0.5f)
+                    slot.Window.SetBoundsPx(new RectF(wx, wy, cur.W, cur.H));
+            }
             SceneRecorder.RecordSubtree(_scene, slot.DrawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicFlyout.Fallback, in textEdit,
                 slot.Root, new Point2(origin.X, origin.Y));
             if (slot.Swapchain is { } sc)
@@ -1521,6 +1613,7 @@ public sealed class AppHost : IDisposable
     {
         // Detach the activation-redirect subscription so a disposed host's IPlatformApp keeps no callback into it.
         if (_onActivationRedirected is { } onAct) { _app.ActivationRedirected -= onAct; _onActivationRedirected = null; }
+        if (_onSystemColorsChanged is { } onSys) { _app.SystemColorsChanged -= onSys; _onSystemColorsChanged = null; }
         // Symmetric SIP teardown: drop the OccludedRect subscription so a disposed host's window TextInput keeps no
         // callback into it (the SIP reflow closure captures _dispatcher).
         if (_onOccludedRectChanged is { } onOcc) { _window.TextInput.OccludedRectChanged -= onOcc; _onOccludedRectChanged = null; }

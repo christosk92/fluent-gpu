@@ -39,6 +39,25 @@ public static class FluentApp
     public static event Action<string>? ActivationRedirected;
 
     /// <summary>
+    /// Relay of the host's OS color-settings-change event (Windows app dark/light flip or accent change), delivered on the
+    /// UI thread at the top of a frame. App-layer relay (not an Engine-seam accessor) so page/app code can react —
+    /// typically re-reading <see cref="SystemIsDark"/> while it follows the OS — without holding the <c>AppHost</c>.
+    /// </summary>
+    public static event Action? SystemColorsChanged;
+
+    /// <summary>True when the OS "app" theme is Light (Settings ▸ Colors). The app-layer facade over the Win32 reader so
+    /// composition-root code (e.g. seeding the initial theme from a "System" preference) stays free of PAL imports.
+    /// Defaults to FALSE (dark) when unreadable, matching the engine default.</summary>
+    public static bool SystemUsesLightTheme() => Win32Theme.SystemUsesLightTheme();
+
+    /// <summary>The current OS accent color (Settings ▸ Colors), preferring the <c>Light2</c> shade WinUI uses for the
+    /// dark-theme accent fill, else the base accent; null when unreadable. The app-layer facade over the Win32 reader.</summary>
+    public static ColorF? SystemAccent()
+        => Win32Theme.AccentLight2() is { } a ? ColorF.FromRgba(a.R, a.G, a.B)
+         : Win32Theme.Accent() is { } b ? ColorF.FromRgba(b.R, b.G, b.B)
+         : null;
+
+    /// <summary>
     /// Optional diagnostic-harness hook. When it is set and returns <see langword="true"/>, it has taken over the run
     /// (e.g. a soak / stress longevity probe) and the normal interactive frame loop below is skipped. Kept as a generic
     /// seam so the engine entry point carries no dependency on any app-specific harness: the gallery installs its
@@ -89,6 +108,15 @@ public static class FluentApp
         // subscribes there). Forwarding the payload, not the handler chain — handlers attach to FluentApp.ActivationRedirected.
         Action<string> forwardActivation = uri => ActivationRedirected?.Invoke(uri);
         host.ActivationRedirected += forwardActivation;
+
+        // Live re-theme: on every theme change the host re-applies the OS window material so DWM's immersive-dark titlebar
+        // and the Mica system backdrop flip to the new theme's variant (instant — the OS can't cross-fade its backdrop;
+        // the in-app content cross-fades). Mirrors the one-shot startup ApplyWindowMaterial above.
+        host.OnApplyThemeMaterial = dark => Win32Theme.ApplyWindowMaterial(window.Handle.Value, dark, mica, customFrame, micaAlt);
+        // Relay the host's UI-thread OS color-settings-change to the app-layer static event (the app subscribes to follow
+        // the OS dark-mode/accent live while its theme mode is "System").
+        Action forwardSystemColors = () => SystemColorsChanged?.Invoke();
+        host.SystemColorsChanged += forwardSystemColors;
 
         // FG_ALLOC_TYPES=1: bring up the per-type allocation profiler (process-global EventListener; the host drives
         // its once-per-second report on the frame cadence). Stopped in the finally so headless/short runs don't leak it.

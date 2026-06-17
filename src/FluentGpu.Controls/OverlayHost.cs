@@ -420,10 +420,11 @@ internal sealed class OverlayServiceImpl : IOverlayService
             if (!e.PlateNode.IsNull && scene.IsLive(e.PlateNode))
                 anim.Cancel(e.PlateNode, AnimChannel.ScaleY);
             scene.Mark(e.SurfaceNode, NodeFlags.PaintDirty);
-            // NOTE: windowed (OS-backed) menus currently close with this same engine fade of the swapchain content; the
-            // composition acrylic (CompositionBackdrop) is torn down with the window at finalize. Fading the acrylic out
-            // too (CompositionBackdrop.AnimateClose) lands with the shadow step (it needs the group-opacity fade synced
-            // here so content + acrylic fade once each, not a double-fade).
+            // Windowed (OS-backed) menus: ALSO fade the composition CHROME (acrylic + shadow) over the same 83ms via the
+            // host. The engine SurfaceNode fade below covers the swapchain CONTENT (border + items), and the chrome lives
+            // on separate composition visuals, so content + acrylic each fade exactly once (no double-fade). The popup
+            // window is torn down at finalize, after the fade settles — so the acrylic fades out instead of vanishing.
+            if (e.PopupWindowToken >= 0) Hooks?.AnimatePopupClose?.Invoke(e.PopupWindowToken);
             float fadeMs = e.Chrome == PopupChrome.Raw ? RawFadeMs : OpacityMs;
             anim.Animate(e.SurfaceNode, AnimChannel.Opacity, currentOpacity, 0f, fadeMs, Easing.Linear);
         }
