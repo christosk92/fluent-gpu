@@ -76,7 +76,13 @@ This subsystem owns, end to end:
 3. **Shaping** — per-segment complex-script shaping, ligatures/kerning/OpenType features, glyph IDs +
    advances + offsets + cluster map (one shaped run = single face + single script + single direction).
 4. **Layout above shaping** — wrap, align, trim/ellipsis, multi-run line composition, hit-testing,
-   measurement that feeds the Yoga `MeasureFunc`.
+   measurement that feeds the Yoga `MeasureFunc`. **Auto-fit (`TextEl.MinSize` → `TextStyle.MinSizeDip`, opt-in):**
+   when a floor is set with `MaxLines` and a wrapping style, the measure pass binary-searches the largest size in
+   `[MinSize, Size]` whose run wraps to ≤ `MaxLines` at the available width (a Viewbox-for-text; WinUI has no analogue),
+   shaping each probe through the SAME `Measure`. The chosen size is stored on the node's `TextMeasureCache.FitSize`
+   and the recorder shapes the glyph run at it (0 ⇒ the authored size). Off by default (`MinSizeDip == 0`), so all
+   other text is byte-identical; runs only on a cache miss of an opt-in node. As-built: `FlexLayout.FitTextSize`,
+   `SceneRecorder` Text case, `TextMeasureCache.FitSize`.
 5. **Rasterization** — glyph → bitmap (R8 grayscale; BGRA color/emoji), subpixel positioning, gamma policy.
 6. **Glyph atlas** — packing, multi-page, frame-start LRU eviction, the realization-cache key, the
    `GlyphRunRealization` content-epoch, and the by-handle `DrawGlyphRunCmd` reference.

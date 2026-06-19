@@ -2,6 +2,7 @@ using System.IO;
 using FluentGpu;             // FluentApp
 using FluentGpu.Dsl;         // Theme (startup theme seed)
 using FluentGpu.Foundation;  // Diag
+using FluentGpu.Localization; // Loc tables (assets/loc)
 
 namespace Wavee;
 
@@ -43,6 +44,11 @@ static class Program
         var settings = AppDataSettings.ForUnpackaged("Wavee", "Wavee");
         int themeMode = settings.Get(WaveeSettings.ThemeMode);
         Theme.Dark = themeMode switch { 1 => false, 2 => true, _ => !FluentApp.SystemUsesLightTheme() };
+
+        // ── Localization: load the bundled culture tables (assets/loc/*.json, copied next to the exe) before the first
+        // frame, so every Loc.Get(Strings.*) resolves. en-US is the base + terminal fallback; more cultures drop in later.
+        Localization.DefaultCulture = "en-US";
+        Localization.LoadFolder(Path.Combine(AppContext.BaseDirectory, "assets", "loc"));
 
         try
         {

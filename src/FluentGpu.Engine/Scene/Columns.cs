@@ -20,6 +20,9 @@ public struct TextMeasureCache
     public TextStyle Style;
     public float MaxW;
     public Size2 Size;
+    /// <summary>Auto-fit resolved font size (TextEl.MinSize / TextStyle.MinSizeDip): the size the measure pass shrank
+    /// to so the run fits MaxLines at MaxW. 0 ⇒ no auto-fit (the recorder shapes at the authored SizeDip).</summary>
+    public float FitSize;
     /// <summary>Underline bar top, measured DOWN from the line top (DWrite underlinePosition flipped over the baseline
     /// — TextLayoutEngine.cs:141; headless model: baseline + 1).</summary>
     public float UnderlineY;
@@ -239,6 +242,7 @@ public struct ScrollState
     // Persistent scrollbar: keep the bar visible (thin rail) whenever content overflows, bypassing the auto-hide FadeT
     // gate at record time (hover still expands it). Set by the reconciler from ScrollEl.AlwaysShowScrollbar.
     public bool  AlwaysShowBar;
+    public bool  SuppressBar;             // never draw the conscious scrollbar (paged shelves nav by pager, not the bar)
     public float IdleMs;                  // time since the last scroll movement / hover (drives the auto-hide)
     public bool PointerOver;              // pointer is inside this scroll viewport
     public bool PointerOverScrollbar;     // pointer is inside this viewport's scrollbar gutter

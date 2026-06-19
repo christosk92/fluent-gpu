@@ -95,11 +95,22 @@ public sealed class AutoSuggestBox : Component
     public IReadOnlyList<string> Suggestions = [];
     public string Placeholder = "Search";
     public float Width = 280f;
+    /// <summary>Flex-fill factor. When &gt; 0 the field fills its parent's WIDTH on its own — no wrapper, no external
+    /// <see cref="WidthSignal"/>: the root drops its explicit <see cref="Width"/> (so a COLUMN parent cross-stretches it
+    /// and a ROW parent grows it), self-measures via <c>OnBoundsChanged</c>, and clamps its main-axis to
+    /// <see cref="FieldMinHeight"/> so a column can't grow it vertically. Pair with <see cref="MaxFillWidth"/> to cap it
+    /// (the omnibar uses <c>grow:1, maxFillWidth:720</c>).</summary>
+    public float Grow;
+    /// <summary>In fill mode (<see cref="Grow"/> &gt; 0), the maximum width (DIP) the field grows to; 0 = unbounded
+    /// (fills the parent). Applied as the root's <c>MaxWidth</c> so the layout clamps the stretch/grow directly.</summary>
+    public float MaxFillWidth;
     /// <summary>LIVE available width (DIP) — when set, the field renders at <c>min(Width, WidthSignal.Value)</c>
     /// (<see cref="Width"/> becomes the maximum). Component plain fields freeze at mount, so a search box that must
     /// give way as its host narrows takes the host's measured slot signal here (the titlebar passes
     /// <see cref="TitleBar.ContentAvail"/>); the popup surfaces follow the same effective width.</summary>
     public IReadSignal<float>? WidthSignal;
+    // Self-measured width when Grow > 0 and no external WidthSignal: updated via OnBoundsChanged on the root BoxEl.
+    readonly Signal<float> _selfW = new(0f);
     public Signal<string>? Text;                       // caller-owned query (two-way), like ComboBox.Text
     public Action<string>? OnTextChanged;              // legacy alias of TextChanged (no reason argument)
     /// <summary>WinUI <c>TextChanged</c> with <c>AutoSuggestBoxTextChangedEventArgs.Reason</c> (debounced 150ms;
@@ -137,19 +148,30 @@ public sealed class AutoSuggestBox : Component
         IReadSignal<float>? widthSignal = null,
         Field<string>? field = null,
         float minHeight = 32f,
-        float cornerRadius = 0f)
+        float cornerRadius = 0f,
+        float grow = 0f,
+        float maxFillWidth = 0f)
         => Embed.Comp(() => new AutoSuggestBox
         {
-            Suggestions = suggestions, Placeholder = placeholder, Width = width, WidthSignal = widthSignal, Text = text,
+            Suggestions = suggestions, Placeholder = placeholder, Width = width, Grow = grow, MaxFillWidth = maxFillWidth,
+            WidthSignal = widthSignal, Text = text,
             OnTextChanged = onTextChanged, OnSuggestionChosen = onSuggestionChosen,
             OnQuerySubmitted = onQuerySubmitted, QueryIcon = queryIcon, MaxHeight = maxPopupHeight, DebounceMs = debounceMs,
             TextChanged = textChanged, UpdateTextOnSelect = updateTextOnSelect, Parts = parts, Field = field,
             FieldMinHeight = minHeight, FieldRadius = cornerRadius,
         });
 
-    // The rendered width: the live signal (clamped by Width as the max) over the frozen mount value. Reading it
-    // inside a Render subscribes THAT component (the field here, the popup body in SuggestionsList) to live resizes.
-    internal float EffectiveWidth => WidthSignal is { } ws ? MathF.Min(Width, ws.Value) : Width;
+    // The rendered width — what sizes the inner editor and the popup. Reading it inside a Render subscribes THAT
+    // component (the field here, the popup body in SuggestionsList) to live resizes.
+    //  • WidthSignal (legacy/explicit): min(Width, signal) — Width is the cap.
+    //  • Grow > 0 (fill mode): the SELF-MEASURED width (_selfW from OnBoundsChanged). The MaxFillWidth cap is enforced
+    //    by the layout (root MaxWidth), so _selfW already reflects it — no extra clamp here. Before the first bounds
+    //    report (_selfW == 0) fall back to the cap, else the fixed Width, for one frame.
+    //  • otherwise: the fixed Width.
+    internal float EffectiveWidth =>
+        WidthSignal is { } ws ? MathF.Min(Width, ws.Value) :
+        Grow > 0f            ? (_selfW.Value > 0f ? _selfW.Value : (MaxFillWidth > 0f ? MaxFillWidth : Width)) :
+        Width;
 
     // Re-filter helper shared by the root (open-decision) and the popup body (render). Case-insensitive substring;
     // empty query → no matches (WinUI: list opens iff query non-empty AND count > 0).
@@ -371,20 +393,31 @@ public sealed class AutoSuggestBox : Component
         // subscribes to this memo and resizes itself when the live width moves.
         var innerWidth = UseComputed(() => EffectiveWidth - iconCol);
 
+        var editor = Embed.Comp(() =>
+        {
+            var e = new EditableText
+            {
+                Text = query, Width = width - iconCol, WidthSignal = innerWidth, Height = 32f, Placeholder = Placeholder,
+                Chromeless = true,
+                OnCommit = OnEnter, OnCancel = OnEscape,
+                OnFocusChanged = f => { if (!f) Field?.MarkTouched(); },   // form-validation.md: arm the OnTouched gate on blur
+            };
+            _edit = e;
+            return e;
+        });
         var children = new List<Element>
         {
-            Embed.Comp(() =>
-            {
-                var e = new EditableText
-                {
-                    Text = query, Width = width - iconCol, WidthSignal = innerWidth, Height = 32f, Placeholder = Placeholder,
-                    Chromeless = true,
-                    OnCommit = OnEnter, OnCancel = OnEscape,
-                    OnFocusChanged = f => { if (!f) Field?.MarkTouched(); },   // form-validation.md: arm the OnTouched gate on blur
-                };
-                _edit = e;
-                return e;
-            }),
+            // FILL MODE — the editor is wrapped in a Basis=0 box. EditableText is a FIXED-WIDTH control (its root always
+            // sets an explicit Width), so without this its measured width would flow up as our content width → as the
+            // BASE width of every ancestor COLUMN (PageHeader → card → content), which (Shrink=0) can't shrink to the
+            // window → horizontal overflow, and since we self-measure that width back into the editor it DIVERGED
+            // (infinite expansion). FlexLayout zeroes a Basis=0 child's measured main (FlexLayout.cs:217), so this box
+            // contributes 0 to our measured width — we collapse to just the query button — while Grow=1 still arranges
+            // the editor to fill. (Non-fill keeps the editor inline: the explicit Width is the INTENDED fixed size.)
+            Grow > 0f
+                ? new BoxEl { Grow = 1f, Basis = 0f, Shrink = 1f, ClipToBounds = true,
+                              AlignItems = FlexAlign.Stretch, Children = [editor] }
+                : editor,
         };
 
         if (hasIcon)
@@ -440,7 +473,23 @@ public sealed class AutoSuggestBox : Component
         var root = new BoxEl
         {
             // WinUI AutoSuggestBox field surface: ControlCornerRadius, 1px ControlStrokeColorDefault, ControlFillColorDefault.
-            Direction = 0, Width = width, MinHeight = FieldMinHeight, AlignItems = FlexAlign.Center,
+            Direction = 0,
+            // Fill mode (Grow > 0): fill the parent's WIDTH while keeping a fixed height.
+            //  • Width=NaN          → a COLUMN parent cross-stretches us to its width; a ROW parent grows us in.
+            //  • Height (explicit)  → the height we contribute to a column (so it allocates the field's row) AND the
+            //                         cross size in a row. NOTE: do NOT use Basis=0 on this root — Basis is the MAIN
+            //                         axis, which is VERTICAL in a column, so it would zero our height contribution and
+            //                         the next row would overlap us. The editor-wrapper Basis=0 (below) is what keeps
+            //                         our WIDTH from over-propagating; the root keeps its natural (tiny) content width.
+            //  • Grow + MaxHeight   → Grow fills the width (row) but is also vertical in a column; MaxHeight clamps that
+            //                         (FlexLayout clamps grow by ClampMain → MaxH) so a column can't stretch us tall.
+            //  • MaxWidth           → caps the fill (omnibar = 720; 0 = unbounded).
+            Width = Grow > 0f ? float.NaN : width,
+            Height = Grow > 0f ? FieldMinHeight : float.NaN,
+            Grow = Grow,
+            MaxWidth = Grow > 0f && MaxFillWidth > 0f ? MaxFillWidth : float.NaN,
+            MaxHeight = Grow > 0f ? FieldMinHeight : float.NaN,
+            MinHeight = FieldMinHeight, AlignItems = FlexAlign.Center,
             Corners = fieldCorners, BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, Fill = Tok.FillControlDefault,
             // The field surface (WinUI TextBox BorderElement) owns the PointerOver fill at the field's CORNER RADIUS, and
             // CLIPS — so the inner Chromeless editor's square hover fill follows the (possibly pill) corners instead of
@@ -451,6 +500,10 @@ public sealed class AutoSuggestBox : Component
             Role = AutomationRole.ComboBox,
             OnRealized = anchorCapture,
             OnKeyDown = HandleNavKeys,                 // Up/Down bubble up to here from the focused field
+            // Grow mode: self-measure width for EffectiveWidth so internal children + popup size correctly.
+            OnBoundsChanged = Grow > 0f && WidthSignal is null
+                ? r => { if (r.W > 0f && MathF.Abs(r.W - _selfW.Peek()) > 0.5f) _selfW.Value = r.W; }
+                : null,
             Children = rootKids,
         };
         if (Parts is { } rp)
@@ -465,8 +518,15 @@ public sealed class AutoSuggestBox : Component
             };
         }
         // form-validation.md: stack the reveal-animated error message row under the field (popup still anchors to `root`).
+        // Fill mode: the wrapper fills width like the root (Width=NaN + Grow); no Basis=0 (this is a COLUMN, so Basis is
+        // the vertical axis — zeroing it would collapse the field+message height) and no height lock (the message needs room).
         if (Field is { } vfield)
-            return new BoxEl { Direction = 1, Width = width, Children = [root, FieldVisuals.MessageRow(vfield.Error)] };
+            return new BoxEl
+            {
+                Direction = 1,
+                Width = Grow > 0f ? float.NaN : width, Grow = Grow,
+                Children = [root, FieldVisuals.MessageRow(vfield.Error)],
+            };
         return root;
     }
 

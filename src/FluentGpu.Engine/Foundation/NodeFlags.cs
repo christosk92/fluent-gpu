@@ -18,6 +18,14 @@ public enum NodeFlags : uint
                                    // wins when the gesture runs along its own axis and yields (the list scrolls) when
                                    // cross-axis (input-a11y.md §7A; the declarative form of DragController.YieldsToPan)
 
+    // layout notification
+    BoundsChangedPending = 1u << 4,   // a NEW OnBoundsChanged handler was just installed on this node — deliver the
+                                      // node's current arranged rect to it ONCE on the next arrange even if the rect is
+                                      // unchanged (the handler is edge-triggered on subsequent deltas, but an
+                                      // unconstrained node whose Arrange size == its silently-Measured size would
+                                      // otherwise never get its initial value). Set in SetBoundsChangedHandler, cleared
+                                      // by SetArrangedBounds after the one-shot invoke.
+
     // state
     Visible = 1u << 8,
     HitTestVisible = 1u << 9,
@@ -51,4 +59,7 @@ public enum NodeFlags : uint
     // lifecycle
     NewThisFrame = 1u << 29,
     Detached = 1u << 28,
+    Parked = 1u << 27,            // node belongs to a KeepAlive-parked (backgrounded, detached) subtree: the animation /
+                                  // scroll tickers skip it + exclude it from HasActive (idle wake-stop), and a component
+                                  // mounted under it seeds INACTIVE. Set/cleared by Reconciler.SetSubtreeParked.
 }

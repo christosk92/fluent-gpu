@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Localization;
 using FluentGpu.Signals;
 
 namespace Wavee;
@@ -14,14 +16,22 @@ namespace Wavee;
 // piece re-renders itself from the signals it reads. Mounted by WaveeApp inside the Services + PlaybackBridge providers.
 sealed class WaveeShell : Component
 {
-    // One open browser-style tab: its route key, the strip label/glyph, and the route Arg (playlist display name).
-    private sealed record OpenTab(string Key, string Label, string Glyph, string? Arg);
+    // One open browser-style tab: stable identity + route key, strip label/glyph, and route Arg (playlist display name).
+    private sealed record OpenTab(int Id, string Key, string Label, string Glyph, string? Arg);
 
     readonly Signal<Route> _route = new(new Route("home"));
     readonly Signal<bool> _canBack = new(false);
+    readonly Signal<bool> _canForward = new(false);
     readonly List<Route> _history = new();
+    readonly List<Route> _forwardHistory = new();
+    readonly HistoryStore _historyStore = new();
+    // Page-scoped Mica tint: a detail page writes its art colour here while active; the shell paints it as a low-alpha
+    // scrim BEHIND the chrome (which is translucent over Mica), so the window material carries the colour. Null ⇒ plain
+    // Mica. Owner-gated writes (ShellTintState) make A→B navigation race-free. Provided at the root via ShellTint.Slot.
+    readonly Signal<ShellTintState> _shellTint = new(default);
 
-    readonly List<OpenTab> _open = new() { new OpenTab("home", "Home", Icons.Home, null) };
+    int _nextTabId = 1;
+    readonly List<OpenTab> _open = new() { new OpenTab(0, "home", Loc.Get(Strings.Nav.Home), Icons.Home, null) };
     readonly Signal<int> _tabsVersion = new(0);
     readonly Signal<int> _selectedTab = new(0);
 
@@ -42,11 +52,54 @@ sealed class WaveeShell : Component
 
     // The shell receives its persisted settings through the IAppSettings interface (provided by the composition root,
     // Services). It never sees the concrete store — no "ForUnpackaged"/registry/publisher detail leaks in here.
+    static string HistoryFilePath() => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "Wavee", "WaveeMusic", "history.json");
+
     public WaveeShell(IAppSettings settings)
     {
         _settings = settings;
         _sidebarCompact = new(settings.Get(WaveeSettings.SidebarCollapsed));
         _sidebarWidth = new(settings.Get(WaveeSettings.SidebarWidth));
+
+        _historyStore.Init(HistoryFilePath());
+        _historyStore.LoadFromDisk();
+
+        _historyStore.Add(new Route("home"));   // record this session's first visit
+        if (_historyStore.Entries.Count == 1)   // only seed fake data on a fresh install (nothing loaded from disk)
+            SeedFakeHistory();
+    }
+
+    void SeedFakeHistory()
+    {
+        var now = DateTime.Now;
+        void At(Route r, int daysAgo, int hour, int min)
+            => _historyStore.AddAt(r, now.Date.AddDays(-daysAgo).AddHours(hour).AddMinutes(min));
+
+        // Earlier (5-7 days ago)
+        At(new Route("artists"),                     7, 14, 23);
+        At(new Route("albums"),                      7, 14, 45);
+        At(new Route("pl:local:1", "Deep Focus"),    6,  9, 30);
+        At(new Route("search", "Daft Punk"),         5, 20, 12);
+        At(new Route("liked"),                       5, 18,  5);
+        // This week (2-3 days ago)
+        At(new Route("podcasts"),                    3,  8, 45);
+        At(new Route("pl:local:2", "Morning Run"),   3,  7, 15);
+        At(new Route("search", "Taylor Swift"),      2, 16, 30);
+        At(new Route("home"),                        2, 16, 35);
+        At(new Route("artists"),                     2, 16, 40);
+        At(new Route("albums"),                      2, 17,  0);
+        // Yesterday
+        At(new Route("pl:local:3", "Chill Vibes"),   1, 10, 20);
+        At(new Route("liked"),                       1, 11,  5);
+        At(new Route("search", "Radiohead"),         1, 14, 33);
+        At(new Route("home"),                        1, 19,  0);
+        At(new Route("podcasts"),                    1, 21, 10);
+        // Today
+        At(new Route("albums"),                      0,  9, 15);
+        At(new Route("pl:local:1", "Deep Focus"),    0,  9, 30);
+        At(new Route("artists"),                     0, 10,  0);
+        At(new Route("search", "Stromae"),           0, 10, 20);
     }
 
     void SaveSidebar()
@@ -79,9 +132,9 @@ sealed class WaveeShell : Component
                 {
                     IconGlyph = "", ShowPaneToggle = false, ShowCaptionButtons = true,
                     Tabs = () => Embed.Comp(BuildTabStrip),
-                    TabsVersion = () => _tabsVersion.Value,
+                    TabsVersion = TitleBarTabsVersion,
                 }),
-                Embed.Comp(() => new ShellToolbar(_route, _canBack, Go, Back, Home, _searchText, _sidebarCompact, ToggleTheme)),
+                Embed.Comp(() => new ShellToolbar(_route, _canBack, _canForward, GoNav, Back, Forward, Home, _searchText, _sidebarCompact, ToggleTheme, _history, _forwardHistory)),
                 Ui.ZStack(
                     // The sidebar + content row. The sidebar PANE (SidebarPane) is the row's DIRECT child, so ITS width
                     // is what the row distributes — the content column re-solves and tiles against it gap-free. The width
@@ -113,7 +166,7 @@ sealed class WaveeShell : Component
                                 {
                                     Direction = 1, Grow = 1f,
                                     Opacity = Prop.Of(() => _sidebarFade.Value),
-                                    Children = [ Embed.Comp(() => new WaveeSidebar(_route, Go, _sidebarCompact)) ],
+                                    Children = [ Embed.Comp(() => new WaveeSidebar(_route, GoNav, _sidebarCompact)) ],
                                 },
                             ],
                         },
@@ -132,7 +185,7 @@ sealed class WaveeShell : Component
                                         // host's live re-theme (RethemeAll) re-fires it → FillCardDefault follows the theme.
                                         Fill = Prop.Of(() => WaveeColors.FileArea), Corners = CornerRadius4.All(WaveeRadius.Card),
                                         Shadow = Elevation.Card, ClipToBounds = true,
-                                        Children = [ Embed.Comp(() => new ContentHost(_route)) ],
+                                        Children = [ Embed.Comp(() => new ContentHost(_route, ActiveTabId)) ],
                                     },
                                 ],
                             },
@@ -161,7 +214,20 @@ sealed class WaveeShell : Component
             ],
         };
 
-        return Embed.Comp(() => new OverlayHost { Child = column });
+        // The Mica-tint scrim: a full-bleed layer BEHIND the 4-row chrome whose Fill is the (bound) page tint. The root
+        // stays Mica-passthrough when the tint is null (Transparent); when a detail page sets it, the low-alpha colour
+        // sits between DWM Mica and the translucent chrome, so the visible Mica regions carry the album/playlist hue.
+        var tinted = new BoxEl
+        {
+            Grow = 1f, Direction = 1,
+            Fill = Prop.Of(() => _shellTint.Value.Color ?? ColorF.Transparent),
+            Children = [column],
+        };
+
+        return Ctx.Provide(ShellTint.Slot, _shellTint,
+               Ctx.Provide(HistoryStore.NavCtx, (Action<string, string?>)GoNav,
+               Ctx.Provide(HistoryStore.Slot, _historyStore,
+               Embed.Comp(() => new OverlayHost { Child = tinted }))));
     }
 
     TabStrip BuildTabStrip() => new TabStrip
@@ -178,6 +244,13 @@ sealed class WaveeShell : Component
         SelectedFill = Prop.Of(() => WaveeColors.Toolbar), TabWidth = 200f, MinTabWidth = 120f, MaxTabWidth = 240f,
     };
 
+    int TitleBarTabsVersion()
+    {
+        int version = _tabsVersion.Value;
+        int selected = _selectedTab.Value;
+        return unchecked(version * 397 ^ selected);
+    }
+
     IReadOnlyList<TabViewItem> BuildTabItems()
     {
         var items = new TabViewItem[_open.Count];
@@ -186,39 +259,71 @@ sealed class WaveeShell : Component
         return items;
     }
 
+    int ActiveTabId()
+    {
+        _ = _tabsVersion.Value;
+        int i = _selectedTab.Value;
+        return (uint)i < (uint)_open.Count ? _open[i].Id : -1;
+    }
+
     // ── navigation (the single source of truth the chrome reads) ─────────────────────────────────
     void Go(string key, string? arg)
     {
         _history.Add(_route.Peek());
+        _forwardHistory.Clear();
+        _canForward.Value = false;
         _route.Value = new Route(key, arg);
         _canBack.Value = _history.Count > 0;
+        _historyStore.Add(_route.Peek());
         SyncActiveTab(_route.Peek());
     }
 
     void Back()
     {
         if (_history.Count == 0) return;
+        _forwardHistory.Add(_route.Peek());
+        _canForward.Value = true;
         _route.Value = _history[^1];
         _history.RemoveAt(_history.Count - 1);
         _canBack.Value = _history.Count > 0;
+        _historyStore.Add(_route.Peek());
+        SyncActiveTab(_route.Peek());
+    }
+
+    void Forward()
+    {
+        if (_forwardHistory.Count == 0) return;
+        _history.Add(_route.Peek());
+        _canBack.Value = true;
+        _route.Value = _forwardHistory[^1];
+        _forwardHistory.RemoveAt(_forwardHistory.Count - 1);
+        _canForward.Value = _forwardHistory.Count > 0;
+        _historyStore.Add(_route.Peek());
         SyncActiveTab(_route.Peek());
     }
 
     void Home() => Go("home", null);
+
+    // History always opens in its own tab (global view — same as browser convention).
+    void GoNav(string key, string? arg)
+    {
+        if (key == "history") OpenNewTab(key);
+        else Go(key, arg);
+    }
 
     void SyncActiveTab(Route r)
     {
         int i = _selectedTab.Peek();
         if ((uint)i >= (uint)_open.Count) return;
         var (title, glyph) = ShellNav.Dest(r);
-        _open[i] = new OpenTab(r.Name, title, glyph, r.Arg);
+        _open[i] = _open[i] with { Key = r.Name, Label = title, Glyph = glyph, Arg = r.Arg };
         _tabsVersion.Value = _tabsVersion.Peek() + 1;
     }
 
     void OpenNewTab(string key)
     {
         var (title, glyph) = ShellNav.Dest(key, null);
-        _open.Add(new OpenTab(key, title, glyph, null));
+        _open.Add(new OpenTab(_nextTabId++, key, title, glyph, null));
         _selectedTab.Value = _open.Count - 1;
         _tabsVersion.Value = _tabsVersion.Peek() + 1;
         Go(key, null);

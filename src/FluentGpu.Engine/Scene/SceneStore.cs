@@ -407,7 +407,17 @@ public sealed class SceneStore : ISceneBackend
 
     public void SetClickHandler(NodeHandle h, Action? handler) => _click[LiveIndex(h)] = handler;
     public Action? GetClickHandler(NodeHandle h) => _click[LiveIndexOrZero(h)];
-    public void SetBoundsChangedHandler(NodeHandle h, Action<RectF>? handler) => _boundsChanged[LiveIndex(h)] = handler;
+    public void SetBoundsChangedHandler(NodeHandle h, Action<RectF>? handler)
+    {
+        int idx = LiveIndex(h);
+        // First install of a handler on a node that had none ⇒ arm a one-shot initial delivery: an unconstrained node
+        // whose final arranged rect equals its silently-Measured rect would otherwise never see its first value (the
+        // edge-triggered SetArrangedBounds only fires on a delta). Re-installing on steady re-renders (handler already
+        // present) does NOT re-arm, so the callback fires once at mount then only on real bounds changes.
+        if (handler is not null && _boundsChanged[idx] is null) _flags[idx] |= NodeFlags.BoundsChangedPending;
+        else if (handler is null) _flags[idx] &= ~NodeFlags.BoundsChangedPending;
+        _boundsChanged[idx] = handler;
+    }
     public Action<RectF>? GetBoundsChangedHandler(NodeHandle h) => _boundsChanged[LiveIndexOrZero(h)];
     public void SetKeyHandler(NodeHandle h, Action<KeyEventArgs>? handler) => _keyHandler[LiveIndex(h)] = handler;
     public Action<KeyEventArgs>? GetKeyHandler(NodeHandle h) => _keyHandler[LiveIndexOrZero(h)];

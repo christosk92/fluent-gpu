@@ -125,10 +125,11 @@ The per-glyph color field of GlyphInstance: **text.md**.)
 | Hook | Authority |
 |------|-----------|
 | **Signals reactive core** (`Signal<T>`/`FloatSignal`/`Memo<T>`/`Effect`/`ReactiveRuntime`; AS-BUILT signals-first runtime, shipped in `FluentGpu.Foundation`) | reconciler-hooks.md §0bis |
-| UseSignal / UseFloatSignal / UseComputed (signals hooks) + ReactiveComponent.Setup() + Flow.For/Flow.Show + the `Prop<T>` reactive element props (Transform/Opacity/Fill/Width/Height/Text/Color/Source/Placeholder; record shape co-owned by dsl-aot.md) | reconciler-hooks.md §0bis |
+| UseSignal / UseFloatSignal / UseComputed (signals hooks) + ReactiveComponent.Setup() + Flow.For/Flow.Show/Flow.KeepAlive + the `Prop<T>` reactive element props (Transform/Opacity/Fill/Width/Height/Text/Color/Source/Placeholder; record shape co-owned by dsl-aot.md) | reconciler-hooks.md §0bis |
 | UseState / UseReducer / UseMemo / UseCallback / UseEffect / UseLayoutEffect / UseContext / UseRef | reconciler-hooks.md |
+| UseIsActive / UseActivation (component activation lifecycle: parked-by-KeepAlive OR window-minimized; the `Activation.IsActive` ambient + the `SetSubtreeParked` engine auto-quiesce of parked anim/scroll tickers) | reconciler-hooks.md §0bis (window-visibility source: pal-rhi.md; as-built: src\FluentGpu.Engine\Hooks\RenderContext.cs + Reconciler.cs + Hosting\AppHost.cs) |
 | UseVirtual / UseInfiniteCollection / UseVisibleRange | virtualization.md (DepKey/cell semantics: reconciler-hooks.md) |
-| IVirtualLayout / IMeasuredVirtualLayout (E11-L0 seam) + built-in layouts (Stack/Grid/HorizontalGrid/LinedFlow/SpanningGrid/MeasuredStack/GroupedList) | virtualization.md (as-built: src\FluentGpu.Engine\Scene\VirtualLayout.cs) |
+| IVirtualLayout / IMeasuredVirtualLayout / IViewportVirtualLayout (E11-L0 seam) + built-in layouts (Stack/Grid/HorizontalGrid/FillRow/LinedFlow/SpanningGrid/MeasuredStack/GroupedList) | virtualization.md (as-built: src\FluentGpu.Engine\Scene\VirtualLayout.cs) |
 | VirtualListEl realize lifecycle (OnItemPrepared/Clearing/IndexChanged/OnVisibleRange/OnRealized) | virtualization.md (as-built: src\FluentGpu.Engine\Reconciler\VirtualListEl.cs + Reconciler RealizeWindow) |
 | SelectionModel / ItemContainer / ItemsView (E11-L3) | controls.md (selection semantics cite WinUI controls\dev\ItemsView selectors; as-built: src\FluentGpu.Controls) |
 | UseImage / UseMosaic / UseVideoSurface / UseSyncedLyrics | media-pipeline.md (UseSyncedLyrics timing: backdrop-effects-animation.md) |

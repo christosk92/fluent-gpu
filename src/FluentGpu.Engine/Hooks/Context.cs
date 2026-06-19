@@ -33,6 +33,20 @@ public static class FrameClock
 }
 
 /// <summary>
+/// The app-wide window-visibility signal, published by the host: <c>false</c> while the window is minimized (or while
+/// the app has signalled a power suspend via <c>AppHost.SetWindowActive(false)</c>), <c>true</c> otherwise. The
+/// <see cref="RenderContext.UseIsActive"/> hook AND-folds it with the component's own KeepAlive-parked state so a
+/// component learns it is inactive when its page is backgrounded OR the window is invisible. Published as a host-owned
+/// ambient (like <c>Viewport.Size</c>); the channel value is the visibility <c>IReadSignal&lt;bool&gt;</c> itself
+/// (which never re-publishes, so resolving it is re-render-free — the hook reads the inner signal to subscribe).
+/// NAMESPACED <c>Activation.IsActive</c> (bare <c>IsActive</c> collides with <c>DragController.IsActive</c>).
+/// </summary>
+public static class Activation
+{
+    public static readonly Context<IReadSignal<bool>?> IsActive = new(null);
+}
+
+/// <summary>
 /// A host-owned registration surface a tree-level concern can hook into without the host depending on it. The host
 /// bridges <see cref="KeyPreview"/> into the input dispatcher's pre-focus key hook, and runs
 /// <see cref="AfterAnimations"/> after the animation engine ticks but before recording. Read the host instance via

@@ -315,7 +315,10 @@ float4 PSMain(VSOut i) : SV_Target
         run.bidiLevel = 0;
 
         IDWriteGlyphRunAnalysis* analysis;
-        Check(_dw->CreateGlyphRunAnalysis(&run, 1.0f, null, DWRITE_RENDERING_MODE.DWRITE_RENDERING_MODE_NATURAL,
+        // NATURAL_SYMMETRIC (not NATURAL): symmetric AA in BOTH axes. Plain NATURAL anti-aliases only horizontally, which
+        // samples out fine horizontal stroke features — the documented blur on CJK faces (e.g. MS Mincho) and large text.
+        // SYMMETRIC is the modern default (UWP/WinUI/WPF) and Microsoft's recommendation above ~16 ppem. (dwrite.h docs.)
+        Check(_dw->CreateGlyphRunAnalysis(&run, 1.0f, null, DWRITE_RENDERING_MODE.DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,
             DWRITE_MEASURING_MODE.DWRITE_MEASURING_MODE_NATURAL, 0f, 0f, &analysis), "CreateGlyphRunAnalysis");
 
         // NATURAL (antialiased) rendering mode → must query the CLEARTYPE_3x1 texture (ALIASED_1x1 returns empty bounds here).
@@ -587,7 +590,10 @@ float4 PSMain(VSOut i) : SV_Target
         run.isSideways = BOOL.FALSE; run.bidiLevel = 0;
 
         IDWriteGlyphRunAnalysis* analysis;
-        Check(_dw->CreateGlyphRunAnalysis(&run, 1.0f, null, DWRITE_RENDERING_MODE.DWRITE_RENDERING_MODE_NATURAL,
+        // NATURAL_SYMMETRIC (not NATURAL): symmetric AA in BOTH axes. Plain NATURAL anti-aliases only horizontally, which
+        // samples out fine horizontal stroke features — the documented blur on CJK faces (e.g. MS Mincho) and large text.
+        // SYMMETRIC is the modern default (UWP/WinUI/WPF) and Microsoft's recommendation above ~16 ppem. (dwrite.h docs.)
+        Check(_dw->CreateGlyphRunAnalysis(&run, 1.0f, null, DWRITE_RENDERING_MODE.DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,
             DWRITE_MEASURING_MODE.DWRITE_MEASURING_MODE_NATURAL, 0f, 0f, &analysis), "CreateGlyphRunAnalysis");
         RECT bounds;
         Check(analysis->GetAlphaTextureBounds(DWRITE_TEXTURE_TYPE.DWRITE_TEXTURE_CLEARTYPE_3x1, &bounds), "GetAlphaTextureBounds");

@@ -1,5 +1,6 @@
 using System;
 using FluentGpu.Controls;
+using FluentGpu.Localization;
 
 namespace Wavee;
 
@@ -10,17 +11,20 @@ static class ShellNav
 {
     public static (string Title, string Glyph) Dest(string key, string? arg = null)
     {
-        if (key.StartsWith("pl:", StringComparison.Ordinal)) return (arg ?? "Playlist", Icons.MusicNote);
+        if (key.StartsWith("pl:", StringComparison.Ordinal)) return (arg ?? Loc.Get(Strings.Nav.Playlist), Icons.MusicNote);
+        if (key.StartsWith("album:", StringComparison.Ordinal)) return (arg ?? Loc.Get(Strings.Nav.Album), Mdl.Album);
+        if (key.StartsWith("artist:", StringComparison.Ordinal)) return (arg ?? Loc.Get(Strings.Nav.Artist), Mdl.Contact);
         return key switch
         {
-            "home"     => ("Home", Icons.Home),
-            "search"   => ("Search", Icons.Search),
-            "albums"   => ("Albums", Mdl.Album),
-            "artists"  => ("Artists", Mdl.Contact),
-            "liked"    => ("Liked Songs", Icons.Heart),
-            "podcasts" => ("Podcasts", Mdl.RadioTower),
-            "local"    => ("Local files", Icons.Folder),
-            _          => ("Your Library", Icons.MusicNote),
+            "home"     => (Loc.Get(Strings.Nav.Home), Icons.Home),
+            "search"   => (Loc.Get(Strings.Nav.Search), Icons.Search),
+            "albums"   => (Loc.Get(Strings.Nav.Albums), Mdl.Album),
+            "artists"  => (Loc.Get(Strings.Nav.Artists), Mdl.Contact),
+            "liked"    => (Loc.Get(Strings.Nav.LikedSongs), Icons.Heart),
+            "podcasts" => (Loc.Get(Strings.Nav.Podcasts), Mdl.RadioTower),
+            "local"    => (Loc.Get(Strings.Nav.LocalFiles), Icons.Folder),
+            "history"  => (Loc.Get(Strings.Nav.History.Title), Icons.Clock),
+            _          => (Loc.Get(Strings.Nav.YourLibrary), Icons.MusicNote),
         };
     }
 

@@ -39,7 +39,7 @@ public static class FakeData
         var s = Seed[i % Seed.Length];
         var album = new AlbumRef($"al{i}", $"spotify:album:al{i}", s.Title);
         long dur = 138_000 + (i * 37 % 150) * 1000L;       // 2:18 – ~4:50
-        return new Track($"tr{i}", $"spotify:track:tr{i}", s.Title, [ArtistRef(i)], album, dur, i % 6 == 0, Cover(i, 64));
+        return new Track($"tr{i}", $"spotify:track:tr{i}", s.Title, [ArtistRef(i)], album, dur, i % 6 == 0, Cover(i, 64), HasVideo: i % 4 == 1);
     }
 
     public static Track[] Tracks(int count, int offset = 0)
@@ -60,11 +60,39 @@ public static class FakeData
         return new Palette(BackgroundDark: Dark(accent, 0.16f), TintedDark: Dark(accent, 0.28f), Light: 0xFFFFFFFF, Accent: accent);
     }
 
+    // A deterministic release shape per index, so the catalog spans all four kinds (and the More-by/home shelves show a mix).
+    static (AlbumKind Kind, int Count) AlbumShape(int i) => (i % 6) switch
+    {
+        0 => (AlbumKind.Single, 1),
+        1 => (AlbumKind.EP, 5),
+        2 => (AlbumKind.Album, 12),
+        3 => (AlbumKind.Single, 2),
+        4 => (AlbumKind.Compilation, 18),
+        _ => (AlbumKind.Album, 10),
+    };
+
+    static Track[] AlbumTracks(int count, int offset, ArtistRef artist, bool various)
+    {
+        var a = new Track[count];
+        for (int i = 0; i < count; i++)
+        {
+            var t = Track(offset + i);
+            long plays = 60_000_000L / (i + 1) + ((offset * 131 % 37) + 1) * 250_000L;   // descending → track 1 is the "hit"
+            // A compilation is various-artists (each track keeps its own artist); a single/EP/album is one artist.
+            a[i] = t with { PlayCount = plays, Artists = various ? t.Artists : [artist] };
+        }
+        return a;
+    }
+
     public static Album Album(int i)
     {
         var s = Seed[i % Seed.Length];
-        var tracks = Tracks(10, i * 10);
-        return new Album($"al{i}", $"spotify:album:al{i}", s.Title, Cover(i, 300), [ArtistRef(i)], 2014 + (i % 11), tracks.Length, tracks);
+        var (kind, count) = AlbumShape(i);
+        var artist = ArtistRef(i);
+        var tracks = AlbumTracks(count, i * 10, artist, kind == AlbumKind.Compilation);
+        // A single leads with its official video → the detail page surfaces the "Watch the official video" card.
+        if (kind == AlbumKind.Single && tracks.Length > 0) tracks[0] = tracks[0] with { HasVideo = true };
+        return new Album($"al{i}", $"spotify:album:al{i}", s.Title, Cover(i, 300), [artist], 2014 + (i % 11), tracks.Length, tracks, kind);
     }
 
     public static Artist Artist(int i)
@@ -78,9 +106,24 @@ public static class FakeData
     public static Playlist Playlist(int i, int trackCount = 40)
     {
         var s = Seed[i % Seed.Length];
+        // Editorial/made-for-you playlists (a "Spotify"-billed seed) carry NO per-track added-at/added-by — the detail
+        // page then hides those columns. A user playlist stamps a descending "added at" (newest first); some are
+        // collaborative (≥2 contributors), which is what makes the page reveal the Added-By column.
+        bool curated = s.Artist == "Spotify";
+        string owner = curated ? "Spotify" : "Christos";
         var tracks = Tracks(trackCount, i * 100);
+        if (!curated)
+        {
+            bool collab = i % 3 == 1;
+            string[] people = collab ? ["Christos", "Alex", "Mia"] : ["Christos"];
+            var now = DateTimeOffset.Now;
+            var stamped = new Track[tracks.Length];
+            for (int t = 0; t < tracks.Length; t++)
+                stamped[t] = tracks[t] with { AddedAt = now.AddDays(-(t * 2L + (i % 5))), AddedBy = people[t % people.Length] };
+            tracks = stamped;
+        }
         return new Playlist($"pl{i}", $"spotify:playlist:pl{i}", $"{s.Title} Mix", $"The best of {s.Artist} and friends.",
-            "Wavee", Cover(i + 100, 300), tracks.Length, tracks);
+            owner, Cover(i + 100, 300), tracks.Length, tracks);
     }
 
     /// <summary>The big list (Liked Songs) — generated on demand so 50k stays cheap.</summary>

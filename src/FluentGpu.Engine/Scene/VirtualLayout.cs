@@ -8,9 +8,10 @@ namespace FluentGpu.Scene;
 /// in-window scroll is transform-only and never touches it), and the methods return structs / via out-params — so a
 /// custom layout costs zero per-frame managed allocation, honoring the engine's core contract. Implement this to make
 /// any virtualized layout (lists, card grids, staggered walls, …). Built-ins: <see cref="StackVirtualLayout"/>,
-/// <see cref="GridVirtualLayout"/>, <see cref="HorizontalGridVirtualLayout"/>, <see cref="LinedFlowLayout"/>,
-/// <see cref="SpanningGridVirtualLayout"/>. Variable-extent (measured) layouts implement the widened seam
-/// <see cref="IMeasuredVirtualLayout"/> — same contract plus estimate-then-correct feedback.
+/// <see cref="GridVirtualLayout"/>, <see cref="HorizontalGridVirtualLayout"/>, <see cref="FillRowVirtualLayout"/>,
+/// <see cref="LinedFlowLayout"/>, <see cref="SpanningGridVirtualLayout"/>. Variable-extent (measured) layouts implement
+/// the widened seam <see cref="IMeasuredVirtualLayout"/> — same contract plus estimate-then-correct feedback; layouts
+/// that size items to the viewport implement <see cref="IViewportVirtualLayout"/> — same contract plus a viewport feed.
 /// </summary>
 public interface IVirtualLayout
 {
@@ -45,6 +46,22 @@ public interface IMeasuredVirtualLayout : IVirtualLayout
 
     /// <summary>The item whose extent band contains <paramref name="offset"/> — the scroll-anchor candidate.</summary>
     int IndexAt(float offset, float crossSize);
+}
+
+/// <summary>
+/// The viewport-aware virtualization seam — folds "size each item to the SCROLL-AXIS (main) viewport" behind the SAME
+/// pluggable seam as the fixed-geometry layouts. The core <see cref="IVirtualLayout"/> methods only receive the CROSS
+/// size (height for a horizontal viewport), so a "fill the width with N equal cards" layout cannot be expressed; this
+/// adds <see cref="SetViewport"/>, which the layout engine calls with the main-axis viewport extent BEFORE every
+/// geometry call (<see cref="IVirtualLayout.ContentExtent"/>/<see cref="IVirtualLayout.Window"/>/<see cref="IVirtualLayout.ItemRect"/>).
+/// Stateful + allocation-free (cache the fit), exactly like <see cref="IMeasuredVirtualLayout"/>. The core contract is
+/// unchanged, so existing layouts and custom implementations are unaffected. Built-in: <see cref="FillRowVirtualLayout"/>.
+/// </summary>
+public interface IViewportVirtualLayout : IVirtualLayout
+{
+    /// <summary>Feed the live viewport before geometry: <paramref name="mainExtent"/> is the scroll-axis viewport
+    /// extent (width for a horizontal viewport), <paramref name="crossSize"/> the cross axis. O(1), allocation-free.</summary>
+    void SetViewport(float mainExtent, float crossSize);
 }
 
 /// <summary>Decides whether a scroll offset needs a virtual-window refresh, using the realized overscan as a guard band.</summary>
@@ -156,6 +173,100 @@ public sealed class HorizontalGridVirtualLayout : IVirtualLayout
         int col = i / Rows, row = i % Rows;
         float rh = RowHeight(cross);
         return new RectF(col * ColStride, row * (rh + Gap), ItemWidth, rh);
+    }
+}
+
+/// <summary>
+/// Horizontal "fill the viewport with EQUAL cards" layout (the size-reactive shelf / Spotify rail) — the viewport-aware
+/// sibling of <see cref="HorizontalGridVirtualLayout"/>: instead of a FIXED item width it fits as many equal columns as
+/// the main-axis viewport width allows, each sized to fill exactly within <c>[minCardW, maxCardW]</c>, <see cref="Rows"/>
+/// cells tall. The engine feeds the live viewport via <see cref="SetViewport"/> before each geometry call, so cards
+/// re-fit on resize with NO app-side width broker. The fit is COUNT-INDEPENDENT (a handful of items render at the normal
+/// fitted width, left-aligned with trailing space — never ballooned), which makes the card width strictly
+/// <c>≤ maxCardW</c> by construction. STATEFUL (caches the fit) — create once and reuse (hoist in a <c>UseMemo</c>);
+/// pair with <c>VirtualListEl.Horizontal = true</c>. Override knobs: <see cref="PerPageOverride"/> pins the columns-per-
+/// page; <see cref="FixedCardW"/> pins the card width (both bypass the auto-fit).
+/// </summary>
+public sealed class FillRowVirtualLayout : IViewportVirtualLayout
+{
+    public readonly float MinCardW, MaxCardW, Gap;
+    public readonly int Rows;
+    public readonly int PerPageOverride;   // 0 ⇒ auto-fit
+    public readonly float FixedCardW;      // 0 ⇒ auto-fit
+
+    private float _main, _cross;           // last viewport fed by the engine (main = scroll-axis width)
+    private int _perPage = 1;
+    private float _cardW;
+
+    public FillRowVirtualLayout(float minCardW = 150f, float maxCardW = 200f, float gap = 0f, int rows = 1,
+                                int perPageOverride = 0, float fixedCardW = 0f)
+    {
+        MinCardW = minCardW <= 0 ? 1f : minCardW;
+        MaxCardW = maxCardW < MinCardW ? MinCardW : maxCardW;
+        Gap = gap < 0 ? 0f : gap;
+        Rows = Math.Max(1, rows);
+        PerPageOverride = Math.Max(0, perPageOverride);
+        FixedCardW = fixedCardW < 0 ? 0f : fixedCardW;
+        _cardW = MinCardW;
+    }
+
+    /// <summary>Columns shown per page at the current viewport (≥1) — valid after the engine's first <see cref="SetViewport"/>.</summary>
+    public int PerPage => _perPage;
+    /// <summary>The fitted card width at the current viewport.</summary>
+    public float CardW => _cardW;
+
+    public void SetViewport(float mainExtent, float crossSize)
+    {
+        if (mainExtent == _main && crossSize == _cross) return;
+        _main = mainExtent; _cross = crossSize;
+        (_perPage, _cardW) = Fit(_main, MinCardW, MaxCardW, Gap, PerPageOverride, FixedCardW);
+    }
+
+    /// <summary>The viewport→(perPage, cardW) fit — COUNT-INDEPENDENT, cardW capped at <paramref name="maxCardW"/>.
+    /// Exposed static so a host control can compute the SAME geometry it will be laid out at (e.g. to size a
+    /// width-driven card's height before it knows the realized cell). Allocation-free.</summary>
+    public static (int PerPage, float CardW) Fit(float main, float minCardW, float maxCardW, float gap,
+                                                 int perPageOverride = 0, float fixedCardW = 0f)
+    {
+        minCardW = minCardW <= 0 ? 1f : minCardW;
+        maxCardW = maxCardW < minCardW ? minCardW : maxCardW;
+        gap = gap < 0 ? 0f : gap;
+        if (fixedCardW > 0f)
+            return (main <= 1f ? 1 : Math.Max(1, (int)MathF.Floor((main + gap) / (fixedCardW + gap))), fixedCardW);
+        if (main <= 1f) return (1, minCardW);
+        // Max columns that fit at the MIN card width, then grow columns to pull each card down to ≤ maxCardW.
+        int perPage = perPageOverride > 0 ? perPageOverride : Math.Max(1, (int)MathF.Floor((main + gap) / (minCardW + gap)));
+        float cardW = (main - (perPage - 1) * gap) / perPage;
+        while (perPageOverride == 0 && cardW > maxCardW) { perPage++; cardW = (main - (perPage - 1) * gap) / perPage; }
+        cardW = MathF.Min(cardW, maxCardW);   // belt-and-suspenders (and the perPageOverride path)
+        return (Math.Max(1, perPage), cardW <= 0f ? minCardW : cardW);
+    }
+
+    private float ColStride => _cardW + Gap;
+    private float RowHeight(float cross) => (cross - (Rows - 1) * Gap) / Rows;
+    private int ColCount(int n) => (n + Rows - 1) / Rows;
+
+    public float ContentExtent(int n, float cross)
+    {
+        int cols = ColCount(n);
+        return cols <= 0 ? 0f : cols * _cardW + (cols - 1) * Gap;
+    }
+
+    public void Window(int n, float cross, float viewport, float offset, int overscan, out int first, out int last)
+    {
+        float stride = ColStride;
+        int firstCol = Math.Max(0, (int)MathF.Floor(offset / stride) - overscan);
+        int lastCol = (int)MathF.Ceiling((offset + viewport) / stride) + overscan;
+        first = Math.Min(n, firstCol * Rows);
+        last = Math.Min(n, lastCol * Rows);
+        if (last < first) last = first;
+    }
+
+    public RectF ItemRect(int i, float cross)
+    {
+        int col = i / Rows, row = i % Rows;
+        float rh = RowHeight(cross);
+        return new RectF(col * ColStride, row * (rh + Gap), _cardW, rh);
     }
 }
 

@@ -5,6 +5,7 @@ using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 using Wavee.Core;
@@ -149,6 +150,9 @@ sealed class PlayerBarContent : Component
 
     // A soft critical red for the Error state's title (app-local; the chrome stays WinUI-faithful elsewhere).
     static readonly ColorF Critical = new(0.93f, 0.42f, 0.45f, 1f);
+    // Shared marquee cadence for the now-playing title + subtitle: a FIXED cycle (vs constant speed) so the two lines
+    // advance through the same fraction of their own text in lockstep and reset together — i.e. they read as synced.
+    const float MarqueeCycleMs = 12000f;
     // Dark glyph for the WHITE primary play/pause face (the musa/Spotify treatment — a white circle, dark icon).
     // Thin volume rail — the WinUI Slider trimmed to a 4px track + a small 12px thumb so it reads as a level line.
     static readonly Slider.Style RailStyle = Slider.DefaultStyle with
@@ -215,21 +219,17 @@ sealed class PlayerBarContent : Component
         float clusterGap = L.ClusterGap;
 
         // ── LEFT — now playing ─────────────────────────────────────────────────────────────────────
-        string title; string artistText; ColorF titleColor;
-        switch (st)
-        {
-            case PlayerState.NoTrack: title = "Nothing playing"; artistText = ""; titleColor = Tok.TextSecondary; break;
-            case PlayerState.Loading: title = track?.Title ?? "Loading…"; artistText = ArtistsOf(track); titleColor = Tok.TextPrimary; break;
-            case PlayerState.Error: title = err ?? "Can’t play this track"; artistText = ""; titleColor = Critical; break;
-            default: title = track?.Title ?? ""; artistText = ArtistsOf(track); titleColor = Tok.TextPrimary; break;
-        }
-
+        // Title/subtitle/colour are bound REACTIVELY off the bridge (Prop thunks), not passed as frozen strings: the
+        // Marquee is an autonomous component, so a parent re-render does not push new constructor args into it — the
+        // thunk (captured once, reading the stable bridge's signals) is what keeps the inner TextEl re-measuring and
+        // repainting as the track changes. Passing the strings directly would freeze them at the first-mount value.
         var metaKids = new List<Element>(2)
         {
-            BodyStrong(title) with { Color = titleColor, Trim = TextTrim.CharacterEllipsis, Wrap = TextWrap.NoWrap },
+            Marquee.Of(Prop.Of(() => NowPlaying(b).Title),
+                new Marquee.Style { FontSize = 14f, Weight = 700, Foreground = Prop.Of(() => NowPlaying(b).Color), CycleMs = MarqueeCycleMs }),
         };
         if (showSubtitle)
-            metaKids.Add(Caption(SubtitleOf(track, artistText)).Secondary() with { Trim = TextTrim.CharacterEllipsis, Wrap = TextWrap.NoWrap });
+            metaKids.Add(Marquee.Of(Prop.Of(() => NowPlayingSubtitle(b)), new Marquee.Style { FontSize = 12f, Foreground = Tok.TextSecondary, CycleMs = MarqueeCycleMs }));
 
         var metaCol = new BoxEl
         {
@@ -303,22 +303,22 @@ sealed class PlayerBarContent : Component
         var overflowCommands = new List<AppBarCommand>(8);
         if (!showPrevNext)
         {
-            overflowCommands.Add(new AppBarCommand(Icons.Previous, "Previous", () => { _ = b.Player.PreviousAsync(); }, Enabled: canTransport));
-            overflowCommands.Add(new AppBarCommand(Icons.Next, "Next", () => { _ = b.Player.NextAsync(); }, Enabled: canTransport));
+            overflowCommands.Add(new AppBarCommand(Icons.Previous, Loc.Get(Strings.Player.Previous), () => { _ = b.Player.PreviousAsync(); }, Enabled: canTransport));
+            overflowCommands.Add(new AppBarCommand(Icons.Next, Loc.Get(Strings.Player.Next), () => { _ = b.Player.NextAsync(); }, Enabled: canTransport));
         }
         if (!showShuffleRepeat)
         {
-            overflowCommands.Add(new AppBarCommand(Icons.Shuffle, "Shuffle", () => ToggleShuffle(b), AppBarCommandKind.ToggleButton, shuffle, canTransport));
-            overflowCommands.Add(new AppBarCommand(repeat == RepeatMode.Track ? Icons.RepeatOne : Icons.RepeatAll, "Repeat", () => CycleRepeat(b), AppBarCommandKind.ToggleButton, repeat != RepeatMode.Off, canTransport));
+            overflowCommands.Add(new AppBarCommand(Icons.Shuffle, Loc.Get(Strings.Player.Shuffle), () => ToggleShuffle(b), AppBarCommandKind.ToggleButton, shuffle, canTransport));
+            overflowCommands.Add(new AppBarCommand(repeat == RepeatMode.Track ? Icons.RepeatOne : Icons.RepeatAll, Loc.Get(Strings.Player.Repeat), () => CycleRepeat(b), AppBarCommandKind.ToggleButton, repeat != RepeatMode.Off, canTransport));
         }
         if (!showLike && active)
-            overflowCommands.Add(new AppBarCommand(Icons.Heart, "Like", () => setLiked(!liked), AppBarCommandKind.ToggleButton, liked, true));
+            overflowCommands.Add(new AppBarCommand(Icons.Heart, Loc.Get(Strings.Player.Like), () => setLiked(!liked), AppBarCommandKind.ToggleButton, liked, true));
         if (!showQueue)
-            overflowCommands.Add(new AppBarCommand(Icons.Queue, "Queue", () => { /* TODO: queue panel not wired yet */ }, Enabled: canTransport));
+            overflowCommands.Add(new AppBarCommand(Icons.Queue, Loc.Get(Strings.Player.Queue), () => { /* TODO: queue panel not wired yet */ }, Enabled: canTransport));
         if (!showDevices)
-            overflowCommands.Add(new AppBarCommand(Icons.Devices, "Devices", () => { /* TODO: device picker not wired yet */ }, Enabled: canTransport));
+            overflowCommands.Add(new AppBarCommand(Icons.Devices, Loc.Get(Strings.Player.Devices), () => { /* TODO: device picker not wired yet */ }, Enabled: canTransport));
         if (!showExpand)
-            overflowCommands.Add(new AppBarCommand(Icons.ChevronUp, "Now playing", () => { /* TODO: now-playing expand panel not wired yet */ }, Enabled: canTransport));
+            overflowCommands.Add(new AppBarCommand(Icons.ChevronUp, Loc.Get(Strings.Player.NowPlaying), () => { /* TODO: now-playing expand panel not wired yet */ }, Enabled: canTransport));
 
         var rightKids = new List<Element>(8);
         if (showShuffleRepeat)
@@ -408,6 +408,35 @@ sealed class PlayerBarContent : Component
     }
 
     // ── helpers ────────────────────────────────────────────────────────────────────────────────────
+    // The now-playing title + its colour, derived LIVE from the bridge (same state machine as PlayerState). Called from
+    // a Prop thunk so the Marquee's bound TextEl re-measures/repaints when the track or play-state changes — see metaKids.
+    static (string Title, ColorF Color) NowPlaying(PlaybackBridge b)
+    {
+        var track = b.CurrentTrack.Value;
+        string? err = b.Error.Value;
+        bool loading = b.IsLoading.Value;
+        PlayerState st = err is not null ? PlayerState.Error
+                       : track is null ? PlayerState.NoTrack
+                       : loading ? PlayerState.Loading
+                       : PlayerState.Active;
+        return st switch
+        {
+            PlayerState.NoTrack => (Loc.Get(Strings.Player.NothingPlaying), Tok.TextSecondary),
+            PlayerState.Loading => (track?.Title ?? Loc.Get(Strings.Player.Loading), Tok.TextPrimary),
+            PlayerState.Error   => (err ?? Loc.Get(Strings.Player.CannotPlay), Critical),
+            _                   => (track?.Title ?? "", Tok.TextPrimary),
+        };
+    }
+
+    // "artist · album" subtitle, derived live. NoTrack/Error carry no artist line (mirrors the title state machine).
+    static string NowPlayingSubtitle(PlaybackBridge b)
+    {
+        var track = b.CurrentTrack.Value;
+        bool hasErr = b.Error.Value is not null;
+        string artistText = (track is null || hasErr) ? "" : ArtistsOf(track);
+        return SubtitleOf(track, artistText);
+    }
+
     static string ArtistsOf(Track? t) => t is null ? "" : string.Join(", ", t.Artists.Select(a => a.Name));
 
     // "artist · album" subtitle (falls back to just the artist when the album is empty/unknown).

@@ -25,6 +25,8 @@ public static class WaveeSize
     public const float ControlH = 32, NavItemH = 44, TrackRowH = 56, PlayerBarH = 72;   // taller dock: room for the seek row
     public const float RailCard = 180, NavPaneW = 240, NavCompactW = 56;   // NavPaneW 240 = WinUI OpenPaneLength (flush, no inset gap)
     public const float ArtThumb = 40, ArtNowPlaying = 64, ArtPlayerBar = 48;
+    // Detail-page left-rail widths (the shared playlist/album/single detail surface; liked is single-column → no rail).
+    public const float RailAlbum = 280, RailPlaylist = 240;
 }
 
 /// <summary>The bottom player-bar dock geometry. Pages reserve this height so their last row clears the transport.</summary>
@@ -42,8 +44,12 @@ public static class WaveeColors
     // dark = #733A3A3A (a translucent dark layer over Mica), light = #B3FFFFFF (a translucent WHITE layer). Hardcoding the
     // dark value made the chrome read near-black in light theme over a dark-OS Mica backdrop — the 70%-white light layer
     // masks the dark Mica instead. Theme-dependent, so the surfaces that use it must be BOUND to follow a live switch.
+    //
+    // Light override: WinUI's #B3FFFFFF (70% white) blends invisibly into the near-white Mica light backdrop — no depth.
+    // We use the opaque WinUI SolidBase grey (#F3F3F3) so the chrome is a DEFINITE surface; the white content card then
+    // floats visibly above it. Dark keeps the original translucent dark layer (Mica tints through nicely there).
     public static ColorF LayerOnMicaBaseAlt => Tok.Theme == ThemeKind.Light
-        ? ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3)
+        ? Tok.FillSolidBase                          // #F3F3F3 opaque — visible grey chrome
         : ColorF.FromRgba(0x3A, 0x3A, 0x3A, 0x73);
     // The shell root is Mica passthrough: FluentApp sets Theme.WindowBackground = Transparent when mica:true, so DWM
     // composites Mica BaseAlt behind the client area. The chrome (Toolbar/Sidebar = LayerOnMicaBaseAlt) tints it; the
@@ -53,9 +59,17 @@ public static class WaveeColors
     public static ColorF TitleBar => ColorF.Transparent;
     public static ColorF Toolbar => LayerOnMicaBaseAlt;
     public static ColorF Sidebar => LayerOnMicaBaseAlt;
-    public static ColorF FileArea => Tok.FillCardDefault;
-    public static ColorF Content => Tok.FillCardDefault;
-    public static ColorF ContentAlt => Tok.FillCardSecondary;
+    // Light: pure white card floats over the #F3F3F3 chrome — the depth contrast that makes it read as "floating".
+    // Dark: keep the WinUI-faithful translucent card (Mica bleeds through nicely).
+    public static ColorF FileArea => Tok.Theme == ThemeKind.Light
+        ? ColorF.FromRgba(0xFF, 0xFF, 0xFF)
+        : Tok.FillCardDefault;
+    public static ColorF Content => Tok.Theme == ThemeKind.Light
+        ? ColorF.FromRgba(0xFF, 0xFF, 0xFF)
+        : Tok.FillCardDefault;
+    public static ColorF ContentAlt => Tok.Theme == ThemeKind.Light
+        ? ColorF.FromRgba(0xF9, 0xF9, 0xF9)         // very subtle tint for alternate/secondary surfaces
+        : Tok.FillCardSecondary;
     public static ColorF ChromeHover => Tok.FillSubtleSecondary;
     public static ColorF ChromePressed => Tok.FillSubtleTertiary;
     public static ColorF Badge => Tok.AccentDefault;

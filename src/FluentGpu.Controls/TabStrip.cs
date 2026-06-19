@@ -192,6 +192,7 @@ public sealed class TabStrip : Component
                 [
                     new BoxEl
                     {
+                        Key = "selected-bg",
                         Width = tabW + 8f,
                         Height = 32f,
                         OffsetX = -4f,

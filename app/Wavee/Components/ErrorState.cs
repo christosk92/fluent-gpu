@@ -1,6 +1,7 @@
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
+using FluentGpu.Localization;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
@@ -9,7 +10,7 @@ namespace Wavee;
 /// The technical detail goes to the log (visible in the Diagnostics page), not to the user.</summary>
 public static class ErrorState
 {
-    public static Element Build(Exception? error = null, Action? onRetry = null, string message = "Something went wrong.")
+    public static Element Build(Exception? error = null, Action? onRetry = null, string? message = null)
     {
         WaveeLog.Instance.Log(WaveeLogLevel.Warning, "ui",
             error is null ? "Surface error shown" : "Surface error shown: " + error.Message, error);
@@ -18,13 +19,13 @@ public static class ErrorState
         {
             Icon(Icons.Cancel, 32f, Tok.SystemFillCritical),
             new BoxEl { Height = WaveeSpace.M },
-            WaveeType.RailHeader(message),
-            WaveeType.TrackMeta("Check your connection and try again."),
+            WaveeType.RailHeader(message ?? Loc.Get(Strings.Common.ErrorTitle)),
+            WaveeType.TrackMeta(Loc.Get(Strings.Common.ErrorSubtitle)),
         };
         if (onRetry is not null)
         {
             kids.Add(new BoxEl { Height = WaveeSpace.L });
-            kids.Add(Button.Accent("Retry", onRetry));
+            kids.Add(Button.Accent(Loc.Get(Strings.Common.Retry), onRetry));
         }
         return EmptyState.Centered(kids);
     }

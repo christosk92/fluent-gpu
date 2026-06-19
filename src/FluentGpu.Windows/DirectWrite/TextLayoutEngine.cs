@@ -76,7 +76,11 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     private IDWriteFontFallback* _fallback;
     private IDWriteFontCollection* _sysColl;
     private TextAnalysisSourceCcw* _fsrc;
-    private readonly Dictionary<string, nint> _fallbackFaces = new();
+    // Keyed by (family, RESOLVED weight) — NOT family alone: a CJK family (Malgun Gothic) has separate Regular/Bold
+    // faces, so caching by family only would pin every weight to whichever was resolved FIRST (almost always Regular),
+    // rendering a bold (900) CJK run at regular weight while its Latin neighbour is bold. The resolved weight dedups
+    // requests that map to the same face (900 and 800 both → Bold 700).
+    private readonly Dictionary<(string Family, int Weight), nint> _fallbackFaces = new();
 
     private readonly List<ItemRun> _runs = new();
     private readonly List<BreakOpp> _breaks = new();
@@ -726,10 +730,14 @@ public sealed unsafe class TextLayoutEngine : IDisposable
 
     private IDWriteFontFace* ResolveFallbackFace(string family, IDWriteFont* font, IDWriteFontFace* baseFace)
     {
-        if (_fallbackFaces.TryGetValue(family, out var c)) return (IDWriteFontFace*)c;
+        // The matched face's REAL weight (e.g. 700 when a 900 run maps to a family whose heaviest cut is Bold) — the
+        // cache key, so each weight keeps its own face and a bold CJK run renders bold (not the first-cached Regular).
+        int w = (int)font->GetWeight();
+        var key = (family, w);
+        if (_fallbackFaces.TryGetValue(key, out var c)) return (IDWriteFontFace*)c;
         IDWriteFontFace* face;
         if ((int)font->CreateFontFace(&face) < 0) return baseFace;
-        _fallbackFaces[family] = (nint)face;
+        _fallbackFaces[key] = (nint)face;
         return face;
     }
 

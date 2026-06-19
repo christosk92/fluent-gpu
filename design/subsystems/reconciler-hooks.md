@@ -90,6 +90,25 @@ contracts owned elsewhere:
 - **Frame loop** (`AppHost`): pump → input → `ReactiveRuntime.Flush` (re-render dirty components + run bindings) →
   scoped relayout → record → present. A frame with only Transform/Paint binding writes does no render/reconcile/
   layout (`FrameStats.Rendered == false`).
+- **Component activation lifecycle (notify-only).** `Flow.KeepAlive` (the fourth control-flow boundary,
+  `Hooks/ControlFlow.cs`) parks a backgrounded page subtree mounted-but-detached; `Reconciler.SetSubtreeParked` is the
+  single park/un-park chokepoint (reached on the deactivate/reactivate edges). A parked component's render-effect is
+  **suspended** (`RunComponent` defers, replays once on un-park), so a backgrounded tab stops rebuilding on the signals
+  it still subscribes to. On top of that, two hooks expose activation to developers: `UseIsActive() → IReadSignal<bool>`
+  (reactive truth) and `UseActivation(onActivated, onDeactivated)` (transition callbacks — edge-only, never at mount or
+  unmount). **Inactive = parked by KeepAlive OR window minimized / app-suspended.** The per-component half is a
+  lazily-created `Signal<bool>` on `CompEntry` flipped in `SetSubtreeParked`; the app-wide half is the host-owned
+  **`Activation.IsActive`** ambient (a `Signal<bool>` written on `AppHost`'s minimize/restore edge — one-shot flush on
+  the minimize edge fires `onDeactivated` before the gate's early-return — AND-folded with the optional power-suspend
+  gate `AppHost.SetWindowActive(bool)`). `UseActivation` is a **standalone effect** over the value-gated memo, NOT the
+  render-effect (which is suspended while parked), so the notification keeps firing while parked; callbacks live in a
+  stable cell and run under `Reactive.Untrack`. **Engine auto-quiesce (same chokepoint):** a `NodeFlags.Parked` marker +
+  per-node `AnimEngine.SetNodeParked`/`ScrollAnimator.SetNodeParked` make the tickers skip parked tracks and exclude
+  them from `HasActive` (O(1) counter), so a parked tab's looping animation / mid-fling scroll cannot defeat the idle
+  wake-stop (`backdrop-effects-animation.md` owns the ticker behavior; the window-visibility source is `pal-rhi.md`'s
+  `IPlatformWindow.State`). Notify-only by design (the engine can't know which work is the developer's); focus/blur and
+  same-screen occlusion are not inputs. As-built: `RenderContext.cs`, `Reconciler.cs`, `Hosting/AppHost.cs`,
+  `Animation/{AnimEngine,ScrollAnimator}.cs`, `Foundation/NodeFlags.cs`.
 
 ---
 

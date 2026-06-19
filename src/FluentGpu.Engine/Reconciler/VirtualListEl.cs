@@ -78,4 +78,7 @@ public sealed record VirtualListEl : Element
     public EdgeFadeSpec? EdgeFade { get; init; }
     /// <summary>Auto edge fade: feather only the overflowing edges, ramped with the offset. Ignored when EdgeFade is set.</summary>
     public bool AutoEdgeFade { get; init; }
+    /// <summary>Never draw the conscious scrollbar for this viewport (a paged shelf navigates by its pager, not a
+    /// draggable bar; the offset is still programmatically scrolled). Edge-fade cues are unaffected.</summary>
+    public bool SuppressScrollBar { get; init; }
 }

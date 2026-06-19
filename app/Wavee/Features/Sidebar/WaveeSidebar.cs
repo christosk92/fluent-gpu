@@ -6,6 +6,7 @@ using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 using Wavee.Core;
@@ -40,7 +41,7 @@ sealed class WaveeSidebar : Component
     NodeHandle _contentNode;
 
     // ── overlay selection-pill geometry ──────────────────────────────────────────────────────────
-    const float PillH = 16f;                 // SelectionIndicator height (WinUI 3×16)
+    internal const float PillH = 16f;        // SelectionIndicator height (WinUI 3×16)
     const float PillX = 14f;                 // left inset = ExpandedBody pad-left(8) + row pad-left(6) → over the gutter
 
     // The pill target, recomputed each render and read by WaveeSelPill (mirrors NavigationView.IndicatorTarget): the
@@ -87,12 +88,14 @@ sealed class WaveeSidebar : Component
 
         Element body = compact ? CompactBody(sel, playlists) : ExpandedBody(stats, playlists, sel);
         // Keyed cross-fade: the swap remounts a fresh wrapper (key flips), so the incoming body fades in via BodyFade.
-        Element bodyWrapped = new BoxEl { Key = compact ? "rail" : "full", Animate = BodyFade, Children = [ body ] };
+        BoxEl bodyWrapped = new BoxEl { Key = compact ? "rail" : "full", Animate = BodyFade, Children = [ body ] };
 
         Element content;
         if (compact)
         {
-            content = bodyWrapped;                                    // compact rail = background-fill selection, no pill
+            // Capture the root even when the first mount is compact. The compact root is reused when it updates into
+            // the expanded ZStack, and OnRealized is mount-only, so the expanded-only callback would never fire.
+            content = bodyWrapped with { OnRealized = h => _contentNode = h }; // compact rail = background-fill selection, no pill
         }
         else
         {
@@ -155,20 +158,20 @@ sealed class WaveeSidebar : Component
         Direction = 1, Gap = WaveeSpace.S, Padding = new Edges4(8f, 8f, 8f, 12f),
         Children =
         [
-            Section("Pinned", _pinnedOpen, PinnedDropZone()),
-            Section("Your Library", _libOpen, new BoxEl
+            Section(Loc.Get(Strings.Sidebar.Pinned), _pinnedOpen, PinnedDropZone()),
+            Section(Loc.Get(Strings.Sidebar.YourLibrary), _libOpen, new BoxEl
             {
                 Direction = 1, Gap = 2f,
                 Children =
                 [
-                    LibRow("albums",   Mdl.Album,      "Albums",      sel, 0, CountBadge(stats, s => s.Albums)),
-                    LibRow("artists",  Mdl.Contact,    "Artists",     sel, 1, CountBadge(stats, s => s.Artists)),
-                    LibRow("liked",    Icons.Heart,    "Liked Songs", sel, 2, CountBadge(stats, s => s.LikedSongs)),
-                    LibRow("podcasts", Mdl.RadioTower, "Podcasts",    sel, 3, CountBadge(stats, s => s.Podcasts)),
+                    LibRow("albums",   Mdl.Album,      Loc.Get(Strings.Sidebar.Albums),     sel, 0, CountBadge(stats, s => s.Albums)),
+                    LibRow("artists",  Mdl.Contact,    Loc.Get(Strings.Sidebar.Artists),    sel, 1, CountBadge(stats, s => s.Artists)),
+                    LibRow("liked",    Icons.Heart,    Loc.Get(Strings.Sidebar.LikedSongs), sel, 2, CountBadge(stats, s => s.LikedSongs)),
+                    LibRow("podcasts", Mdl.RadioTower, Loc.Get(Strings.Sidebar.Podcasts),   sel, 3, CountBadge(stats, s => s.Podcasts)),
                     LocalRow(),
                 ],
             }),
-            Section("Playlists", _plOpen, StatefulRegion.List(
+            Section(Loc.Get(Strings.Sidebar.Playlists), _plOpen, StatefulRegion.List(
                 playlists, _ => PlaylistSkeletonRow(), skeletonCount: 5,
                 content: arr => Flow.For(() => arr.Length, i => PlaylistRow(arr[i], sel, i), keyOf: i => arr[i].Uri),
                 empty: EmptyState.Default()),
@@ -247,11 +250,11 @@ sealed class WaveeSidebar : Component
         [
             new BoxEl { Width = 3f },
             Icon(Icons.Folder, 16f, Tok.TextSecondary),
-            Body("Local files") with { Grow = 1f, Trim = TextTrim.CharacterEllipsis },
+            Body(Loc.Get(Strings.Sidebar.LocalFiles)) with { Grow = 1f, Trim = TextTrim.CharacterEllipsis },
             new BoxEl
             {
                 Padding = new Edges4(8f, 2f, 8f, 2f), Corners = CornerRadius4.All(WaveeRadius.Pill), Fill = Tok.FillSubtleSecondary,
-                Children = [ new TextEl("Soon") { Size = 11f, Color = Tok.TextTertiary } ],
+                Children = [ new TextEl(Loc.Get(Strings.Sidebar.Soon)) { Size = 11f, Color = Tok.TextTertiary } ],
             },
         ],
     };
@@ -261,7 +264,7 @@ sealed class WaveeSidebar : Component
         Height = 56f, Margin = new Edges4(4f, 4f, 4f, 8f),
         AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Corners = CornerRadius4.All(4f),
         BorderColor = Tok.TextTertiary with { A = 0.5f }, BorderWidth = 1f, BorderDashOn = 4f, BorderDashOff = 3f,
-        Children = [ new TextEl("Drop items here to pin") { Size = 12f, Color = Tok.TextTertiary with { A = 0.8f } } ],
+        Children = [ new TextEl(Loc.Get(Strings.Sidebar.DropToPin)) { Size = 12f, Color = Tok.TextTertiary with { A = 0.8f } } ],
     };
 
     Element CountBadge(Loadable<LibraryStats> stats, Func<LibraryStats, int> pick)
@@ -295,7 +298,7 @@ sealed class WaveeSidebar : Component
                     Children =
                     [
                         Body(p.Name) with { Trim = TextTrim.CharacterEllipsis, MaxLines = 1 },
-                        Caption(p.TrackCount + " songs").Secondary(),
+                        Caption(Strings.Sidebar.SongCount(p.TrackCount)).Secondary(),
                     ],
                 },
             ],
@@ -408,16 +411,25 @@ sealed class WaveeSidebar : Component
     }
 }
 
-// The single overlay selection pill (WinUI NavigationView.NavIndicator). It GLIDES to the selected row using the
-// NavPill composition spring. Unlike NavigationView — whose row layout is uniform/known, so it hand-computes the Y —
-// the bespoke sidebar has collapsible sections + async playlists, so we MEASURE the selected row's laid-out rect each
-// time the layout settles (Context.Scene.AbsoluteRect) and spring to it. Robust to any layout, zero hand geometry.
+// The single overlay selection pill (WinUI NavigationView.NavIndicator). Glides to the selected row by MEASURING the
+// row's laid-out AbsoluteRect (robust to collapsible sections + async playlists). On first mount it snaps; on
+// subsequent moves it plays the WinUI NavigationView stretch animation (PlayIndicatorAnimations, 600ms):
+//   • ScaleY: 1 → peakScale (FluentAccelerate, 0→200ms) → 1 (FluentDecelerate, 200→600ms)
+//   • TranslateY: hold at fromY while scale reaches across the gap, then ease to toY while scale contracts.
+//   • TransformOriginY pins the edge nearest fromY (top when moving down, bottom when moving up), so the stretch grows
+//     toward the selected row instead of scaling in place at the destination.
+// peakScale = abs(to - from) / PillH + 1 — the scale that makes the pill span the full old→new distance.
 sealed class WaveeSelPill : Component
 {
     readonly Dictionary<string, NodeHandle> _rows;
     readonly Func<NodeHandle> _content;
     NodeHandle _self;
     bool _seeded;
+    float _prevY;   // last target Y (needed as fromY for the stretch animation on the NEXT move)
+    float _originY = 0.5f;
+
+    const float StretchDuration = 600f;
+    const float StretchPeak = 0.333f;   // WinUI c_frame1 break-point (200ms of 600ms)
 
     public WaveeSelPill(Dictionary<string, NodeHandle> rows, Func<NodeHandle> content)
     {
@@ -429,37 +441,88 @@ sealed class WaveeSelPill : Component
         var st = UseContext(WaveeSidebar.Pill);   // re-render when selection / visibility / layout-dep changes
         bool visible = st.Visible;
 
-        // Measure + spring AFTER layout (UseLayoutEffect runs post-layout, so AbsoluteRect is valid this frame). Re-runs
-        // whenever st.Dep changes (selection, any section toggle, playlist load) — i.e. whenever the row's Y can move.
+        // Measure AFTER layout (UseLayoutEffect runs post-layout, so AbsoluteRect is valid this frame). Re-runs whenever
+        // st.Dep changes (selection, any section toggle, playlist load) — i.e. whenever the row's Y can move.
         UseLayoutEffect(() =>
         {
             if (!visible) return;
             var anim = Context.Anim; var scene = Context.Scene;
-            if (anim is null || scene is null || _self.IsNull || !scene.IsLive(_self)) return;
+            if (anim is null || scene is null) return;
+            if (_self.IsNull || !scene.IsLive(_self)) return;
             var content = _content();
             if (!_rows.TryGetValue(st.RowKey, out var row) || row.IsNull || content.IsNull) return;
             if (!scene.IsLive(row) || !scene.IsLive(content)) return;
 
             RectF rr = scene.AbsoluteRect(row);
             RectF cr = scene.AbsoluteRect(content);
-            float targetY = (rr.Y - cr.Y) + (rr.H - 16f) * 0.5f;   // glide the pill onto the row's centre line
+            float targetY = (rr.Y - cr.Y) + (rr.H - WaveeSidebar.PillH) * 0.5f;
 
-            if (!_seeded) { _seeded = true; anim.Spring(_self, AnimChannel.TranslateY, targetY, MotionSprings.NavPill, initial: targetY); }
-            else anim.Spring(_self, AnimChannel.TranslateY, targetY, MotionSprings.NavPill);
+            if (!_seeded)
+            {
+                // First mount: snap immediately (no stretch on initial placement).
+                _seeded = true;
+                _prevY = targetY;
+                anim.Spring(_self, AnimChannel.TranslateY, targetY, MotionSprings.NavPill, initial: targetY);
+                return;
+            }
+
+            float fromY = anim.TryGetTrackValue(_self, AnimChannel.TranslateY, out var liveY)
+                ? liveY
+                : scene.Paint(_self).LocalTransform.Dy;
+            if (MathF.Abs(targetY - fromY) < 0.5f)
+            {
+                // Negligible move (layout settle, same row) — don't restart animation.
+                _prevY = targetY;
+                return;
+            }
+            _prevY = targetY;
+
+            // WinUI-parity stretch animation. peakScale makes the pill visually span old→new row.
+            float peakScale = MathF.Abs(targetY - fromY) / WaveeSidebar.PillH + 1f;
+            bool movingDown = targetY > fromY;
+            _originY = movingDown ? 0f : 1f;
+            ref var paint = ref scene.Paint(_self);
+            paint.OriginY = _originY;
+            scene.Mark(_self, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+
+            // ScaleY: same shape for both directions — 1 → peakScale (FluentAccelerate) → 1 (FluentDecelerate).
+            anim.Keyframes(_self, AnimChannel.ScaleY,
+            [
+                new Keyframe(0f,          1f,         Easing.Linear),
+                new Keyframe(StretchPeak, peakScale,  Easing.FluentAccelerate),
+                new Keyframe(1f,          1f,         Easing.FluentDecelerate),
+            ], StretchDuration);
+
+            // Hold while stretching across the gap; then use the same decel phase as ScaleY so the far edge stays
+            // visually pinned while the pill contracts onto the destination row.
+            anim.Keyframes(_self, AnimChannel.TranslateY,
+            [
+                new Keyframe(0f,          fromY,   Easing.Linear),
+                new Keyframe(StretchPeak, fromY,   Easing.Linear),
+                new Keyframe(1f,          targetY, Easing.FluentDecelerate),
+            ], StretchDuration);
         }, st.Dep, visible);
 
-        // Fade with the WinUI selection-indicator timing. The static Opacity must equal the terminal so a freed track
-        // never snaps a hidden pill back to visible (NavIndicator's documented landmine).
-        UseTransition(AnimChannel.Opacity, visible ? 0f : 1f, visible ? 1f : 0f, 150f, Easing.EaseOut, visible);
+        // Opacity fade with WinUI selection-indicator timing (150ms EaseOut). Capture _seeded before the effect is
+        // queued: on the very first mount with visible=false, skip the animation to avoid a startup flash at Y=0.
+        bool skipOpacityInit = !_seeded && !visible;
+        UseLayoutEffect(() =>
+        {
+            if (skipOpacityInit) return;
+            var a = Context.Anim; var hn = Context.HostNode;
+            if (a is null || hn.IsNull) return;
+            a.Animate(hn, AnimChannel.Opacity, visible ? 0f : 1f, visible ? 1f : 0f, 150f, Easing.EaseOut);
+        }, visible);
 
         return new BoxEl
         {
-            Width = 3f, Height = 16f,
+            Width = 3f, Height = WaveeSidebar.PillH,
             Margin = new Edges4(14f, 0f, 0f, 0f),     // PillX: over the row gutter
             AlignSelf = FlexAlign.Start,
+            TransformOriginY = _originY,
             Corners = CornerRadius4.All(2f),
             Fill = Tok.AccentDefault,
-            Opacity = visible ? 1f : 0f,
+            Opacity = visible ? 1f : 0f,   // terminal value (WriteColumns writes this when no track is active)
             HitTestVisible = false,
             OnRealized = h => _self = h,
         };
@@ -487,8 +550,8 @@ sealed class SidebarCreateButton : Component
 
         var items = new MenuFlyoutItem[]
         {
-            new("Playlist", Invoke: _onPlaylist),
-            new("Folder",   Invoke: _onFolder),
+            new(Loc.Get(Strings.Sidebar.CreatePlaylist), Invoke: _onPlaylist),
+            new(Loc.Get(Strings.Sidebar.CreateFolder),   Invoke: _onFolder),
         };
 
         void Toggle()

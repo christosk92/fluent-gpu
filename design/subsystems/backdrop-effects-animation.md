@@ -949,6 +949,13 @@ hole-punch are different regions and do not conflict.
   fixed `for i in 0..n` sub-step loop with `n` capped at 8 — no allocation, no recursion); channel apply is a
   `ref`-into-column store. No `IEnumerable`, no LINQ, no closure. The `NodeHandle→TrackHead` retarget index is a
   pre-grown slab-side `int[]` (no per-frame dictionary).
+- **Parked-subtree quiescence (component activation lifecycle, owned by `reconciler-hooks.md` §0bis):** when
+  `Flow.KeepAlive` parks a backgrounded page, `Reconciler.SetSubtreeParked` calls `AnimEngine.SetNodeParked(node, true)`
+  (and the symmetric `ScrollAnimator.SetNodeParked`) per node. `Tick` then **skips** parked tracks/viewports (no advance,
+  no fold — they resume from their current state on un-park), and `HasActive` **excludes** them via an O(1) maintained
+  counter (`_parkedTrackCount` / `_parkedActive`). This is what stops a backgrounded tab's **looping** animation (skeleton
+  shimmer, spinner) or a mid-fling scroll from keeping `HasActive` true forever and defeating the idle wake-stop. The
+  `NodeFlags.Parked` marker also seeds a track born on an already-parked node (`Get`).
 - **`TransitionSpec`/`AnimTrack`/`EffectAux`/`DetachedNode` are blittable POD** in slabs; `TransitionSpec`
   arrays passed to `UseImplicitTransition` are `stackalloc` spans (the `app-requirements` example uses
   `.Transition(onShow: stackalloc[]{...})`). Multi-spec buffers use `[InlineArray]` where fixed-arity.

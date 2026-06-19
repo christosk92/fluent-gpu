@@ -41,6 +41,11 @@ public sealed class ScrollAnimator
     /// <summary>Engine-deliberate hover-flash retire delay (see class remarks): contract-begin + contract.</summary>
     public const float LeaveHideMs = ContractBeginMs + ExpandContractMs;
 
+    /// <summary>Minimum overflow (content − viewport, DIP) before the conscious scrollbar may arm. Below it the content
+    /// effectively fits — a sub-px / few-px fractional-layout remainder is not worth a bar — so a hover or a tiny pan
+    /// never flickers the indicator in. (The edge-fade cue keeps its own tighter 0.5px gate.)</summary>
+    public const float MinBarOverflowPx = 4f;
+
     /// <summary>Touch/trackpad-fling friction: the per-second exponential SURVIVAL factor applied to the velocity each
     /// tick (v *= FlingDecayPerS^dt_s). NOT WinUI's 0.95: WinUI's <c>c_scrollPresenterDefaultInertiaDecayRate</c>
     /// (ScrollPresenter.cpp:31) is the InteractionTracker's <c>PositionInertiaDecayRate</c> param, integrated inside the
@@ -76,6 +81,7 @@ public sealed class ScrollAnimator
     private readonly SceneStore _scene;
     private readonly List<NodeHandle> _active = new();
     private readonly HashSet<int> _member = new();
+    private readonly HashSet<int> _parkedActive = new();   // armed viewports in a KeepAlive-parked subtree: not ticked, excluded from HasActive
     private readonly Dictionary<int, Conscious> _state = new();   // per-viewport conscious-bar timers (cold; survives drops)
 
     /// <summary>Per-viewport conscious-state timers + eased FadeT/ExpandT tracks (kept out of ScrollState so the
@@ -114,9 +120,20 @@ public sealed class ScrollAnimator
     /// <see cref="DragController.FollowOmega"/> the drag-ghost lag spring uses (semi-implicit Euler, ≤16ms substeps).</summary>
     public const float OverscrollSpringOmega = 38f;
 
-    public bool HasActive => _active.Count > 0;
+    // HasActive EXCLUDES parked viewports (a backgrounded tab mid-fling/transition must not keep the loop awake).
+    public bool HasActive => _active.Count - _parkedActive.Count > 0;
     /// <summary>Viewports currently scrolling/transitioning (the armed set) — O(1) census.</summary>
     public int ActiveCount => _active.Count;
+
+    /// <summary>Quiesce / resume an armed viewport on a KeepAlive park edge: a parked viewport is not ticked (its
+    /// mid-fling / target-chase scroll freezes) and is excluded from <see cref="HasActive"/>, so a backgrounded tab
+    /// can't keep the frame loop awake; it resumes on un-park. No-op for a viewport that isn't currently armed.</summary>
+    public void SetNodeParked(NodeHandle n, bool parked)
+    {
+        int idx = (int)n.Raw.Index;
+        if (!_member.Contains(idx)) { _parkedActive.Remove(idx); return; }
+        if (parked) _parkedActive.Add(idx); else _parkedActive.Remove(idx);
+    }
     /// <summary>Viewports retaining a conscious-scrollbar timer row (survives drops until fully hidden) — O(1) census.</summary>
     public int ConsciousStateCount => _state.Count;
 
@@ -167,6 +184,7 @@ public sealed class ScrollAnimator
         {
             NodeHandle n = _active[i];
             if (!_scene.IsLive(n)) { Drop(i, n, forget: true); continue; }
+            if (_parkedActive.Contains((int)n.Raw.Index)) continue;   // parked (backgrounded) viewport: freeze; resumes on un-park
             ref ScrollState sc = ref _scene.ScrollRef(n);
             bool horizontal = sc.Orientation == 1;
             float off = horizontal ? sc.OffsetX : sc.OffsetY;
@@ -345,7 +363,12 @@ public sealed class ScrollAnimator
             bool over = sc.PointerOver;
             bool lane = sc.PointerOverScrollbar;
 
-            if (moved || movingNow) cs.ScrolledSinceReveal = true;
+            // Below the overflow floor the content effectively fits (a fractional-layout remainder) — never arm the bar,
+            // so a hover or a tiny pan can't flicker it in. Real overflow (≥ MinBarOverflowPx) behaves as before.
+            float overflow = (sc.Orientation == 1 ? sc.ContentW - sc.ViewportW : sc.ContentH - sc.ViewportH);
+            bool scrollable = overflow > MinBarOverflowPx;
+
+            if (scrollable && (moved || movingNow)) cs.ScrolledSinceReveal = true;
 
             // Expand/contract dwell timers (ScrollBarExpandBeginTime 400ms / ScrollBarContractBeginTime 500ms).
             if (lane)
@@ -376,7 +399,7 @@ public sealed class ScrollAnimator
             // Visibility: visible while moving / lane / over (the MouseIndicator hold); hide after the away/idle delay.
             sc.IdleMs = (movingNow || over) ? 0f : sc.IdleMs + dtMs;
             cs.AwayMs = over ? 0f : cs.AwayMs + dtMs;
-            bool show = movingNow || over || lane;
+            bool show = scrollable && (movingNow || over || lane);
             bool hideDue = !show &&
                 (cs.ScrolledSinceReveal ? sc.IdleMs >= IdleHideMs       // WinUI ScrollBarContractDelay 2s
                                         : cs.AwayMs >= LeaveHideMs);    // hover-flash retire (≈667ms; class remarks)
@@ -437,6 +460,7 @@ public sealed class ScrollAnimator
     private void Drop(int i, NodeHandle n, bool forget)
     {
         _member.Remove((int)n.Raw.Index);
+        _parkedActive.Remove((int)n.Raw.Index);
         _active.RemoveAt(i);
         if (forget) _state.Remove((int)n.Raw.Index);
     }

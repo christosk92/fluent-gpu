@@ -15,7 +15,7 @@ namespace FluentGpu.Controls;
 /// </summary>
 public sealed class ItemsViewController
 {
-    internal Action<int, float>? BringIntoViewImpl;
+    internal Action<int, float, bool>? BringIntoViewImpl;
     internal Func<int>? GetCurrent;
     internal Action<float>? ScrollByImpl;
 
@@ -29,9 +29,11 @@ public sealed class ItemsViewController
     /// <summary>WinUI <c>StartBringItemIntoView(index, BringIntoViewOptions)</c> (idl:52): realizes the target by
     /// scrolling the virtualized viewport. <paramref name="alignmentRatio"/> NaN = minimal scroll (the default
     /// BringIntoViewOptions); 0 = align item start to viewport start, 1 = end to end (the Home/End ratios,
-    /// ItemsViewInteractions.cpp:1013-1016).</summary>
-    public void StartBringItemIntoView(int index, float alignmentRatio = float.NaN)
-        => BringIntoViewImpl?.Invoke(index, alignmentRatio);
+    /// ItemsViewInteractions.cpp:1013-1016). <paramref name="animate"/> true = SMOOTH-scroll to the target (the
+    /// ScrollAnimator eases the offset, matching WinUI's <c>BringIntoViewOptions.AnimationDesired</c>); false (default) =
+    /// snap immediately. Animated paging (e.g. a PagedShelf's chevrons) passes true.</summary>
+    public void StartBringItemIntoView(int index, float alignmentRatio = float.NaN, bool animate = false)
+        => BringIntoViewImpl?.Invoke(index, alignmentRatio, animate);
 
     /// <summary>Nudge the virtualized viewport by <paramref name="delta"/> DIP along its scroll axis (clamped).
     /// The drag-reorder EDGE AUTO-SCROLL seam: a composing list (ListView) calls this while the pointer drags near
@@ -185,6 +187,14 @@ public sealed class ItemsView : Component
     /// overflowing edge so a long list reads as scrollable. <see cref="ScrollEdgeCues.Auto"/> (default) → the app
     /// default (ON, fade-only); <see cref="ScrollEdgeCues.None"/> opts out. Forwarded onto the built VirtualListEl.</summary>
     public ScrollEdgeCues EdgeCues = ScrollEdgeCues.Auto;
+    /// <summary>Premium alpha-mask edge fade: feather the content's OWN alpha at the overflowing edges. Unlike the
+    /// surface-colour <see cref="EdgeCues"/> fade (which needs an opaque plate to dissolve into and self-skips over a
+    /// gradient wash), this works over ANY background. One offscreen RT for the viewport. Forwarded onto the built
+    /// VirtualListEl. Default false.</summary>
+    public bool AutoEdgeFade;
+    /// <summary>Never draw the conscious scrollbar for the virtualized viewport (a paged surface navigates by its
+    /// pager, not a draggable bar). Forwarded onto the built VirtualListEl. Default false.</summary>
+    public bool SuppressScrollBar;
 
     /// <summary>Legacy demo factory (compat): a single-selectable grid of labeled tiles, now riding the full
     /// L0–L3 substrate (virtualized grid + ItemContainer chrome + keyboard nav). Natural-sized (Grow 0): the demo
@@ -211,7 +221,9 @@ public sealed class ItemsView : Component
                                  Func<int, (float, float)>? itemDisplacement = null,
                                  IReadSignal<int>? displacementVersion = null,
                                  IReadSignal<int>? draggedSlot = null,
-                                 Func<int, ItemChromeState, PartDelta>? partDelta = null)
+                                 Func<int, ItemChromeState, PartDelta>? partDelta = null,
+                                 bool suppressScrollBar = false,
+                                 bool autoEdgeFade = false)
         => Embed.Comp(() => new ItemsView
         {
             ItemCount = itemCount,
@@ -230,6 +242,8 @@ public sealed class ItemsView : Component
             ContainerFactory = containerFactory,
             KeyOf = keyOf,
             Grow = grow,
+            SuppressScrollBar = suppressScrollBar,
+            AutoEdgeFade = autoEdgeFade,
             Transition = transition,
             Selector = selector,
             ItemDisplacement = itemDisplacement,
@@ -371,7 +385,7 @@ public sealed class ItemsView : Component
 
         // The dispatcher's SetScrollOffset idiom (InputDispatcher.cs:388-433): write Offset+Target, apply the
         // layout-free -offset transform, dirty the realize window, request a render.
-        void BringIntoView(int index, float alignmentRatio)
+        void BringIntoView(int index, float alignmentRatio, bool animate)
         {
             if (sceneRef is null || layout is null || (uint)index >= (uint)count) return;
             var vp = viewportNode.Value;
@@ -400,6 +414,18 @@ public sealed class ItemsView : Component
 
             float content = horizontal ? sc.ContentW : sc.ContentH;
             target = Math.Clamp(target, 0f, MathF.Max(0f, content - viewport));
+
+            // Animated (WinUI AnimationDesired): set the TARGET only and arm the ScrollAnimator — phase 7 eases the live
+            // offset toward it (+ re-realizes the window + fades the bar). Snap (default): write Offset==Target and apply
+            // the -offset content transform now (the dispatcher's SetScrollOffset idiom, InputDispatcher.cs:388-433).
+            if (animate)
+            {
+                if (horizontal) sc.TargetX = target; else sc.TargetY = target;
+                Context.ArmScroll?.Invoke(vp);
+                Context.RequestRerender();
+                return;
+            }
+
             if (horizontal) { sc.OffsetX = target; sc.TargetX = target; }
             else { sc.OffsetY = target; sc.TargetY = target; }
 
@@ -467,7 +493,7 @@ public sealed class ItemsView : Component
         void MoveCurrent(int next, bool ctrl, bool shift, float alignmentRatio = float.NaN)
         {
             if ((uint)next >= (uint)count || !ItemEnabled(next)) return;   // disabled = not focusable (cpp:203/:321)
-            BringIntoView(next, alignmentRatio);
+            BringIntoView(next, alignmentRatio, animate: false);
             model.OnFocusedAction(next, ctrl, shift);      // selection follows keyboard per mode (SelectorBase trio)
             if (current.Peek() != next)
             {
@@ -546,10 +572,20 @@ public sealed class ItemsView : Component
             switch (e.KeyCode)
             {
                 case Keys.A when ctrl:
-                    // Ctrl+A — Multiple/Extended only (ItemsViewInteractions.cpp:35-50).
+                    // Ctrl+A — Multiple/Extended only (ItemsViewInteractions.cpp:35-50). Extends WinUI: a repeat Ctrl+A
+                    // when everything is already selected CLEARS it (toggle), giving a keyboard path back to no-selection.
                     if (SelectionMode is ItemsSelectionMode.Multiple or ItemsSelectionMode.Extended)
                     {
-                        model.SelectAll();
+                        if (model.SelectedCount >= count) model.DeselectAll();
+                        else model.SelectAll();
+                        e.Handled = true;
+                    }
+                    return;
+                case Keys.Escape:
+                    // Escape clears the selection (a deliberate addition — the multi-select dismiss gesture).
+                    if (SelectionMode != ItemsSelectionMode.None && model.SelectedCount > 0)
+                    {
+                        model.DeselectAll();
                         e.Handled = true;
                     }
                     return;
@@ -559,7 +595,7 @@ public sealed class ItemsView : Component
                     // cpp:1009-1016), then make the first/last FOCUSABLE element current — WinUI focuses
                     // FindFirst/LastFocusableElement, not blindly index 0/count−1 (cpp:1028-1040).
                     bool home = e.KeyCode == Keys.Home;
-                    BringIntoView(home ? 0 : count - 1, home ? 0f : 1f);
+                    BringIntoView(home ? 0 : count - 1, home ? 0f : 1f, animate: false);
                     int t = home ? FirstEnabled(0, +1) : FirstEnabled(count - 1, -1);
                     if (t >= 0) MoveCurrent(t, ctrl, shift);   // minimal scroll keeps the edge alignment above
                     e.Handled = true;
@@ -662,7 +698,7 @@ public sealed class ItemsView : Component
             // startBringIntoView = (focusState == FocusState::Pointer) into SetCurrentElementIndex →
             // element.StartBringIntoView() with default (minimal-scroll) options (ItemsViewInteractions.cpp:894-895,
             // :1340-1345). Keyboard triggers don't (the nav keys handle their own scrolling).
-            if (pointer) BringIntoView(i, float.NaN);
+            if (pointer) BringIntoView(i, float.NaN, animate: false);
             if (current.Peek() != i) current.Value = i;
             // Roving tab stop: a press on a non-current container can't take pointer focus at the dispatch edge
             // (only the current container is in the tab order), so land focus here — FocusState::Pointer shows no
@@ -852,6 +888,8 @@ public sealed class ItemsView : Component
                 Overscan = OverscanItems,
                 Horizontal = horizontal,
                 EdgeCues = EdgeCues,
+                AutoEdgeFade = AutoEdgeFade,
+                SuppressScrollBar = SuppressScrollBar,
                 // Grow rides through to the viewport: 1 = fill the parent (hard viewport, never content-measured);
                 // 0 = natural — FlexLayout.MeasureViewport sizes a non-flexing viewport to the layout's ContentExtent
                 // (the gallery card shape; D1).

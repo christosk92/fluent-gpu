@@ -2,6 +2,7 @@ using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Localization;
 using FluentGpu.Signals;
 using static FluentGpu.Dsl.Ui;
 
@@ -45,7 +46,7 @@ public sealed class ToastHost : Component
         };
         if (toast is { ActionLabel: { } label, OnAction: { } act })
             kids.Add(Button.Standard(label, () => { act(); Toasts.Dismiss(); }));
-        kids.Add(Button.Standard("Dismiss", Toasts.Dismiss));
+        kids.Add(Button.Standard(Loc.Get(Strings.Common.Dismiss), Toasts.Dismiss));
 
         return new BoxEl
         {

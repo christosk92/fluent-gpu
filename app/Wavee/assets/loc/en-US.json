@@ -1,0 +1,211 @@
+{
+  "$culture": "en-US",
+  "$comment": "Wavee base culture — every user-facing UI string. Other cultures override per-key and fall back here. Keys flatten to a `Wavee.Strings` class via FluentGpu.SourceGen (Strings.Detail.Play == \"detail.play\"); parameterized keys expose a typed format method.",
+
+  "detail": {
+    "play": "Play",
+    "addToQueue": "Add to queue",
+    "addToPlaylist": "Add to playlist",
+    "copyToPlaylist": "Copy to playlist",
+    "selectAll": "Select all",
+    "goToArtist": "Go to artist",
+    "share": "Share",
+    "follow": "Follow",
+    "artist": "ARTIST",
+    "aboutTheArtist": "About the artist",
+    "fansAlsoLike": "Fans also like",
+    "featuredOn": "Featured on",
+    "watchOfficialVideo": "WATCH THE OFFICIAL VIDEO",
+    "likedSongs": "Liked Songs",
+    "moreBy": "More by {name}",
+    "songCount": "{count, plural, one {# song} other {# songs}}",
+    "selectedCount": "{count, plural, one {# selected} other {# selected}}",
+    "daysAgo": "{count, plural, one {# day ago} other {# days ago}}",
+    "today": "Today",
+    "yesterday": "Yesterday",
+    "durationHrMin": "{hours} hr {minutes} min",
+    "durationMin": "{minutes} min",
+    "metaLine": "{count} · {duration}",
+    "metaLineYear": "{count} · {duration} · {year}",
+    "column": {
+      "number": "#",
+      "title": "Title",
+      "artist": "Artist",
+      "album": "Album",
+      "addedBy": "Added by",
+      "dateAdded": "Date added",
+      "plays": "Plays"
+    },
+    "sort": {
+      "customOrder": "Custom order",
+      "title": "Title",
+      "artist": "Artist",
+      "album": "Album",
+      "dateAdded": "Date added",
+      "duration": "Duration",
+      "plays": "Plays",
+      "ascending": "Ascending",
+      "descending": "Descending"
+    },
+    "filter": {
+      "title": "Filter",
+      "searchThisList": "Search this list",
+      "hideExplicit": "Hide explicit",
+      "videosOnly": "Videos only",
+      "clear": "Clear"
+    },
+    "density": {
+      "rowSize": "Row size",
+      "compact": "Compact",
+      "default": "Default",
+      "cozy": "Cozy",
+      "comfortable": "Comfortable"
+    },
+    "empty": {
+      "noTracks": "Nothing here yet",
+      "noMatch": "No songs match your filter"
+    },
+    "badge": {
+      "single": "SINGLE",
+      "ep": "EP",
+      "album": "ALBUM",
+      "compilation": "COMPILATION"
+    }
+  },
+
+  "home": {
+    "goodMorning": "Good morning",
+    "goodAfternoon": "Good afternoon",
+    "goodEvening": "Good evening",
+    "greeting": "{part}, {name}",
+    "onRotation": "Here's what's been on rotation.",
+    "madeFor": "Made for {name}",
+    "you": "you",
+    "newReleases": "New releases",
+    "popularArtists": "Popular artists",
+    "artist": "Artist",
+    "featuredAlbum": "FEATURED ALBUM",
+    "play": "Play",
+    "spotlightSub": "{artist} · {year}",
+    "albumSub": "{kind} · {year}",
+    "single": "Single",
+    "ep": "EP",
+    "album": "Album",
+    "compilation": "Compilation"
+  },
+
+  "shell": {
+    "searchPlaceholder": "Search songs, artists, albums...",
+    "connecting": "Connecting...",
+    "signIn": "Sign in",
+    "friends": "Friends",
+    "notifications": "Notifications",
+    "lightTheme": "Light theme",
+    "darkTheme": "Dark theme"
+  },
+
+  "player": {
+    "nothingPlaying": "Nothing playing",
+    "loading": "Loading…",
+    "cannotPlay": "Can’t play this track",
+    "previous": "Previous",
+    "next": "Next",
+    "shuffle": "Shuffle",
+    "repeat": "Repeat",
+    "like": "Like",
+    "queue": "Queue",
+    "devices": "Devices",
+    "nowPlaying": "Now playing"
+  },
+
+  "nav": {
+    "home": "Home",
+    "search": "Search",
+    "albums": "Albums",
+    "artists": "Artists",
+    "likedSongs": "Liked Songs",
+    "podcasts": "Podcasts",
+    "localFiles": "Local files",
+    "playlist": "Playlist",
+    "album": "Album",
+    "artist": "Artist",
+    "yourLibrary": "Your Library",
+    "comingSoon": "This view arrives in a later pass.",
+    "viewAllHistory": "View all history",
+    "history": {
+      "title": "History",
+      "clearAll": "Clear all",
+      "searchPlaceholder": "Search history…",
+      "mostVisited": "MOST VISITED",
+      "visitCount": "{count, plural, one {# visit} other {# visits}}",
+      "visitMultiplier": "{count}×",
+      "stat": {
+        "visits": "visits",
+        "unique": "unique"
+      },
+      "filter": {
+        "all": "All",
+        "playlists": "Playlists",
+        "library": "Library",
+        "search": "Search",
+        "pages": "Pages"
+      },
+      "sort": {
+        "mostRecent": "Most recent",
+        "mostVisited": "Most visited"
+      },
+      "group": {
+        "today": "Today",
+        "yesterday": "Yesterday",
+        "thisWeek": "This week",
+        "thisMonth": "This month",
+        "earlier": "Earlier"
+      },
+      "kind": {
+        "playlist": "Playlist",
+        "library": "Library",
+        "search": "Search",
+        "page": "Page"
+      },
+      "ts": {
+        "yesterday": "Yesterday, {time}",
+        "weekday": "{day}, {time}",
+        "date": "{date}, {time}"
+      },
+      "empty": {
+        "noResults": "No results",
+        "nothingHere": "Nothing here",
+        "noHistory": "No history yet",
+        "noMatch": "No history matches \"{query}\"",
+        "tryAll": "Try switching to \"All\" to see your full history.",
+        "startNavigating": "Start navigating — your history will appear here."
+      }
+    }
+  },
+
+  "sidebar": {
+    "pinned": "Pinned",
+    "yourLibrary": "Your Library",
+    "albums": "Albums",
+    "artists": "Artists",
+    "likedSongs": "Liked Songs",
+    "podcasts": "Podcasts",
+    "playlists": "Playlists",
+    "localFiles": "Local files",
+    "soon": "Soon",
+    "dropToPin": "Drop items here to pin",
+    "songCount": "{count, plural, one {# song} other {# songs}}",
+    "createPlaylist": "Playlist",
+    "createFolder": "Folder"
+  },
+
+  "common": {
+    "retry": "Retry",
+    "dismiss": "Dismiss",
+    "offline": "You're offline — showing saved content.",
+    "emptyTitle": "Nothing here yet",
+    "emptySubtitle": "When there's something to show, it'll appear here.",
+    "errorTitle": "Something went wrong.",
+    "errorSubtitle": "Check your connection and try again."
+  }
+}

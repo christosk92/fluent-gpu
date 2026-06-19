@@ -22,7 +22,7 @@ public sealed class TreeReconciler
     private readonly StringTable _strings;
 
     // Mounted child components, keyed by their host node (the ComponentEl anchor).
-    private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; }
+    private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; public bool Parked; public bool DeferredRender; public Signal<bool>? ActiveSig; }
     private readonly Dictionary<NodeHandle, CompEntry> _comps = new();
     private readonly Dictionary<Component, NodeHandle> _anchorOf = new();
     private readonly List<Component> _live = new();
@@ -48,6 +48,28 @@ public sealed class TreeReconciler
     // Skeleton-loading: per SkelRegionEl node, the last branch (0 none / 1 shimmer / 2 real / 3 failed), the last-mounted
     // child element (for ReconcileSingleChild's type-compare), and the reveal-group token (for the group coordinator).
     private readonly Dictionary<int, (byte Branch, Element? El, object? Group)> _skelState = new();
+    // KeepAlive boundaries retain inactive page subtrees detached from the live child chain. Entries are node-owned so
+    // unmounting the boundary releases every parked component/effect/resource deterministically.
+    private sealed class KeepAliveEntry
+    {
+        public string Key = "";
+        public object Token = null!;
+        public Element El = null!;
+        public NodeHandle Root;
+        public long LastUsed;
+        public bool Attached;
+        public bool ResourcesActive = true;
+        public bool Cacheable = true;
+    }
+    private sealed class KeepAliveState
+    {
+        public readonly Dictionary<string, KeepAliveEntry> Entries = new();
+        public string? ActiveKey;
+        public long Clock;
+        public int TransientSeq;
+    }
+    private readonly Dictionary<int, KeepAliveState> _keepAliveState = new();
+    private readonly HashSet<int> _imagePinnedNodes = new();
     private readonly List<NodeHandle> _dirtyVirtualScratch = new();
 
     private Component? _root;
@@ -82,10 +104,19 @@ public sealed class TreeReconciler
 
     /// <summary>Set by the host; injected into each component so animation hooks can seed tracks on their node.</summary>
     public AnimEngine? Anim { get; set; }
+    /// <summary>Set by the host (→ ScrollAnimator.Arm); injected into each component so a control can arm a viewport for a
+    /// smooth programmatic scroll (set Target, then phase 7 eases the offset toward it).</summary>
+    public Action<FluentGpu.Foundation.NodeHandle>? ArmScroll { get; set; }
     /// <summary>Set by the host; image nodes request decodes through it and pin/unpin for residency (liveness).</summary>
     public ImageCache? Images { get; set; }
     /// <summary>Set by the host; bumped on any image status change so <c>UseImage</c> consumers re-render granularly.</summary>
     public IReadSignal<int>? ImageEpoch { get; set; }
+    /// <summary>Set by the host; clears input/focus state when a retained subtree is parked off the live scene chain.</summary>
+    public Action<NodeHandle>? OnSubtreeDeactivated { get; set; }
+    /// <summary>Set by the host; called for each node as a subtree is parked/un-parked by KeepAlive so the animation +
+    /// scroll tickers can quiesce that node's tracks (a parked, invisible tab must not keep the app awake / defeat the
+    /// idle wake-stop). Wired to <c>AnimEngine.SetNodeParked</c> + <c>ScrollAnimator.SetNodeParked</c>.</summary>
+    public Action<NodeHandle, bool>? OnNodeParkedChanged { get; set; }
 
     public TreeReconciler(SceneStore scene, StringTable strings, ReactiveRuntime? runtime = null)
     {
@@ -230,6 +261,7 @@ public sealed class TreeReconciler
         ctx.Anim = Anim;
         ctx.Images = Images;
         ctx.Scene = _scene;
+        ctx.ArmScroll = ArmScroll;
         ctx.AnchorNode = anchor;
         ctx.ResolveContextSignal = ResolveContext;
         ctx.ImageEpoch = ImageEpoch;
@@ -254,6 +286,7 @@ public sealed class TreeReconciler
         if (el is VirtualListEl ve) { MountVirtual(node, ve); return; }
         if (el is ShowEl sh) { MountShow(node, sh); return; }
         if (el is ForEl fe) { MountFor(node, fe); return; }
+        if (el is KeepAliveEl ka) { MountKeepAlive(node, ka); return; }
         if (el is SkelRegionEl skr) { MountSkeletonRegion(node, skr); return; }
 
         WriteColumns(node, el, isMount: true);
@@ -335,6 +368,11 @@ public sealed class TreeReconciler
             return;   // autonomous reactive list boundary
         }
 
+        if (newEl is KeepAliveEl)
+        {
+            return;   // autonomous retained-page boundary
+        }
+
         if (newEl is SkelRegionEl)
         {
             return;   // autonomous skeleton boundary — its effect manages shimmer↔real on the loadable's state
@@ -394,20 +432,34 @@ public sealed class TreeReconciler
     {
         var comp = ce.Factory();
         InjectContext(comp.Context, node);
-        var entry = new CompEntry { Comp = comp, Type = ce.ComponentType };
+        // Mount-under-parked-ancestor: a component can be mounted into an already-parked subtree (a reactive Show/For
+        // boundary inside a parked page still fires its effect). It must initialize INACTIVE — seed Parked from the
+        // parent's marker and mark this node too, so the deferred-render gate holds and descendants inherit it.
+        var parent = _scene.Parent(node);
+        bool parked = !parent.IsNull && (_scene.Flags(parent) & NodeFlags.Parked) != 0;
+        var entry = new CompEntry { Comp = comp, Type = ce.ComponentType, Parked = parked };
+        if (parked) _scene.Mark(node, NodeFlags.Parked);
         _comps[node] = entry;
         _anchorOf[comp] = node;
         _live.Add(comp);
 
+        // The component's per-instance activation signal (UseIsActive), created lazily on first read so a component that
+        // never uses the lifecycle allocates nothing. Initial value = its current attached state (inactive if parked).
+        comp.Context.GetActiveSig = () => entry.ActiveSig ??= new Signal<bool>(!entry.Parked);
+
         var effect = new Effect(Runtime, () => RunComponent(node, entry), owner: null, runNow: false);
         entry.Effect = effect;
         comp.Context.RequestRerender = effect.Schedule;   // imperative re-render (granular) for escape-hatch callers
-        effect.RunNow();                                  // first render + child mount
+        effect.RunNow();                                  // first render + child mount (deferred if mounted parked)
     }
 
     private void RunComponent(NodeHandle node, CompEntry entry)
     {
         if (!_scene.IsLive(node)) return;
+        // Parked by Flow.KeepAlive (inactive tab/page): skip the render entirely — it is invisible and detached, so
+        // rebuilding it is pure waste (and a parked page subscribed to a per-frame signal would re-render every frame).
+        // Remember that a render was owed; ReactivateKeepAliveEntry replays it once when the subtree comes back.
+        if (entry.Parked) { entry.DeferredRender = true; return; }
         _renderCount++;
         if (Diag.Enabled) Diag.Event("render", entry.Comp.GetType().Name);   // who re-rendered (granularity diagnosis)
         var comp = entry.Comp;
@@ -578,6 +630,188 @@ public sealed class TreeReconciler
 
     // ── Fine-grained bindings (signal → scene node, no re-render) ────────────────────────────────
 
+    private void MountKeepAlive(NodeHandle node, KeepAliveEl ka)
+    {
+        int idx = (int)node.Raw.Index;
+        var state = new KeepAliveState();
+        _keepAliveState[idx] = state;
+
+        var eff = new Effect(Runtime, () =>
+        {
+            if (!_scene.IsLive(node)) return;
+
+            object token = ka.Active();
+            bool cacheable = ka.Options.ShouldCache?.Invoke(token) ?? true;
+            string key = cacheable ? ka.KeyOf(token) : "__transient:" + (++state.TransientSeq).ToString();
+            Element desired = ka.View(token) with { Key = key };
+
+            ReconcileKeepAlive(node, state, ka.Options, key, token, desired, cacheable);
+        }, owner: null, runNow: true);
+        AddBinding(node, eff);
+    }
+
+    private void ReconcileKeepAlive(NodeHandle node, KeepAliveState state, KeepAliveOptions options, string key, object token, Element desired, bool cacheable)
+    {
+        state.Clock++;
+
+        if (state.ActiveKey is { } oldKey && oldKey != key && state.Entries.TryGetValue(oldKey, out var oldActive))
+        {
+            DeactivateKeepAliveEntry(oldActive, options);
+            if (!oldActive.Cacheable) state.Entries.Remove(oldKey);
+        }
+
+        if (!state.Entries.TryGetValue(key, out var entry))
+        {
+            var root = _scene.CreateNode(desired.ElementTypeId);
+            _scene.AppendChild(node, root);
+            Mount(root, desired);
+            entry = new KeepAliveEntry
+            {
+                Key = key,
+                Token = token,
+                El = desired,
+                Root = root,
+                LastUsed = state.Clock,
+                Attached = true,
+                ResourcesActive = true,
+                Cacheable = cacheable,
+            };
+            state.Entries[key] = entry;
+            _scene.Mark(node, NodeFlags.LayoutDirty);
+        }
+        else
+        {
+            entry.Token = token;
+            entry.Cacheable = cacheable;
+            entry.LastUsed = state.Clock;
+            if (!entry.Attached)
+                ReactivateKeepAliveEntry(node, entry, options);
+
+            if (entry.El.ElementTypeId == desired.ElementTypeId)
+            {
+                Update(entry.Root, desired, entry.El);
+                entry.El = desired;
+            }
+            else
+            {
+                ReplaceKeepAliveRoot(node, entry, desired);
+            }
+        }
+
+        state.ActiveKey = key;
+        MirrorParticipation(node, entry.Root);
+        EvictInactiveKeepAliveEntries(state, options);
+    }
+
+    private void ReactivateKeepAliveEntry(NodeHandle parent, KeepAliveEntry entry, KeepAliveOptions options)
+    {
+        if (!_scene.IsLive(entry.Root)) return;
+        _scene.Detach(entry.Root);
+        _scene.AppendChild(parent, entry.Root);
+        entry.Attached = true;
+        if (options.ReleaseInactiveResources && !entry.ResourcesActive)
+        {
+            SetSubtreeResourcesActive(entry.Root, active: true);
+            entry.ResourcesActive = true;
+        }
+        SetSubtreeParked(entry.Root, parked: false);   // re-attached → un-park + replay any render owed while parked
+        _scene.Mark(parent, NodeFlags.LayoutDirty);
+    }
+
+    private void DeactivateKeepAliveEntry(KeepAliveEntry entry, KeepAliveOptions options)
+    {
+        if (!_scene.IsLive(entry.Root)) return;
+        OnSubtreeDeactivated?.Invoke(entry.Root);
+        if (options.ReleaseInactiveResources && entry.ResourcesActive)
+        {
+            SetSubtreeResourcesActive(entry.Root, active: false);
+            entry.ResourcesActive = false;
+        }
+        SetSubtreeParked(entry.Root, parked: true);   // inactive → suspend its render-effects (no re-render while invisible)
+        _scene.Detach(entry.Root);
+        entry.Attached = false;
+        if (!entry.Cacheable) FreeKeepAliveEntry(entry);
+    }
+
+    private void ReplaceKeepAliveRoot(NodeHandle parent, KeepAliveEntry entry, Element desired)
+    {
+        if (_scene.IsLive(entry.Root))
+        {
+            OnSubtreeDeactivated?.Invoke(entry.Root);
+            UnmountSubtree(entry.Root);
+            _scene.FreeSubtree(entry.Root);
+        }
+        var root = _scene.CreateNode(desired.ElementTypeId);
+        _scene.AppendChild(parent, root);
+        Mount(root, desired);
+        entry.Root = root;
+        entry.El = desired;
+        entry.Attached = true;
+        entry.ResourcesActive = true;
+        _scene.Mark(parent, NodeFlags.LayoutDirty);
+    }
+
+    private void EvictInactiveKeepAliveEntries(KeepAliveState state, KeepAliveOptions options)
+    {
+        int max = Math.Max(1, options.MaxEntries);
+        while (state.Entries.Count > max)
+        {
+            KeepAliveEntry? victim = null;
+            foreach (var e in state.Entries.Values)
+            {
+                if (e.Attached) continue;
+                if (victim is null || e.LastUsed < victim.LastUsed) victim = e;
+            }
+            if (victim is null) break;
+            state.Entries.Remove(victim.Key);
+            FreeKeepAliveEntry(victim);
+        }
+    }
+
+    private void FreeKeepAliveEntry(KeepAliveEntry entry)
+    {
+        if (!_scene.IsLive(entry.Root)) return;
+        OnSubtreeDeactivated?.Invoke(entry.Root);
+        UnmountSubtree(entry.Root);
+        _scene.FreeSubtree(entry.Root);
+    }
+
+    private void SetSubtreeResourcesActive(NodeHandle node, bool active)
+    {
+        if (!_scene.IsLive(node)) return;
+        ref NodePaint paint = ref _scene.Paint(node);
+        if (paint.VisualKind == VisualKind.Image && paint.ImageId != 0)
+        {
+            if (active) PinImageNode(node, paint.ImageId);
+            else UnpinImageNode(node, paint.ImageId);
+        }
+        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
+            SetSubtreeResourcesActive(c, active);
+    }
+
+    // Park / un-park a kept-alive subtree so an INACTIVE page doesn't keep working while invisible. The single chokepoint
+    // for three effects, all driven off one walk on the tab-switch edge:
+    //  (1) component render-effects: while parked RunComponent defers (sets DeferredRender); on un-park we replay exactly
+    //      the components that owed a render — once, now attached, so context resolves and content is current.
+    //  (2) the per-component activation signal (UseIsActive): flipped here so UseActivation fires onDeactivated/onActivated.
+    //  (3) a scene-level Parked marker + a per-node ticker notification so the animation/scroll engines quiesce this
+    //      subtree's tracks (a backgrounded looping animation / mid-fling scroll must not defeat the idle wake-stop), and
+    //      so a component mounted under a parked ancestor seeds inactive (MountComponent reads the marker).
+    private void SetSubtreeParked(NodeHandle node, bool parked)
+    {
+        if (!_scene.IsLive(node)) return;
+        if (parked) _scene.Mark(node, NodeFlags.Parked); else _scene.Unmark(node, NodeFlags.Parked);
+        OnNodeParkedChanged?.Invoke(node, parked);
+        if (_comps.TryGetValue(node, out var entry))
+        {
+            entry.Parked = parked;
+            if (entry.ActiveSig is { } sig) sig.Value = !parked;   // value-gated; flips the UseIsActive memo → UseActivation
+            if (!parked && entry.DeferredRender) { entry.DeferredRender = false; entry.Effect?.Schedule(); }
+        }
+        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
+            SetSubtreeParked(c, parked);
+    }
+
     private void AddBinding(NodeHandle node, Computation c)
     {
         int idx = (int)node.Raw.Index;
@@ -589,6 +823,27 @@ public sealed class TreeReconciler
     // carries (one null test per fire; signal-direct means the CALLER allocated no closure). Wiring stays MOUNT-ONLY:
     // a new thunk/signal supplied on a re-render is ignored (the signals-first contract — change the signal's value,
     // not the bind; locked by bind.mount-only.stale).
+    private void PinImageNode(NodeHandle node, int imageId)
+    {
+        if (Images is null || imageId == 0 || !_scene.IsLive(node) || !IsReachableFromRoot(node)) return;
+        if (_imagePinnedNodes.Add((int)node.Raw.Index))
+            Images.Pin(new ImageHandle(imageId));
+    }
+
+    private void UnpinImageNode(NodeHandle node, int imageId)
+    {
+        if (Images is null || imageId == 0 || !_scene.IsLive(node)) return;
+        if (_imagePinnedNodes.Remove((int)node.Raw.Index))
+            Images.Unpin(new ImageHandle(imageId));
+    }
+
+    private bool IsReachableFromRoot(NodeHandle node)
+    {
+        for (var n = node; !n.IsNull && _scene.IsLive(n); n = _scene.Parent(n))
+            if (n == _scene.Root) return true;
+        return false;
+    }
+
     private void BindNode(NodeHandle node, Element el)
     {
         if (el is BoxEl b)
@@ -672,12 +927,9 @@ public sealed class TreeReconciler
                         ? Images.Request(src, dW, dH, ImagePriority.Visible, ime.BlurHash, ime.Transition).Id : 0;
                     ref var paint = ref _scene.Paint(node);
                     if (newId == paint.ImageId) return;
-                    if (Images is not null)
-                    {
-                        if (paint.ImageId != 0) Images.Unpin(new ImageHandle(paint.ImageId));
-                        if (newId != 0) Images.Pin(new ImageHandle(newId));
-                    }
+                    UnpinImageNode(node, paint.ImageId);
                     paint.ImageId = newId;
+                    PinImageNode(node, newId);
                     _scene.Mark(node, NodeFlags.PaintDirty);
                 }, owner: null, runNow: true));
             }
@@ -1149,10 +1401,19 @@ public sealed class TreeReconciler
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) UnmountSubtree(c);
 
         int idx = (int)node.Raw.Index;
+        if (_keepAliveState.Remove(idx, out var kas))
+        {
+            foreach (var ex in kas.Entries.Values)
+            {
+                if (!_scene.IsLive(ex.Root) || !_scene.Parent(ex.Root).IsNull) continue;
+                UnmountSubtree(ex.Root);
+                _scene.FreeSubtree(ex.Root);
+            }
+        }
         if (Images is not null)
         {
             ref NodePaint paint = ref _scene.Paint(node);
-            if (paint.VisualKind == VisualKind.Image && paint.ImageId != 0) Images.Unpin(new ImageHandle(paint.ImageId));
+            if (paint.VisualKind == VisualKind.Image && paint.ImageId != 0) UnpinImageNode(node, paint.ImageId);
         }
         if (_nodeBindings.Remove(idx, out var binds)) for (int i = 0; i < binds.Count; i++) binds[i].Dispose();
         _providerSig.Remove(idx);
@@ -1249,6 +1510,7 @@ public sealed class TreeReconciler
                 if (b.PressedBorderBrush is { } pbb) _scene.SetPressedBorderBrush(node, pbb); else _scene.ClearPressedBorderBrush(node);
                 if (b.Acrylic is { } ac) _scene.SetAcrylic(node, ac); else _scene.ClearAcrylic(node);
                 if (b.EdgeFade is { } bef) _scene.SetEdgeFade(node, bef); else _scene.ClearEdgeFade(node);
+                _scene.SetHitTestPassThrough(node, b.HitTestPassThrough ? node : NodeHandle.Null);   // self = yield to behind, except own children
 
                 // Transform origin (used by static + animated scale/rotate; default centre). Set unconditionally so an
                 // AnimEngine ScaleX/Y track or a TransformBind pivots about the requested origin (e.g. a menu's top edge).
@@ -1542,6 +1804,7 @@ public sealed class TreeReconciler
                 sc.EdgeCueConfig = ResolveEdgeCues(v.EdgeCues);
                 if (v.EdgeFade is { } vef) _scene.SetEdgeFade(node, vef); else _scene.ClearEdgeFade(node);
                 sc.AutoEdgeFade = v.AutoEdgeFade; sc.AutoEdgeFadeBand = v.AutoEdgeFade ? 24f : 0f;
+                sc.SuppressBar = v.SuppressScrollBar;
                 break;
             }
             case GridEl g:
@@ -1610,12 +1873,9 @@ public sealed class TreeReconciler
                         ? Images.Request(im.Source.Value, decodeW, decodeH, ImagePriority.Visible, im.BlurHash, im.Transition).Id : 0;
                     if (newId != oldId)
                     {
-                        if (Images is not null)
-                        {
-                            if (oldId != 0) Images.Unpin(new ImageHandle(oldId));
-                            if (newId != 0) Images.Pin(new ImageHandle(newId));
-                        }
+                        UnpinImageNode(node, oldId);
                         paint.ImageId = newId;
+                        PinImageNode(node, newId);
                     }
                 }
 
@@ -1668,7 +1928,8 @@ public sealed class TreeReconciler
                 var famId = _strings.Intern(t.FontFamily);
                 if (li.TextStyle.FontFamily != famId) { _strings.AddRef(famId); _strings.Release(li.TextStyle.FontFamily); }
                 li.TextStyle = new TextStyle(famId, t.Size, t.ResolvedWeight, t.Wrap, t.Trim, t.MaxLines,
-                    t.CharSpacing, t.LineHeight, t.LineStacking, t.LineBounds);
+                    t.CharSpacing, t.LineHeight, t.LineStacking, t.LineBounds,
+                    MinSizeDip: float.IsNaN(t.MinSize) ? 0f : t.MinSize);
                 li.Margin = t.Margin;
                 li.Width = t.Width; li.Height = t.Height;
                 li.MinW = t.MinWidth; li.MinH = t.MinHeight; li.MaxW = t.MaxWidth; li.MaxH = t.MaxHeight;

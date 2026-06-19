@@ -114,7 +114,15 @@ public sealed class FlexLayout
         ref RectF b = ref _scene.Bounds(node);
         bool changed = b.X != next.X || b.Y != next.Y || b.W != next.W || b.H != next.H;
         b = next;
-        if (changed) _scene.GetBoundsChangedHandler(node)?.Invoke(next);
+        // Fire on a real delta, OR once when a freshly-installed handler is still pending its initial delivery (an
+        // unconstrained node whose arranged rect already equals its Measure-written rect produces no delta, so the
+        // first value would otherwise never reach the handler). Clear the one-shot flag after delivering.
+        bool pending = (_scene.Flags(node) & NodeFlags.BoundsChangedPending) != 0;
+        if (changed || pending)
+        {
+            if (pending) _scene.Unmark(node, NodeFlags.BoundsChangedPending);
+            _scene.GetBoundsChangedHandler(node)?.Invoke(next);
+        }
     }
 
     // ── Measure: fill Bounds.W/H with each node's base (hypothetical) border-box size ──
@@ -162,13 +170,25 @@ public sealed class FlexLayout
             else
             {
                 if (s_layoutDiag) _dTextMiss++;
-                var m = _fonts.Measure(paint.Text, li.TextStyle, maxW);
+                // Auto-fit (TextEl.MinSize / TextStyle.MinSizeDip): shrink the font so the run fits MaxLines at maxW.
+                // Opt-in (MinSizeDip>0), so normal text skips this entirely. The chosen size feeds BOTH the measured box
+                // and the recorder (stored as FitSize); 0 ⇒ no shrink (the recorder shapes at the authored SizeDip).
+                float fit = 0f;
+                TextStyle eff = li.TextStyle;
+                if (li.TextStyle.MinSizeDip > 0f && li.TextStyle.MinSizeDip < li.TextStyle.SizeDip
+                    && li.TextStyle.MaxLines > 0 && li.TextStyle.Wrap != Foundation.TextWrap.NoWrap && !float.IsInfinity(maxW))
+                {
+                    float chosen = FitTextSize(paint.Text, li.TextStyle, maxW);
+                    if (chosen < li.TextStyle.SizeDip) { fit = chosen; eff = li.TextStyle with { SizeDip = chosen }; }
+                }
+                var m = _fonts.Measure(paint.Text, eff, maxW);
                 w = m.Size.Width; h = m.Size.Height;
                 // Retain the face's decoration metrics alongside the size: the recorder places underline/strikethrough
                 // bars (NodePaint.TextDecorations) from this row at record time without re-touching the font seam.
                 mc = new TextMeasureCache
                 {
                     Valid = true, Text = paint.Text, Style = li.TextStyle, MaxW = maxW, Size = new Size2(w, h),
+                    FitSize = fit,
                     UnderlineY = m.UnderlineY, UnderlineThickness = m.UnderlineThickness, StrikeY = m.StrikeY,
                 };
             }
@@ -392,6 +412,14 @@ public sealed class FlexLayout
 
         if (!sc.ContentSized)
         {
+            // A vertical viewport with a FINITE offered width ADOPTS it (CSS overflow-y: the content is width-
+            // constrained and only the scroll axis overflows). Without this a wide child (e.g. a horizontal card
+            // strip / Home shelf) hugged the content's natural width PAST the viewport, so the page could never shrink
+            // below it on resize (it was measured at +Inf in the cross-hug below). Horizontal viewports and genuinely
+            // unconstrained contexts (availW = +Inf) still take the natural-width hug below. (layout.md §6.)
+            if (!horizontal && float.IsNaN(w) && !float.IsInfinity(availW))
+                w = MathF.Max(0f, availW);
+
             // D1 — natural-size fallback for NON-FLEXING virtual viewports the parent does not size. WinUI's
             // ItemsView template is a ScrollView over an ItemsRepeater (ItemsView.xaml:19-37, VerticalAlignment=Top):
             // measured unconstrained it reports the repeater's natural extent — it does not collapse to 0 (the
@@ -409,6 +437,10 @@ public sealed class FlexLayout
                     float cross = horizontal
                         ? (float.IsNaN(h) ? 0f : MathF.Max(0f, h - li.Padding.Vertical))
                         : (float.IsNaN(w) ? 0f : MathF.Max(0f, w - li.Padding.Horizontal));
+                    // Viewport-aware layout: seed a best-known main estimate (the offered width for a horizontal shelf)
+                    // so ContentExtent is reasonable this frame; arrange + realize-after-layout correct it.
+                    if (sc.Layout is IViewportVirtualLayout dvl)
+                        dvl.SetViewport(horizontal ? (float.IsInfinity(availW) ? 0f : MathF.Max(0f, availW)) : 0f, cross);
                     float main = sc.Layout is not null ? sc.Layout.ContentExtent(sc.ItemCount, cross)
                                : _scene.TryGetExtents(node, out var extents) && extents is not null ? (float)extents.Total
                                : 0f;
@@ -541,6 +573,8 @@ public sealed class FlexLayout
         if (content.IsNull || layout is null) return (0f, 0f);
         int first = sc.FirstRealized;
         float cross = horizontal ? innerH : innerW;
+        // Viewport-aware layouts (fill-the-width shelves) need the scroll-axis viewport before any geometry call.
+        if (layout is IViewportVirtualLayout vl) vl.SetViewport(horizontal ? innerW : innerH, cross);
         float mainContent = layout.ContentExtent(sc.ItemCount, cross);
         float contentW = horizontal ? mainContent : innerW;
         float contentH = horizontal ? innerH : mainContent;
@@ -551,7 +585,13 @@ public sealed class FlexLayout
         {
             var rect = layout.ItemRect(first + ord, cross);   // children are in window (index) order; content-space rect
             Measure(rc);                                       // base sizes for the cell's own internal flex
-            Arrange(rc, rect.X, rect.Y, rect.W, rect.H);
+            // Inset the item by its Margin within the slot, so a list item honors Margin like any stack child (the WinUI
+            // ListViewItem backplate inset {4,2,4,2}). Without this the item filled the full slot — a margined row (an
+            // inset highlight pill / backplate) then started its content at padding-only, drifting out of alignment with
+            // a fixed header outside the list. The slot stride (ItemRect/extent) is unchanged; only the item insets.
+            ref LayoutInput rli = ref _scene.Layout(rc);
+            float mL = rli.Margin.Left, mT = rli.Margin.Top, mR = rli.Margin.Right, mB = rli.Margin.Bottom;
+            Arrange(rc, rect.X + mL, rect.Y + mT, MathF.Max(0f, rect.W - mL - mR), MathF.Max(0f, rect.H - mT - mB));
         }
         return (contentW, contentH);
     }
@@ -683,6 +723,32 @@ public sealed class FlexLayout
 
     // ── CSS Grid — distinct true-tracks (Pixel/Star/Auto) + row-major auto-flow (layout.md §7) ──
 
+    // Largest font size in [MinSizeDip, SizeDip] whose run wraps to ≤ MaxLines at maxW (TextEl auto-fit). "Fits" is
+    // monotonic in size (a bigger size never wraps fewer lines), so a short binary search converges. Each probe does
+    // two cheap Measure calls (a single-line height reference + the wrapped box); this runs ONLY on a cache miss of an
+    // opt-in (MinSizeDip>0) text node — never normal text, never a steady frame — so the extra measures are immaterial.
+    private float FitTextSize(StringId text, TextStyle style, float maxW)
+    {
+        int maxLines = style.MaxLines;
+        float maxS = style.SizeDip, minS = style.MinSizeDip;
+
+        bool Fits(float s)
+        {
+            var probe = style with { SizeDip = s };
+            float oneLine = _fonts.Measure(text, probe with { Wrap = Foundation.TextWrap.NoWrap, MaxLines = 0, Trim = Foundation.TextTrim.None }, float.PositiveInfinity).Size.Height;
+            if (oneLine <= 0f) return true;
+            float boxH = _fonts.Measure(text, probe with { MaxLines = 0, Trim = Foundation.TextTrim.None }, maxW).Size.Height;
+            int lines = Math.Max(1, (int)MathF.Round(boxH / oneLine));
+            return lines <= maxLines;
+        }
+
+        if (Fits(maxS)) return maxS;
+        if (!Fits(minS)) return minS;
+        float lo = minS, hi = maxS;
+        for (int i = 0; i < 6; i++) { float mid = (lo + hi) * 0.5f; if (Fits(mid)) lo = mid; else hi = mid; }
+        return lo;
+    }
+
     private Size2 MeasureGrid(NodeHandle node, in LayoutInput li, float availW)
     {
         _scene.TryGetGrid(node, out var g);
@@ -790,14 +856,21 @@ public sealed class FlexLayout
             else starTotal += MathF.Max(0f, t.Value);
         }
         float gaps = count > 1 ? (count - 1) * g.ColGap : 0f;
-        float remaining = MathF.Max(0f, availW - fixedW - gaps);
+        // Overflow guard (layout.md §7): when the FIXED (Px/Auto) tracks + gaps cannot fit a FINITE width, scale the
+        // fixed tracks down proportionally so the row fits EXACTLY instead of spilling past the edge with overlapping
+        // cells (Star tracks already resolve to 0). Grids don't scroll, so an over-wide fixed grid is a layout error we
+        // degrade gracefully. No-op when it already fits (scale 1) or the width is unconstrained (the measure pass).
+        float fixedScale = 1f;
+        if (!float.IsInfinity(availW) && fixedW > 0f && fixedW + gaps > availW)
+            fixedScale = Math.Clamp((availW - gaps) / fixedW, 0f, 1f);
+        float remaining = MathF.Max(0f, availW - fixedW * fixedScale - gaps);
         for (int j = 0; j < count; j++)
         {
             var t = g.Columns[j];
             colW[j] = t.Kind switch
             {
-                TrackKind.Pixel => t.Value,
-                TrackKind.Auto => autoW[j],
+                TrackKind.Pixel => t.Value * fixedScale,
+                TrackKind.Auto => autoW[j] * fixedScale,
                 _ => starTotal > 0f ? remaining * MathF.Max(0f, t.Value) / starTotal : 0f,
             };
         }

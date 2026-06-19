@@ -138,6 +138,20 @@ sealed class SpringProbe : Component
     }
 }
 
+// Diagnostic root for FG_PROBE=marquee: a fixed 150px-wide stretch column holding a Marquee with a long title.
+sealed class MarqueeProbeRoot : Component
+{
+    public override Element Render() => new BoxEl
+    {
+        Width = 150f, Height = 40f, Direction = 1, AlignItems = FluentGpu.Foundation.FlexAlign.Stretch,
+        Children =
+        [
+            Marquee.Of("This is a very long track title that should overflow and scroll",
+                new Marquee.Style { FontSize = 14f, Trigger = Marquee.TriggerMode.Always }),
+        ],
+    };
+}
+
 // Probe component for the expanded hooks.
 sealed class HookProbe : Component
 {
@@ -726,6 +740,16 @@ sealed class GridProbe : Component
         => Ui.UniformGrid(3, 10f, 50f, Cell(), Cell(), Cell(), Cell(), Cell()) with { Width = 320, Height = 400 };
 }
 
+// A grid whose FIXED columns (100+100+60 = 260) exceed its definite width (120) with a Star track present — the
+// overflow case that used to spill cells past the edge + overlap. The engine must shrink the fixed tracks to fit.
+sealed class GridOverflowProbe : Component
+{
+    static Element Cell() => new BoxEl { Fill = ColorF.FromRgba(40, 40, 40) };
+    public override Element Render()
+        => Ui.Grid([TrackSize.Px(100), TrackSize.Px(100), TrackSize.Star(), TrackSize.Px(60)], 0f, 0f, 40f,
+                   Cell(), Cell(), Cell(), Cell()) with { Width = 120f, Height = 80f };
+}
+
 // A STRETCH-width grid (no explicit Width) inside a column, followed by a sibling — the gallery shape (a UniformGrid
 // is the body of a Section/card). The grid must MEASURE to its real content height so the column stacks the next
 // sibling below it; if Measure can't see the available width it collapses to 0 and the sibling overlaps the grid's
@@ -745,6 +769,46 @@ sealed class GridStretchProbe : Component
                 new TextEl("after") { Size = 14f, Color = ColorF.FromRgba(255, 255, 255) }
             ],
         };
+}
+
+// Repro of the Wavee detail-page table: a column header grid (chrome Padding=PadX, grid no-padding) above a "row"
+// (RowSkin: ZStack + Margin=RowInset, a Direction=0 lane with Grow, the grid Grow=1 + Padding=PadX-RowInset). Both grids
+// share the SAME track list (the alignment invariant). At EQUAL container width the columns must land at identical X —
+// this isolates a grid-structure bug from an ItemsView width mismatch.
+sealed class ColumnAlignProbe : Component
+{
+    const float PadX = 16f, RowInset = 8f, ColGap = 12f;
+    static TrackSize[] Tracks() => [TrackSize.Px(36f), TrackSize.Px(36f), TrackSize.Star(), TrackSize.Px(180f), TrackSize.Px(108f), TrackSize.Px(40f), TrackSize.Px(64f)];
+    static Element Cell() => new BoxEl { Fill = ColorF.FromRgba(40, 40, 40) };
+    static Element[] Cells() { var a = new Element[7]; for (int i = 0; i < 7; i++) a[i] = Cell(); return a; }
+    static Element RowGrid() => new GridEl
+    {
+        Columns = Tracks(), ColGap = ColGap, RowHeight = 48f, Grow = 1f,
+        Padding = new Edges4(PadX - RowInset, 0f, PadX - RowInset, 0f), Children = Cells(),
+    };
+    static BoxEl RowSkinLike(Element content) => new BoxEl
+    {
+        ZStack = true, MinHeight = 48f, Margin = new Edges4(RowInset, 0f, RowInset, 0f),
+        Children = [ new BoxEl { Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center, Children = [content] } ],
+    };
+    public override Element Render() => new BoxEl
+    {
+        Direction = 1, Width = 900f, Height = 400f,
+        Children =
+        [
+            new BoxEl   // chrome (fixed header, outside the scroller) — matches DetailTracks.Render
+            {
+                Direction = 1, Padding = new Edges4(PadX, 8f, PadX, 0f),
+                Children = [ new BoxEl { Direction = 1, Children = [
+                    new GridEl { Columns = Tracks(), ColGap = ColGap, RowHeight = 36f, Children = Cells() },
+                    new BoxEl { Height = 1f } ] } ],
+            },
+            // The rows go through a real ItemsView (40 items → overflow → scrollbar), wrapped by a RowSkin-like
+            // container — the actual app path. This is what the bare-grid probe omitted.
+            ItemsView.Create(40, i => RowGrid(), RepeatLayout.Stack(48f),
+                containerFactory: (i, content, st, oi, of) => RowSkinLike(content), grow: 1f),
+        ],
+    };
 }
 
 // An auto-fill responsive grid (CSS repeat(auto-fill, minmax(120, 1fr))) in a 520-wide box: it must pack as many equal
@@ -930,6 +994,140 @@ sealed class FlowReorderProbe : Component
 }
 
 // ── Basic-input infrastructure probes (overlay / text input / repeat) ─────────────
+sealed class KeepAliveProbe : Component
+{
+    public Signal<string>? Route;
+    public int MaxEntries = 2;
+    public readonly Dictionary<string, int> PageRenders = new();
+
+    public override Element Render()
+    {
+        var route = UseSignal("a");
+        Route = route;
+        return Flow.KeepAlive(
+            () => route.Value,
+            key => key,
+            key => Embed.Comp(() => new KeepAlivePage(key, this)),
+            new KeepAliveOptions(MaxEntries));
+    }
+}
+
+sealed class KeepAlivePage : Component
+{
+    readonly string _key;
+    readonly KeepAliveProbe _owner;
+    public KeepAlivePage(string key, KeepAliveProbe owner) { _key = key; _owner = owner; }
+
+    public override Element Render()
+    {
+        _owner.PageRenders.TryGetValue(_key, out int renders);
+        _owner.PageRenders[_key] = renders + 1;
+
+        var (count, setCount) = UseState(0);
+        Element[] rows = new Element[18];
+        for (int i = 0; i < rows.Length; i++)
+            rows[i] = new BoxEl { Height = 24, Children = [Text(_key + "-row-" + i)] };
+
+        return new BoxEl
+        {
+            Direction = 1, Gap = 4, Width = 220, Height = 170,
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = 120, Height = 30, Role = AutomationRole.Button,
+                    Fill = new ColorF(0.2f, 0.2f, 0.2f, 1f),
+                    OnClick = () => setCount(count + 1),
+                    Children = [Text(_key + ":" + count)],
+                },
+                new ScrollEl
+                {
+                    Width = 180, Height = 64,
+                    Content = new BoxEl { Direction = 1, Children = rows },
+                },
+                Image("keepalive-" + _key, 24, 24, 2f, ColorF.FromRgba(0x33, 0x33, 0x33)),
+            ],
+        };
+    }
+}
+
+// Activation-lifecycle probe (UseIsActive / UseActivation + Layer-D auto-quiesce): a KeepAlive boundary whose pages
+// record their activation transitions and (except the "blank" page) seed a LOOPING animation, so a test can assert
+// (a) UseActivation fires exactly once per park/minimize edge and never at mount, and (b) parking a page quiesces its
+// looping animation so AnimEngine.HasActive (the Anim wake reason) drops.
+sealed class ActivationProbe : Component
+{
+    public Signal<string>? Route;
+    public int MaxEntries = 4;
+    public readonly Dictionary<string, int> On = new();
+    public readonly Dictionary<string, int> Off = new();
+
+    public override Element Render()
+    {
+        var route = UseSignal("a");
+        Route = route;
+        return Flow.KeepAlive(
+            () => route.Value,
+            key => key,
+            key => Embed.Comp(() => new ActivationPage(key, this)),
+            new KeepAliveOptions(MaxEntries));
+    }
+}
+
+sealed class ActivationPage : Component
+{
+    readonly string _key;
+    readonly ActivationProbe _owner;
+    public ActivationPage(string key, ActivationProbe owner) { _key = key; _owner = owner; }
+
+    public override Element Render()
+    {
+        UseActivation(
+            onActivated:   () => { _owner.On.TryGetValue(_key, out int n);  _owner.On[_key] = n + 1; },
+            onDeactivated: () => { _owner.Off.TryGetValue(_key, out int n); _owner.Off[_key] = n + 1; });
+        // A persistent looping animation on every page EXCEPT "blank" — _key is instance-constant, so this conditional
+        // hook keeps a stable call order for any given page. Quiesced when the page parks (Layer D).
+        if (_key != "blank")
+            UseKeyframes(AnimChannel.Opacity, [new Keyframe(0f, 0.4f), new Keyframe(1f, 1f)], 600f, loop: true);
+        return new BoxEl { Width = 100, Height = 40, Children = [Text("ap-" + _key)] };
+    }
+}
+
+// Probe for TextEl auto-fit (check 51): four wrapping boxes (each sizes to its text's height) — a long + a short title,
+// once WITH a MinSize floor (auto-fit) and once WITHOUT (authored size, capped+trimmed). The check reads box heights.
+sealed class AutoFitProbe : Component
+{
+    public NodeHandle LongFit, LongFixed, ShortFit, ShortFixed;
+    const string Long = "mellow pop wistful sunset late night drive";
+    const string Short = "Hits";
+    const float W = 180f;
+
+    static Element Cell(string txt, float min, Action<NodeHandle> cap) => new BoxEl
+    {
+        OnRealized = cap,
+        Children =
+        [
+            new TextEl(txt)
+            {
+                Size = 40f, MinSize = min, Width = W, Weight = 700,
+                Wrap = TextWrap.Wrap, MaxLines = 3, Trim = TextTrim.CharacterEllipsis,
+            },
+        ],
+    };
+
+    public override Element Render() => new BoxEl
+    {
+        Direction = 1, Gap = 8f,
+        Children =
+        [
+            Cell(Long,  16f,        h => LongFit = h),
+            Cell(Long,  float.NaN,  h => LongFixed = h),
+            Cell(Short, 16f,        h => ShortFit = h),
+            Cell(Short, float.NaN,  h => ShortFixed = h),
+        ],
+    };
+}
+
 sealed class RepeatProbe : Component
 {
     public int Clicks;
@@ -7592,6 +7790,132 @@ static class Slice
     }
 
     // Grid: 3 equal Star tracks across 320 (gaps 10) → 100px columns; 5 cells flow row-major into 2 rows.
+    // KeepAlive is opt-in: active route pages stay mounted while inactive pages are detached, unpinned, and LRU-evicted.
+    static void KeepAliveChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("keepalive", new Size2(260, 220), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var probe = new KeepAliveProbe { MaxEntries = 2 };
+        using var host = new AppHost(app, window, device, fonts, strings, probe);
+
+        host.RunFrame();
+        var imgA = host.Images.Request("keepalive-a", 24, 24);
+        bool initial = HasGlyph(device, strings, "a:0") && host.Images.RefsOf(imgA) == 1;
+
+        var buttonA = FindRole(host.Scene, host.Scene.Root, AutomationRole.Button);
+        ClickNode(host, window, buttonA);
+        bool clicked = HasGlyph(device, strings, "a:1") && !FocusedNode(host.Scene, host.Scene.Root).IsNull;
+
+        var scrollA = FindScrollable(host.Scene, host.Scene.Root);
+        var sr = host.Scene.AbsoluteRect(scrollA);
+        window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(sr.X + 20f, sr.Y + 20f), 0, 0, 120f));
+        host.RunFrame();
+        host.Scene.TryGetScroll(scrollA, out var scA);
+        float offsetA = scA.OffsetY;
+
+        probe.Route!.Value = "b";
+        host.RunFrame();
+        bool detached = HasGlyph(device, strings, "b:0") && !HasGlyph(device, strings, "a:1")
+                        && FocusedNode(host.Scene, host.Scene.Root).IsNull
+                        && host.Images.RefsOf(imgA) == 0;
+
+        probe.Route.Value = "a";
+        host.RunFrame();
+        var scrollA2 = FindScrollable(host.Scene, host.Scene.Root);
+        host.Scene.TryGetScroll(scrollA2, out var scA2);
+        bool restored = HasGlyph(device, strings, "a:1") && scA2.OffsetY > offsetA - 0.5f && host.Images.RefsOf(imgA) == 1;
+
+        probe.Route.Value = "b"; host.RunFrame();
+        probe.Route.Value = "c"; host.RunFrame();   // with MaxEntries=2, inactive A is the LRU victim
+        probe.Route.Value = "a"; host.RunFrame();
+        bool evictedFresh = HasGlyph(device, strings, "a:0") && !HasGlyph(device, strings, "a:1");
+
+        Check("50a. KeepAlive opt-in caches page state/scroll, detaches inactive input/draw, releases image pins, and LRU-evicts inactive pages",
+            initial && clicked && offsetA > 1f && detached && restored && evictedFresh,
+            $"initial={initial} clicked={clicked} off={offsetA:0.#}->{scA2.OffsetY:0.#} detached={detached} restored={restored} evictedFresh={evictedFresh} refsA={host.Images.RefsOf(imgA)}");
+    }
+
+    // Component activation lifecycle: UseActivation fires once per park/minimize transition (never at mount), and a
+    // parked subtree's looping animation is auto-quiesced so AnimEngine.HasActive (the Anim wake reason) drops.
+    static void ActivationLifecycleChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("activation", new Size2(260, 220), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var probe = new ActivationProbe { MaxEntries = 4 };
+        using var host = new AppHost(app, window, device, fonts, strings, probe);
+
+        host.RunFrame();
+        // Mount = active: neither callback fires; the page's loop animation keeps the Anim wake reason set.
+        probe.On.TryGetValue("a", out int aOn0); probe.Off.TryGetValue("a", out int aOff0);
+        bool mountSilent = aOn0 == 0 && aOff0 == 0;
+        bool animAwake = (host.CurrentWakeReasons & WakeReasons.Anim) != 0;
+
+        // Switch away → "a" parks → onDeactivated fires once (and its loop track is quiesced — see auto-quiesce below).
+        probe.Route!.Value = "b"; host.RunFrame();
+        probe.On.TryGetValue("a", out int aOn1); probe.Off.TryGetValue("a", out int aOff1);
+        bool parkedFires = aOn1 == 0 && aOff1 == 1;
+
+        // Switch back → "a" reactivates (onActivated); "b" parks (its onDeactivated).
+        probe.Route.Value = "a"; host.RunFrame();
+        probe.On.TryGetValue("a", out int aOn2); probe.Off.TryGetValue("a", out int aOff2);
+        probe.Off.TryGetValue("b", out int bOff2);
+        bool reactivateFires = aOn2 == 1 && aOff2 == 1 && bOff2 == 1;
+
+        // Window minimize → the ACTIVE (un-parked) page goes inactive too (onDeactivated), then restore → onActivated.
+        window.State = FluentGpu.Pal.WindowState.Minimized; host.RunFrame();
+        probe.Off.TryGetValue("a", out int aOff3);
+        bool minimizeFires = aOff3 == 2;
+        window.State = FluentGpu.Pal.WindowState.Normal; host.RunFrame();
+        probe.On.TryGetValue("a", out int aOn4);
+        bool restoreFires = aOn4 == 2;
+
+        Check("50b. UseActivation fires once per park/minimize transition, silent at mount (parked OR minimized → inactive)",
+            mountSilent && animAwake && parkedFires && reactivateFires && minimizeFires && restoreFires,
+            $"mountSilent={mountSilent} parked(off={aOff1}) reactivate(on={aOn2},bOff={bOff2}) min(off={aOff3}) restore(on={aOn4})");
+
+        // Auto-quiesce: with the only live page being non-animated ("blank"), the parked pages' loop tracks no longer
+        // keep the app awake (HasActive excludes parked tracks) → the Anim wake reason clears; it resumes on return.
+        probe.Route.Value = "blank"; host.RunFrame();
+        bool quiesced = (host.CurrentWakeReasons & WakeReasons.Anim) == 0;
+        probe.Route.Value = "a"; host.RunFrame();
+        bool resumed = (host.CurrentWakeReasons & WakeReasons.Anim) != 0;
+        Check("50c. Auto-quiesce: a parked subtree's looping animation drops AnimEngine.HasActive (idle wake-stop), resumes on return",
+            animAwake && quiesced && resumed, $"animAwake={animAwake} quiesced={quiesced} resumed={resumed}");
+    }
+
+    // Engine TextEl auto-fit (TextEl.MinSize / TextStyle.MinSizeDip): a long run shrinks to fit MaxLines at the
+    // available width (a SHORTER box than the same run capped+trimmed at the authored size); a run that already fits is
+    // NOT shrunk. Asserted against the headless advance model via the laid-out box heights.
+    static void AutoFitTextChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("autofit", new Size2(320, 320), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var probe = new AutoFitProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, probe);
+        host.RunFrame();
+
+        float longFit    = host.Scene.AbsoluteRect(probe.LongFit).H;
+        float longFixed  = host.Scene.AbsoluteRect(probe.LongFixed).H;
+        float shortFit   = host.Scene.AbsoluteRect(probe.ShortFit).H;
+        float shortFixed = host.Scene.AbsoluteRect(probe.ShortFixed).H;
+
+        bool longShrank = longFit > 0f && longFit < longFixed - 1f;   // shrank to fit → shorter than the capped 40px run
+        bool shortKept  = Near(shortFit, shortFixed, 1f);             // already fits at the authored size → no shrink
+
+        Check("AF1. TextEl auto-fit (MinSize): a long title shrinks to fit MaxLines; a short title is unchanged",
+            longShrank && shortKept,
+            $"longFit={longFit:0.#} < longFixed={longFixed:0.#} | shortFit={shortFit:0.#} ~= shortFixed={shortFixed:0.#}");
+    }
+
     static void GridChecks(StringTable strings)
     {
         using var app = new HeadlessPlatformApp();
@@ -7612,6 +7936,35 @@ static class Slice
         bool rows = Near(b3.X, 0) && Near(b3.Y, 60) && Near(b4.X, 110) && Near(b4.Y, 60);
         Check("51. Grid: star tracks split width + row-major auto-flow", cols && rows,
             $"cols x={b0.X:0},{b1.X:0},{b2.X:0} w={b0.W:0}; row2 y={b3.Y:0}");
+    }
+
+    // Overflow guard: a GridEl whose FIXED columns exceed its width must shrink them to fit — every column stays
+    // within [0, width] (no past-edge/negative colX) and columns never overlap (each starts at/after the prev right).
+    static void GridOverflowChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("gridoverflow", new Size2(640, 480), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new GridOverflowProbe());
+        host.RunFrame();
+
+        const float W = 120f;
+        var grid = host.Scene.Root;
+        bool within = true, ordered = true;
+        float prevRight = 0f;
+        var detail = new System.Text.StringBuilder();
+        for (int i = 0; i < 4; i++)
+        {
+            var b = host.Scene.Bounds(Child(host.Scene, grid, i));
+            detail.Append($" c{i}=({b.X:0.#},{b.W:0.#})");
+            if (b.X < -0.5f || b.X + b.W > W + 0.5f) within = false;   // no column positioned/sized past the edge
+            if (b.X + 0.5f < prevRight) ordered = false;               // no overlap (starts at/after the prev right edge)
+            prevRight = b.X + b.W;
+        }
+        Check("51c. Grid: fixed columns exceeding width shrink-to-fit (no overflow / no overlap)", within && ordered,
+            $"W={W:0}{detail}");
     }
 
     // Regression: a stretch-width grid (no explicit Width) must measure its real content height so a following
@@ -7636,6 +7989,51 @@ static class Slice
         bool noOverlap = ab.Y >= 192f - 0.5f;            // sibling below the grid's real content, not on top of it
         Check("51b. Grid: stretch-width grid measures content height (sibling doesn't overlap)",
             gridHeight && gridWidth && noOverlap, $"gridW={gb.W:0} gridH={gb.H:0} afterY={ab.Y:0}");
+    }
+
+    // Detail-page header-vs-row column alignment: the header grid (chrome padding) and the row grid (RowSkin margin +
+    // Direction=0 lane + grid padding) must place every column at the SAME X when their containers are equally wide.
+    static void ColumnAlignChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("colalign", new Size2(1000, 500), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new ColumnAlignProbe());
+        host.RunFrame();
+
+        var scene = host.Scene;
+        var root = scene.Root;
+        var headerGrid = Child(scene, Child(scene, Child(scene, root, 0), 0), 0);   // root→chrome→headerBox→grid
+
+        // Locate the scroller, its content panel, the first realized row (RowSkin) → lane → grid.
+        static NodeHandle FindScroll(SceneStore s, NodeHandle n)
+        {
+            if (s.TryGetScroll(n, out _)) return n;
+            for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c)) { var r = FindScroll(s, c); if (!r.IsNull) return r; }
+            return NodeHandle.Null;
+        }
+        var vp = FindScroll(scene, root);
+        NodeHandle firstRow = NodeHandle.Null;
+        if (!vp.IsNull && scene.TryGetScroll(vp, out var sc)) firstRow = scene.FirstChild(sc.ContentNode);
+        bool haveScroll = !firstRow.IsNull;
+        var rowGrid = firstRow.IsNull ? NodeHandle.Null : Child(scene, Child(scene, firstRow, 0), 0);   // RowSkin→lane→grid
+
+        var hsb = new System.Text.StringBuilder();
+        var rsb = new System.Text.StringBuilder();
+        bool aligned = !rowGrid.IsNull;
+        if (!rowGrid.IsNull)
+            for (int i = 0; i < 7; i++)
+            {
+                float hx = scene.AbsoluteRect(Child(scene, headerGrid, i)).X;   // window-space (sums the parent chain)
+                float rx = scene.AbsoluteRect(Child(scene, rowGrid, i)).X;
+                hsb.Append($"{hx:0.#} ");
+                rsb.Append($"{rx:0.#} ");
+                if (!Near(hx, rx, 0.5f)) aligned = false;
+            }
+        Check("51d. virtualized list items honor their Margin → a fixed header's columns align with the scrolled row columns", aligned,
+            $"scroll={haveScroll} hdr=[ {hsb}] row=[ {rsb}]");
     }
 
     // Auto-fill responsive grid: 520 inner width, minCol 120, gap 10 → floor((520+10)/(120+10)) = 4 columns, each
@@ -13367,6 +13765,29 @@ static class Slice
                 seeded && sticky && correctedG && none, $"total={total:0}→{gl.ContentExtent(n, cross):0} hdr6@{gl.OffsetOf(6, cross):0}");
         }
 
+        // e11virt.fillrow — FillRowVirtualLayout (the viewport-aware "fill the width with equal cards" shelf via the
+        // IViewportVirtualLayout seam): SetViewport feeds the main-axis viewport; the fit is COUNT-INDEPENDENT, so a
+        // handful of items render at the normal fitted width (≤ maxCardW) instead of ballooning to fill — the regression
+        // guard for the Home shelf card-balloon bug (3 items in a wide viewport must NOT become ~458px cards).
+        {
+            var fr = new FillRowVirtualLayout(minCardW: 150f, maxCardW: 200f, gap: 12f);
+            const float cross = 240f;
+            fr.SetViewport(1400f, cross);                        // perPage=floor(1412/162)=8, cardW=(1400-84)/8=164.5
+            bool fit = fr.PerPage == 8 && Near(fr.CardW, 164.5f) && fr.CardW <= 200.01f;
+            // Count-independent: 3 items → a SHORT strip at the fitted width (NOT 3 cards stretched across 1400px).
+            float ext3 = fr.ContentExtent(3, cross);             // 3×164.5 + 2×12 = 517.5
+            var c0 = fr.ItemRect(0, cross); var c1 = fr.ItemRect(1, cross);
+            bool fewItems = Near(ext3, 517.5f) && Near(c0.W, 164.5f) && Near(c1.X, 176.5f) && Near(c0.H, cross);
+            fr.SetViewport(324f, cross);                          // refit: perPage=floor(336/162)=2, cardW=(324-12)/2=156
+            bool refit = fr.PerPage == 2 && Near(fr.CardW, 156f);
+            // Override: pin 2 columns on a wide viewport → unclamped card would be 694, capped to maxCardW 200.
+            var frOv = new FillRowVirtualLayout(150f, 200f, 12f, perPageOverride: 2);
+            frOv.SetViewport(1400f, cross);
+            bool capped = frOv.PerPage == 2 && Near(frOv.CardW, 200f);
+            Check("e11virt.fillrow FillRow: viewport-fed fit (≤maxCardW), count-independent (no balloon), refit on resize, perPage-override cap",
+                fit && fewItems && refit && capped, $"fit={fr.PerPage}@{fr.CardW:0.0} ext3={ext3:0.0} cap={frOv.CardW:0}");
+        }
+
         // e11virt.5 — ItemsRepeater lifecycle (E11-L2, ItemsRepeater.idl:186-188): ElementPrepared on entering the
         // realized window, ElementClearing on leaving (recycle = Clearing(old)+Prepared(new)), visible-range prefetch;
         // a steady in-window scroll fires NOTHING (transform-only frames never realize).
@@ -13913,10 +14334,12 @@ static class Slice
         int lvRows = lv.IsNull ? 0 : host.Scene.ChildCount(lsc.ContentNode);
         var row0 = default(RectF);
         if (lvRows > 0) row0 = host.Scene.Bounds(host.Scene.FirstChild(lsc.ContentNode));
+        // The {4,2,4,2} ListViewItem backplate margin now insets the item within its 44 slot (WinUI parity): 280−8=272 wide,
+        // 44−4=40 tall. The 44 SLOT stride (content height 8×44=352, viewport) is unchanged — only the backplate insets.
         bool lvOk = !lv.IsNull && Near(lvRect.W, 280f) && Near(lvRect.H, 8 * ItemsView.ListItemExtent)
             && Near(lsc.ViewportW, 280f) && Near(lsc.ViewportH, 352f) && Near(lsc.ContentH, 352f)
-            && lvRows == 8 && Near(row0.W, 280f) && Near(row0.H, ItemsView.ListItemExtent);
-        Check("cp1.a — gallery ItemsView List preset (280-wide card, no height above) sizes naturally to 8×44 and realizes 8 rows at W=280",
+            && lvRows == 8 && Near(row0.W, 272f) && Near(row0.H, ItemsView.ListItemExtent - 4f);
+        Check("cp1.a — gallery ItemsView List preset (280-wide card, no height above) sizes naturally to 8×44 slots; backplates inset {4,2,4,2} → 272×40",
             lvOk, $"vp={lvRect.W:0}x{lvRect.H:0} viewport={lsc.ViewportW:0}x{lsc.ViewportH:0} content={lsc.ContentH:0} rows={lvRows} row0={row0.W:0}x{row0.H:0}");
 
         // cp1.b — the gallery ItemsView shape (MiscPages.cs): legacy Create(items, columns:4) in an AUTO-HEIGHT,
@@ -16938,6 +17361,25 @@ static class Slice
         }
     }
 
+    static void MarqueeChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("marquee", new Size2(480, 320), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var root = new MarqueeProbeRoot();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+        // A long title in a 150px column overflows (~485px). Past the marquee's start delay the loop track ramps,
+        // translating the content left. This also guards the engine fix it depends on: an unconstrained node's
+        // OnBoundsChanged must deliver its initial size (FlexLayout one-shot initial bounds delivery) so the marquee
+        // detects overflow; without it TextW stays 0 and it never scrolls.
+        float maxTrack = 0f;
+        for (int i = 0; i < 40; i++) { host.RunFrame(); maxTrack = MathF.Max(maxTrack, MaxAbsTrackX(host, host.Scene.Root)); }
+        Check("M1. marquee scrolls overflowing text (OnBoundsChanged initial delivery + nested-component TranslateX seed)",
+              maxTrack > 1f, $"maxAbsTrackX={maxTrack:0.##}");
+    }
+
     static int Main()
     {
         // FG_PROBE=ranged-tooltip — isolated repro driver for the live "ranged slider hover → tooltip → freeze"
@@ -17021,6 +17463,7 @@ static class Slice
         CompositorChecks(strings);
         AnimEngineChecks(strings);
         AnimHookChecks(strings);
+        MarqueeChecks(strings);
         ScrollChecks(strings);
         TwoAxisScrollChecks(strings);
         ScrollCrossAxisChecks(strings);
@@ -17049,8 +17492,13 @@ static class Slice
         ControlsChecks(strings);
         NavigationChecks();
         PageHostChecks(strings);
+        KeepAliveChecks(strings);
+        ActivationLifecycleChecks(strings);
+        AutoFitTextChecks(strings);
         GridChecks(strings);
+        GridOverflowChecks(strings);
         GridStretchChecks(strings);
+        ColumnAlignChecks(strings);
         AutoGridChecks(strings);
         VirtualGridChecks(strings);
         ZStackRepeaterChecks(strings);

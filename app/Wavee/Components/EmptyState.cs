@@ -1,6 +1,7 @@
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
+using FluentGpu.Localization;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
@@ -26,7 +27,7 @@ public static class EmptyState
         return Centered(kids);
     }
 
-    public static Element Default() => Build("Nothing here yet", "When there's something to show, it'll appear here.");
+    public static Element Default() => Build(Loc.Get(Strings.Common.EmptyTitle), Loc.Get(Strings.Common.EmptySubtitle));
 
     internal static Element Centered(List<Element> kids) => new BoxEl
     {

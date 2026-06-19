@@ -92,6 +92,10 @@ public sealed class AnimEngine
         public float RestoreTo;
         public bool RestoreLayout;
         public bool TrailingAnchor;
+        // Quiesced: this track's node belongs to a KeepAlive-parked (backgrounded) subtree — Tick neither advances nor
+        // folds it, and it is excluded from HasActive, so an invisible tab's looping animation can't defeat the idle
+        // wake-stop. Set/cleared via SetNodeParked on the park edge; the track resumes from its current state on un-park.
+        public bool Parked;
 
         /// <summary>The destination this track is flying to (spring target / last keyframe value).</summary>
         public float TargetValue => Mode == IntegrationMode.Spring ? Target : (Keys.Length > 0 ? Keys[^1].Value : 0f);
@@ -166,7 +170,23 @@ public sealed class AnimEngine
     public DrivenClockTable Clocks { get; } = new();
 
     public AnimEngine(SceneStore scene) => _scene = scene;
-    public bool HasActive => _tracks.Count > 0;
+    // HasActive EXCLUDES parked tracks (O(1) via a maintained counter, never a per-frame scan): a backgrounded tab's
+    // looping animation keeps _tracks.Count > 0 forever, so without this it would keep the frame loop awake.
+    private int _parkedTrackCount;
+    public bool HasActive => _tracks.Count - _parkedTrackCount > 0;
+
+    /// <summary>Quiesce / resume a node's animation tracks (called by the reconciler as a KeepAlive subtree parks /
+    /// un-parks): a parked track does not advance, fold, or count toward <see cref="HasActive"/>, so a backgrounded
+    /// tab's looping animation can't defeat the idle wake-stop; it resumes from its current state on un-park. The
+    /// counter stays exact (idempotent <c>Parked != parked</c> guard). O(tracks-on-this-node).</summary>
+    public void SetNodeParked(NodeHandle node, bool parked)
+    {
+        for (int i = 0; i < _tracks.Count; i++)
+        {
+            Track t = _tracks[i];
+            if (t.Node == node && t.Parked != parked) { t.Parked = parked; _parkedTrackCount += parked ? 1 : -1; }
+        }
+    }
 
     // ── census (read by the MemCensus sampler) ────────────────────────────────────────────────────
     // _loopTrackCount is maintained at add/remove/loop-flag-change (NOT a per-call scan): a fresh track from Get
@@ -183,6 +203,7 @@ public sealed class AnimEngine
     private void RemoveTrackAt(int i)
     {
         if (_tracks[i].Loop) _loopTrackCount--;
+        if (_tracks[i].Parked) _parkedTrackCount--;
         _tracks.RemoveAt(i);
     }
 
@@ -574,6 +595,7 @@ public sealed class AnimEngine
                 if (_tracks[i].Node == node && _tracks[i].Channel == ch && _tracks[i].Composite == CompositeOp.Replace)
                     return _tracks[i];
         var nt = new Track { Node = node, Channel = ch, Composite = composite };
+        if ((_scene.Flags(node) & NodeFlags.Parked) != 0) { nt.Parked = true; _parkedTrackCount++; }   // seeded on a parked node
         _tracks.Add(nt);
         return nt;
     }
@@ -590,6 +612,7 @@ public sealed class AnimEngine
         {
             Track t = _tracks[i];
             if (!_scene.IsLive(t.Node)) { RemoveTrackAt(i); continue; }
+            if (t.Parked) continue;   // parked (backgrounded) subtree: do not advance/fold; resumes on un-park
             float stepMs = dtMs;
             // A JUST-seeded track must not consume its delay from THIS frame's dt: the dt accumulated BEFORE the
             // seed (idle frames roll their pending time into the next active frame), so charging it against the
@@ -663,11 +686,13 @@ public sealed class AnimEngine
             if (!_scratch.ContainsKey(t.Node)) _scratch[t.Node] = Accum.FromPaint(in _scene.Paint(t.Node));
         }
 
-        // fold Replace tracks first (the base), then additive layers — so order can't clobber the base
+        // fold Replace tracks first (the base), then additive layers — so order can't clobber the base. Parked tracks
+        // are skipped (never advanced into _scratch above) — folding one would wrongly synthesize a scratch entry and
+        // mutate the parked node's paint.
         for (int i = 0; i < _tracks.Count; i++)
-            if (_tracks[i].Composite == CompositeOp.Replace) Fold(_tracks[i]);
+            if (!_tracks[i].Parked && _tracks[i].Composite == CompositeOp.Replace) Fold(_tracks[i]);
         for (int i = 0; i < _tracks.Count; i++)
-            if (_tracks[i].Composite != CompositeOp.Replace) Fold(_tracks[i]);
+            if (!_tracks[i].Parked && _tracks[i].Composite != CompositeOp.Replace) Fold(_tracks[i]);
 
         // compose each animated node's channels → LocalTransform (T∘R∘S) + Opacity
         foreach (var kv in _scratch)

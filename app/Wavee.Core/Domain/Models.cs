@@ -14,15 +14,24 @@ public sealed record Artist(
     string Id, string Uri, string Name, Image? Image,
     IReadOnlyList<Album>? TopAlbums = null);
 
+/// <summary>The release type — drives the detail-page badge, the layout (a single is a one-track release), and whether
+/// the track rows show a per-track artist (compilations are various-artists).</summary>
+public enum AlbumKind { Single, EP, Album, Compilation }
+
 public sealed record Album(
     string Id, string Uri, string Name, Image? Cover,
     IReadOnlyList<ArtistRef> Artists, int Year, int TrackCount,
-    IReadOnlyList<Track>? Tracks = null);
+    IReadOnlyList<Track>? Tracks = null, AlbumKind Kind = AlbumKind.Album);
 
 public sealed record Track(
     string Id, string Uri, string Title,
     IReadOnlyList<ArtistRef> Artists, AlbumRef Album,
-    long DurationMs, bool IsExplicit, Image? Image);
+    long DurationMs, bool IsExplicit, Image? Image,
+    // Per-playlist membership metadata (null outside a user playlist): when a track was added, and by whom. The detail
+    // page surfaces these as optional columns — curated/editorial playlists carry neither.
+    DateTimeOffset? AddedAt = null, string? AddedBy = null,
+    bool HasVideo = false,    // the track has an accompanying music video (offered as a list filter + a row indicator)
+    long PlayCount = 0);      // stream count (album pages show a Plays column; the top-played track gets a star)
 
 public sealed record Playlist(
     string Id, string Uri, string Name, string? Description, string OwnerName,

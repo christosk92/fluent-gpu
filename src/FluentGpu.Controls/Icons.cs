@@ -13,6 +13,7 @@ public static class Icons
     public const string ChevronDownSmall = "\uE96E";  // AnimatedChevronDownSmall fallback (DropDownButton/SplitButton)
     public const string ChevronUp = "\uE70E";
     public const string ChevronRight = "\uE76C";
+    public const string ChevronLeft = "\uE76B";
     public const string Clock = "\uE823";
     public const string FavoriteStar = "\uE734";
     public const string Code = "\uE943";
@@ -42,6 +43,8 @@ public static class Icons
     public const string Star = "\uE734";
     public const string List = "\uEA37";
     public const string Grid = "\uE80A";
+    public const string Filter = "\uE71C";   // Segoe Fluent "Filter" \u2014 list/grid filter affordance
+    public const string Sort = "\uE8CB";      // Segoe Fluent "Sort" \u2014 list sort affordance
     public const string MusicNote = "\uEC4F";
     public const string Picture = "\uEB9F";
     public const string Download = "\uE896";

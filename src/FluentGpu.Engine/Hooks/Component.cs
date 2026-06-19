@@ -31,6 +31,15 @@ public abstract class Component
     protected IReadSignal<T> UseContextSignal<T>(Context<T> context) => Context.UseContextSignal(context);
     /// <summary>Mount a signal-tracked effect owned by this component.</summary>
     protected void UseSignalEffect(Action effect) => Context.UseSignalEffect(effect);
+    /// <summary>This component's activation state as a reactive signal — <c>false</c> when parked by <c>Flow.KeepAlive</c>
+    /// (a backgrounded tab) OR the window is minimized/suspended. Read <c>.Value</c> in render to gate a live-only
+    /// affordance; for pause/resume callbacks use <see cref="UseActivation"/>.</summary>
+    protected IReadSignal<bool> UseIsActive() => Context.UseIsActive();
+    /// <summary>Notify-only pause/resume lifecycle: <paramref name="onDeactivated"/> runs when this component goes
+    /// inactive (page parked OR window minimized/suspended), <paramref name="onActivated"/> when it returns. Transitions
+    /// only — never at mount (start work in <c>UseEffect</c>) or unmount (use its cleanup). Pause your own background
+    /// work (poll/timer/OS subscription) here.</summary>
+    protected void UseActivation(Action? onActivated = null, Action? onDeactivated = null) => Context.UseActivation(onActivated, onDeactivated);
     /// <summary>The host UI-thread poster (<see cref="HostDispatch.Post"/>): run an action on the UI thread next frame
     /// from any thread. Use for off-thread data instead of <c>UseContext(FrameClock.Tick)</c> + a per-frame drain.</summary>
     protected Action<Action> UsePost() => Context.UsePost();

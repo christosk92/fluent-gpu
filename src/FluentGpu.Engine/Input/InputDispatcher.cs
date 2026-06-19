@@ -394,6 +394,33 @@ public sealed class InputDispatcher
     /// <summary>OLE DragLeave / cancel: end the external session (fires OnLeave on a live target).</summary>
     public void ExternalDragLeave() => DragDrop.Cancel();
 
+    /// <summary>Clear input state that points into a retained subtree before it is detached from the live scene chain.</summary>
+    public void DeactivateSubtree(NodeHandle root)
+    {
+        if (root.IsNull || !_scene.IsLive(root)) return;
+
+        bool cancelPointer = IsSelfOrAncestorOf(root, _hovered) || IsSelfOrAncestorOf(root, _pressed)
+                             || IsSelfOrAncestorOf(root, _down) || IsSelfOrAncestorOf(root, _dragTarget)
+                             || IsSelfOrAncestorOf(root, _scrollHovered) || IsSelfOrAncestorOf(root, _scrollDragNode)
+                             || IsSelfOrAncestorOf(root, _panTarget) || IsSelfOrAncestorOf(root, _reorderTarget)
+                             || IsSelfOrAncestorOf(root, _swipeDrag) || IsSelfOrAncestorOf(root, _gesturePanNode)
+                             || IsSelfOrAncestorOf(root, _pinchViewport) || IsSelfOrAncestorOf(root, _pinchSessionViewport);
+        for (int i = 0; !cancelPointer && i < _slots.Length; i++)
+        {
+            if (!_slots[i].Used) continue;
+            ref PointerSlot s = ref _slots[i];
+            cancelPointer = IsSelfOrAncestorOf(root, s.Down) || IsSelfOrAncestorOf(root, s.DragTarget)
+                            || IsSelfOrAncestorOf(root, s.ScrollDragNode) || IsSelfOrAncestorOf(root, s.ContextDown)
+                            || IsSelfOrAncestorOf(root, s.MiddleDown) || IsSelfOrAncestorOf(root, s.PanTarget)
+                            || IsSelfOrAncestorOf(root, s.ReorderTarget) || IsSelfOrAncestorOf(root, s.SwipeDrag)
+                            || IsSelfOrAncestorOf(root, s.GesturePanNode) || IsSelfOrAncestorOf(root, s.PinchViewport);
+        }
+        if (cancelPointer) CancelPointer();
+        if (IsSelfOrAncestorOf(root, _keyArmed)) CancelKeyArm(fire: false);
+        if (IsSelfOrAncestorOf(root, _focused)) SetFocus(NodeHandle.Null);
+        if (IsSelfOrAncestorOf(root, _selText)) { _selText = NodeHandle.Null; _selDragging = false; }
+    }
+
     /// <summary>OLE Drop WITH the dragged paths (the hover-capable backend reads the file list once, at drop, and passes
     /// it here — hover stayed data-free). Fills the session payload deferred from the data-free DragEnter, then commits
     /// (<c>OnDrop</c> sees the real <see cref="FileDropData"/>). Opens a session first if somehow none is live.</summary>

@@ -18,10 +18,24 @@
     <ProjectReference Include="..\Wavee.Core\Wavee.Core.csproj" />
   </ItemGroup>
 
-  <!-- Bundled fake-catalog cover art: copied next to the exe so cards show real art OFFLINE
-       (FakeData.Cover resolves AppContext.BaseDirectory/assets/covers/coverNN.jpg). -->
+  <!-- Bundled fake-catalog cover art + the loc JSON: copied next to the exe (FakeData.Cover resolves
+       AppContext.BaseDirectory/assets/covers/coverNN.jpg; Localization.LoadFolder reads assets/loc/*.json). -->
   <ItemGroup>
     <Content Include="assets\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- ── Compile-safe localization keys (FluentGpu.SourceGen Localization generator) ──────────────────────────
+       The base-culture JSON feeds the generator, which emits `static class Strings` of dotted-key consts (+ typed
+       ICU-format methods) into the `Wavee` namespace, so call sites use Loc.Get(Strings.Detail.Play). -->
+  <PropertyGroup>
+    <FluentGpuLocNamespace>Wavee</FluentGpuLocNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <AdditionalFiles Include="assets\loc\en-US.json" FluentGpuLocBase="true" />
+    <CompilerVisibleItemMetadata Include="AdditionalFiles" MetadataName="FluentGpuLocBase" />
+    <CompilerVisibleProperty Include="FluentGpuLocNamespace" />
+    <ProjectReference Include="..\..\src\FluentGpu.SourceGen\FluentGpu.SourceGen.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
   <ItemGroup>
     <Folder Include="Features\Diagnostics\" />

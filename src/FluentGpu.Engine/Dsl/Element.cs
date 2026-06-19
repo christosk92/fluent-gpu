@@ -167,6 +167,11 @@ public sealed record BoxEl : Element
     /// Tab still reaches it. True (default) = press focuses the nearest focusable self-or-ancestor.</summary>
     public bool AllowFocusOnInteraction { get; init; } = true;
     public bool HitTestVisible { get; init; } = true;
+    /// <summary>Input pass-through (WinUI <c>OverlayInputPassThroughElement</c>): when true, this node yields the hit to
+    /// whatever is BEHIND it wherever none of its OWN children are hit — so a full-bleed floating overlay can host an
+    /// interactive child (a command bar) while clicks in its empty area fall through to the page beneath. (Unlike
+    /// <see cref="HitTestVisible"/>=false, which excludes the whole subtree and would make the child unclickable.)</summary>
+    public bool HitTestPassThrough { get; init; }
     /// <summary>Input-enabled (the default). When false the engine gates this node's interaction: it does not hit-test,
     /// focus, take keyboard activation, repeat, drag, or click — so control factories no longer null their handlers by
     /// hand. Disabled <em>visuals</em> stay control-chosen (pick the disabled token via <c>StateBrush.Resting(enabled)</c>).</summary>
@@ -439,6 +444,13 @@ public sealed record TextEl(Prop<string> Text) : Element
     public TextTrim Trim { get; init; } = TextTrim.None;
     /// <summary>Cap the visible line count (0 = unlimited); the last line trims per <see cref="Trim"/>.</summary>
     public int MaxLines { get; init; }
+    /// <summary>Auto-fit (WinUI has no analogue; a Viewbox-for-text): when set (and &lt; <see cref="Size"/>, with
+    /// <see cref="MaxLines"/> &gt; 0, a wrapping style, and a definite width), the layout SHRINKS the font from
+    /// <see cref="Size"/> down to this floor to make the run fit in <see cref="MaxLines"/> at the available width —
+    /// minimizing wraps and avoiding trimming. The largest size that fits wins; if even this floor doesn't fit,
+    /// <see cref="Trim"/> ellipsis applies at the floor. Use a font-natural line height (leave <see cref="LineHeight"/>
+    /// unset) so the chosen size's spacing scales with it. NaN = off (no auto-fit; the default).</summary>
+    public float MinSize { get; init; } = float.NaN;
 
     // Leaf layout participation. Text needs the same sizing/flex knobs as other leaves so wrapped runs can be
     // constrained by their container instead of contributing their full single-line width to parent measure.

@@ -99,7 +99,11 @@ public interface IPlatformWindow : IDisposable
     Size2 ClientSizePx { get; }
     Scale Scale { get; }                         // effective post-WM_DPICHANGED DPI
     bool IsOccluded { get; }
-    bool IsMinimized { get; }
+    bool IsMinimized { get; }                     // window-visibility source for the component activation lifecycle:
+                                                  //   AppHost derives the Activation.IsActive ambient from the minimized
+                                                  //   state (reconciler-hooks.md §0bis). As-built the Win/headless PAL
+                                                  //   exposes WindowState State; IsMinimized == State==Minimized.
+                                                  //   Occlusion is deliberately NOT an activation input (not portable).
     int  PumpInto(ref InputEventRing ring);      // drain WM_*/NSEvent → InputEvent/WindowEvent POD
     void SetTitle(StringId t);
     void Show(); void Activate(); void RequestClose();

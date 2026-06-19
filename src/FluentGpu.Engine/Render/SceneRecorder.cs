@@ -396,6 +396,10 @@ public static class SceneRecorder
             {
                 ref var li = ref scene.Layout(node);
                 ColorF textColor = ResolveTextColor(scene, node, flags, in p);
+                // Auto-fit: the measure pass may have shrunk the font (TextEl.MinSize) and recorded the chosen size on
+                // the cache. Shape at it so the glyphs match the box the layout sized. 0 ⇒ no fit (authored size).
+                ref TextMeasureCache mc = ref scene.MeasureCacheRef(node);
+                float effSize = mc.Valid && mc.FitSize > 0f ? mc.FitSize : li.TextStyle.SizeDip;
 
                 // Text-edit decorations (editor TEXT nodes only — sparse side-table, recorder READS only).
                 // WinUI-exact emit order: selection highlight UNDER the glyphs → base glyph run → per-rect clipped
@@ -416,7 +420,7 @@ public static class SceneRecorder
                 // overlays the per-range styles from SpanRunTable.Shared and tints per-span colors over textColor.
                 int spanRunId = li.TextStyle.SpanRunId;
                 if (!p.Text.IsEmpty)
-                    dl.DrawGlyphRun(local, textColor, p.Text, li.TextStyle.FontFamily, li.TextStyle.SizeDip, li.TextStyle.Weight,
+                    dl.DrawGlyphRun(local, textColor, p.Text, li.TextStyle.FontFamily, effSize, li.TextStyle.Weight,
                         (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines,
                         li.TextStyle.CharSpacing, li.TextStyle.LineHeight, (int)li.TextStyle.Stacking, (int)li.TextStyle.LineBounds,
                         world, opacity, key, spanRunId, inMotion: inMotion);
@@ -447,20 +451,19 @@ public static class SceneRecorder
                 // decoration belongs to the SpanTextEl/RichTextBlock rich-text pass (Wave 5).
                 if (p.TextDecorations != 0 && !p.Text.IsEmpty)
                 {
-                    // The measure pass get-or-created this row for every text leaf, so record never inserts (0-alloc).
-                    ref TextMeasureCache mc = ref scene.MeasureCacheRef(node);
+                    // The measure pass get-or-created this row for every text leaf (mc captured above), so 0-alloc here.
                     float barW = mc.Valid ? MathF.Min(mc.Size.Width, pw) : pw;
                     // Fallbacks mirror the engine's font-metric conventions for backends that report none (GDI):
                     // thickness max(1, size/14) = TextLayoutEngine.cs:142's own fallback; positions = the headless model.
-                    float thick = mc.Valid && mc.UnderlineThickness > 0f ? mc.UnderlineThickness : MathF.Max(1f, li.TextStyle.SizeDip / 14f);
+                    float thick = mc.Valid && mc.UnderlineThickness > 0f ? mc.UnderlineThickness : MathF.Max(1f, effSize / 14f);
                     if ((p.TextDecorations & NodePaint.UnderlineBit) != 0 && barW > 0f)
                     {
-                        float y = mc.Valid && mc.UnderlineY > 0f ? mc.UnderlineY : li.TextStyle.SizeDip * 1.1f + 1f;
+                        float y = mc.Valid && mc.UnderlineY > 0f ? mc.UnderlineY : effSize * 1.1f + 1f;
                         dl.FillRoundRect(new RectF(0f, y, barW, thick), default, textColor, world, opacity, key | 0x8);
                     }
                     if ((p.TextDecorations & NodePaint.StrikethroughBit) != 0 && barW > 0f)
                     {
-                        float y = mc.Valid && mc.StrikeY > 0f ? mc.StrikeY : li.TextStyle.SizeDip * 0.8f;
+                        float y = mc.Valid && mc.StrikeY > 0f ? mc.StrikeY : effSize * 0.8f;
                         dl.FillRoundRect(new RectF(0f, y, barW, thick), default, textColor, world, opacity, key | 0x8);
                     }
                 }
@@ -476,7 +479,7 @@ public static class SceneRecorder
                         dl.PushClip(selDevice, key | 0x1);
                         // forceColor: selected glyphs repaint UNIFORMLY in the on-accent color — span colors must not
                         // bleed through the selection (WinUI's selected-text recolor).
-                        dl.DrawGlyphRun(local, textEdit.SelectedText, p.Text, li.TextStyle.FontFamily, li.TextStyle.SizeDip, li.TextStyle.Weight,
+                        dl.DrawGlyphRun(local, textEdit.SelectedText, p.Text, li.TextStyle.FontFamily, effSize, li.TextStyle.Weight,
                             (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines,
                             li.TextStyle.CharSpacing, li.TextStyle.LineHeight, (int)li.TextStyle.Stacking, (int)li.TextStyle.LineBounds,
                             world, opacity, key | 0x1, spanRunId, forceColor: true, inMotion: inMotion);
@@ -951,6 +954,7 @@ public static class SceneRecorder
     /// <summary>An auto-hiding scrollbar thumb sized from the viewport's content/offset, faded by <c>FadeT</c>, expanded on lane hover.</summary>
     private static void EmitScrollbar(DrawList dl, in RectF b, in ScrollState sc, in Affine2D world, float opacity, ulong key, ColorF thumb, ColorF track)
     {
+        if (sc.SuppressBar) return;   // paged shelves navigate by pager, not a draggable bar — never draw it
         bool horizontal = sc.Orientation == 1;
         float content = horizontal ? sc.ContentW : sc.ContentH;
         float viewport = horizontal ? sc.ViewportW : sc.ViewportH;

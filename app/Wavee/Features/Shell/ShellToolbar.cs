@@ -4,6 +4,7 @@ using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 using Wavee.Core;
@@ -13,7 +14,7 @@ namespace Wavee;
 
 // Row 1 — the WaveeMusic navigation toolbar (NavigationToolbar.xaml): a 48px row with sidebar-toggle + back/forward/home
 // on the left, the omnibar in the centre, and the account/friends/bell/theme/right-panel cluster on the right. Reads the
-// shell route signals (home pill, back-enabled) and PlaybackBridge (auth/user) so it reacts to navigation and login.
+// shell route signals (home pill, back/forward-enabled) and PlaybackBridge (auth/user) so it reacts to navigation and login.
 //
 // RESPONSIVE (mirrors PlayerBar): the right cluster collapses at width thresholds (band-gated via the Viewport signal so
 // it only re-renders when a threshold is crossed, not every resize frame) — otherwise the fixed account/icon cluster
@@ -22,23 +23,27 @@ sealed class ShellToolbar : ReactiveComponent
 {
     readonly Signal<Route> _route;
     readonly Signal<bool> _canBack;
+    readonly Signal<bool> _canForward;
     readonly Action<string, string?> _go;
     readonly Action _back;
+    readonly Action _forward;
     readonly Action _home;
     readonly Signal<string> _searchText;
     readonly Signal<bool> _sidebarCompact;
     readonly Action _toggleTheme;
-    // Live omnibar content width — the search field caps at min(720, this) so it SHRINKS with the window. Basis=0 on the
-    // omnibar is what lets it report a width below the field's own size (else a Grow=1 box floors at its content width).
-    readonly Signal<float> _omniAvail = new(720f);
-
+    readonly List<Route> _backHistory;
+    readonly List<Route> _forwardHistory;
     static readonly string[] NoSuggestions = Array.Empty<string>();
 
-    public ShellToolbar(Signal<Route> route, Signal<bool> canBack, Action<string, string?> go, Action back, Action home,
-                        Signal<string> searchText, Signal<bool> sidebarCompact, Action toggleTheme)
+    public ShellToolbar(Signal<Route> route, Signal<bool> canBack, Signal<bool> canForward,
+                        Action<string, string?> go, Action back, Action forward, Action home,
+                        Signal<string> searchText, Signal<bool> sidebarCompact, Action toggleTheme,
+                        List<Route> backHistory, List<Route> forwardHistory)
     {
-        _route = route; _canBack = canBack; _go = go; _back = back; _home = home;
+        _route = route; _canBack = canBack; _canForward = canForward;
+        _go = go; _back = back; _forward = forward; _home = home;
         _searchText = searchText; _sidebarCompact = sidebarCompact; _toggleTheme = toggleTheme;
+        _backHistory = backHistory; _forwardHistory = forwardHistory;
     }
 
     public override Element Setup()
@@ -58,30 +63,27 @@ sealed class ShellToolbar : ReactiveComponent
     internal Element Bar(ToolbarLayout L, PlaybackBridge? b)
     {
         bool onHome = _route.Value.Name == "home";        // subscribe (home pill)
-        bool canBack = _canBack.Value;                    // subscribe (back enabled)
         var nav = IconButton.DefaultStyle with { Size = 36f, Height = 32f };
 
         var kids = new List<Element>
         {
             // ── left: sidebar toggle · back · forward · home ────────────────────────────
+            // Back/forward use NavHistoryButton so they also support right-click/hold history flyouts.
             IconButton.Create(Icons.Menu, () => _sidebarCompact.Value = !_sidebarCompact.Peek(), nav),
-            IconButton.Create(Icons.Back, _back, nav, isEnabled: canBack),
-            IconButton.Create(Icons.Forward, () => { }, nav, isEnabled: false),
+            Embed.Comp(() => new NavHistoryButton(Icons.Back,    _back,    _canBack,    _backHistory,    _go, nav)),
+            Embed.Comp(() => new NavHistoryButton(Icons.Forward, _forward, _canForward, _forwardHistory, _go, nav)),
             HomeButton(nav, onHome),
 
             // ── centre: omnibar (left-aligned right after Home, like WaveeMusic — not centred) ──
             new BoxEl
             {
-                // Basis=0 (CRITICAL): a Grow=1 box defaults to basis=content, so the 720 field would pin the omnibar's
-                // min width at 720 and it could never report a width below 720 — the field never shrank (feedback
-                // deadlock). Basis=0 sizes the omnibar to its ALLOCATED share so the field tracks the real free space.
                 Grow = 1f, Basis = 0f, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start,
                 Padding = new Edges4(8f, 0f, 8f, 0f),
-                OnBoundsChanged = r => { float avail = MathF.Max(0f, r.W - 16f); if (MathF.Abs(avail - _omniAvail.Peek()) > 0.5f) _omniAvail.Value = avail; },
                 Children =
                 [
-                    AutoSuggestBox.Create(NoSuggestions, "Search songs, artists, albums...",
-                        width: 720f, widthSignal: _omniAvail, text: _searchText,
+                    // Fills the omnibar slot, capped at 720 (shrinks below that on a narrow window).
+                    AutoSuggestBox.Create(NoSuggestions, Loc.Get(Strings.Shell.SearchPlaceholder),
+                        grow: 1f, maxFillWidth: 720f, text: _searchText,
                         onQuerySubmitted: _ => _go("search", null),
                         onSuggestionChosen: _ => _go("search", null),
                         minHeight: 36f, cornerRadius: 18f),
@@ -141,17 +143,17 @@ sealed class ShellToolbar : ReactiveComponent
             };
         }
         if (auth == AuthStatus.Authenticating)
-            return new BoxEl { Height = 32f, AlignItems = FlexAlign.Center, Padding = new Edges4(8f, 0f, 8f, 0f), Children = [ Caption("Connecting...").Secondary() ] };
-        return Button.Accent("Sign in", () => { _ = b?.Session.ConnectAsync(); });
+            return new BoxEl { Height = 32f, AlignItems = FlexAlign.Center, Padding = new Edges4(8f, 0f, 8f, 0f), Children = [ Caption(Loc.Get(Strings.Shell.Connecting)).Secondary() ] };
+        return Button.Accent(Loc.Get(Strings.Shell.SignIn), () => { _ = b?.Session.ConnectAsync(); });
     }
 
     // The items currently dropped from the bar (by threshold), as plain MenuFlyout items. They stay reachable here.
     List<MenuFlyoutItem> OverflowItems(ToolbarLayout L)
     {
         var items = new List<MenuFlyoutItem>(3);
-        if (!L.ShowFriends) items.Add(new MenuFlyoutItem("Friends", Mdl.Friends, Invoke: () => { }));
-        if (!L.ShowBell) items.Add(new MenuFlyoutItem("Notifications", Mdl.Bell, Invoke: () => { }));
-        if (!L.ShowThemeToggle) items.Add(new MenuFlyoutItem(Theme.Dark ? "Light theme" : "Dark theme", Theme.Dark ? Mdl.Sun : Mdl.Moon, Invoke: _toggleTheme));
+        if (!L.ShowFriends) items.Add(new MenuFlyoutItem(Loc.Get(Strings.Shell.Friends), Mdl.Friends, Invoke: () => { }));
+        if (!L.ShowBell) items.Add(new MenuFlyoutItem(Loc.Get(Strings.Shell.Notifications), Mdl.Bell, Invoke: () => { }));
+        if (!L.ShowThemeToggle) items.Add(new MenuFlyoutItem(Theme.Dark ? Loc.Get(Strings.Shell.LightTheme) : Loc.Get(Strings.Shell.DarkTheme), Theme.Dark ? Mdl.Sun : Mdl.Moon, Invoke: _toggleTheme));
         return items;
     }
 
@@ -194,6 +196,66 @@ readonly record struct ToolbarLayout(bool ShowFriends, bool ShowProfileName, boo
         ShowProfileName: w >= 900f,
         ShowBell:        w >= 800f,
         ShowThemeToggle: w >= 720f);
+}
+
+// A toolbar nav button (Back or Forward) that fires its primary action on click and opens a history flyout on
+// right-click or touch-hold (OnContextRequested). Shows the most recent HistoryMenuMax routes from the supplied
+// list (most recent at top), plus a "View all history" item when the list exceeds the cap. Each item navigates
+// via Go so back/forward state is rebuilt naturally (Go clears forward, then the user can go back to any item).
+sealed class NavHistoryButton : Component
+{
+    readonly string _icon;
+    readonly Action _primary;
+    readonly Signal<bool> _canDo;
+    readonly List<Route> _history;   // live reference — read at flyout-open time, not mount time
+    readonly Action<string, string?> _go;
+    readonly IconButton.Style _style;
+
+    const int HistoryMenuMax = 8;
+
+    public NavHistoryButton(string icon, Action primary, Signal<bool> canDo,
+                            List<Route> history, Action<string, string?> go, IconButton.Style style)
+    { _icon = icon; _primary = primary; _canDo = canDo; _history = history; _go = go; _style = style; }
+
+    public override Element Render()
+    {
+        bool canDo = _canDo.Value;   // subscribe → re-render when enabled state changes
+        var anchor = UseRef<NodeHandle>(default);
+        var handle = UseRef<OverlayHandle?>(null);
+        var svc = UseContext(Overlay.Service);
+
+        void OpenFlyout(Point2 _)
+        {
+            if (handle.Value is { IsOpen: true } h) { h.Close(); return; }
+            if (_history.Count == 0) return;
+
+            int count = Math.Min(_history.Count, HistoryMenuMax);
+            bool hasMore = _history.Count > HistoryMenuMax;
+            var items = new MenuFlyoutItem[count + (hasMore ? 2 : 0)];
+            int idx = 0;
+            for (int i = _history.Count - 1; i >= _history.Count - count; i--)
+            {
+                var r = _history[i];
+                var (title, glyph) = ShellNav.Dest(r);
+                items[idx++] = new MenuFlyoutItem(title, glyph, Invoke: () => _go(r.Name, r.Arg));
+            }
+            if (hasMore)
+            {
+                items[idx++] = MenuFlyoutItem.Separator;
+                items[idx]   = new MenuFlyoutItem(Loc.Get(Strings.Nav.ViewAllHistory), Icons.Clock, Invoke: () => _go("history", null));
+            }
+
+            handle.Value = svc.Open(
+                () => anchor.Value,
+                () => MenuFlyout.Build(items, () => handle.Value?.Close()),
+                FlyoutPlacement.BottomEdgeAlignedLeft,
+                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
+            handle.Value.ClosedAction = () => handle.Value = null;
+        }
+
+        return IconButton.Create(_icon, _primary, _style, isEnabled: canDo)
+            with { OnRealized = h => anchor.Value = h, OnContextRequested = OpenFlyout };
+    }
 }
 
 // A "⋯" toolbar icon that opens a plain MenuFlyout below it via the overlay service — the same path DropDownButton uses,

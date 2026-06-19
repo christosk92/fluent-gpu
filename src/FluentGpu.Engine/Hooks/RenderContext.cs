@@ -153,10 +153,12 @@ public sealed partial class RenderContext
     public AnimEngine? Anim;
     public ImageCache? Images;                  // host-injected; backs UseImage / PrefetchImage
     public SceneStore? Scene;                   // reconciler-injected; for measuring nodes (AbsoluteRect) + overlay positioning
+    public Action<NodeHandle>? ArmScroll;       // host-injected (→ ScrollAnimator.Arm): arm a viewport so phase 7 eases Offset→Target (smooth programmatic scroll)
     public NodeHandle HostNode;                 // this component's rendered child (animation hooks target it)
     public NodeHandle AnchorNode;               // this component's anchor in the scene (context resolution walks up from here)
     public Func<NodeHandle, object, Signal<object?>?>? ResolveContextSignal;   // (anchor, channel) → nearest provider signal
     public IReadSignal<int>? ImageEpoch;        // bumped by the host on any image status change → re-renders UseImage consumers
+    public Func<Signal<bool>>? GetActiveSig;    // reconciler-injected: get-or-create THIS component's KeepAlive-parked signal (UseIsActive)
 
     internal void BeginRender() => _cursor = 0;
     internal void EndRender()
@@ -312,11 +314,21 @@ public sealed partial class RenderContext
         return cell.Value;
     }
 
+    // Last-resolved provider signal per context channel. Reused when a later resolve returns null because this
+    // component's subtree is temporarily DETACHED — e.g. parked by Flow.KeepAlive (a tab/page cache). A parked subtree
+    // re-attaches to the SAME provider chain, so the providers above it don't change while parked; without this, a
+    // parked re-render (triggered by a signal it still subscribes to, like a store's Version) would resolve to the
+    // context Default and overwrite its cached content with the empty fallback — the "History tab goes blank after
+    // switching tabs" bug. The normal (attached) path is unchanged: resolution succeeds and refreshes the cache.
+    Dictionary<object, Signal<object?>>? _ctxResolveCache;
+
     /// <summary>Read the nearest provided value of <paramref name="context"/> (or its default), subscribing this
     /// component to that provider's signal so a change re-renders exactly here (no prop drilling, no full-tree walk).</summary>
     public T UseContext<T>(Context<T> context)
     {
         var sig = ResolveContextSignal?.Invoke(AnchorNode, context);
+        if (sig is not null) (_ctxResolveCache ??= new())[context] = sig;   // attached: refresh the last-resolved provider
+        else _ctxResolveCache?.TryGetValue(context, out sig);              // detached/parked: reuse it (providers above are unchanged)
         if (sig is not null && sig.Value is T tv) return tv;   // sig.Value subscribes the render-effect
         return context.Default;
     }
@@ -330,6 +342,68 @@ public sealed partial class RenderContext
         else cell = (ContextSignalCell<T>)_cells[_cursor];
         _cursor++;
         return cell.Signal;
+    }
+
+    // ── Activation lifecycle (parked-by-KeepAlive OR window-minimized) ───────────────────────────────────────────────
+
+    /// <summary>This component's activation state as a reactive signal: <c>false</c> when its page is parked by
+    /// <c>Flow.KeepAlive</c> (a backgrounded tab) OR the window is minimized / app-suspended, <c>true</c> otherwise.
+    /// Read <c>.Value</c> in render to subscribe (e.g. gate a live-only affordance); for transition callbacks use
+    /// <see cref="UseActivation"/>. A value-gated <see cref="Memo{T}"/> built once at mount (zero steady-state
+    /// allocation); a fresh component is active. Folds the per-component KeepAlive signal with the ambient
+    /// <c>Activation.IsActive</c> window-visibility signal — either being false makes the component inactive.</summary>
+    public IReadSignal<bool> UseIsActive()
+    {
+        MemoHookCell<bool> cell;
+        if (!_mounted)
+        {
+            var componentActive = GetActiveSig;   // get-or-create this component's parked signal on first compute (lazy)
+            var meta = ResolveContextSignal?.Invoke(AnchorNode, Activation.IsActive);
+            var windowVisible = meta?.Peek() as IReadSignal<bool>;   // ambient visibility signal (the channel value never re-publishes)
+            var memo = new Memo<bool>(Rt, () =>
+                (componentActive is null || componentActive().Value) && (windowVisible is null || windowVisible.Value));
+            cell = new MemoHookCell<bool>(memo);
+            _cells.Add(cell);
+        }
+        else cell = (MemoHookCell<bool>)_cells[_cursor];
+        _cursor++;
+        return cell.Memo;
+    }
+
+    /// <summary>Run <paramref name="onDeactivated"/> when this component goes inactive (its page parked by
+    /// <c>Flow.KeepAlive</c> OR the window minimized / app-suspended) and <paramref name="onActivated"/> when it comes
+    /// back — the notify-only lifecycle for pausing/resuming the component's OWN background work (a poll, a periodic
+    /// refresh, an OS subscription). TRANSITIONS ONLY: neither fires at mount (a fresh component is active — start work
+    /// in <see cref="UseEffect"/>), and neither fires on unmount (use the <see cref="UseEffect"/> cleanup). Backed by a
+    /// STANDALONE effect over <see cref="UseIsActive"/> — NOT the render-effect, which is suspended while parked, so the
+    /// notification must live in an independent computation that keeps observing while parked. The latest callbacks are
+    /// read from a stable cell (a fresh lambda each render does not re-subscribe) and invoked under
+    /// <see cref="Reactive.Untrack"/> (a callback's signal reads do not subscribe the effect).</summary>
+    public void UseActivation(Action? onActivated = null, Action? onDeactivated = null)
+    {
+        var cb = UseRef<(Action? On, Action? Off)>(default);
+        cb.Value = (onActivated, onDeactivated);     // always route to the latest closures
+        var active = UseIsActive();
+        var prev = UseRef(true);
+        var started = UseRef(false);
+
+        SignalEffectCell cell;
+        if (!_mounted)
+        {
+            var effect = new Effect(Rt, () =>
+            {
+                bool now = active.Value;   // subscribe this effect to the activation memo
+                if (!started.Value) { started.Value = true; prev.Value = now; return; }   // capture initial state — no fire at mount
+                if (now == prev.Value) return;   // value-gated memo already collapses churn; this guards re-fires
+                prev.Value = now;
+                var (on, off) = cb.Value;
+                Reactive.Untrack(() => { if (now) on?.Invoke(); else off?.Invoke(); });
+            });
+            cell = new SignalEffectCell(effect);
+            _cells.Add(cell);
+        }
+        else cell = (SignalEffectCell)_cells[_cursor];
+        _cursor++;
     }
 
     /// <summary>The host's cross-thread UI-thread poster (<see cref="HostDispatch.Post"/>): <c>post(action)</c> runs

@@ -113,6 +113,11 @@ public sealed class AppHost : IDisposable
     private readonly Signal<int> _dragEpoch = new(0);    // bumped each frame while a typed drag is live (+once on end) → UseDragState
     private bool _dragWasActive;
     private Size2 _lastViewportDip;
+    // Window-visibility ambient (Activation.IsActive): false while minimized OR while the app has signalled a power
+    // suspend (SetWindowActive(false)). UseIsActive AND-folds it with each component's KeepAlive-parked state. Written
+    // on the minimize/restore EDGE in RunFrame (and by SetWindowActive); value-eq-gated, so a steady frame is a no-op.
+    private readonly Signal<bool> _windowVisible = new(true);
+    private bool _windowActiveApp = true;                // app-side power suspend/resume gate (AND-ed into _windowVisible)
 
     // Cross-thread UI dispatch (HostDispatch.Post / UsePost): worker / OS-callback / agile-COM threads enqueue
     // UI-thread actions and Wake() the loop; drained inside a reactive Batch at the top of each frame's flush so the
@@ -459,6 +464,7 @@ public sealed class AppHost : IDisposable
         _layout = new FlexLayout(_scene, fonts);
         _invalidator = new LayoutInvalidator(_scene, _layout);
         _dispatcher = new InputDispatcher(_scene);
+        _reconciler.OnSubtreeDeactivated = _dispatcher.DeactivateSubtree;
         _anim = new AnimEngine(_scene);
         _interact = new InteractionAnimator(_scene);
         _scrollAnim = new ScrollAnimator(_scene);
@@ -604,6 +610,10 @@ public sealed class AppHost : IDisposable
         _inputHooks.AnimatePopupClose = AnimatePopupCloseWindow;
 
         _reconciler.Anim = _anim;
+        _reconciler.ArmScroll = _scrollAnim.Arm;   // controls can request a smooth programmatic scroll (set Target + arm → phase 7 eases)
+        // KeepAlive park/un-park → quiesce/resume the parked subtree's animation + scroll tickers so a backgrounded tab's
+        // looping animation or mid-fling scroll can't keep the frame loop awake (defeating the idle wake-stop).
+        _reconciler.OnNodeParkedChanged = (node, parked) => { _anim.SetNodeParked(node, parked); _scrollAnim.SetNodeParked(node, parked); };
         // Symmetric teardown of INDEX-keyed per-node side-tables on slot free (mem-06): a freed node's slot is reused,
         // so the AnimEngine layout-transition spec + the ScrollAnimator conscious-bar timers (both keyed by node index,
         // not gen-checked handle) must be dropped or the next node reusing that index inherits the stale row.
@@ -624,6 +634,9 @@ public sealed class AppHost : IDisposable
         _reconciler.SetAmbient(FrameClock.Tick, _frameClockSig);
         _hostPostSig = new Signal<object?>((Action<Action>)Post);   // ambient UI-thread poster (HostDispatch.Post / UsePost)
         _reconciler.SetAmbient(HostDispatch.Post, _hostPostSig);
+        // Window-visibility ambient: the channel value IS the visibility signal (an IReadSignal<bool>, never re-published),
+        // so UseIsActive resolves it once and subscribes to the INNER signal — see Activation.IsActive.
+        _reconciler.SetAmbient(Activation.IsActive, new Signal<object?>(_windowVisible));
         _reconciler.SetAmbient(ThemeControl.Request, new Signal<object?>((Action<float>)RequestThemeTransition));   // live re-theme trigger for app code
 
         // Keep-alive repaint: the OS fires this synchronously from inside a modal move/size loop (and on NC
@@ -729,6 +742,15 @@ public sealed class AppHost : IDisposable
         // defaults to Normal and nothing here flips it), so the headless path is unaffected.
         bool minimized = IsMinimized;
         if (_wasMinimized && !minimized) _frameNeeded = true;   // restored: repaint now
+        if (_wasMinimized != minimized)
+        {
+            // Window-visibility EDGE → update the Activation.IsActive signal so every component's UseIsActive flips and
+            // UseActivation fires. On the minimize-ENTERING edge the gate below returns BEFORE Paint's reactive flush,
+            // so flush ONCE here (one-shot, on the edge only — not per idle frame) so onDeactivated runs while invisible.
+            // The restore edge forced _frameNeeded above, so its onActivated rides Paint's normal flush.
+            UpdateWindowVisible();
+            if (minimized) _runtime.Flush();
+        }
         _wasMinimized = minimized;
         if (minimized)
         {
@@ -801,6 +823,23 @@ public sealed class AppHost : IDisposable
     /// <summary>True when the host window is minimized (PAL <see cref="Pal.WindowState.Minimized"/>) — frames run
     /// while minimized are wasted work the wake diagnostics surface.</summary>
     private bool IsMinimized => _window.State == FluentGpu.Pal.WindowState.Minimized;
+
+    /// <summary>Recompute and publish the ambient window-visibility (<c>Activation.IsActive</c>): visible IFF not
+    /// minimized AND not app-suspended. Value-eq-gated by the signal, so a no-op write notifies nobody. UI-thread.</summary>
+    private void UpdateWindowVisible() => _windowVisible.Value = !IsMinimized && _windowActiveApp;
+
+    /// <summary>App-side power suspend/resume hook (opt-in): the app wires <c>PowerSession.Suspending/Resumed</c> into
+    /// this via <see cref="Post"/> (power callbacks arrive off-thread) to AND a suspend gate into window visibility, so
+    /// <c>UseIsActive</c>/<c>UseActivation</c> see a suspended app as inactive. The engine never references the power
+    /// API — this is a documented augmentation. Call on the UI thread (marshal via <see cref="Post"/> if off-thread);
+    /// idempotent and value-gated. Forces a frame so the visibility flip flushes promptly.</summary>
+    public void SetWindowActive(bool active)
+    {
+        if (_windowActiveApp == active) return;
+        _windowActiveApp = active;
+        UpdateWindowVisible();
+        WakeFrame();   // ensure the loop runs a frame so the UseActivation effects flush
+    }
 
     /// <summary>Phases 3–12: flush reactive work, (scoped) re-layout, record, submit, present, effects. No pump — safe from WndProc.
     /// <paramref name="keepAlive"/> marks a repaint fired synchronously from inside an OS modal move/size loop: the submit
