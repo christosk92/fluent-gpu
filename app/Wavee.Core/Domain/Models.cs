@@ -31,11 +31,35 @@ public sealed record Track(
     // page surfaces these as optional columns — curated/editorial playlists carry neither.
     DateTimeOffset? AddedAt = null, string? AddedBy = null,
     bool HasVideo = false,    // the track has an accompanying music video (offered as a list filter + a row indicator)
-    long PlayCount = 0);      // stream count (album pages show a Plays column; the top-played track gets a star)
+    long PlayCount = 0,       // stream count (album pages show a Plays column; the top-played track gets a star)
+    // Source-agnostic seam (see docs/architecture.md §5): which provider this track came from, how it plays, and
+    // whether it is playable in this context. Default = a streamed, playable, source-unspecified track.
+    TrackOrigin Origin = TrackOrigin.Streamed,
+    Availability Availability = Availability.Playable,
+    string? Source = null);
+
+/// <summary>How a track plays — streamed from a remote source (CDN) or decoded from a local file. The seam routes
+/// playback by this; default is Streamed (the synthetic catalog's shape).</summary>
+public enum TrackOrigin { Streamed, Local }
+
+/// <summary>Whether a track can be played in the current context (account tier / market / delisting). First-class so
+/// the UI dims+disables rather than failing at play time. Extensible to a reason later.</summary>
+public enum Availability { Playable, Unavailable }
+
+/// <summary>A content owner/curator (e.g. a playlist owner) — richer than a bare name; carries an avatar image.</summary>
+public sealed record Owner(string Id, string Name, Image? Avatar);
+
+/// <summary>What the current user may do to a playlist (mirrors Spotify's currentUserCapabilities). The UI gates its
+/// edit affordances on these — an editorial / not-owned playlist renders read-only. <c>default</c> = no rights.</summary>
+public readonly record struct PlaylistCapabilities(
+    bool CanView, bool CanEditItems, bool CanEditMetadata, bool IsCollaborative, bool IsOwner);
 
 public sealed record Playlist(
     string Id, string Uri, string Name, string? Description, string OwnerName,
-    Image? Cover, int TrackCount, IReadOnlyList<Track>? Tracks = null);
+    Image? Cover, int TrackCount, IReadOnlyList<Track>? Tracks = null,
+    // Source-agnostic seam (see docs/architecture.md §5): the real owner, the user's capabilities (drives the
+    // read-only vs editable UI), the recommender format (daily-mix/editorial/…), and which provider this came from.
+    Owner? Owner = null, PlaylistCapabilities Capabilities = default, string? Format = null, string? Source = null);
 
 /// <summary>Album-art-derived palette. Plain ARGB <see cref="uint"/> channels keep Core
 /// framework-neutral; the app maps each to its renderer color (ColorF) at the UI boundary.</summary>

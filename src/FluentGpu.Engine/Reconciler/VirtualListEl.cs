@@ -34,6 +34,11 @@ public sealed record VirtualListEl : Element
     public float EstimatedExtent { get; init; } = 48f;// legacy variable path: seed extent for unmeasured rows
     public int Overscan { get; init; } = 4;
     public bool Horizontal { get; init; }
+    /// <summary>Opt-in cold-mount stagger (bound lists only): when true, a freshly-mounted list realizes its large
+    /// initial window a few rows PER FRAME instead of all at once — trading a couple of frames of staggered fill for
+    /// removing the one-frame mount spike (the nav cold-mount stutter). Off by default: small/simple lists realize in a
+    /// single frame (and the golden recycle/0-alloc gates assume that). A heavy detail/track list opts in.</summary>
+    public bool StaggerColdRealize { get; init; }
 
     // ── E11-L2 item lifecycle (the WinUI ItemsRepeater ElementPrepared/ElementClearing/ElementIndexChanged trio +
     //    the UseVisibleRange prefetch hook). Fired by the reconciler at realize time (cold realize edge, never on a

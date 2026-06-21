@@ -3,10 +3,12 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
+using FluentGpu.Signals;
 using Wavee.Core;
 using static FluentGpu.Dsl.Ui;
 
@@ -18,25 +20,55 @@ namespace Wavee;
 // two-column shell. The per-context config is resolved POST-load (an album with ≤2 tracks becomes a "single").
 sealed class DetailPage : Component
 {
-    readonly DetailKind _kind;
-    readonly string? _id;
-    public DetailPage(DetailKind kind, string? id) { _kind = kind; _id = id; }
+    readonly Signal<Route> _route;   // the (per-pane) navigation route, read reactively so ONE instance serves successive detail pages
+    public DetailPage(Signal<Route> route) { _route = route; }
+
+    // Route → (kind, id): album:/pl: carry the uri after the prefix; "liked" is the saved-tracks collection.
+    internal static (DetailKind Kind, string? Id) ParseDetail(Route r) =>
+        r.Name.StartsWith("album:", StringComparison.Ordinal) ? (DetailKind.Album, r.Name["album:".Length..])
+        : r.Name.StartsWith("pl:", StringComparison.Ordinal) ? (DetailKind.Playlist, r.Name["pl:".Length..])
+        : (DetailKind.Liked, null);
 
     public override Element Render()
     {
         var svc = UseContext(Services.Slot);
         if (svc is null) return new BoxEl { Grow = 1f };
+        var navPreview = UseContext(NavPreviewStore.Slot);
 
-        var model = UseAsyncResource(ct => LoadAsync(svc, ct), DetailModel.Empty);
+        var route = _route.Value;                          // subscribe → re-render when navigation swaps the detail route in place
+        var (kind, id) = ParseDetail(route);
 
+        // Connected-animation (Hero) key for the cover == the route key the Home card navigated with. Threaded into BOTH
+        // the skeleton's reserved cover slot AND the real cover, so the flying art lands whichever is laid out first.
+        string? morphKey = MorphKeys.For(kind, id);
+
+        // The PARTIAL model the Home card already had (cover/title/artist) — optional: deep links / search have none.
+        var preview = UseMemo(() => morphKey is null ? null : navPreview?.Take(morphKey), morphKey ?? "");
+        // Dep-keyed on the route: when navigation swaps the detail route on a REUSED instance, cancel the prior load and
+        // refetch for the new id (resetting to the new preview/skeleton). Fires once at mount when nothing is reused.
+        var model = UseAsyncResource(ct => LoadAsync(svc, kind, id, ct), preview ?? DetailModel.Empty, route.Name);
+
+        // Pre-loaded: render the shell straight away from the preview (header live), tracks stream in via Skel.Region.
+        // Thread the preview's cover as the fallback so a loaded null cover never drops the flown-in art to a placeholder.
+        if (preview is not null)
+            return Embed.Comp(() => new DetailShell(_route, model, preview.Cover));
+
+        // No data at click (deep link): the full-page skeleton until the model lands, then the loadable-driven shell.
+        // The content is wrapped in a plain Grow=1 BoxEl (NOT a bare component): the SkelRegion boundary mirrors its active
+        // child's layout participation, and a plain BoxEl's Grow is written synchronously (WriteColumns) — a bare component's
+        // Grow is mirrored from ITS output only after its async render effect runs, so the boundary would mirror a stale Grow=0
+        // and the single-column page (a virtualized list whose only intrinsic height is its chrome) would collapse to 0 rows.
         return StatefulRegion.Single(
             model,
-            shimmer: () => DetailSkeleton.Build(SkeletonConfig()),
-            content: m => Embed.Comp(() => new DetailShell(m, ResolveConfig(m))));
+            shimmer: () => DetailSkeleton.Build(SkeletonConfig(kind), morphKey),
+            // Pass the SHARED loadable (Ready when content runs), not a fresh Loadable.Ready(m): the shell is REUSED
+            // across detail routes, so it must read the one re-driven loadable — a per-render wrapper would leave the
+            // reused shell pinned to the first album's value.
+            content: _ => new BoxEl { Grow = 1f, Direction = 0, Children = [ Embed.Comp(() => new DetailShell(_route, model)) ] });
     }
 
     // Album cfg is release-kind-dependent (single = one-track layout, compilation = various-artists rows); playlist/liked fixed.
-    DetailConfig ResolveConfig(DetailModel m) => _kind switch
+    internal static DetailConfig ResolveConfig(DetailKind kind, DetailModel m) => kind switch
     {
         DetailKind.Playlist => DetailConfig.Playlist,
         DetailKind.Liked => DetailConfig.Liked,
@@ -49,18 +81,18 @@ sealed class DetailPage : Component
     };
 
     // A coarse config just for sizing the loading skeleton (the single-vs-album split doesn't matter pre-load).
-    DetailConfig SkeletonConfig() => _kind switch
+    static DetailConfig SkeletonConfig(DetailKind kind) => kind switch
     {
         DetailKind.Playlist => DetailConfig.Playlist,
         DetailKind.Liked => DetailConfig.Liked,
         _ => DetailConfig.Album,
     };
 
-    async Task<DetailModel> LoadAsync(Services svc, CancellationToken ct) => _kind switch
+    static async Task<DetailModel> LoadAsync(Services svc, DetailKind kind, string? id, CancellationToken ct) => kind switch
     {
-        DetailKind.Playlist => MapPlaylist(await svc.Library.GetPlaylistAsync(_id ?? "", ct)),
+        DetailKind.Playlist => MapPlaylist(await svc.Library.GetPlaylistAsync(id ?? "", ct)),
         DetailKind.Liked => MapLiked(await svc.Library.GetLikedSongsAsync(ct)),
-        _ => await MapAlbumAsync(svc, await svc.Library.GetAlbumAsync(_id ?? "", ct), ct),
+        _ => await MapAlbumAsync(svc, await svc.Library.GetAlbumAsync(id ?? "", ct), ct),
     };
 
     static DetailModel MapPlaylist(Playlist p)
@@ -79,10 +111,11 @@ sealed class DetailPage : Component
         }
         return new DetailModel(
             Title: p.Name, Cover: p.Cover, ContextUri: p.Uri,
-            BadgeType: null, Year: null, OwnerName: p.OwnerName, OwnerImage: null,
+            BadgeType: null, Year: null, OwnerName: p.OwnerName, OwnerImage: p.Owner?.Avatar,
             Artists: Array.Empty<ArtistRef>(), Description: p.Description, MetaLine: meta,
             Tracks: tracks, AboutArtist: null, Palette: null,
-            HasDateAdded: hasDate, HasAddedBy: contributors.Count >= 2, HasVideo: hasVideo);
+            HasDateAdded: hasDate, HasAddedBy: contributors.Count >= 2, HasVideo: hasVideo,
+            Capabilities: p.Capabilities);
     }
 
     static DetailModel MapLiked(IReadOnlyList<Track> tracks)
@@ -136,7 +169,7 @@ sealed class DetailPage : Component
 // The loading skeleton, matched to the real layout (rail block + N row bars) so the reveal doesn't jump.
 static class DetailSkeleton
 {
-    public static Element Build(DetailConfig cfg)
+    public static Element Build(DetailConfig cfg, string? morphKey = null)
     {
         var rows = new Element[8];
         for (int i = 0; i < rows.Length; i++) rows[i] = RowBar();
@@ -157,7 +190,9 @@ static class DetailSkeleton
             Padding = new Edges4(WaveeSpace.L, WaveeSpace.XXL, WaveeSpace.S, WaveeSpace.XXL),
             Children =
             [
-                new BoxEl { Width = cover, Height = cover, Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardDefault },
+                // The reserved cover slot doubles as the connected-animation dest while the album loads — the flying card
+                // art lands here immediately (no wait for the fetch); the real cover cross-fades in underneath when ready.
+                new BoxEl { Width = cover, Height = cover, Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardDefault, MorphId = morphKey },
                 Bar(cover * 0.5f, 12f), Bar(cover * 0.85f, 30f), Bar(cover * 0.6f, 13f),
                 new BoxEl { Height = WaveeSpace.S },
                 Bar(120f, 40f),

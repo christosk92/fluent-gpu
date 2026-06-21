@@ -59,8 +59,13 @@ public sealed record DetailModel(
     bool HasVideo = false,               // any track has a video → offer the "Videos only" filter + the row indicator
     AlbumKind ReleaseKind = AlbumKind.Album,   // album path: which release type (drives badge + config)
     IReadOnlyList<Artist>? Fans = null,        // album trailing: "Fans also like" artist chips
-    IReadOnlyList<PlaylistSummary>? FeaturedOn = null)   // album trailing: "Featured on" playlist shelf
+    IReadOnlyList<PlaylistSummary>? FeaturedOn = null,   // album trailing: "Featured on" playlist shelf
+    PlaylistCapabilities Capabilities = default)   // playlist: what the user may do (drives read-only vs editable UI when edit lands)
 {
+    /// <summary>Shared-element (connected-animation) key for the cover art — set by <c>DetailPage</c> from the route
+    /// ("album:"+uri / "pl:"+uri) so the cover flies to/from the like-tagged Home card. Null = no Hero.</summary>
+    public string? MorphKey { get; init; }
+
     public static readonly DetailModel Empty = new(
         "", null, null, null, null, null, null,
         Array.Empty<ArtistRef>(), null, "", Array.Empty<Track>(), null, null);

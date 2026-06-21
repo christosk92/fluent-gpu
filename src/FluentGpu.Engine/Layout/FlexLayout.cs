@@ -112,16 +112,23 @@ public sealed class FlexLayout
     private void SetArrangedBounds(NodeHandle node, in RectF next)
     {
         ref RectF b = ref _scene.Bounds(node);
-        bool changed = b.X != next.X || b.Y != next.Y || b.W != next.W || b.H != next.H;
         b = next;
-        // Fire on a real delta, OR once when a freshly-installed handler is still pending its initial delivery (an
-        // unconstrained node whose arranged rect already equals its Measure-written rect produces no delta, so the
-        // first value would otherwise never reach the handler). Clear the one-shot flag after delivering.
+        var handler = _scene.GetBoundsChangedHandler(node);
+        if (handler is null) return;
+        // Edge-trigger against the LAST DELIVERED arranged rect — NOT the live Bounds. Measure pre-writes Bounds to each
+        // node's hypothetical size earlier in this pass, so for an unconstrained node (arranged == measured, e.g. the
+        // marquee's Shrink=0 text box) a Bounds-vs-next compare is always false and the handler would fire only once via
+        // the mount one-shot, never again on a real content-driven size change. Comparing against the delivered baseline
+        // also stops a constrained node (arranged != measured) from firing spuriously every pass. Fire on a real change,
+        // OR once when a freshly-installed handler is still pending its initial delivery; then advance the baseline.
+        ref RectF delivered = ref _scene.BoundsDeliveredRef(node);
         bool pending = (_scene.Flags(node) & NodeFlags.BoundsChangedPending) != 0;
+        bool changed = delivered.X != next.X || delivered.Y != next.Y || delivered.W != next.W || delivered.H != next.H;
         if (changed || pending)
         {
             if (pending) _scene.Unmark(node, NodeFlags.BoundsChangedPending);
-            _scene.GetBoundsChangedHandler(node)?.Invoke(next);
+            delivered = next;
+            handler.Invoke(next);
         }
     }
 
@@ -523,7 +530,25 @@ public sealed class FlexLayout
         if (!content.IsNull && _scene.IsLive(content))
         {
             ref NodePaint cp = ref _scene.Paint(content);
-            cp.LocalTransform = Affine2D.Translation(horizontal ? -sc.OffsetX : 0f, horizontal ? 0f : -sc.OffsetY);
+            // Mirror Input.ApplyScrollPosition's -(offset + band) EXACTLY (incl. its zoom branch). A RELAYOUT that fires
+            // while the rubber-band is displaced — an async re-render mid-overpan/spring at an edge — must NOT drop the band
+            // for one frame: that 1-frame band-blink shifted the WHOLE content by the band amount (~tens of px), the
+            // top/bottom-edge "another viewport" flash. And for a pinch-zoomed viewport (z!=1) the relayout must NOT drop
+            // the scale to z==1 either — write the same origin-conjugated z·p−offset map the scroll path writes.
+            float band = sc.OverscrollPx;
+            float z = sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f;
+            float offX = horizontal ? sc.OffsetX + band : 0f, offY = horizontal ? 0f : sc.OffsetY + band;
+            if (z == 1f)
+            {
+                cp.LocalTransform = Affine2D.Translation(-offX, -offY);
+            }
+            else
+            {
+                ref RectF cb = ref _scene.Bounds(content);
+                float ox = cb.W * cp.OriginX, oy = cb.H * cp.OriginY;
+                var map = new Affine2D(z, 0f, 0f, z, -offX, -offY);
+                cp.LocalTransform = Affine2D.Translation(-ox, -oy).Multiply(map).Multiply(Affine2D.Translation(ox, oy));
+            }
         }
 
         // D1 realize-after-layout: the realize window was computed BEFORE this arrange published the real viewport

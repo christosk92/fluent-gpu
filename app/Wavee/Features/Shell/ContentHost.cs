@@ -22,15 +22,24 @@ sealed class ContentHost : Component
     public override Element Render()
         => Flow.KeepAlive(() => new PageSlot(_activeTabId(), _route.Value), SlotKey, s => PageFor(s.Route), new KeepAliveOptions(MaxEntries: 8));
 
-    static string SlotKey(PageSlot s) => s.TabId.ToString() + "\u001F" + s.Route.Name + "\u001F" + (s.Route.Arg ?? "");
+    // Detail routes collapse to ONE slot per tab (identity = tab × page-class; the route is content) so album→album
+    // reconciles the mounted shell instead of cold-remounting. TabId stays in the key → tabs never share a detail slot.
+    static string SlotKey(PageSlot s) => IsDetail(s.Route) ? s.TabId.ToString() + "\\u001Fdetail" : s.TabId.ToString() + "\u001F" + s.Route.Name + "\u001F" + (s.Route.Arg ?? "");
 
-    static Element DetailHost(Route r, DetailKind kind, string? id) => new BoxEl
+    // The shared detail page (album / playlist / single / liked) reads the route reactively (via _route) and derives its
+    // own kind/id, so ONE DetailPage instance serves successive detail routes in place. The Key is route-INDEPENDENT
+    // ("page:detail") so KeepAlive reuses the mounted slot across albums — the swap reconciles + reloads in place rather
+    // than tearing down and cold-remounting the rail / track-list / trailing.
+    Element DetailHost() => new BoxEl
     {
-        Key = "page:" + r.Name, Grow = 1f, Direction = 1,
-        Children = [ Embed.Comp(() => new DetailPage(kind, id)) ],
+        Key = "page:detail", Grow = 1f, Direction = 1,
+        Children = [ Embed.Comp(() => new DetailPage(_route)) ],
     };
 
-    static Element PageFor(Route r)
+    static bool IsDetail(Route r) =>
+        r.Name.StartsWith("album:", StringComparison.Ordinal) || r.Name.StartsWith("pl:", StringComparison.Ordinal) || r.Name == "liked";
+
+    Element PageFor(Route r)
     {
         if (r.Name == "home")
             return new BoxEl { Key = "page:home", Grow = 1f, Direction = 1,
@@ -40,14 +49,7 @@ sealed class ContentHost : Component
             return new BoxEl { Key = "page:history", Grow = 1f, Direction = 1,
                 Children = [ Embed.Comp(() => new HistoryPage()) ] };
 
-        // The shared detail page — playlist / album / single / liked (single resolved post-load by track count).
-        // The Key folds in the route arg (the uri) so KeepAlive never shares a cached page across two albums.
-        if (r.Name.StartsWith("album:", StringComparison.Ordinal))
-            return DetailHost(r, DetailKind.Album, r.Name["album:".Length..]);
-        if (r.Name.StartsWith("pl:", StringComparison.Ordinal))
-            return DetailHost(r, DetailKind.Playlist, r.Name["pl:".Length..]);
-        if (r.Name == "liked")
-            return DetailHost(r, DetailKind.Liked, null);
+        if (IsDetail(r)) return DetailHost();
 
         var (title, glyph) = ShellNav.Dest(r);
         return new BoxEl

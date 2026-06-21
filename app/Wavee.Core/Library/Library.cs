@@ -10,6 +10,10 @@ public sealed record SearchResults(
     IReadOnlyList<Artist> Artists,
     IReadOnlyList<Playlist> Playlists);
 
+/// <summary>One page of a streamed track list (skeleton-then-stream — see docs/architecture.md §3/§6): the tracks
+/// resolved so far, the running loaded count, and the known total (so the UI can size a progress cue up front).</summary>
+public sealed record TrackPage(IReadOnlyList<Track> Tracks, int Loaded, int Total);
+
 /// <summary>The read-API facade. Collapses WaveeMusic's library / album / artist / search read
 /// paths (Pathfinder + SpClient) behind one async surface the UI binds against.</summary>
 public interface IMusicLibrary
@@ -29,4 +33,11 @@ public interface IMusicLibrary
     // skeleton-load them like everything else (the folder-capable tree is a later enhancement).
     Task<LibraryStats> GetStatsAsync(CancellationToken ct = default);
     Task<IReadOnlyList<PlaylistSummary>> GetPlaylistsAsync(CancellationToken ct = default);
+
+    // Streamed track loading (skeleton-then-stream): the detail header loads via GetPlaylist/GetAlbum, then the rows
+    // page in from here so a big context fills progressively instead of blocking on the whole list.
+    IAsyncEnumerable<TrackPage> StreamTracksAsync(string contextUri, CancellationToken ct = default);
+
+    // The condensed, grouped home feed (replaces the four-separate-collection-calls home). Merged across sources.
+    Task<HomeFeed> GetHomeAsync(CancellationToken ct = default);
 }

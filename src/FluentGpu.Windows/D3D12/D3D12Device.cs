@@ -21,7 +21,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
 {
     // Back buffers == per-frame allocators == frames-in-flight. Canon (budgets.md): 2 (FLIP_DISCARD); configurable 2–3.
     // Every site below keys off this, so 3 (more CPU run-ahead slack, +1 frame latency, +VRAM) is a one-line change.
-    internal const uint FRAME_COUNT = 2;
+    internal const uint FRAME_COUNT = 2;   // double-buffer (FLIP_DISCARD). Reverted from 3: triple-buffering correlated with a DXGI_ERROR_DEVICE_HUNG on the Adreno after sustained load (~6.5 min). The image-upload throttle (DecodeScheduler) is the safer spike fix.
     private const uint INFINITE = 0xFFFFFFFF;
 
     private ID3D12Device* _device;
@@ -41,7 +41,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
     private bool _hasLatencyWaitable;
     private uint _swapChainFlags;           // flags the swapchain was created with (must be preserved across ResizeBuffers)
     private bool _tearingSupported;         // DXGI_FEATURE_PRESENT_ALLOW_TEARING (hwnd, vsync-off path only)
-    private bool _vsync = true;             // Present sync-interval 1 when true; interval 0 + ALLOW_TEARING when false
+    private bool _vsync = !FluentGpu.Foundation.Diag.EnvFlag("FG_NOVSYNC");  // FG_NOVSYNC=1 forces interval 0 (diagnose present-cap vs frame-cost). Present sync-interval 1 when true; interval 0 + ALLOW_TEARING when false
 
     private HWND _hwnd;
     private uint _w, _h;

@@ -1,0 +1,124 @@
+using System.Linq;
+using System.Runtime.CompilerServices;
+
+namespace Wavee.Core;
+
+/// <summary>The source-agnostic façade the UI binds against (docs/architecture.md §4.3). Implements the UI-facing
+/// <see cref="IMusicLibrary"/> by federating over a <see cref="SourceRegistry"/>: single-item reads route to the first
+/// owning source; collection reads MERGE (concat) across catalog sources — each source contributes only what it has,
+/// so the union is clean. Provider-mappings / dedup / fallback chains are the documented extension point (trivial with
+/// one real source today). This is the layer Connect/playback federation (FederatedPlayback/Remote) will sit beside.</summary>
+public sealed class AggregateCatalog : IMusicLibrary
+{
+    readonly SourceRegistry _reg;
+    public AggregateCatalog(SourceRegistry registry) => _reg = registry;
+
+    // ── single-item reads: first owning source that returns non-null wins; else a minimal empty shape ──
+    public async Task<Playlist> GetPlaylistAsync(string id, CancellationToken ct = default)
+    {
+        foreach (var s in _reg.CatalogSources)
+            if (s.Owns(id) && await s.GetPlaylistAsync(id, ct).ConfigureAwait(false) is { } p) return p;
+        return new Playlist(id, id, "", null, "", null, 0, System.Array.Empty<Track>());
+    }
+
+    public async Task<Album> GetAlbumAsync(string id, CancellationToken ct = default)
+    {
+        foreach (var s in _reg.CatalogSources)
+            if (s.Owns(id) && await s.GetAlbumAsync(id, ct).ConfigureAwait(false) is { } a) return a;
+        return new Album(id, id, "", null, System.Array.Empty<ArtistRef>(), 0, 0, System.Array.Empty<Track>());
+    }
+
+    public async Task<Artist> GetArtistAsync(string id, CancellationToken ct = default)
+    {
+        foreach (var s in _reg.CatalogSources)
+            if (s.Owns(id) && await s.GetArtistAsync(id, ct).ConfigureAwait(false) is { } a) return a;
+        return new Artist(id, id, "", null);
+    }
+
+    public IAsyncEnumerable<TrackPage> StreamTracksAsync(string contextUri, CancellationToken ct = default)
+        => _reg.OwnerOf(contextUri)?.StreamTracksAsync(contextUri, ct) ?? EmptyPages(ct);
+
+    // ── merged collections (each source returns EMPTY where it has no data → clean union, no dups) ──
+    public async Task<IReadOnlyList<LibraryItem>> GetLibraryAsync(CancellationToken ct = default)
+    {
+        var r = new List<LibraryItem>();
+        foreach (var s in _reg.CatalogSources) r.AddRange(await s.GetLibraryAsync(ct).ConfigureAwait(false));
+        return r;
+    }
+
+    public async Task<IReadOnlyList<PlaylistSummary>> GetPlaylistsAsync(CancellationToken ct = default)
+    {
+        var r = new List<PlaylistSummary>();
+        foreach (var s in _reg.CatalogSources) r.AddRange(await s.GetPlaylistsAsync(ct).ConfigureAwait(false));
+        return r;
+    }
+
+    public async Task<IReadOnlyList<Album>> GetAlbumsAsync(CancellationToken ct = default)
+    {
+        var r = new List<Album>();
+        foreach (var s in _reg.CatalogSources) r.AddRange(await s.GetAlbumsAsync(ct).ConfigureAwait(false));
+        return r;
+    }
+
+    public async Task<IReadOnlyList<Artist>> GetArtistsAsync(CancellationToken ct = default)
+    {
+        var r = new List<Artist>();
+        foreach (var s in _reg.CatalogSources) r.AddRange(await s.GetArtistsAsync(ct).ConfigureAwait(false));
+        return r;
+    }
+
+    public async Task<IReadOnlyList<Track>> GetLikedSongsAsync(CancellationToken ct = default)
+    {
+        var r = new List<Track>();
+        foreach (var s in _reg.CatalogSources) r.AddRange(await s.GetLikedSongsAsync(ct).ConfigureAwait(false));
+        return r;
+    }
+
+    public async Task<SearchResults> SearchAsync(string query, CancellationToken ct = default)
+    {
+        var t = new List<Track>(); var al = new List<Album>(); var ar = new List<Artist>(); var pl = new List<Playlist>();
+        foreach (var s in _reg.CatalogSources)
+        {
+            var x = await s.SearchAsync(query, ct).ConfigureAwait(false);
+            t.AddRange(x.Tracks); al.AddRange(x.Albums); ar.AddRange(x.Artists); pl.AddRange(x.Playlists);
+        }
+        return new SearchResults(t, al, ar, pl);
+    }
+
+    public async Task<LibraryStats> GetStatsAsync(CancellationToken ct = default)
+    {
+        int al = 0, ar = 0, lk = 0, pod = 0;
+        foreach (var s in _reg.CatalogSources)
+        {
+            var st = await s.GetStatsAsync(ct).ConfigureAwait(false);
+            al += st.Albums; ar += st.Artists; lk += st.LikedSongs; pod += st.Podcasts;
+        }
+        return new LibraryStats(al, ar, lk, pod);
+    }
+
+    public async Task<HomeFeed> GetHomeAsync(CancellationToken ct = default)
+    {
+        var contribs = new List<HomeContribution>();
+        foreach (var s in _reg.CatalogSources)
+        {
+            var c = await s.GetHomeAsync(ct).ConfigureAwait(false);
+            if (c.Groups.Count > 0) contribs.Add(c);
+        }
+        contribs.Sort((a, b) => a.Priority.CompareTo(b.Priority));
+        var groups = contribs.SelectMany(c => c.Groups).ToList();
+        return new HomeFeed(Greeting(), groups);
+    }
+
+    /// <summary>A live, time-of-day greeting (the export's is a snapshot; compute it fresh so it's always right).</summary>
+    static string Greeting()
+    {
+        int h = System.DateTime.Now.Hour;
+        return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
+    }
+
+    static async IAsyncEnumerable<TrackPage> EmptyPages([EnumeratorCancellation] CancellationToken ct = default)
+    {
+        await Task.CompletedTask;
+        yield break;
+    }
+}

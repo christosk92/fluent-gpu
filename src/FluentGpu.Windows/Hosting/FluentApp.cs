@@ -66,9 +66,15 @@ public static class FluentApp
     /// </summary>
     public static Func<AppHost, IPlatformWindow, IGpuDevice, bool>? DiagnosticRun;
 
+    /// <param name="ambientFps">Optional power throttle for PERPETUAL ambient motion (a looping spinner/shimmer/equalizer,
+    /// a smooth media playhead, a reveal/brush fade): the frame loop paces autonomous-animation frames to this rate
+    /// instead of free-running at the panel refresh, where a sub-display rate is imperceptible but idles the CPU. 0 (the
+    /// default) keeps the engine default (uncapped / display-rate). Latency-sensitive motion the user actively drives
+    /// (scroll, hover, press, drag, repeat) is exempt and always runs at the display rate; input never waits on the cap.
+    /// Maps to <see cref="AppHost.AmbientAnimationFps"/> (an app/battery policy, per the engine's FG_ANIM_FPS knob).</param>
     public static void Run(Func<Component> root, string title = "FluentGpu", int width = 800, int height = 600,
                            bool mica = true, int frames = -1, string? screenshot = null, bool customFrame = false,
-                           bool micaAlt = false)
+                           bool micaAlt = false, int ambientFps = 0)
     {
         bool consoleDiagnostics = Diag.EnvFlag("FG_DIAG") || Diag.EnvFlag("FG_DIAG_CONSOLE");
         if (consoleDiagnostics)
@@ -103,6 +109,12 @@ public static class FluentApp
 
         using var host = new AppHost(app, window, device, fonts, strings, root(), images);
         host.SmoothScroll = true;   // inertial wheel scrolling + auto-hiding scrollbars (the real-app default)
+        // App-set ambient power throttle (>0): pace perpetual loop animation (spinner/shimmer/equalizer/media-playhead) to
+        // this rate so a never-idling app (one with always-on ambient motion) doesn't free-run the whole render+present
+        // pipeline at the panel refresh. A live FG_ANIM_FPS env var still wins (the host seeded its default from it), so
+        // the diagnostic override (incl. =0 to A/B uncapped) is preserved; 0 here = leave the host default untouched.
+        if (ambientFps > 0 && Environment.GetEnvironmentVariable("FG_ANIM_FPS") is null)
+            host.AmbientAnimationFps = ambientFps;
 
         // Relay the host's UI-thread single-instance redirect to the app-layer static event (the Windows-APIs page
         // subscribes there). Forwarding the payload, not the handler chain — handlers attach to FluentApp.ActivationRedirected.
@@ -139,11 +151,19 @@ public static class FluentApp
         // apps. Pair with FG_D3D_MEM=1 for the per-resource [d3d-mem] create/release trace.
         if (DiagnosticRun is { } diag && diag(host, window, device)) { WindowHandle = 0; return; }
 
+        bool fpsLog = Diag.EnvFlag("FG_FPS_LOG");   // periodic [fps] readout to stderr (frame-rate / frame-ms diagnosis)
         int n = 0;
         while (!window.IsClosed)
         {
             host.RunFrame();
             n++;
+            if (fpsLog)
+            {
+                var s = host.LastStats;
+                bool spike = s.FrameMs > 11.0;   // anything over the ~11ms 90Hz line on a 120Hz panel = a dropped-frame spike
+                if (spike || n % 30 == 0)
+                    Console.Error.WriteLine($"[fps]{(spike ? " SPIKE" : "")} {s.Fps:0}fps {s.FrameMs:0.0}ms = flush{s.FlushMs:0.0} layout{s.LayoutMs:0.0} anim{s.AnimMs:0.0} record{s.RecordMs:0.0} submit{s.SubmitMs:0.0} (f{n})");
+            }
             if (frames > 0 && n >= frames) break;
             if (screenshot != null)
                 window.WaitForWork(8);   // deterministic ~8ms/frame so time-driven animations advance (and never block)

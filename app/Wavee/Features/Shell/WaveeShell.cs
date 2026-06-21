@@ -25,6 +25,7 @@ sealed class WaveeShell : Component
     readonly List<Route> _history = new();
     readonly List<Route> _forwardHistory = new();
     readonly HistoryStore _historyStore = new();
+    readonly NavPreviewStore _navPreview = new();   // click→detail handoff: the card stashes its known cover/title/artist
     // Page-scoped Mica tint: a detail page writes its art colour here while active; the shell paints it as a low-alpha
     // scrim BEHIND the chrome (which is translucent over Mica), so the window material carries the colour. Null ⇒ plain
     // Mica. Owner-gated writes (ShellTintState) make A→B navigation race-free. Provided at the root via ShellTint.Slot.
@@ -44,6 +45,7 @@ sealed class WaveeShell : Component
     readonly Signal<bool> _sidebarDragging = new(false);       // ON during a seam drag → snaps all layout transitions (1:1 resize)
     readonly Signal<float> _sidebarFade = new(1f);             // content-opacity cue as a resize nears the collapse detent
     Action<float>? _requestTheme;                              // ambient ThemeControl.Request: live animated re-theme (captured in Render)
+    Action<string>? _morphBegin;                               // ambient SharedTransition.Begin: capture the leaving cover for the Back/Forward fly
     readonly bool _reducedMotionOS = Motion.ReducedMotion;     // OS reduced-motion setting; restored after a drag
 
     // The pane's collapse-toggle animation (56↔expanded width eases). Snapped during a drag via Motion.ReducedMotion.
@@ -56,11 +58,32 @@ sealed class WaveeShell : Component
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "Wavee", "WaveeMusic", "history.json");
 
+    // Stress-probe nav seam (WAVEE_NAV_PROBE only): lets the WaveeNavProbe drive REAL navigation/theme/tab churn through
+    // the same signals the chrome writes — no synthetic input, no reaching into private state. Inert in normal runs.
+    internal static Action<string, string?>? ProbeNav;
+    internal static Action? ProbeBack, ProbeForward, ProbeTheme;
+    internal static Action<string>? ProbeOpenTab;
+    internal static Action<string, string?, bool>? ProbeCardNav;   // replicate a Home-card click: (key, arg, doMorph=Hero fly)
+
     public WaveeShell(IAppSettings settings)
     {
         _settings = settings;
         _sidebarCompact = new(settings.Get(WaveeSettings.SidebarCollapsed));
         _sidebarWidth = new(settings.Get(WaveeSettings.SidebarWidth));
+
+        if (Diag.EnvFlag("WAVEE_NAV_PROBE") || Diag.EnvFlag("WAVEE_CONN_STRESS"))
+        {
+            ProbeNav = GoNav; ProbeBack = Back; ProbeForward = Forward; ProbeTheme = ToggleTheme; ProbeOpenTab = OpenNewTab;
+            // Exactly the Home-card path: stash a preview (→ DetailShell mounts the PREVIEW path, not the skeleton path the
+            // sidebar nav hits) + fire the Hero-fly morph, then navigate — so the probe can reproduce the card-click transition.
+            ProbeCardNav = (key, arg, doMorph) =>
+            {
+                if (!Diag.EnvFlag("WAVEE_PB_NOPREVIEW") && key.StartsWith("pl:", System.StringComparison.Ordinal))
+                    _navPreview.Set(key, DetailPreview.FromPlaylist(new Wavee.Core.PlaylistSummary(key.Substring(3), arg ?? "Playlist", "", 0, null)));
+                if (doMorph && !Diag.EnvFlag("WAVEE_PB_NOMORPH")) _morphBegin?.Invoke(key);   // the Hero cover fly
+                GoNav(key, arg);
+            };
+        }
 
         _historyStore.Init(HistoryFilePath());
         _historyStore.LoadFromDisk();
@@ -111,6 +134,14 @@ sealed class WaveeShell : Component
     public override Element Render()
     {
         _requestTheme = UseContext(ThemeControl.Request);   // host's live re-theme trigger (animated in-place; no remount)
+        _morphBegin = UseContext(SharedTransition.Begin);   // connected-animation: Back/Forward capture the leaving cover before the route flips
+        // The shell's content lives in the OverlayHost ZStack, which deliberately lets its child OVERFLOW (a tall popup must
+        // not be clipped to the window). For the page CONTENT that means a tall page (a Detail rail is ~600px and does not
+        // scroll) sizes the whole column to its content (~827px) and overflows the 760px window — shoving the fixed player
+        // bar off the bottom (the "player bar disappears / slides" glitch). Pin the column's height to the LIVE viewport (a
+        // BOUND prop, not a stale literal — it re-fires on resize) so the column is exactly window-tall and its Shrink=1 /
+        // MinHeight=0 content region yields instead of overflowing. UI-thread signal; the binding re-lays-out on resize.
+        var vpSig = UseContextSignal(Viewport.Size);
         bool compact = _sidebarCompact.Value;    // subscribe → re-persist on a collapse/expand toggle (infrequent)
         bool dragging = _sidebarDragging.Value;  // subscribe → snap all layout transitions while resizing the sidebar
         // Persist the collapse toggle here; the grip's drag-end (OnReleased → SaveSidebar) persists the width. The
@@ -125,7 +156,7 @@ sealed class WaveeShell : Component
 
         var column = new BoxEl
         {
-            Direction = 1, Grow = 1f,
+            Direction = 1, Grow = 1f, Height = Prop.Of(() => vpSig.Value.Height),   // window-tall → content yields, never overflows the player bar
             Children =
             [
                 Embed.Comp(() => new TitleBar
@@ -173,12 +204,20 @@ sealed class WaveeShell : Component
                             // Content side: an inset, rounded, shadowed "page" over the Toolbar-chrome backing.
                             new BoxEl
                             {
-                                Direction = 1, Grow = 1f, Fill = Prop.Of(() => WaveeColors.Toolbar),
+                                // MinHeight=0 at every flex level of the content chain (see the card below) so a tall page
+                                // can shrink/clip instead of overflowing the column and covering the docked player bar.
+                                Direction = 1, Grow = 1f, MinHeight = 0f, Fill = Prop.Of(() => WaveeColors.Toolbar),
                                 Children =
                                 [
                                     new BoxEl
                                     {
-                                        Grow = 1f, Margin = new Edges4(0f, 2f, 8f, 0f),
+                                        // MinHeight=0 (the flex `min-height:0` override): this card CLIPS its content, so it
+                                        // must be allowed to shrink BELOW the page's natural min-height. Without it, a tall
+                                        // page (a Detail RAIL is ~600px and does not scroll) forces the content region past
+                                        // the column height and PUSHES THE FIXED PLAYER BAR off the bottom for a frame on
+                                        // navigation — the "player bar animates away then back" glitch. With it the card
+                                        // shrinks to the available space and clips/scrolls, so the player bar stays docked.
+                                        Grow = 1f, MinHeight = 0f, Margin = new Edges4(0f, 2f, 8f, 0f),
                                         // BOUND (not a static ColorF): this content "page" is a frozen literal inside the
                                         // OverlayHost.Child column (constructor args freeze at mount), so a re-render can't
                                         // re-read the token. As a bind it lives in the reconciler's _nodeBindings and the
@@ -206,10 +245,14 @@ sealed class WaveeShell : Component
                         ],
                     }
                 // Bounded fill: Grow=1 takes the free space, Shrink=1 makes this the ONE region that yields when the
-                // window is shorter than the column's natural height. The chrome rows (TitleBar, ShellToolbar) and the
+                // window is shorter than the column's natural height. MinHeight=0 (the flex `min-height:0` override on the
+                // SHRINKING element itself — the engine otherwise floors a flex item at its CONTENT's natural min) is what
+                // actually lets it yield below a tall page (a Detail rail is ~600px and does not scroll); without it the
+                // region overflows the column and shoves the fixed PlayerBar ~67px off the bottom for a frame on nav (the
+                // "player bar disappears then slides back" glitch). The chrome rows (TitleBar, ShellToolbar) and the
                 // PlayerBar host keep the default Shrink=0, so the player bar stays a fixed 72px slot docked at the
                 // window bottom and only the middle gives — its bounded height then lets the sidebar ScrollView scroll.
-                ) with { Grow = 1f, Shrink = 1f },
+                ) with { Grow = 1f, Shrink = 1f, MinHeight = 0f },
                 Embed.Comp(() => new PlayerBar()),
             ],
         };
@@ -227,7 +270,8 @@ sealed class WaveeShell : Component
         return Ctx.Provide(ShellTint.Slot, _shellTint,
                Ctx.Provide(HistoryStore.NavCtx, (Action<string, string?>)GoNav,
                Ctx.Provide(HistoryStore.Slot, _historyStore,
-               Embed.Comp(() => new OverlayHost { Child = tinted }))));
+               Ctx.Provide(NavPreviewStore.Slot, _navPreview,
+               Embed.Comp(() => new OverlayHost { Child = tinted })))));
     }
 
     TabStrip BuildTabStrip() => new TabStrip
@@ -281,6 +325,7 @@ sealed class WaveeShell : Component
     void Back()
     {
         if (_history.Count == 0) return;
+        _morphBegin?.Invoke(_route.Peek().Name);   // reverse fly: snapshot the leaving page's cover; the like-tagged dest on the previous route flies it back
         _forwardHistory.Add(_route.Peek());
         _canForward.Value = true;
         _route.Value = _history[^1];
@@ -293,6 +338,7 @@ sealed class WaveeShell : Component
     void Forward()
     {
         if (_forwardHistory.Count == 0) return;
+        _morphBegin?.Invoke(_route.Peek().Name);   // same as Back: fly the leaving cover into the like-tagged dest on the route we redo to
         _history.Add(_route.Peek());
         _canBack.Value = true;
         _route.Value = _forwardHistory[^1];

@@ -25,6 +25,9 @@ public sealed class PlaybackBridge
 
     // ── UI signals (read by components) ─────────────────────────────────────────────────────────────────────────────
     public Signal<Track?> CurrentTrack { get; } = new(null);
+    /// <summary>The currently-playing context uri (playlist/album/liked) — content cards compare their own uri to this
+    /// to show the now-playing equalizer.</summary>
+    public Signal<string?> CurrentContext { get; } = new(null);
     public Signal<bool> IsPlaying { get; } = new(false);
     public Signal<bool> IsBuffering { get; } = new(false);
     // Player-bar display states the IPlaybackState snapshot doesn't carry yet (the real provider drives these; default
@@ -75,6 +78,7 @@ public sealed class PlaybackBridge
     void PushState(IPlaybackState s)
     {
         CurrentTrack.Value = s.CurrentTrack;
+        CurrentContext.Value = s.ContextUri;
         IsPlaying.Value = s.IsPlaying;
         IsBuffering.Value = s.IsBuffering;
         IsShuffle.Value = s.IsShuffle;

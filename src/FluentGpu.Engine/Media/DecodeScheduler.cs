@@ -33,6 +33,13 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     private readonly Task[] _workers;
     private readonly CancellationTokenSource _shutdown = new();
     private int _inflight, _queued;
+    // Max decoded images APPLIED (GPU-uploaded) per Pump = per frame. An UNBOUNDED drain uploaded a whole fast-scroll's
+    // worth of album art in ONE frame → a 10-35ms GPU submit spike (the frame lands late → a stale composited frame =
+    // the edge "another viewport" flash). Bounding it spreads uploads over frames: un-applied decodes stay in _out and
+    // their ImageCache entries stay State==Pending, so PendingCount>0 keeps the frame loop awake → the rest drain on the
+    // next frames (rows show their skeleton/blur-hash meanwhile). FG_IMG_UPLOADS overrides; default tuned for ~120fps.
+    private static readonly int s_maxAppliesPerFrame =
+        int.TryParse(System.Environment.GetEnvironmentVariable("FG_IMG_UPLOADS"), out int __u) && __u > 0 ? __u : 6;
     private long _bytesDownloaded;
 
     public int WorkerCount => _workers.Length;
@@ -102,7 +109,7 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     public void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels)
     {
         int drained = 0;
-        while (_out.TryDequeue(out var d))
+        while (drained < s_maxAppliesPerFrame && _out.TryDequeue(out var d))
         {
             if (d.Ok && d.Buffer != null) onPixels(d.Id, d.Buffer.AsSpan(0, d.ByteLen), d.W, d.H);
             onComplete(d.Id, d.Ok, d.W, d.H, d.Failure, d.Attempts);

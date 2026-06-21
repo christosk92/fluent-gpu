@@ -1,3 +1,4 @@
+using FluentGpu.Animation;
 using FluentGpu.Foundation;
 using FluentGpu.Pal;
 using FluentGpu.Scene;
@@ -49,7 +50,7 @@ public sealed class InputDispatcher
     private Point2 _panAnchorPx;       // window-space press point — pan delta measures from here
     private float _panAnchorOffset;    // the scroll offset captured at the press (drives SetScrollOffset(anchor − delta))
     private bool _panAxisX;            // the scroll axis of _panTarget (Orientation == 1) — pan tracks this axis only
-    private TouchVelocity _panVel;     // per-contact EMA velocity sampler (cloned from DragController.UpdateVelocity)
+    private TouchVelocity _panVel;     // per-contact windowed-regression velocity sampler for the touch fling hand-off
     // §7A drag-reorder-over-touch: the contact enrolled a DragReorder member (a CanDrag chain under the press) whose
     // axis-locked vote competes with Pan in the arena. The reorder's item axis (the source row's parent-container main
     // axis); when the arena resolves DragReorder, _touchReorder latches and the contact DRIVES Input.DragController
@@ -160,12 +161,29 @@ public sealed class InputDispatcher
         public bool HoldFired;  // §7A the long-press Hold won + fired its context flyout: the eventual up suppresses the tap-click
     }
 
-    /// <summary>Exponential-moving-average pointer-velocity sampler (px/s, ~50ms horizon) — the
-    /// <see cref="DragController.UpdateVelocity"/> shape, per-contact for the touch fling hand-off. 0/duplicate platform
-    /// timestamps (the headless default) leave the velocity unchanged, so a 0-stamp gesture measures zero velocity
-    /// (a vacuous fling — the harness uses monotonic stamps to exercise inertia).</summary>
+    /// <summary>Windowed least-squares pointer-velocity sampler (px/s) — a fixed-capacity ring of the recent
+    /// (position, timestamp) samples over a trailing <see cref="WindowMs"/> window; the velocity per axis is the slope
+    /// of the best-fit line. Replaces the prior single-pole 50ms EMA, which (a) UNDER-read a short/fast flick — its gain
+    /// <c>dt/(dt+50)</c> lags before it converges, so a brief flick released its true terminal speed as a fraction — and
+    /// (b) carried a STATIONARY-UP-SAMPLE bias: a release whose final sample repeats the last position multiplicatively
+    /// decayed the EMA toward 0, killing a real flick. A regression reads the TRUE terminal slope of a fast flick, and a
+    /// final stationary cluster is just one point that barely tips a multi-point fit. Per-contact, fixed inline storage
+    /// (zero alloc). DETERMINISTIC: the slope is summed in a fixed oldest→newest order over the actual EVENT timestamps,
+    /// identical across the animation-dt sweep (the input events are identical) — the §12.6 snap-fling-dt-invariant
+    /// property holds. 0/duplicate platform timestamps (the headless default) do NOT advance the regression, so a
+    /// 0-stamp gesture measures zero velocity (a vacuous fling — the harness uses monotonic stamps to exercise inertia).</summary>
     private struct TouchVelocity
     {
+        private const int Cap = 8;          // fixed ring capacity (covers the window at any realistic event cadence)
+        private const float WindowMs = 50f; // trailing regression window — samples older than this are excluded
+
+        private struct VSample { public float X, Y; public uint T; }
+        [System.Runtime.CompilerServices.InlineArray(8)]
+        private struct Ring { private VSample _e0; }
+
+        private Ring _ring;
+        private int _count;      // valid samples in the ring (0..Cap)
+        private int _head;       // next write index (ring)
         private Point2 _lastAbs;
         private uint _lastMs;
         private float _vx, _vy;
@@ -175,24 +193,56 @@ public sealed class InputDispatcher
 
         public void Reset(Point2 abs, uint timestampMs)
         {
-            _lastAbs = abs;
-            _lastMs = timestampMs;
+            _count = 0; _head = 0;
+            _lastAbs = abs; _lastMs = timestampMs;
             _vx = 0f; _vy = 0f;
+            Push(abs, timestampMs);
         }
 
         public void Sample(Point2 abs, uint timestampMs)
         {
-            uint dt = timestampMs - _lastMs;
-            if (timestampMs != 0 && _lastMs != 0 && dt > 0 && dt < 1000)
-            {
-                float instX = (abs.X - _lastAbs.X) * 1000f / dt;
-                float instY = (abs.Y - _lastAbs.Y) * 1000f / dt;
-                float alpha = dt / (dt + 50f);
-                _vx += (instX - _vx) * alpha;
-                _vy += (instY - _vy) * alpha;
-            }
-            if (timestampMs != 0) _lastMs = timestampMs;
+            // 0/duplicate stamp (the headless default / a coalesced same-tick move): keep the position, leave the
+            // velocity unchanged — never advance the regression on a non-monotonic clock (the vacuous-fling guard).
+            if (timestampMs == 0 || (_lastMs != 0 && timestampMs == _lastMs)) { _lastAbs = abs; return; }
+            Push(abs, timestampMs);
+            Recompute(timestampMs);
             _lastAbs = abs;
+            _lastMs = timestampMs;
+        }
+
+        private void Push(Point2 abs, uint t)
+        {
+            _ring[_head] = new VSample { X = abs.X, Y = abs.Y, T = t };
+            _head = (_head + 1) % Cap;
+            if (_count < Cap) _count++;
+        }
+
+        private void Recompute(uint tNew)
+        {
+            // Fixed oldest→newest pass over the in-window samples; least-squares slope of pos vs time, ×1000 → px/s.
+            int oldest = (_head - _count + Cap) % Cap;
+            float sumT = 0f, sumX = 0f, sumY = 0f, sumTT = 0f, sumTX = 0f, sumTY = 0f;
+            int m = 0;
+            for (int k = 0; k < _count; k++)
+            {
+                int idx = (oldest + k) % Cap;
+                uint t = _ring[idx].T;
+                if (tNew - t > (uint)WindowMs) continue;   // outside the trailing window
+                float rt = tNew - t;                        // relative time (ms; small) — keeps the normal equations well-conditioned
+                float x = _ring[idx].X, y = _ring[idx].Y;
+                sumT += rt; sumX += x; sumY += y;
+                sumTT += rt * rt; sumTX += rt * x; sumTY += rt * y;
+                m++;
+            }
+            if (m < 2) { _vx = 0f; _vy = 0f; return; }
+            float denom = m * sumTT - sumT * sumT;
+            if (MathF.Abs(denom) < 1e-6f) { _vx = 0f; _vy = 0f; return; }
+            // Slope of pos vs the RELATIVE time rt = (tNew − t): rt DECREASES as a sample gets newer, so d(pos)/d(rt) is
+            // the negative of the real forward velocity d(pos)/d(t). Negate to recover it, then ×1000 (per-ms → per-s).
+            float slopeX = (m * sumTX - sumT * sumX) / denom;
+            float slopeY = (m * sumTY - sumT * sumY) / denom;
+            _vx = -slopeX * 1000f;
+            _vy = -slopeY * 1000f;
         }
     }
 
@@ -497,6 +547,11 @@ public sealed class InputDispatcher
     /// the brush transition (kept as delegates to keep Input decoupled from the Animation assembly).</summary>
     public Action<NodeHandle, bool>? OnHoverChanged;
     public Action<NodeHandle, bool>? OnPressChanged;
+
+    /// <summary>The active scroll feel profile. The host sets it from the app's <see cref="ScrollTuning"/>; defaults to
+    /// <see cref="ScrollTuning.WinUiLike"/>. Only the per-notch wheel distance is read here — applied when a wheel event
+    /// carries a device <see cref="InputEvent.WheelNotch"/> count; a DIP-only ScrollDelta (the headless harness) bypasses it.</summary>
+    public ScrollTuning Tuning { get; set; } = ScrollTuning.WinUiLike;
 
     /// <summary>When true, a wheel sets the scroll TARGET and the ScrollAnimator eases the offset (momentum/inertia +
     /// auto-hiding scrollbars). When false, the offset jumps immediately (the deterministic default for tests).</summary>
@@ -869,7 +924,43 @@ public sealed class InputDispatcher
                     // Element-level wheel handlers (WinUI PointerWheelChanged) see the wheel BEFORE the viewport:
                     // a Handled NumberBox consumes the step instead of scrolling the form (NumberBox.cpp:578-597).
                     if (DispatchWheel(in e)) { handled++; break; }
-                    if (ScrollAt(e.PositionPx, e.ScrollDelta, e.ScrollDeltaX)) handled++;
+                    {
+                        // A precision touchpad gets the dedicated pixel-follow + glide path. Its scroll DISTANCE comes from
+                        // the device NOTCH scaled by the tunable TouchpadDipPerNotch (FG_TP_SCALE) — NOT the PAL's element-
+                        // level dip (e.ScrollDelta), which bakes in a fixed 60/notch and was over-scrolling ~3x. Synthetic
+                        // DIP-only input (no notch — the headless harness) is used directly. Mouse wheels keep the discrete
+                        // max(48 DIP, 15%·viewport) eased notch. No magnitude heuristic — PointerKind already classified it.
+                        bool touchpad = e.Pointer == PointerKind.Touchpad;
+                        bool useNotch = !touchpad && (e.WheelNotch != 0f || e.WheelNotchX != 0f);
+                        float wAxisY = touchpad
+                            ? (e.WheelNotch != 0f ? Tuning.TouchpadDip(e.WheelNotch) : e.ScrollDelta)
+                            : useNotch ? e.WheelNotch : e.ScrollDelta;
+                        float wAxisX = touchpad
+                            ? (e.WheelNotchX != 0f ? Tuning.TouchpadDip(e.WheelNotchX) : e.ScrollDeltaX)
+                            : useNotch ? e.WheelNotchX : e.ScrollDeltaX;
+                        // Axis rails (touchpad only): lock a primarily-one-axis gesture so a small cross-axis component
+                        // can't grab a nested horizontal carousel mid vertical-page-scroll. Mouse wheel is single-axis, so
+                        // it's left untouched. Latched per gesture after ~24px of travel; reset on a >200ms idle gap.
+                        if (touchpad)
+                        {
+                            // Recent-weighted axis rails: DECAY the per-axis travel each event and RE-PICK the rail every
+                            // event (not a sticky one-shot latch). So a mid-gesture transition vertical(page)→horizontal
+                            // (carousel) re-rails within a packet or two instead of being dead until a >200ms lift, a quick
+                            // re-swipe in the other axis re-rails immediately, and comparable axes (a genuine diagonal) stay
+                            // un-railed so BOTH move. A >200ms idle fully resets the window.
+                            uint gap = e.TimestampMs - _wheelGestureMs;
+                            _wheelGestureMs = e.TimestampMs;
+                            float keep = gap >= 200u ? 0f : MathF.Exp(-(float)gap / 90f);
+                            _railAccumY = _railAccumY * keep + MathF.Abs(wAxisY);
+                            _railAccumX = _railAccumX * keep + MathF.Abs(wAxisX);
+                            if (_railAccumY + _railAccumX > 12f && _railAccumY > _railAccumX * 1.5f) _wheelRailAxis = 1;
+                            else if (_railAccumY + _railAccumX > 12f && _railAccumX > _railAccumY * 1.5f) _wheelRailAxis = 2;
+                            else _wheelRailAxis = 0;   // too little / comparable recent travel → free (a diagonal moves both)
+                            if (_wheelRailAxis == 1) wAxisX = 0f;
+                            else if (_wheelRailAxis == 2) wAxisY = 0f;
+                        }
+                        if (ScrollAt(e.PositionPx, wAxisY, wAxisX, useNotch, touchpad, e.TimestampMs)) handled++;
+                    }
                     break;
 
                 case InputKind.PointerCancel:
@@ -1205,6 +1296,15 @@ public sealed class InputDispatcher
             if (!scrollable.IsNull)
             {
                 ref ScrollState sc = ref _scene.ScrollRef(scrollable);
+                // A finger touching an in-flight viewport takes authoritative control immediately. Cancel either a
+                // touch fling or a precision-touchpad tail before capturing the pan anchor, otherwise phase 7 can move
+                // the content underneath the stationary finger between down and the first move.
+                sc.ScrollMode = 0;
+                sc.FlingVelocity = 0f;
+                sc.FlingRetargeted = false;
+                sc.FlingSnapTarget = float.NaN;
+                sc.TouchpadIdleMs = 0f;
+                sc.TouchpadInertiaStarted = false;
                 _panTarget = scrollable;
                 _panClaimed = false;
                 _panAxisX = sc.Orientation == 1;
@@ -2174,8 +2274,9 @@ public sealed class InputDispatcher
     // ── scrolling (layout-free: write the content's -ScrollOffset transform; never relayout) ──
 
     /// <summary>Scroll the nearest scrollable ancestor under the pointer; bubbles to an outer scroller at the edge.</summary>
-    /// <summary>The nearest scrollable viewport under the pointer (for revealing its scrollbar on hover).</summary>
-    private NodeHandle ScrollableUnder(Point2 p)
+    /// <summary>The nearest scrollable viewport under the pointer (for revealing its scrollbar on hover, and for binding
+    /// an OS manipulation to a viewport at contact-down via <see cref="FluentGpu.Animation.IScrollHost"/>).</summary>
+    public NodeHandle ScrollableUnder(Point2 p)
     {
         for (var n = HitTestAny(p); !n.IsNull; n = _scene.Parent(n))
             if ((_scene.Flags(n) & NodeFlags.Scrollable) != 0) return n;
@@ -2215,7 +2316,13 @@ public sealed class InputDispatcher
         return InScrollbarLane(local, in m);
     }
 
-    private bool ScrollAt(Point2 p, float deltaY, float deltaX)
+    /// <summary>Diagnostic only: drive the wheel-routing path (hit-test → nearest vertical scroller) directly, bypassing the
+    /// input ring — lets a harness isolate routing from the OS-pump/injection path. Returns true iff a scroller consumed it.</summary>
+    public bool DiagScrollAt(Point2 p, float deltaY) => ScrollAt(p, deltaY, 0f);
+    /// <summary>Diagnostic only: the topmost hit-test node at a point (the same walk wheel/click routing starts from).</summary>
+    public NodeHandle DiagHitTest(Point2 p) => HitTestAny(p);
+
+    private bool ScrollAt(Point2 p, float deltaY, float deltaX, bool isNotch = false, bool touchpad = false, uint timestampMs = 0)
     {
         var node = HitTestAny(p);
         bool any = false;
@@ -2226,14 +2333,34 @@ public sealed class InputDispatcher
         //   FALLBACK so a STANDALONE horizontal carousel still wheel-scrolls.
         // • Horizontal wheel/two-finger swipe → nearest HORIZONTAL scroller ONLY (no vertical fallback — a horizontal
         //   swipe must never scroll the page vertically, the symptom this fix removes).
-        if (deltaY != 0f) any |= ScrollAxis(node, deltaY, wantHorizontal: false, oppositeFallback: true);
-        if (deltaX != 0f) any |= ScrollAxis(node, deltaX, wantHorizontal: true, oppositeFallback: false);
+        if (deltaY != 0f) any |= ScrollAxis(node, deltaY, wantHorizontal: false, oppositeFallback: true, isNotch, touchpad, timestampMs);
+        if (deltaX != 0f) any |= ScrollAxis(node, deltaX, wantHorizontal: true, oppositeFallback: false, isNotch, touchpad, timestampMs);
         return any;
     }
 
-    private bool ScrollAxis(NodeHandle node, float delta, bool wantHorizontal, bool oppositeFallback)
+    /// <summary>Touchpad overscroll rubber-band (the WinUI overpan) — ON by default; FG_TP_NOBOUNCE=1 disables it. It
+    /// earlier looked like the viewport "glitching up and down," but that was a dropped-frame GPU spike (an album-art
+    /// upload colliding with an edge re-realize on a double-buffered swapchain), now fixed by triple-buffering — so the
+    /// rubber-band renders cleanly and is restored.</summary>
+    private static readonly bool s_tpBounce = System.Environment.GetEnvironmentVariable("FG_TP_NOBOUNCE") != "1";
+    /// <summary>Diagnostic: FG_OFFSET_JUMP=1 logs (to stderr) any single offset write that jumps the viewport > 60px — used
+    /// to localise the 1-frame top-edge "another viewport" flash to its writer (input/glide/programmatic). Fires only on a
+    /// jump, so it's near-free and doesn't perturb the frame loop the way the per-event FG_SCROLL_LOG does.</summary>
+    private static readonly bool s_offsetJumpLog = System.Environment.GetEnvironmentVariable("FG_OFFSET_JUMP") == "1";
+
+    // Axis rails (WinUI parity): lock a primarily-one-axis touchpad gesture to that axis so a small cross-axis component
+    // (touchpad noise / a slightly diagonal swipe) can't grab a nested HORIZONTAL carousel mid vertical-page-scroll ("the
+    // horizontal sections catch the scroller"). Decided after a little accumulated travel; reset on an idle gap between
+    // gestures; a genuinely diagonal swipe (axes comparable) stays free (un-railed).
+    private byte _wheelRailAxis;                 // 0 = free, 1 = vertical-locked, 2 = horizontal-locked
+    private uint _wheelGestureMs;                // last wheel event time (reset the rail on a gesture gap)
+    private float _railAccumY, _railAccumX;      // accumulated |Δ| per axis this gesture (picks the rail)
+
+    private bool ScrollAxis(NodeHandle node, float delta, bool wantHorizontal, bool oppositeFallback, bool isNotch = false,
+                            bool touchpad = false, uint timestampMs = 0)
     {
         NodeHandle fallback = NodeHandle.Null;
+        NodeHandle outermost = NodeHandle.Null;   // outermost same-axis scroller — the one that rubber-bands when the chain is pinned
         for (var n = node; !n.IsNull; n = _scene.Parent(n))
         {
             if ((_scene.Flags(n) & NodeFlags.Scrollable) == 0) continue;
@@ -2243,20 +2370,30 @@ public sealed class InputDispatcher
                 if (oppositeFallback && fallback.IsNull) fallback = n;   // opposite-axis scroller remembered as a fallback
                 continue;
             }
-            if (TryScrollNode(n, delta)) return true;                    // a same-axis scroller consumed it (else climb on)
+            outermost = n;                                                              // climbs to the outermost same-axis scroller
+            if (TryScrollNode(n, delta, isNotch, touchpad, timestampMs)) return true;   // a same-axis scroller consumed it (else climb on)
         }
-        return oppositeFallback && !fallback.IsNull && TryScrollNode(fallback, delta);
+        if (oppositeFallback && !fallback.IsNull && TryScrollNode(fallback, delta, isNotch, touchpad, timestampMs)) return true;
+        // Scroll chaining ended — every same-axis scroller is pinned at this edge. A precision touchpad rubber-bands the
+        // OUTERMOST one (WinUI ScrollPresenter overpan); a mouse wheel just hard-clamps with no band (the existing feel).
+        // Rubber-band is opt-in (FG_TP_BOUNCE=1); by default a pinned touchpad pull hard-clamps (no viewport bounce).
+        if (touchpad && s_tpBounce && !outermost.IsNull) return ApplyTouchpadOverscroll(outermost, delta, timestampMs);
+        return false;
     }
 
-    private bool TryScrollNode(NodeHandle n, float delta)
+    private bool TryScrollNode(NodeHandle n, float delta, bool isNotch = false, bool touchpad = false, uint timestampMs = 0)
     {
-        return ScrollBy(n, delta, SmoothScroll);
+        return ScrollBy(n, delta, SmoothScroll, isNotch, touchpad, timestampMs);
     }
 
-    private bool ScrollBy(NodeHandle n, float delta, bool smooth)
+    private bool ScrollBy(NodeHandle n, float delta, bool smooth, bool isNotch = false, bool touchpad = false, uint timestampMs = 0)
     {
         ref ScrollState sc = ref _scene.ScrollRef(n);
         bool horizontal = sc.Orientation == 1;
+        // A device-NOTCH wheel amount → DIP: max(48, 15%·viewport) per notch (WinUI content-relative line height,
+        // ScrollTuning.PerNotchDip). A DIP ScrollDelta (synthetic/test/programmatic, isNotch=false) is used directly.
+        if (isNotch) delta *= Tuning.PerNotchDip(horizontal ? sc.ViewportW : sc.ViewportH);
+        if (touchpad) return ScrollByTouchpad(n, delta, timestampMs);
         // Clamp against the SCALED content extent (Content*Zoom − Viewport), identical to SetScrollOffset/ApplyTouchPan: the
         // smooth (wheel + scrollbar-track-click) Target write below clamps directly here and never reaches SetScrollOffset,
         // so it must use the same scaled max or a zoomed-in viewport can't wheel to the far edge / a zoomed-out one drives
@@ -2265,23 +2402,34 @@ public sealed class InputDispatcher
         float z = sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f;
         float max = horizontal ? MathF.Max(0f, sc.ContentW * z - sc.ViewportW) : MathF.Max(0f, sc.ContentH * z - sc.ViewportH);
 
-        // ALL wheel input (precision touchpad reported as a hi-res wheel, free-spin mice, AND a clicky wheel) rides ONE
-        // unified eased TargetChase path below — there is NO magnitude-based "hi-res" branch. A precision touchpad's
-        // WM_POINTERWHEEL notches span the whole range within a single gesture, so any threshold straddles a normal flick
-        // and made the offset flip-flop between an eased target and a 1:1 jump every gesture (the "ultra buggy / stops
-        // midway" regression). Edge/Chromium likewise give every mousewheel/keyboard/scrollbar scroll one smooth curve.
-        // (True OS-quality touchpad pan + inertia + rubber-band is the separate DirectManipulation WM_POINTER path.)
+        // Discrete mouse/free-spin wheel path. Precision touchpad packets returned above before reaching this branch.
         if (smooth)
         {
-            // Set the target; the ScrollAnimator eases the live offset toward it (+ virtualization re-realize + fade).
-            float curTarget = horizontal ? sc.TargetX : sc.TargetY;
-            float nextTarget = Math.Clamp(curTarget + delta, 0f, max);
-            if (nextTarget == curTarget) return false;   // at the edge → bubble to an outer scroller
-            if (horizontal) sc.TargetX = nextTarget; else sc.TargetY = nextTarget;
+            if (sc.ScrollMode == 2)
+            {
+                sc.ScrollMode = 0;
+                sc.FlingVelocity = 0f;
+                sc.TouchpadInertiaStarted = false;
+            }
+            // Mouse-wheel MOMENTUM (browser-like): instead of a fixed eased target step, seed a friction-decayed fling so
+            // a single notch coasts ≈ one notch (v0 = notchDip·k, k = −ln(decay) matches the integrator, so ∫v = v0/k =
+            // delta) and a FAST spin ACCUMULATES velocity → coasts farther. Runs through the ScrollAnimator integrator
+            // under WheelFlingMode (hard-clamps at the edge, NO touch rubber-band / snap).
+            float off = horizontal ? sc.OffsetX : sc.OffsetY;
+            bool atEdge = (delta < 0f && off <= 0.5f) || (delta > 0f && off >= max - 0.5f);
+            if (max <= 0f || atEdge) return false;   // nothing to scroll / pinned at this edge → bubble to an outer scroller
+            float k = -MathF.Log(ScrollAnimator.WheelFlingDecayPerS);
+            bool sameDir = sc.ScrollMode == 3 && MathF.Sign(delta) == MathF.Sign(sc.FlingVelocity);   // 3 == WheelFlingMode
+            sc.FlingVelocity = (sameDir ? sc.FlingVelocity : 0f) + delta * k;   // accumulate on a fast same-direction spin
+            sc.ScrollMode = 3;
+            sc.FlingRetargeted = false;
+            sc.FlingSnapTarget = float.NaN;
+            sc.FlingFromOffset = off;
+            if (horizontal) sc.TargetX = off; else sc.TargetY = off;   // Target == Offset keeps the integrator in fling mode
             sc.IdleMs = 0f;
             OnScrollArmed?.Invoke(n);
             if (FluentGpu.Foundation.ScrollLog.On)
-                FluentGpu.Foundation.ScrollLog.Line($"  scrollBy SMOOTH {(horizontal ? "x" : "y")} delta={delta:0.0} target={curTarget:0}->{nextTarget:0}");
+                FluentGpu.Foundation.ScrollLog.Line($"  scrollBy WHEEL-FLING {(horizontal ? "x" : "y")} delta={delta:0.0} v={sc.FlingVelocity:0} off={off:0}");
             return true;
         }
 
@@ -2290,6 +2438,106 @@ public sealed class InputDispatcher
         if (FluentGpu.Foundation.ScrollLog.On)
             FluentGpu.Foundation.ScrollLog.Line($"  scrollBy DIRECT {(horizontal ? "x" : "y")} delta={delta:0.0} off={old:0}->{(horizontal ? sc.OffsetX : sc.OffsetY):0}");
         return movedDirect;
+    }
+
+    /// <summary>Precision-touchpad packet path. Packets move content synchronously (no target lag) and update a
+    /// timestamp-based velocity estimate. <see cref="ScrollAnimator"/> waits for the stream to go quiet before turning
+    /// that terminal estimate into inertia; a driver-provided decaying stream therefore reaches a near-zero estimate and
+    /// does not receive a second synthetic fling.</summary>
+    private bool ScrollByTouchpad(NodeHandle n, float delta, uint timestampMs)
+    {
+        ref ScrollState sc = ref _scene.ScrollRef(n);
+        bool horizontal = sc.Orientation == 1;
+        // An active rubber-band on this viewport: keep routing through the overscroll accumulator so REVERSING back
+        // SHRINKS the band continuously (ApplyTouchPan, which inverts OverscrollBand) instead of hard-clearing it in one
+        // frame (a visible band-sized snap). The original "it rubber-banded me back" was the band LINGERING on an in-range
+        // scroll; this resolves it by shrinking the band smoothly as the offset re-enters range. Once the band is gone
+        // (OverscrollPx==0) the normal in-range path below resumes, WITH glide-velocity tracking.
+        if (sc.OverscrollPx != 0f) return ApplyTouchpadOverscroll(n, delta, timestampMs);
+
+        float old = horizontal ? sc.OffsetX : sc.OffsetY;
+        if (!SetScrollOffset(n, old + delta))
+        {
+            // Pinned at this edge: stop this viewport's tail and let ScrollAxis bubble the packet to an ancestor.
+            sc.ScrollMode = 0;
+            sc.FlingVelocity = 0f;
+            sc.TouchpadIdleMs = 0f;
+            sc.TouchpadInertiaStarted = false;
+            return false;
+        }
+        if (sc.Overscrolling) sc.Overscrolling = false;   // band already fully shrunk to 0; drop the stale hold flag
+
+        float next = horizontal ? sc.OffsetX : sc.OffsetY;
+        float actualDelta = next - old;
+        // Direction reversal: collapse the stale same-sign glide velocity so a reverse-then-lift can't coast the OLD way
+        // (the EMA then rebuilds in the new direction from the following packets). Without this, the damped EMA can still
+        // read the pre-reversal sign at a lift that lands mid-flip → a glide opposite the finger's final motion.
+        if (actualDelta != 0f && sc.FlingVelocity != 0f && MathF.Sign(actualDelta) != MathF.Sign(sc.FlingVelocity))
+            sc.FlingVelocity = 0f;
+        uint previousMs = sc.TouchpadLastTimestampMs;
+        // Velocity for the post-lift glide. A DAMPED EMA with NO "reset-to-raw" path. The old code seeded FlingVelocity
+        // straight from ONE packet's instantaneous speed (its reset branch), so a single spiked packet — this touchpad's
+        // driver streams its OWN acceleration as huge one-off notch values — latched a full-distance glide: "mega
+        // acceleration, top→bottom" off a small flick. Now every packet only NUDGES the estimate (alpha < 1), so one spike
+        // contributes little while a SUSTAINED flick still builds up. The cap bounds the worst-case coast (v/k) to ~0.8
+        // viewport, and a slow ~28ms time-constant further blunts a lone spike.
+        if (timestampMs != 0 && previousMs != 0)
+        {
+            uint elapsedMs = timestampMs - previousMs;
+            if (elapsedMs > 120) sc.FlingVelocity = 0f;                          // new gesture after a gap → drop stale velocity
+            else if (elapsedMs > 0)
+            {
+                float instantaneous = Math.Clamp(actualDelta * 1000f / elapsedMs, -2_200f, 2_200f);
+                float alpha = 1f - MathF.Exp(-elapsedMs / 28f);                  // ~28ms TC: a lone spiked packet barely moves it
+                sc.FlingVelocity += (instantaneous - sc.FlingVelocity) * alpha;
+            }
+            // elapsedMs == 0 (sub-ms packet): keep the estimate — distance without usable timing.
+        }
+        if (timestampMs != 0) sc.TouchpadLastTimestampMs = timestampMs;
+        sc.TouchpadIdleMs = 0f;
+        sc.TouchpadInertiaStarted = false;
+        sc.ScrollMode = 2;
+        if (FluentGpu.Foundation.ScrollLog.On)
+            FluentGpu.Foundation.ScrollLog.Line($"  touchpad DIRECT {(horizontal ? "x" : "y")} delta={actualDelta:0.00} off={old:0.0}->{next:0.0} v={sc.FlingVelocity:0}");
+        return true;
+    }
+
+    /// <summary>A precision-touchpad packet that no same-axis scroller can take in-range (the whole chain is pinned at
+    /// this edge) pulls the OUTERMOST scroller into a damped rubber-band — the WinUI ScrollPresenter overpan. It keeps a
+    /// raw position past the edge (<see cref="ScrollState.TouchpadRawOffset"/>) and routes it through the SAME
+    /// <see cref="ApplyTouchPan"/> band producer the touch pan uses, so the overpan looks identical and springs back via
+    /// the same phase-7 spring (released when the stream goes quiet — see <c>ScrollAnimator.StopTouchpad</c>). Velocity
+    /// is held at 0: you spring back from an overpan, you don't fling out of it. Reversing back in-range shrinks the band
+    /// to 0 through ApplyTouchPan, after which normal in-range tracking resumes.</summary>
+    private bool ApplyTouchpadOverscroll(NodeHandle n, float delta, uint timestampMs)
+    {
+        float raw;
+        {
+            ref ScrollState sc = ref _scene.ScrollRef(n);
+            bool horizontal = sc.Orientation == 1;
+            float pinned = horizontal ? sc.OffsetX : sc.OffsetY;     // 0 or max (the chain is pinned here)
+            if (!sc.Overscrolling)
+            {
+                // First overpan packet of this pull: seed the raw position at the pinned edge — UNLESS a previous overpan
+                // is still springing back (band != 0), in which case continue from that band's pre-image so re-pulling
+                // mid-spring doesn't SNAP the band (invert OverscrollBand: raw = band·limit / (limit − |band|)).
+                float band = sc.OverscrollPx;
+                if (band != 0f)
+                {
+                    float lim = OverscrollLimitFraction * (horizontal ? sc.ViewportW : sc.ViewportH);
+                    sc.TouchpadRawOffset = pinned + (MathF.Abs(band) < lim ? band * lim / (lim - MathF.Abs(band)) : band);
+                }
+                else sc.TouchpadRawOffset = pinned;
+            }
+            sc.TouchpadRawOffset += delta;
+            sc.ScrollMode = 2;
+            sc.FlingVelocity = 0f;                                    // no fling out of an overpan; the band springs back
+            sc.TouchpadIdleMs = 0f;
+            sc.TouchpadInertiaStarted = false;
+            if (timestampMs != 0) sc.TouchpadLastTimestampMs = timestampMs;
+            raw = sc.TouchpadRawOffset;
+        }
+        return ApplyTouchPan(n, raw);   // in-range part → offset (clamp chokepoint); past-edge excess → damped band + Overscrolling
     }
 
     private bool SetScrollOffset(NodeHandle n, float offset)
@@ -2304,6 +2552,8 @@ public sealed class InputDispatcher
         float max = horizontal ? MathF.Max(0f, sc.ContentW * z - sc.ViewportW) : MathF.Max(0f, sc.ContentH * z - sc.ViewportH);
         float old = horizontal ? sc.OffsetX : sc.OffsetY;
         float next = Math.Clamp(offset, 0f, max);
+        if (s_offsetJumpLog && MathF.Abs(next - old) > 60f)
+            System.Console.Error.WriteLine($"[OFFSET-JUMP] {old:0}->{next:0} req={offset:0} max={max:0} mode={sc.ScrollMode} content={(horizontal ? sc.ContentW : sc.ContentH):0} vp={(horizontal ? sc.ViewportW : sc.ViewportH):0}");
         float target = horizontal ? sc.TargetX : sc.TargetY;
         if (next == old && target == next) return false;
         if (horizontal) { sc.OffsetX = next; sc.TargetX = next; }
@@ -2397,6 +2647,15 @@ public sealed class InputDispatcher
             // is OverscrollPx<0 ⇒ -band is positive ⇒ the content slides DOWN, revealing the rubber gap (and symmetric for
             // the other three edges). 0 on every non-overscrolled / non-touch path, so the math is byte-identical there.
             float band = sc.OverscrollPx;
+            // Edge-sign guard (fixes the 1-frame top/bottom "another viewport" flash): the rubber-band may only point
+            // AWAY from the edge it formed against — an UPWARD overpan (band<0) only at the top, a DOWNWARD one (band>0)
+            // only at the bottom. A stale wrong-sign band (e.g. a positive band still settling from a prior bottom-overpan
+            // when the offset is now at the top) would slide the content the WRONG way for one frame, flashing real content
+            // as "another viewport" until the spring zeroes it. Clamp it to the valid sign at the clamped edge.
+            float bzMax = sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f;
+            float bMaxOff = horizontal ? MathF.Max(0f, sc.ContentW * bzMax - sc.ViewportW) : MathF.Max(0f, sc.ContentH * bzMax - sc.ViewportH);
+            if (next <= 0.5f && band > 0f) band = 0f;                 // at the top, only an upward (negative) band is valid
+            else if (next >= bMaxOff - 0.5f && band < 0f) band = 0f;  // at the bottom, only a downward (positive) band is valid
             float offX = horizontal ? next + band : 0f, offY = horizontal ? 0f : next + band;
             if (z == 1f)
             {
@@ -2564,8 +2823,40 @@ public sealed class InputDispatcher
         if (!prev.IsNull && _scene.IsLive(prev)) _scene.Flags(prev) &= ~flag;
         slot = next;
         if (!next.IsNull) _scene.Flags(next) |= flag;
+        if (flag == NodeFlags.Hovered) UpdateHoverWithin(prev, next);
         Notify(flag, prev, on: false);
         Notify(flag, next, on: true);
+    }
+
+    // Hover-within: keep the HoverWithin flag on the interactive STRICT-ancestors of the hovered leaf, so a container
+    // (a list row, a card) reads as hovered while the pointer is anywhere inside it — over its interactive children
+    // (links, buttons) included. Diff prev's ancestor chain vs next's: clear the ancestors that left the chain, set the
+    // ones that entered; both loops break at the first SHARED ancestor, so a move WITHIN a row dirties only the row.
+    private void UpdateHoverWithin(NodeHandle prev, NodeHandle next)
+    {
+        const int interactive = InteractionInfo.PointerBit | InteractionInfo.ClickBit | InteractionInfo.PressedBit;
+        for (var n = prev.IsNull ? NodeHandle.Null : _scene.Parent(prev); !n.IsNull && _scene.IsLive(n); n = _scene.Parent(n))
+        {
+            if (n != next && IsSelfOrAncestorOf(n, next)) break;   // still a strict-ancestor of the new leaf → stays set
+            if ((_scene.Flags(n) & NodeFlags.HoverWithin) != 0)
+            {
+                _scene.Flags(n) &= ~NodeFlags.HoverWithin; _scene.Mark(n, NodeFlags.PaintDirty);
+                // The container left the hover scope (pointer exited its subtree) → let its reveal-on-hover descendants
+                // decay (it is no longer Hovered nor HoverWithin, so SetHover resolves to off).
+                OnHoverChanged?.Invoke(n, false);
+            }
+        }
+        for (var n = next.IsNull ? NodeHandle.Null : _scene.Parent(next); !n.IsNull && _scene.IsLive(n); n = _scene.Parent(n))
+        {
+            if (n != prev && IsSelfOrAncestorOf(n, prev)) break;   // already set from prev's chain → stop
+            if ((_scene.Interaction(n).HandlerMask & interactive) != 0 && (_scene.Flags(n) & NodeFlags.HoverWithin) == 0)
+            {
+                _scene.Flags(n) |= NodeFlags.HoverWithin; _scene.Mark(n, NodeFlags.PaintDirty);
+                // The pointer entered this container's subtree (possibly straight onto an interactive child) → keep its
+                // reveal-on-hover descendants driven, so the affordance does not require the leaf to be the row itself.
+                OnHoverChanged?.Invoke(n, true);
+            }
+        }
     }
 
     private void Notify(NodeFlags flag, NodeHandle node, bool on)
@@ -3252,13 +3543,18 @@ public sealed class InputDispatcher
             // CursorBit makes a node hover-resolvable in its own right (WinUI: SetCursor applies on direct hover of
             // any hit-testable element — XAML hit-testing is background-gated, not handler-gated), so an editing
             // surface's own padding/gaps still show its I-beam. Harmless for clicks: no handler ⇒ nothing fires.
-            // SelectableText/SpanLinks text leaves hit-test too (drag-select anchoring; hyperlink hover/click —
-            // WinUI's selectable/hyperlink text is hit-testable, RichTextBlock.cpp:2988-3001).
-            if ((flags & NodeFlags.Disabled) == 0 &&   // disabled nodes don't hit-test (gates click/pointer/drag/repeat)
-                (ii.HandlerMask & (InteractionInfo.ClickBit | InteractionInfo.PointerBit | InteractionInfo.PressedBit | InteractionInfo.DragBit | InteractionInfo.CursorBit | InteractionInfo.SelectableTextBit | InteractionInfo.SpanLinksBit | InteractionInfo.GestureBit)) != 0 &&
-                inside && !YieldsToPassThrough(node))
+            // SelectableText text leaves hit-test across their whole box (drag-select anchoring).
+            const int hitAnywhere = InteractionInfo.ClickBit | InteractionInfo.PointerBit | InteractionInfo.PressedBit
+                | InteractionInfo.DragBit | InteractionInfo.CursorBit | InteractionInfo.SelectableTextBit | InteractionInfo.GestureBit;
+            if ((flags & NodeFlags.Disabled) == 0 && inside && !YieldsToPassThrough(node))   // disabled nodes don't hit-test
             {
-                result = node;
+                if ((ii.HandlerMask & hitAnywhere) != 0)
+                    result = node;
+                // A SpanLinks-ONLY leaf (an inline hyperlink with no other interaction) is hit ONLY over a link RECT —
+                // the gaps around the link text fall through to the container beneath (the list row), so clicking the
+                // empty space next to an artist/album link selects the ROW (WinUI inline-Hyperlink hit shape).
+                else if ((ii.HandlerMask & InteractionInfo.SpanLinksBit) != 0 && HitLinkSpan(node, local) >= 0)
+                    result = node;
             }
         }
         return result;

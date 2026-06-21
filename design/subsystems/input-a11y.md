@@ -524,6 +524,23 @@ Recognized gestures emit their bubble events **only after the arena declares thi
 >    An OS engine cannot pass either gate. (Confined-to-`FluentGpu.Windows` Pal/ Win32 calls like `EnableMouseInPointer`
 >    are fine; an OS *animation/physics* engine in the hot integrator path is the rejected dependency.)
 
+> **Ratified (scroll WinUI-parity, Phase 3): manual-update DirectManipulation as an ADDITIVE, opt-in, Windows-only sample
+> source.** The two grounds above still **bind the default integrator** — it stays the deterministic, headless,
+> cross-platform scroll path, and every standing gate runs against it. They are *reconciled, not overturned*, for an
+> OPTIONAL Windows touch path behind the engine seam `IScrollSource` (POD/`NodeHandle`-only, TerraFX-free; the concrete
+> `Win32DmScrollSource` is confined to `FluentGpu.Windows`): (1) the **out-of-band-clock** ground is mechanically
+> NEUTRALIZED by running DM in **manual-update mode** (`DIRECTMANIPULATION_VIEWPORT_OPTIONS_MANUALUPDATE`; we never bind
+> `CLSID_DCompManipulationCompositor` and DM never gets a DComp visual) — we poll `IDirectManipulationUpdateManager::Update`
+> synchronously in the input pump, read the content transform, and re-apply it through the SAME `SetScrollOffset`
+> chokepoint, so `VirtualRangeDirty` still fires and the virtual re-realize is preserved; (2) the **no-headless-presence**
+> ground is NOT overturned — the DM layer is Windows-only and **opt-in** (`FG_DM_SCROLL=1`), **never** runs in the
+> headless tripwire, and the deterministic part of it (the transform→offset/band mapping, `DmScrollMath`) IS unit-tested
+> headlessly (`gate.scroll.dm-transform-maps`) while the live physics is touchscreen-manual. DM is a SAMPLE source only:
+> it owns **no GPU COM** (a UI-thread-confined COM domain distinct from the render-thread D3D12/DXGI/DComp ComPtr
+> monopoly, `threading-render-seam.md`), and `SetScrollOffset` stays the **sole clamp authority**. A precision touchpad
+> pan arrives as `WM_POINTERWHEEL` (not a DM-claimable touch contact), so it always rides the deterministic wheel path —
+> DM engages genuine touchscreen contacts only.
+
 > **Shipped Phase-1 subset (the arena lands later, §7A unchanged).** Phase 1 ships the **synchronous
 > single-recognizer** path only: one pan/tap recognizer in `Dispatch` (touch-down on a `Scrollable` anchors;
 > crossing the `SM_CXDRAG` slop claims the pan — kills the click candidate, routes `Pressed → PointerCancel` to

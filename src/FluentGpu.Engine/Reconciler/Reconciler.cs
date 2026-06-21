@@ -33,8 +33,22 @@ public sealed class TreeReconciler
     {
         public Element[]? Prev; public int PrevLen; public int PrevFirst; public VirtualListEl? El;
         public List<(Signal<int> Index, Element El)>? Slots;
+        // Cold-mount stagger (bound lists): while a freshly-mounted list's large initial window is being realized a few
+        // rows per frame (not all at once → the nav cold-mount spike), Warming is true. LastGrowEpoch caps the grow to
+        // ONE batch per frame (the host calls realize up to ~5x/frame: pre-layout + the 2-pass post-layout loop + the
+        // 2-pass scroll catch-up) so the spread is per-FRAME, not per-call.
+        public bool Warming; public int LastGrowEpoch = -1;
     }
     private readonly Dictionary<NodeHandle, VirtualEntry> _virtuals = new();
+
+    // Cold-realize stagger plumbing. FrameEpoch is bumped once per host Paint; ColdRealizeRowsPerFrame is the per-frame
+    // grow budget. _warmingCount is an O(1) census so the host can keep the loop awake until every list finishes warming.
+    private const int ColdRealizeRowsPerFrame = 4;
+    public int FrameEpoch;
+    private int _warmingCount;
+    /// <summary>True while any bound virtual list is still spreading its initial window across frames — the host ORs this
+    /// into its wake mask so the loop keeps running until the cold realize completes (it isn't a re-render or anim).</summary>
+    public bool HasWarmingVirtuals => _warmingCount > 0;
 
     // Context provider value signals, keyed by provider node index (a consumer resolves by walking ancestors).
     private readonly Dictionary<int, (object Channel, Signal<object?> Sig)> _providerSig = new();
@@ -104,6 +118,9 @@ public sealed class TreeReconciler
 
     /// <summary>Set by the host; injected into each component so animation hooks can seed tracks on their node.</summary>
     public AnimEngine? Anim { get; set; }
+    /// <summary>Set by the host; shared-element (connected-animation) registry. A node carrying <c>Element.MorphId</c> is
+    /// registered as a participant here so its art flies between routes (backdrop-effects-animation.md §5.4/§5.6).</summary>
+    public ConnectedAnimation? Connected { get; set; }
     /// <summary>Set by the host (→ ScrollAnimator.Arm); injected into each component so a control can arm a viewport for a
     /// smooth programmatic scroll (set Target, then phase 7 eases the offset toward it).</summary>
     public Action<FluentGpu.Foundation.NodeHandle>? ArmScroll { get; set; }
@@ -561,13 +578,25 @@ public sealed class TreeReconciler
             Element? desired = branch switch
             {
                 // Reduced motion ⇒ no exit-fade stamp (the swap snaps); the pulse + reveal already no-op under it.
+                // Content-owned reveal (SkelReveal.None): the shimmer must LINGER across the content's own per-row
+                // entrance (it draws behind the live tree, so a too-fast exit leaves an empty gap before the rows fade
+                // up). Floor the exit at the standard content-reveal duration so apps get the cross-dissolve for free —
+                // no hand-tuned ExitMs to match the list's row-add timing.
                 1 => Motion.ReducedMotion
                         ? SkeletonDeriver.Derive(se.ShimmerSource(), se.Style)
-                        : StampShimmerExit(SkeletonDeriver.Derive(se.ShimmerSource(), se.Style)),
+                        : StampShimmerExit(SkeletonDeriver.Derive(se.ShimmerSource(), se.Style),
+                            se.Reveal == SkelReveal.None ? Math.Max(se.Style.ExitMs, Expressive.Slow) : se.Style.ExitMs),
                 3 => se.OnFailed?.Invoke(),
                 _ => se.Content(),
             };
             ReconcileSingleChild(node, desired, lastEl);
+            // Inherit the active branch's layout participation (Grow/size) onto this transparent boundary — exactly like a
+            // component (ReconcileComponent) or KeepAlive (ReconcileKeepAlive) does. Without it the SkelRegion node keeps its
+            // default Grow=0, so a Grow=1 content subtree (e.g. a single-column virtualized list whose only intrinsic height
+            // is its chrome) can't fill its parent: the region collapses to the content's intrinsic size and a viewport-driven
+            // list realizes 0 rows (the empty-Liked bug). Large-intrinsic content (home shelves, a detail rail) masked it.
+            MirrorParticipation(node, _scene.FirstChild(node));
+            _scene.Mark(node, NodeFlags.LayoutDirty);
             _skelState[idx] = (branch, desired, se.Group);
 
             if (branch == 1 && Anim is { } a1)
@@ -596,13 +625,13 @@ public sealed class TreeReconciler
 
     // Stamp the derived shimmer ROOT with a fast Opacity+Blur EXIT terminal so the orphan-exit (Remove) cross-blurs it
     // out while the real content blur-reveals in (the two-layer cross-blur, same slot). Only a BoxEl root carries Animate.
-    private static Element StampShimmerExit(Element shimmerRoot)
+    private static Element StampShimmerExit(Element shimmerRoot, float exitMs)
         => shimmerRoot is BoxEl b
             ? b with
             {
                 Animate = new LayoutTransition(
                     TransitionChannels.Opacity,
-                    TransitionDynamics.Tween(Expressive.Fast, Easing.SmoothOut),
+                    TransitionDynamics.Tween(exitMs, Easing.SmoothOut),
                     Exit: new EnterExit(Opacity: 0f, Blur: Expressive.BlurMedium, Active: true)),
             }
             : shimmerRoot;
@@ -1070,7 +1099,20 @@ public sealed class TreeReconciler
         bool structural = false;
         int oldFirst = entry.PrevFirst, oldLast = entry.PrevFirst + entry.PrevLen;   // E11 lifecycle window delta
 
-        while (slots.Count < w)   // grow: the template runs ONCE per slot; its element tree is never rebuilt
+        // Cold-mount stagger: if filling this window needs MANY new slots (a fresh mount / hint→real grow, never a
+        // recycle — a scroll keeps slots.Count == w), realize at most ColdRealizeRowsPerFrame rows per FRAME so the
+        // initial window doesn't reconcile in one frame (the nav cold-mount spike). The scroll extent is computed from
+        // the FULL ItemCount (ContentExtent), independent of the realized window, so the scrollbar stays correct as rows
+        // fill in. A STEADY scroll realize (slots.Count already == w) is never capped — its leading edge must not lag.
+        if (!entry.Warming && ve.StaggerColdRealize && slots.Count + ColdRealizeRowsPerFrame < w) { entry.Warming = true; _warmingCount++; }
+        int target = w;
+        if (entry.Warming)
+        {
+            if (entry.LastGrowEpoch == FrameEpoch) target = slots.Count;   // already grew this frame → roll to next frame
+            else { target = Math.Min(w, slots.Count + ColdRealizeRowsPerFrame); entry.LastGrowEpoch = FrameEpoch; }
+        }
+
+        while (slots.Count < target)   // grow: the template runs ONCE per slot; its element tree is never rebuilt
         {
             var sig = new Signal<int>(first + slots.Count);
             Element el = rowBind(sig);
@@ -1089,29 +1131,48 @@ public sealed class TreeReconciler
             structural = true;
         }
 
-        for (int i = 0; i < w; i++)
+        // Walk the slot ROOT nodes (direct children of content, in slot order) alongside the rebind loop so a recycled
+        // slot can drop transient interaction state — the same reset the recycling window-diff does (ReconcileWindow,
+        // the Unmark at the recycle match). Without it a slot rebound under a STATIONARY pointer keeps the previous
+        // item's hover/press tint until the next pointer move.
+        // `mat` = rows actually materialized so far (== w once warmed). All downstream state keys off the MATERIALIZED
+        // count, never the uncapped target `w`, so a partially-realized window is internally consistent (rebind walk,
+        // PrevLen, LastRealized, focus/tab-stop). LastRealized = first + mat means NeedsRealize re-flags the still-short
+        // window next layout, and SlotRootForIndex correctly reports "not realized yet" for the not-yet-mounted tail.
+        int mat = Math.Min(slots.Count, w);
+        var slotRoot = _scene.FirstChild(content);
+        for (int i = 0; i < mat; i++)
         {
             var sig = slots[i].Index;
             int idx = first + i;
             int prevIdx = sig.Peek();
             if (prevIdx != idx)
             {
+                if (!slotRoot.IsNull)
+                    _scene.Unmark(slotRoot, NodeFlags.Hovered | NodeFlags.Pressed | NodeFlags.Focused | NodeFlags.FocusVisual);
                 sig.Value = idx;   // granular rebind — only this slot's bind effects re-run
                 ve.OnItemIndexChanged?.Invoke(prevIdx, idx);   // E11: a persistent bound slot moved indices
             }
+            if (!slotRoot.IsNull) slotRoot = _scene.NextSibling(slotRoot);
         }
 
-        bool moved = structural || first != entry.PrevFirst || w != entry.PrevLen;
+        bool moved = structural || first != entry.PrevFirst || mat != entry.PrevLen;
         entry.PrevFirst = first;
-        entry.PrevLen = w;
+        entry.PrevLen = mat;
         if (moved) _scene.Mark(content, NodeFlags.LayoutDirty);   // children are positioned by FirstRealized + order
         if (structural) _reconciled = true;
 
         ref ScrollState scw = ref _scene.ScrollRef(node);
-        scw.FirstRealized = first; scw.LastRealized = last;
-        _scene.Unmark(node, NodeFlags.VirtualRangeDirty);
+        scw.FirstRealized = first; scw.LastRealized = first + mat;
+        if (entry.Warming && mat < w)
+            _scene.Mark(node, NodeFlags.VirtualRangeDirty);   // stay dirty → next frame realizes the next batch
+        else
+        {
+            if (entry.Warming) { entry.Warming = false; _warmingCount--; }
+            _scene.Unmark(node, NodeFlags.VirtualRangeDirty);
+        }
 
-        FireWindowLifecycle(ve, oldFirst, oldLast, first, last);
+        FireWindowLifecycle(ve, oldFirst, oldLast, first, first + mat);
     }
 
     /// <summary>
@@ -1400,6 +1461,7 @@ public sealed class TreeReconciler
     {
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) UnmountSubtree(c);
 
+        Connected?.CaptureOnLeave(node, removeTag: true);   // shared-element: a tagged node leaving captures its reverse snapshot
         int idx = (int)node.Raw.Index;
         if (_keepAliveState.Remove(idx, out var kas))
         {
@@ -1421,10 +1483,14 @@ public sealed class TreeReconciler
         _forState.Remove(idx);
         if (_skelState.Remove(idx, out var sk) && sk.Group is { } skg) SkelGroupCoordinator.Unregister(skg, idx);
         if (_comps.Remove(node, out var e)) { e.Effect?.Dispose(); e.Comp.Unmount(); _live.Remove(e.Comp); _anchorOf.Remove(e.Comp); }
-        if (_virtuals.Remove(node, out var v) && v.Prev is not null)
+        if (_virtuals.Remove(node, out var v))
         {
-            Array.Clear(v.Prev, 0, v.PrevLen);
-            ArrayPool<Element>.Shared.Return(v.Prev);
+            if (v.Warming) _warmingCount--;   // a bound list unmounted mid-warm → keep the warming census exact
+            if (v.Prev is not null)
+            {
+                Array.Clear(v.Prev, 0, v.PrevLen);
+                ArrayPool<Element>.Shared.Return(v.Prev);
+            }
         }
     }
 
@@ -1445,6 +1511,10 @@ public sealed class TreeReconciler
 
     private void WriteColumns(NodeHandle node, Element el, bool isMount, Element? old = null)
     {
+        // Shared-element (connected-animation) tag: a node carrying MorphId is a Hero participant — its laid-out rect +
+        // art are tracked so they fly between routes. Runs for every element type (cover Image, skeleton/cover Box).
+        if (el.MorphId is { Length: > 0 } morphKey) Connected?.NoteTagged(node, morphKey);
+
         switch (el)
         {
             case BoxEl b:

@@ -27,6 +27,9 @@ public interface IPlaybackPlayer
 public interface IPlaybackState : System.ComponentModel.INotifyPropertyChanged
 {
     Track? CurrentTrack { get; }
+    /// <summary>The URI of the context currently playing (the playlist/album/liked uri) — what a card compares its own
+    /// uri against to show the now-playing equalizer. Null when nothing was started from a context.</summary>
+    string? ContextUri { get; }
     bool IsPlaying { get; }
     bool IsBuffering { get; }
     long PositionMs { get; }

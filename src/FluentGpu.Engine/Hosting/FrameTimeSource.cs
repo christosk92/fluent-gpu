@@ -5,6 +5,14 @@ namespace FluentGpu.Hosting;
 public interface IFrameTimeSource
 {
     float NextDeltaMs();
+
+    /// <summary>Drop the accumulated inter-frame delta so the NEXT <see cref="NextDeltaMs"/> returns ~one frame instead
+    /// of a stale gap. The host calls this when the loop steps from a THROTTLED/idle cadence (the ambient 30 Hz cap, or
+    /// a fully-blocked idle) up to display rate for interactive or one-shot motion. Without it the first active frame
+    /// inherits the whole throttle gap (clamped to 34 ms ≈ 2–4 display frames) and every animation — scroll, hover, a
+    /// connected-animation fly — LURCHES forward on frame 1 then glides: the "feels 24 fps then 120 fps" inconsistency.
+    /// No-op for the fixed/manual (headless/test) sources, whose cadence never changes.</summary>
+    void Resync() { }
 }
 
 public sealed class FixedFrameTimeSource(float stepMs = 16f) : IFrameTimeSource
@@ -46,4 +54,8 @@ public sealed class StopwatchFrameTimeSource : IFrameTimeSource
         // every transition to ≥~7 visible steps while still letting a 30 Hz display run essentially real-time.
         return Math.Clamp(dt, 0f, 34f);
     }
+
+    // Forget the last timestamp; the next NextDeltaMs() re-seeds and returns 0 (one no-advance frame), so a cadence
+    // step-up (ambient/idle → display rate) does not feed the stale gap into the animators. See IFrameTimeSource.Resync.
+    public void Resync() => _last = 0;
 }

@@ -106,12 +106,19 @@ public static class FakeData
     public static Playlist Playlist(int i, int trackCount = 40)
     {
         var s = Seed[i % Seed.Length];
-        // Editorial/made-for-you playlists (a "Spotify"-billed seed) carry NO per-track added-at/added-by — the detail
-        // page then hides those columns. A user playlist stamps a descending "added at" (newest first); some are
+        // Match the (name, owner, count) the home/sidebar PlaylistSummary advertises for THIS uri, so the detail page's
+        // pre-loaded header (cover/title/owner/count from the clicked card) does NOT get swapped for a different
+        // playlist when the full model loads. (Real backends are consistent for a uri; the fake catalog must be too.)
+        string? name = null; string? owner = null; int count = trackCount;
+        foreach (var p in PlaylistSeed) if (p.Seed == i) { name = p.Name; owner = p.Owner; count = p.Count; break; }
+        name ??= $"{s.Title} Mix";
+        owner ??= s.Artist == "Spotify" ? "Spotify" : "Christos";
+
+        // Editorial/made-for-you playlists (a "Spotify" owner) carry NO per-track added-at/added-by — the detail page
+        // then hides those columns. A user playlist stamps a descending "added at" (newest first); some are
         // collaborative (≥2 contributors), which is what makes the page reveal the Added-By column.
-        bool curated = s.Artist == "Spotify";
-        string owner = curated ? "Spotify" : "Christos";
-        var tracks = Tracks(trackCount, i * 100);
+        bool curated = owner == "Spotify";
+        var tracks = Tracks(count, i * 100);
         if (!curated)
         {
             bool collab = i % 3 == 1;
@@ -122,12 +129,35 @@ public static class FakeData
                 stamped[t] = tracks[t] with { AddedAt = now.AddDays(-(t * 2L + (i % 5))), AddedBy = people[t % people.Length] };
             tracks = stamped;
         }
-        return new Playlist($"pl{i}", $"spotify:playlist:pl{i}", $"{s.Title} Mix", $"The best of {s.Artist} and friends.",
+        return new Playlist($"pl{i}", $"spotify:playlist:pl{i}", name, $"The best of {s.Artist} and friends.",
             owner, Cover(i + 100, 300), tracks.Length, tracks);
     }
 
     /// <summary>The big list (Liked Songs) — generated on demand so 50k stays cheap.</summary>
     public static Track[] LikedSongs(int count = 5000) => Tracks(count, 1000);
+
+    /// <summary>The trailing numeric id of a <c>spotify:kind:xx{n}</c> uri (the same parse <see cref="FakeSource"/>
+    /// uses to resolve a synthetic detail page) — so a context resolves to the IDENTICAL deterministic track list.</summary>
+    public static int IndexFromUri(string uri)
+    {
+        int colon = uri.LastIndexOf(':');
+        var tail = colon >= 0 ? uri[(colon + 1)..] : uri;
+        int i = 0;
+        foreach (char c in tail) if (char.IsDigit(c)) i = i * 10 + (c - '0');
+        return i;
+    }
+
+    /// <summary>Resolve a context uri (album / playlist / liked-songs) to ITS ordered track list — the same catalog the
+    /// detail page loads, so playing a context at a start index plays the ACTUAL track that row shows. Empty for an
+    /// unknown context.</summary>
+    public static IReadOnlyList<Track> ContextTracks(string? contextUri)
+    {
+        if (string.IsNullOrEmpty(contextUri)) return Array.Empty<Track>();
+        if (contextUri == "spotify:collection:tracks") return LikedSongs(161);
+        if (contextUri.StartsWith("spotify:album:", StringComparison.Ordinal)) return Album(IndexFromUri(contextUri)).Tracks ?? Array.Empty<Track>();
+        if (contextUri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) return Playlist(IndexFromUri(contextUri)).Tracks ?? Array.Empty<Track>();
+        return Array.Empty<Track>();
+    }
 
     // ── Sidebar IA: the "Your Library" counts + the (folder-capable) playlist tree ───────────────────────────────────
     /// <summary>The Your-Library badge counts shown in the sidebar.</summary>

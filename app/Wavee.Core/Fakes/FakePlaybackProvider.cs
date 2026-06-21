@@ -15,6 +15,10 @@ public sealed class FakePlaybackProvider : IPlaybackPlayer, IPlaybackState, ILyr
     readonly List<QueueEntry> _queue = [.. FakeData.DefaultQueue()];
     int _cursor;
 
+    /// <summary>Simulated audio-resolve / buffering latency before a freshly-started track begins to play — the row's
+    /// #-cell spinner and the player-bar activity sweep show for this long, then playback starts.</summary>
+    const int BufferingMs = 700;
+
     public FakePlaybackProvider()
     {
         var first = _queue[0].Track;
@@ -27,6 +31,7 @@ public sealed class FakePlaybackProvider : IPlaybackPlayer, IPlaybackState, ILyr
 
     // ── IPlaybackState ──────────────────────────────────────────────────────────────────────────────────────────────
     public Track? CurrentTrack { get; private set; }
+    public string? ContextUri { get; private set; }
     public bool IsPlaying { get; private set; }
     public bool IsBuffering { get; private set; }
     public long PositionMs { get; private set; }
@@ -43,7 +48,21 @@ public sealed class FakePlaybackProvider : IPlaybackPlayer, IPlaybackState, ILyr
     public IPlaybackState State => this;
 
     // ── IPlaybackPlayer (commands) ──────────────────────────────────────────────────────────────────────────────────
-    public Task PlayAsync(string contextUri, int startIndex = 0, CancellationToken ct = default) { _cursor = Math.Clamp(startIndex, 0, _queue.Count - 1); Load(_queue[_cursor].Track); IsPlaying = true; Bump(); return Task.CompletedTask; }
+    public async Task PlayAsync(string contextUri, int startIndex = 0, CancellationToken ct = default)
+    {
+        // Resolve the context to ITS ordered track list (the same deterministic catalog the detail page loads) and
+        // replace the queue with it, so we start the ACTUAL track the clicked row shows (startIndex into THIS context),
+        // not a fixed default queue. Next/Previous then walk this context.
+        var tracks = FakeData.ContextTracks(contextUri);
+        if (tracks.Count == 0) return;
+        ContextUri = contextUri;          // the now-playing context (cards compare their uri to this)
+        _queue.Clear();
+        for (int i = 0; i < tracks.Count; i++)
+            _queue.Add(new QueueEntry("q" + i, tracks[i], i == 0 ? QueueBucket.NowPlaying : QueueBucket.NextUp, false));
+        Queue = _queue.ToArray();
+        _cursor = Math.Clamp(startIndex, 0, _queue.Count - 1);
+        await StartWithBufferingAsync(_queue[_cursor].Track, ct).ConfigureAwait(false);
+    }
     public Task PlayTrackAsync(string trackUri, CancellationToken ct = default) { IsPlaying = true; Bump(); return Task.CompletedTask; }
     public Task PauseAsync(CancellationToken ct = default) { IsPlaying = false; Bump(); return Task.CompletedTask; }
     public Task ResumeAsync(CancellationToken ct = default) { IsPlaying = true; Bump(); return Task.CompletedTask; }
@@ -82,6 +101,21 @@ public sealed class FakePlaybackProvider : IPlaybackPlayer, IPlaybackState, ILyr
         PositionMs = 0;
         Palette = FakeData.PaletteFor(Math.Abs(t.Id.GetHashCode()));
         _ticks.OnNext(0);
+    }
+
+    /// <summary>Switch to <paramref name="t"/> and show buffering, wait a simulated resolve latency, then start playing
+    /// — unless a newer Play superseded us in the meantime (the current track changed, or the run was cancelled).</summary>
+    async Task StartWithBufferingAsync(Track t, CancellationToken ct)
+    {
+        Load(t);
+        IsBuffering = true;
+        IsPlaying = true;
+        Bump();                                  // the bar shows the new track + the activity sweep; the row keeps its spinner
+        try { await Task.Delay(BufferingMs, ct).ConfigureAwait(false); }
+        catch (OperationCanceledException) { return; }
+        if (ct.IsCancellationRequested || CurrentTrack?.Id != t.Id) return;   // a newer Play took over → don't clobber it
+        IsBuffering = false;
+        Bump();
     }
 
     void Bump()

@@ -1,4 +1,6 @@
 using FluentGpu.Foundation;
+using FluentGpu.Animation;
+using FluentGpu.Scene;
 
 namespace FluentGpu.Pal;
 
@@ -44,9 +46,14 @@ public readonly record struct TitleBarRegion(RectF RectDip, TitleBarHit Hit);
 
 /// <summary>
 /// POD input event drained from the host-owned ring once per frame (no C# events across the seam).
-/// <paramref name="ScrollDelta"/> (Wheel only) is the VERTICAL wheel in DIP, oriented so positive = scroll toward the
-/// content end (offset increases); <paramref name="ScrollDeltaX"/> is the HORIZONTAL wheel (WM_POINTERHWHEEL / trackpad
-/// two-finger horizontal), same DIP + sign convention on the X axis. The platform pump converts notches → DIP per axis.
+/// <paramref name="ScrollDelta"/> (Wheel only) is the VERTICAL wheel in DIP for ELEMENT-level handlers (PointerWheel),
+/// oriented so positive = scroll toward the content end (offset increases); <paramref name="ScrollDeltaX"/> is the
+/// HORIZONTAL wheel (WM_POINTERHWHEEL / trackpad two-finger horizontal), same DIP + sign convention on the X axis.
+/// <paramref name="WheelNotch"/>/<paramref name="WheelNotchX"/> carry the raw DEVICE notch count (signed, rawAmount/120,
+/// viewport-independent). A <see cref="PointerKind.Mouse"/> viewport wheel applies the WinUI fallback distance
+/// max(48 DIP, 15%·viewport) per notch. A <see cref="PointerKind.Touchpad"/> uses the calibrated DIP deltas directly,
+/// tracks content synchronously, and measures the packet stream for its kinetic tail. A synthetic event that sets only
+/// <paramref name="ScrollDelta"/> scrolls that DIP directly.
 /// <paramref name="Button"/>: 0 = left, 1 = right, 2 = middle. <paramref name="Mods"/> is the modifier chord at the
 /// time of the event (pump-captured); <paramref name="IsRepeat"/> = keyboard auto-repeat (lParam bit 30);
 /// <paramref name="TimestampMs"/> = the platform message time (drives double/triple-click detection in the dispatcher).
@@ -58,7 +65,9 @@ public readonly record struct InputEvent(
     InputKind Kind, Point2 PositionPx, int Button, int KeyCode, float ScrollDelta = 0f,
     KeyModifiers Mods = KeyModifiers.None, PointerKind Pointer = PointerKind.Mouse,
     bool IsRepeat = false, uint TimestampMs = 0, uint PointerId = 0, float Pressure = 1f,
-    float ScrollDeltaX = 0f);   // trailing-optional (mouse call sites unchanged); the HORIZONTAL wheel delta (DIP)
+    float ScrollDeltaX = 0f,    // trailing-optional (mouse call sites unchanged); the HORIZONTAL wheel delta (DIP)
+    float WheelNotch = 0f,      // VERTICAL wheel device notch count (signed; rawAmount/120) — viewport-independent
+    float WheelNotchX = 0f);    // HORIZONTAL wheel device notch count (signed); the dispatcher scales notch → DIP
 
 /// <summary>
 /// Drained by the host each frame (drain-to-empty, single contiguous span — <c>AppHost.RunFrame</c> Clears, the window
@@ -106,9 +115,11 @@ public sealed class InputEventRing
         if (e.Kind == InputKind.Wheel && _count > 0)
         {
             ref InputEvent prev = ref _buf[_count - 1];
-            if (prev.Kind == InputKind.Wheel && prev.PositionPx.Equals(e.PositionPx))
+            if (prev.Kind == InputKind.Wheel && prev.Pointer == e.Pointer && prev.PositionPx.Equals(e.PositionPx))
             {
-                prev = prev with { ScrollDelta = prev.ScrollDelta + e.ScrollDelta, ScrollDeltaX = prev.ScrollDeltaX + e.ScrollDeltaX };
+                prev = prev with { ScrollDelta = prev.ScrollDelta + e.ScrollDelta, ScrollDeltaX = prev.ScrollDeltaX + e.ScrollDeltaX,
+                                   WheelNotch = prev.WheelNotch + e.WheelNotch, WheelNotchX = prev.WheelNotchX + e.WheelNotchX,
+                                   TimestampMs = e.TimestampMs, PointerId = e.PointerId };
                 return;
             }
         }
@@ -306,6 +317,13 @@ public interface IPlatformWindow : IDisposable
     /// <see cref="WaitForWork"/> already returns immediately, so the next loop iteration drains the post anyway).
     /// </summary>
     void Wake() { }
+
+    /// <summary>Create the platform's OS-manipulation scroll source (Windows DirectManipulation in manual-update mode),
+    /// or <c>null</c> = the deterministic integrator only (headless / non-Windows — the default). The returned source
+    /// consumes OS position/velocity/inertia in the input pump and re-applies it through <paramref name="host"/>'s clamp
+    /// chokepoint each frame; it owns NO GPU COM (D3D12/DXGI/DComp) and never touches the swapchain. Same defaulted-no-op
+    /// seam pattern as <see cref="Wake"/> / <see cref="SetTitleBarRegions"/>.</summary>
+    IScrollSource? CreateScrollSource(IScrollHost host) => null;
 
     /// <summary>
     /// Invoked by the platform when the OS demands an immediate repaint *outside* the app's frame loop —

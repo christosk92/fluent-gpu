@@ -120,6 +120,17 @@ public sealed class ItemsView : Component
     public int ItemCount = -1;
     /// <summary>The item CONTENT template (wrapped in an <see cref="ItemContainer"/> per item).</summary>
     public Func<int, Element>? ItemTemplate;
+    /// <summary>The SIGNALS-FIRST bound row template (<see cref="CreateBound"/>): the row is built ONCE per slot from a
+    /// <see cref="RowScope"/> of per-row read-signals, then recycled by a signal write (no rebuild, no remount, so a
+    /// row containing a Component/Marquee/bound leaf never replays its Enter transition). Mutually exclusive with
+    /// <see cref="ItemTemplate"/>/<see cref="ContainerFactory"/>; gated by <see cref="BoundMode"/>.</summary>
+    public Func<RowScope, Element>? RowTemplate;
+    /// <summary>True ⇒ the bound realize path (<see cref="RowTemplate"/> + <see cref="VirtualListEl.RowBind"/>): rows are
+    /// persistent slots; selection/current/now-playing re-skin in place via per-row binds, never a list re-render.</summary>
+    public bool BoundMode;
+    /// <summary>Opt-in cold-mount stagger for the bound realize path (see <see cref="VirtualListEl.StaggerColdRealize"/>):
+    /// a heavy list realizes its initial window a few rows/frame instead of all at once, killing the mount spike.</summary>
+    public bool StaggerColdRealize;
     /// <summary>Typeahead text per item (defaults to <see cref="Items"/> when it backs the view).</summary>
     public Func<int, string>? ItemText;
     /// <summary>Per-item enabled gate (disabled items dim to 0.3 and don't interact).</summary>
@@ -252,6 +263,56 @@ public sealed class ItemsView : Component
             PartDelta = partDelta,
         });
 
+    /// <summary>The SIGNALS-FIRST bound factory: the same WinUI ItemsView substrate (selection model, keyboard nav,
+    /// typeahead, invoke, controller, reorder) but rows are PERSISTENT bound slots instead of a rebuilt-per-index
+    /// template. <paramref name="rowTemplate"/> is invoked ONCE per visible slot with a <see cref="RowScope"/> (the
+    /// index SIGNAL + reactive IsSelected/IsCurrent/IsEnabled predicates + the interaction/focus callbacks) and must
+    /// return the COMPLETE slot root — express everything that varies by index as a bind that reads the scope, and wrap
+    /// content in <see cref="SelectorVisualsBound"/> chrome (or a custom skin). Scrolling/selection/now-playing then
+    /// re-skin in place via signal writes — no list re-render, no row rebuild, no Enter-transition replay. Requires a
+    /// VIRTUAL layout (Stack/Grid/Custom); the small-collection Wrap/Inline fallback has no bound path.</summary>
+    public static Element CreateBound(int itemCount, Func<RowScope, Element> rowTemplate, RepeatLayout layout,
+                                      ItemsSelectionMode selectionMode = ItemsSelectionMode.Single,
+                                      SelectionModel? selection = null,
+                                      bool isItemInvokedEnabled = false,
+                                      Action<int>? itemInvoked = null,
+                                      Action? selectionChanged = null,
+                                      Func<int, string>? itemText = null,
+                                      Func<int, bool>? isItemEnabled = null,
+                                      ItemsViewController? controller = null,
+                                      int overscan = 4,
+                                      float grow = 1f,
+                                      Func<int, (float, float)>? itemDisplacement = null,
+                                      IReadSignal<int>? displacementVersion = null,
+                                      IReadSignal<int>? draggedSlot = null,
+                                      bool suppressScrollBar = false,
+                                      bool autoEdgeFade = false,
+                                      bool staggerColdRealize = false)
+        => Embed.Comp(() => new ItemsView
+        {
+            ItemCount = itemCount,
+            RowTemplate = rowTemplate,
+            BoundMode = true,
+            StaggerColdRealize = staggerColdRealize,
+            Layout = layout,
+            HasExplicitLayout = true,
+            SelectionMode = selectionMode,
+            Selection = selection,
+            IsItemInvokedEnabled = isItemInvokedEnabled,
+            ItemInvoked = itemInvoked,
+            SelectionChanged = selectionChanged,
+            ItemText = itemText,
+            IsItemEnabled = isItemEnabled,
+            Controller = controller,
+            OverscanItems = overscan,
+            Grow = grow,
+            SuppressScrollBar = suppressScrollBar,
+            AutoEdgeFade = autoEdgeFade,
+            ItemDisplacement = itemDisplacement,
+            DisplacementVersion = displacementVersion,
+            DraggedSlot = draggedSlot,
+        });
+
     // ── built-in presets (the former ListView/GridView controls, folded onto ItemsView) ──────────────
     // ItemsView.List(...) and ItemsView.Grid(...) are the built-in presets backed by the internal hook-bearing
     // components ItemsViewListPreset / ItemsViewGridPreset (the substrate needs hooks — UseMemo/UseSignal/UseRef/
@@ -315,12 +376,17 @@ public sealed class ItemsView : Component
         var typeBuffer = UseRef(new System.Text.StringBuilder());
         var typeLastMs = UseRef(0L);
         var pendingFocus = UseRef(-1);
+        var lastTabStop = UseRef(-1);                      // bound mode: the index currently holding the roving tab stop
 
         var model = Selection ?? ownModel;
         int count = ItemCount >= 0 ? ItemCount : Items.Count;
         model.ItemCount = count;
         model.Mode = SelectionMode;
-        _ = model.Version.Value;                           // subscribe — a selection change re-skins just this window
+        // RenderItem mode re-skins selection by re-rendering this window (the container template reads IsSelected at
+        // build time), so it subscribes to Version. BOUND mode does NOT: each persistent row owns a bind that reads the
+        // model directly (RowScope.IsSelected), so a programmatic selection change re-skins those rows with no ItemsView
+        // re-render at all (0-alloc) — subscribing here would force a wasteful whole-window re-render per selection.
+        if (!BoundMode) _ = model.Version.Value;           // subscribe — a selection change re-skins just this window
         int cur = current.Value;                           // subscribe — current moves re-render (focus visuals)
         int dispVer = DisplacementVersion?.Value ?? 0;     // subscribe — reorder drag-delta/dwell re-seeds displacement
                                                            //   (crosses the frozen-ComponentEl boundary; the only re-render trigger here)
@@ -439,21 +505,20 @@ public sealed class ItemsView : Component
             Context.RequestRerender();
         }
 
-        // Keyboard focus the REALIZED container for an index: ord = index − FirstRealized → the ord-th window child.
-        // Non-virtual hosts (Wrap/Inline fallback) have no scroll state: every container is a direct child of the
-        // captured host box, so ord == index.
-        void FocusIndex(int index, bool visual)
+        // The REALIZED container node for an index: ord = index − FirstRealized → the ord-th window child (Null when not
+        // realized). Non-virtual hosts (Wrap/Inline fallback) have no scroll state: every container is a direct child of
+        // the captured host box, so ord == index. Shared by FocusIndex and the bound-mode roving tab stop.
+        NodeHandle SlotRootForIndex(int index)
         {
-            var focusNode = hooks.FocusNode;
-            if (sceneRef is null || focusNode is null) return;
+            if (sceneRef is null) return NodeHandle.Null;
             var vp = viewportNode.Value;
-            if (vp.IsNull || !sceneRef.IsLive(vp)) return;
+            if (vp.IsNull || !sceneRef.IsLive(vp)) return NodeHandle.Null;
             NodeHandle first;
             int ord;
             if (sceneRef.TryGetScroll(vp, out var sc))
             {
                 ord = index - sc.FirstRealized;
-                if (ord < 0 || index >= sc.LastRealized) return;
+                if (ord < 0 || index >= sc.LastRealized) return NodeHandle.Null;
                 first = sceneRef.FirstChild(sc.ContentNode);
             }
             else
@@ -463,7 +528,29 @@ public sealed class ItemsView : Component
             }
             var n = first;
             for (int k = 0; k < ord && !n.IsNull; k++) n = sceneRef.NextSibling(n);
-            if (!n.IsNull && sceneRef.IsLive(n)) focusNode(n, visual);
+            return !n.IsNull && sceneRef.IsLive(n) ? n : NodeHandle.Null;
+        }
+
+        // Keyboard focus the REALIZED container for an index (focus lands regardless of the Focusable flag — SetFocus
+        // gates only on Disabled — so the bound roving tab stop's cleared Focusable on non-current rows is no obstacle).
+        void FocusIndex(int index, bool visual)
+        {
+            var focusNode = hooks.FocusNode;
+            if (focusNode is null) return;
+            var n = SlotRootForIndex(index);
+            if (!n.IsNull) focusNode(n, visual);
+        }
+
+        // Bound mode roving SINGLE tab stop (TabNavigation="Once"): the slot roots are built Focusable=false, so the tab
+        // WALK skips them; this moves the one tab stop to the keyboard-current slot by toggling its scene focusability
+        // flags IN PLACE — no re-render, mirroring the WriteColumns mirror (Reconciler: ii.Focusable ⇄ NodeFlags.Focusable).
+        void SetSlotTabStop(int index, bool on)
+        {
+            if (sceneRef is null) return;
+            var n = SlotRootForIndex(index);
+            if (n.IsNull) return;
+            sceneRef.Interaction(n).Focusable = on;
+            if (on) sceneRef.Mark(n, NodeFlags.Focusable); else sceneRef.Unmark(n, NodeFlags.Focusable);
         }
 
         // Edge auto-scroll seam (drag reorder near the viewport edge): nudge Offset/Target by a clamped delta.
@@ -734,6 +821,25 @@ public sealed class ItemsView : Component
             if (target >= 0) { pendingFocus.Value = -1; FocusIndex(target, visual: true); }
         }, cur);
 
+        // Bound mode: move the single roving tab stop to the keyboard-current slot IN PLACE (no re-render). RenderItem
+        // mode bakes the tab stop into each container via isTabStop at build time; bound slots are built once, so the
+        // stop is moved imperatively by toggling the old/new current slot's focusability flags post-layout.
+        UseLayoutEffect(() =>
+        {
+            if (!BoundMode) return;
+            // The roving stop follows the keyboard-current item; with none yet, fall back so Tab can still ENTER the list
+            // (the selected item in Single mode — the GettingFocus redirect — else the first item, realized at the top on
+            // a fresh mount). An off-screen fallback simply finds no realized node and no-ops.
+            int stop = cur >= 0 ? cur
+                     : count == 0 ? -1
+                     : SelectionMode == ItemsSelectionMode.Single && model.FirstSelectedIndex >= 0 ? model.FirstSelectedIndex : 0;
+            int old = lastTabStop.Value;
+            if (old == stop) return;
+            if (old >= 0) SetSlotTabStop(old, false);
+            if (stop >= 0) SetSlotTabStop(stop, true);
+            lastTabStop.Value = stop;
+        }, cur);
+
         // ── reorder displacement seed (the WinUI "siblings part to make room" over the positional recycler) ──────────
         // Edge-triggered on DisplacementVersion (NOT per frame): the owner bumps it on each drag-delta/dwell-commit — the
         // WinUI MoveItemsForLiveReorder-on-timer cadence. The effect walks the REALIZED window and seeds each row's
@@ -878,7 +984,44 @@ public sealed class ItemsView : Component
             ? Repeater.WrapTransition(containerTemplate, tr.ToSpec())
             : containerTemplate;
 
-        Element itemsHost = layout is not null
+        // Bound (signals-first) realize: build the row ONCE per slot from a RowScope of per-row read-signals (the index
+        // SIGNAL + IsSelected/IsCurrent/IsEnabled predicates + the interaction/focus callbacks). A recycle/selection is
+        // then a signal write into existing slots — no row rebuild, no remount, no Enter replay (the flash fix).
+        Func<IReadSignal<int>, Element>? rowBind = null;
+        if (BoundMode && RowTemplate is { } rowTpl)
+        {
+            rowBind = index =>
+            {
+                // Created ONCE per slot (RealizeBoundWindow invokes rowBind only while growing slots), retained by the
+                // slot's bind effects, disposed with the slot. The predicates read model.Version/current + the index
+                // signal, so a selection/current change OR a recycle re-fires exactly the binds that read them — with
+                // NO Memo (Memo.OnStale propagates eagerly, so it adds no dedup over a thunk, only lifetime coupling).
+                Func<bool> isSelected = () => { _ = model.Version.Value; return model.IsSelected(index.Value); };
+                Func<bool> isCurrent = () => current.Value == index.Value;
+                Func<bool> isEnabled = IsItemEnabled is null ? static () => true : () => IsItemEnabled(index.Value);
+                Action<ItemContainerTrigger, KeyModifiers> interact = (t, m) => OnItemInteraction(index.Value, t, m);
+                Action<bool> focusChanged = got => { if (got && current.Peek() != index.Value) current.Value = index.Value; };
+                return rowTpl(new RowScope(index, isSelected, isCurrent, isEnabled, interact, focusChanged));
+            };
+        }
+
+        Element itemsHost = rowBind is not null && layout is not null
+            // Bound slots: the RowBind path (RealizeBoundWindow) — persistent rows, recycle by index-signal write.
+            ? new VirtualListEl
+            {
+                ItemCount = count,
+                Layout = layout,
+                RowBind = rowBind,
+                StaggerColdRealize = StaggerColdRealize,
+                Overscan = OverscanItems,
+                Horizontal = horizontal,
+                EdgeCues = EdgeCues,
+                AutoEdgeFade = AutoEdgeFade,
+                SuppressScrollBar = SuppressScrollBar,
+                Grow = Grow,
+                OnRealized = h => viewportNode.Value = h,
+            }
+            : layout is not null
             ? new VirtualListEl
             {
                 ItemCount = count,

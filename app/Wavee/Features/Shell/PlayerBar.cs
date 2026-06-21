@@ -165,12 +165,13 @@ sealed class PlayerBarContent : Component
         // Hooks FIRST (stable call order — rule #7), before any early return.
         var b = UseContext(PlaybackBridge.Slot);
         var (liked, setLiked) = UseState(false);
+        var titleHover = UseSignal(false);           // hover the now-playing text → BOTH lines scroll together (synced); idle = static + edge fade
         var L = _layout.Value;                       // coarse breakpoint signal; does NOT change for every resize pixel
         if (DiagEnabled)
             Console.Error.WriteLine($"[WAVEE_PLAYERBAR_DIAG] render #{++s_renderCount} band={L.Band}");
 
         if (b is null)
-            return new BoxEl { Height = WaveeSize.PlayerBarH, Fill = WaveeColors.Toolbar };
+            return new BoxEl { Height = WaveeSize.PlayerBarH, Fill = WaveeColors.PlayerBar };
 
         // ── state derivation (low-frequency signals only) ──────────────────────────────────────────
         var track = b.CurrentTrack.Value;
@@ -223,18 +224,28 @@ sealed class PlayerBarContent : Component
         // Marquee is an autonomous component, so a parent re-render does not push new constructor args into it — the
         // thunk (captured once, reading the stable bridge's signals) is what keeps the inner TextEl re-measuring and
         // repainting as the track changes. Passing the strings directly would freeze them at the first-mount value.
+        // Both lines scroll only on hover (TriggerMode.Hover) and share ONE gate (titleHover) driven by the meta column
+        // below — so they start together and stay phase-locked (CycleMs), instead of each toggling under its own line.
+        // The edge fade is unaffected: a right-edge "there's more" cue at rest, both edges while scrolling.
         var metaKids = new List<Element>(2)
         {
             Marquee.Of(Prop.Of(() => NowPlaying(b).Title),
-                new Marquee.Style { FontSize = 14f, Weight = 700, Foreground = Prop.Of(() => NowPlaying(b).Color), CycleMs = MarqueeCycleMs }),
+                new Marquee.Style { FontSize = 14f, Weight = 700, Foreground = Prop.Of(() => NowPlaying(b).Color), CycleMs = MarqueeCycleMs, Trigger = Marquee.TriggerMode.Hover },
+                scrollWhen: titleHover),
         };
         if (showSubtitle)
-            metaKids.Add(Marquee.Of(Prop.Of(() => NowPlayingSubtitle(b)), new Marquee.Style { FontSize = 12f, Foreground = Tok.TextSecondary, CycleMs = MarqueeCycleMs }));
+            metaKids.Add(Marquee.Of(Prop.Of(() => NowPlayingSubtitle(b)),
+                new Marquee.Style { FontSize = 12f, Foreground = Tok.TextSecondary, CycleMs = MarqueeCycleMs, Trigger = Marquee.TriggerMode.Hover },
+                scrollWhen: titleHover));
 
         var metaCol = new BoxEl
         {
             Key = "meta", Animate = MoveMotion,
             Direction = 1, Grow = 1f, Shrink = 1f, Gap = 2f, Justify = FlexJustify.Center, ClipToBounds = true,
+            // The shared hover target: the inner marquees no longer self-hover (they read titleHover), so this column is
+            // the deepest pointer target over the now-playing text → hovering anywhere on it scrolls both lines.
+            OnHoverMove = _ => { if (!titleHover.Peek()) titleHover.Value = true; },
+            OnPointerExit = () => { if (titleHover.Peek()) titleHover.Value = false; },
             Children = metaKids.ToArray(),
         };
 
@@ -380,7 +391,7 @@ sealed class PlayerBarContent : Component
 
         return new BoxEl
         {
-            Direction = 1, Height = WaveeSize.PlayerBarH, Fill = WaveeColors.Toolbar, ClipToBounds = true,
+            Direction = 1, Height = WaveeSize.PlayerBarH, Fill = WaveeColors.PlayerBar, ClipToBounds = true,
             Children = [topEdge, row],
         };
     }

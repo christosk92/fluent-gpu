@@ -13,7 +13,15 @@ public enum KeyModifiers : byte
 
 /// <summary>The physical pointer device class an event came from (WinUI PointerDeviceType) — controls touch-vs-mouse
 /// behavioral splits (RatingControl hover scale, touch paddings).</summary>
-public enum PointerKind : byte { Mouse = 0, Touch = 1, Pen = 2 }
+public enum PointerKind : byte
+{
+    Mouse = 0,
+    Touch = 1,
+    Pen = 2,
+    /// <summary>Windows precision touchpad (<c>POINTER_INPUT_TYPE.PT_TOUCHPAD</c>); kept distinct from a mouse wheel so
+    /// its high-resolution packet stream can track content directly and hand measured velocity to the kinetic tail.</summary>
+    Touchpad = 3,
+}
 
 /// <summary>
 /// The public gesture taxonomy the <c>UseGesture</c> hook (input-a11y.md §13) declares against — the app-facing

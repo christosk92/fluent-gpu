@@ -59,8 +59,13 @@ public static class Marquee
     /// (e.g. a now-playing title). The text is forwarded to the inner <c>TextEl.Text</c>, whose bind re-measures and
     /// re-scrolls on change; a static string never subscribes. (A frozen constructor arg would NOT update — components
     /// are autonomous; reactive data crosses through the Prop, not the factory closure.)</para></summary>
-    public static Element Of(Prop<string> text, Style? style = null)
-        => Embed.Comp(() => new MarqueeHost { Text = text, Sty = style ?? Default });
+    /// <param name="scrollWhen">An OPTIONAL external "scroll now" gate (used with <see cref="TriggerMode.Hover"/>):
+    /// when supplied the marquee scrolls while this signal is true and does NOT wire its own self-hover — so a GROUP of
+    /// marquees (a now-playing title + subtitle) can be driven by ONE shared hover over their common area and stay in
+    /// sync, instead of each toggling only when the pointer is over its own line. Null = self-hover (Hover) / always
+    /// (Always), unchanged. The edge fade is unaffected either way (right-edge cue at rest, both edges while scrolling).</param>
+    public static Element Of(Prop<string> text, Style? style = null, IReadSignal<bool>? scrollWhen = null)
+        => Embed.Comp(() => new MarqueeHost { Text = text, Sty = style ?? Default, External = scrollWhen });
 }
 
 /// <summary>The clip + edge-fade frame (and the optional self-hover trigger). The moving content is a child
@@ -72,12 +77,17 @@ internal sealed class MarqueeHost : Component
 {
     public Prop<string> Text = string.Empty;
     public Marquee.Style Sty = Marquee.Default;
+    public IReadSignal<bool>? External;     // an external "scroll now" gate (a shared group hover) — replaces self-hover
 
     public override Element Render()
     {
         var containerW = UseSignal(0f);     // set from this node's bounds
         var textW = UseSignal(0f);          // set by the child after it measures one copy
-        var hovered = UseSignal(false);     // set by self-hover (Trigger.Hover only)
+        var hovered = UseSignal(false);     // scroll gate: self-hover (Trigger.Hover), or mirrored from External below
+
+        // An external gate (a group's shared hover) drives the SAME `hovered` signal both this host and the scroller
+        // read — so the rest of the logic is untouched and self-hover is skipped (see selfHover). No-op when unset.
+        UseSignalEffect(() => { if (External is { } ext) { bool v = ext.Value; if (hovered.Peek() != v) hovered.Value = v; } });
 
         float cw = containerW.Value, tw = textW.Value;
         bool overflow = tw > cw + 1f && cw > 0f;
@@ -88,7 +98,7 @@ internal sealed class MarqueeHost : Component
             : scrolling ? new EdgeFadeSpec(EdgeMask.Horizontal, Sty.FadeBand, FadeFalloff.Smoothstep, Sty.FadeStrength)
                         : new EdgeFadeSpec(EdgeMask.Right, Sty.FadeBand, FadeFalloff.Smoothstep, Sty.FadeStrength);
 
-        bool selfHover = Sty.Trigger == Marquee.TriggerMode.Hover;
+        bool selfHover = Sty.Trigger == Marquee.TriggerMode.Hover && External is null;
 
         return new BoxEl
         {

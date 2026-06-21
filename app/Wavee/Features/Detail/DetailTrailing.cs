@@ -125,9 +125,9 @@ static class DetailTrailing
         [
             PagedShelf.Create(
                 pls.Count,
-                cardAt: (i, w) => MediaCard.Shelf(pls[i].Cover, pls[i].Name, pls[i].OwnerName,
+                cardAt: (i, w) => MediaCard.Shelf(pls[i].Cover, pls[i].Name, pls[i].OwnerName, pls[i].Uri,
                     () => h.Go("pl:" + pls[i].Uri, pls[i].Name), () => h.PlayContext(pls[i].Uri), w),
-                cardHeight: MediaCard.ShelfHeight,
+                measured: true,
                 header: WaveeType.RailHeader(Loc.Get(Strings.Detail.FeaturedOn))),
         ],
     };
@@ -187,9 +187,10 @@ static class DetailTrailing
                 cardAt: (i, w) => MediaCard.Shelf(
                     albums[i].Cover, albums[i].Name,
                     albums[i].Year > 0 ? albums[i].Year.ToString() : Loc.Get(Strings.Detail.Badge.Album),
+                    albums[i].Uri,
                     () => h.Go("album:" + albums[i].Uri, albums[i].Name),
                     () => h.PlayContext(albums[i].Uri), w),
-                cardHeight: MediaCard.ShelfHeight,
+                measured: true,
                 header: WaveeType.RailHeader(Strings.Detail.MoreBy(artist.Name))),
         ],
     };

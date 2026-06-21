@@ -58,13 +58,18 @@ public static class PagedShelf
     /// <summary>The clipped, edge-faded viewport box that hosts the virtualized strip. Owned: Height, ClipToBounds, EdgeFade.</summary>
     public const string PartViewport = "Viewport";
 
-    /// <summary>Build a paged shelf. <paramref name="cardAt"/> builds card <c>index</c> at the fitted card width;
-    /// <paramref name="cardHeight"/> returns the card's full height for a given card width (used to size the strip).
+    /// <summary>Build a paged shelf. <paramref name="cardAt"/> builds card <c>index</c> at the fitted card width.
+    /// <para>Two sizing modes. The default VIRTUALIZED strip (recycles, scales to thousands) needs
+    /// <paramref name="cardHeight"/> — the card's full height for a given card width — to size the (cross-axis) viewport
+    /// up front, since only the visible page is realized. Pass <paramref name="measured"/><c> = true</c> for a content
+    /// shelf of a handful of cards: it lays them ALL out in a measured row so the engine measures each card and sizes
+    /// the row to the TALLEST (the card sizes itself — exact, no <paramref name="cardHeight"/>, no estimate);
+    /// single-row, no recycling.</para>
     /// The data should be stable at mount (mount after async load / key to remount on change), like every items control.</summary>
     public static Element Create(
         int count,
         Func<int, float, Element> cardAt,
-        Func<float, float> cardHeight,
+        Func<float, float>? cardHeight = null,
         string? title = null,
         Element? header = null,
         ShelfPager pager = ShelfPager.Chevrons,
@@ -75,10 +80,11 @@ public static class PagedShelf
         string prevGlyph = "", string nextGlyph = Icons.ChevronRight,
         TemplateParts? parts = null,
         Func<int, string>? keyOf = null,
-        int overscan = 2)
+        int overscan = 2,
+        bool measured = false)
         => Embed.Comp(() => new PagedShelfCore(count, cardAt, cardHeight, title, header, pager, customPager,
                                                minCardW, maxCardW, gap, rows, perPageOverride, fixedCardW,
-                                               headerGap, edgeFade, prevGlyph, nextGlyph, parts, keyOf, overscan));
+                                               headerGap, edgeFade, prevGlyph, nextGlyph, parts, keyOf, overscan, measured));
 }
 
 /// <summary>The stateful core (self-measure → fit → virtualized strip + animated pager). See <see cref="PagedShelf"/>.</summary>
@@ -86,7 +92,8 @@ internal sealed class PagedShelfCore : Component
 {
     readonly int _count;
     readonly Func<int, float, Element> _cardAt;
-    readonly Func<float, float> _cardHeight;
+    readonly Func<float, float>? _cardHeight;     // null in measured mode (the engine measures instead)
+    readonly bool _measured;
     readonly string? _title;
     readonly Element? _header;
     readonly ShelfPager _pager;
@@ -104,13 +111,13 @@ internal sealed class PagedShelfCore : Component
     readonly ItemsViewController _ctl = new();
     FillRowVirtualLayout? _layout;                    // stateful — hoisted once, reused across renders
 
-    public PagedShelfCore(int count, Func<int, float, Element> cardAt, Func<float, float> cardHeight, string? title,
+    public PagedShelfCore(int count, Func<int, float, Element> cardAt, Func<float, float>? cardHeight, string? title,
                           Element? header, ShelfPager pager, Func<ShelfPagerContext, Element>? customPager,
                           float minCardW, float maxCardW, float gap, int rows, int perPageOverride, float fixedCardW,
                           float headerGap, float edgeFade, string prevGlyph, string nextGlyph, TemplateParts? parts,
-                          Func<int, string>? keyOf, int overscan)
+                          Func<int, string>? keyOf, int overscan, bool measured)
     {
-        _count = count; _cardAt = cardAt; _cardHeight = cardHeight; _title = title; _header = header;
+        _count = count; _cardAt = cardAt; _cardHeight = cardHeight; _measured = measured; _title = title; _header = header;
         _pager = pager; _customPager = customPager; _minCardW = minCardW; _maxCardW = maxCardW; _gap = gap;
         _rows = Math.Max(1, rows); _perPageOverride = perPageOverride; _fixedCardW = fixedCardW;
         _headerGap = headerGap; _edgeFade = edgeFade; _prevGlyph = prevGlyph; _nextGlyph = nextGlyph;
@@ -122,10 +129,7 @@ internal sealed class PagedShelfCore : Component
         float w = _w.Value;                            // subscribe → re-fit on resize
         int page = _page.Value;                        // subscribe → pager state + glide retarget
 
-        // The SAME stateful layout instance the engine drives via SetViewport; hoisted so its fit cache survives renders.
-        var layout = _layout ??= new FillRowVirtualLayout(_minCardW, _maxCardW, _gap, _rows, _perPageOverride, _fixedCardW);
-
-        // Compute the fit the layout will land at (count-independent), to size the strip height + page math.
+        // Compute the fit the layout will land at (count-independent), to size the strip + page math.
         var (perPage, cardW) = FillRowVirtualLayout.Fit(w, _minCardW, _maxCardW, _gap, _perPageOverride, _fixedCardW);
         int perPageItems = Math.Max(1, perPage * _rows);
         int pageCount = Math.Max(1, (_count + perPageItems - 1) / perPageItems);
@@ -136,15 +140,85 @@ internal sealed class PagedShelfCore : Component
         // Keep the stored page in range when a resize shrinks the page count (effect — never write a signal in render).
         UseEffect(() => { if (_page.Peek() > maxPage) _page.Value = maxPage; }, maxPage);
 
+        void GoTo(int to) => _page.Value = Math.Clamp(to, 0, maxPage);
+
+        EdgeMask mask = (canPrev, canNext) switch
+        {
+            (true, true)  => EdgeMask.Horizontal,
+            (true, false) => EdgeMask.Left,
+            (false, true) => EdgeMask.Right,
+            _             => EdgeMask.None,
+        };
+        EdgeFadeSpec? fade = mask == EdgeMask.None || _edgeFade <= 0f ? null : new EdgeFadeSpec(mask, _edgeFade);
+
+        Element body = _measured
+            ? MeasuredBody(perPageItems, cardW, p, fade)
+            : VirtualBody(perPageItems, cardW, p, w, fade);
+        if ((_pager & ShelfPager.HoverEdge) != 0)
+            body = ZStack(body, new BoxEl
+            {
+                Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.SpaceBetween,
+                Children = [ EdgeButton(true, canPrev, () => GoTo(p - 1)), EdgeButton(false, canNext, () => GoTo(p + 1)) ],
+            });
+
+        // ── header (title + chevrons/pips/custom) ────────────────────────────────────────────────────────
+        Element? headerEl = BuildHeader(p, pageCount, canPrev, canNext, GoTo);
+
+        Element[] children = headerEl is null ? [ body ] : [ headerEl, body ];
+        return _parts.Apply(PagedShelf.PartRoot, new BoxEl
+        {
+            Direction = 1, Gap = _headerGap,
+            // No explicit width: the parent sizes us, so OnBoundsChanged reports the real available width (which the
+            // strip's viewport then fills → FillRowVirtualLayout fits the same cardW).
+            OnBoundsChanged = r => { if (r.W > 0f && MathF.Abs(r.W - _w.Peek()) > 0.5f) _w.Value = r.W; },
+            Children = children,
+        });
+    }
+
+    // ── Measured body (auto-height): NOT virtualized. Lays ALL cards in one flex row; the engine measures each card's
+    // natural height and the row's default cross-stretch (FlexAlign.Stretch) makes every card the height of the TALLEST
+    // — uniform, EXACT, and computed by the layout engine (no cardHeight() estimate; the card sizes itself). For the
+    // handful of cards a content shelf holds, laying them all out beats the machinery to avoid it; paging slides the
+    // row (animated OffsetX) rather than virtualizing. Single-row (Rows == 1) — the content-shelf shape. ──
+    Element MeasuredBody(int perPageItems, float cardW, int p, EdgeFadeSpec? fade)
+    {
+        float stride = cardW + _gap;
+        float contentW  = _count <= 0 ? 0f : _count * cardW + (_count - 1) * _gap;
+        float viewportW = perPageItems * cardW + (perPageItems - 1) * _gap;       // one full page of cards
+        float maxOffset = MathF.Max(0f, contentW - viewportW);                    // don't overscroll past the end
+        float target = MathF.Min(p * perPageItems * stride, maxOffset);
+        float x = UseAnimatedValue(target, 320f, Easing.SmoothOut);              // smooth glide between pages
+
+        var cells = new Element[Math.Max(0, _count)];
+        for (int i = 0; i < _count; i++)
+        {
+            int idx = i;
+            // COLUMN cell at the fitted width so the card's own Grow=1 fills the cell's (stretched) HEIGHT — not the
+            // row's width — and the card cross-stretches to cardW. Mirrors the virtualized cell, minus the recycler.
+            cells[i] = new BoxEl { Direction = 1, Width = cardW, Children = [ _cardAt(idx, cardW) ] };
+        }
+        Element strip = new BoxEl { Direction = 0, Gap = _gap, OffsetX = -x, Children = cells };
+        return _parts.Apply(PagedShelf.PartViewport, new BoxEl
+        {
+            ClipToBounds = true,        // no Height ⇒ the viewport wraps the strip = the tallest card (engine-measured)
+            EdgeFade = fade,
+            Children = [ strip ],
+        });
+    }
+
+    // ── Virtualized body: the size-reactive, recycling strip (scales to thousands). Needs cardHeight(cardW) to size
+    // the (cross-axis) viewport up front, since only the visible page is realized. ──
+    Element VirtualBody(int perPageItems, float cardW, int p, float w, EdgeFadeSpec? fade)
+    {
+        // The SAME stateful layout instance the engine drives via SetViewport; hoisted so its fit cache survives renders.
+        var layout = _layout ??= new FillRowVirtualLayout(_minCardW, _maxCardW, _gap, _rows, _perPageOverride, _fixedCardW);
+
         // Glide to the current page once the viewport is measured + the controller is wired (post-layout). Retargets on
         // page change AND width change (a resize keeps the same page aligned to its new offset).
         UseLayoutEffect(() => { if (w > 1f) _ctl.StartBringItemIntoView(p * perPageItems, 0f, animate: true); }, p, w);
 
-        void GoTo(int to) => _page.Value = Math.Clamp(to, 0, maxPage);
+        float shelfH = _cardHeight is null ? float.NaN : _rows * _cardHeight(cardW) + (_rows - 1) * _gap;
 
-        float shelfH = _rows * _cardHeight(cardW) + (_rows - 1) * _gap;
-
-        // ── virtualized strip ────────────────────────────────────────────────────────────────────────────
         // ItemsView is an Embed.Comp → its template closure FREEZES at first mount (when width was 0 ⇒ cardW=min). Read
         // the layout's LIVE fitted width at realize time (the engine sets it via SetViewport every arrange) so the card
         // always matches its cell — otherwise cards stay min-width inside full-width cells (huge gaps + short cards).
@@ -162,42 +236,12 @@ internal sealed class PagedShelfCore : Component
             // the card carries its own visuals (no ItemContainer selection chrome around it).
             containerFactory: (i, content, state, onInteraction, onFocusChanged) => new BoxEl { Direction = 1, Children = [content] });
 
-        EdgeMask mask = (canPrev, canNext) switch
-        {
-            (true, true)  => EdgeMask.Horizontal,
-            (true, false) => EdgeMask.Left,
-            (false, true) => EdgeMask.Right,
-            _             => EdgeMask.None,
-        };
-
-        Element viewport = _parts.Apply(PagedShelf.PartViewport, new BoxEl
+        return _parts.Apply(PagedShelf.PartViewport, new BoxEl
         {
             Height = shelfH > 0f ? shelfH : float.NaN,
             ClipToBounds = true,
-            EdgeFade = mask == EdgeMask.None || _edgeFade <= 0f ? null : new EdgeFadeSpec(mask, _edgeFade),
+            EdgeFade = fade,
             Children = [ items ],
-        });
-
-        // HoverEdge buttons overlay the strip (left/right, vertically centered) via a full-bleed row.
-        Element body = viewport;
-        if ((_pager & ShelfPager.HoverEdge) != 0)
-            body = ZStack(viewport, new BoxEl
-            {
-                Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.SpaceBetween,
-                Children = [ EdgeButton(true, canPrev, () => GoTo(p - 1)), EdgeButton(false, canNext, () => GoTo(p + 1)) ],
-            });
-
-        // ── header (title + chevrons/pips/custom) ────────────────────────────────────────────────────────
-        Element? headerEl = BuildHeader(p, pageCount, canPrev, canNext, GoTo);
-
-        Element[] children = headerEl is null ? [ body ] : [ headerEl, body ];
-        return _parts.Apply(PagedShelf.PartRoot, new BoxEl
-        {
-            Direction = 1, Gap = _headerGap,
-            // No explicit width: the parent sizes us, so OnBoundsChanged reports the real available width (which the
-            // strip's viewport then fills → FillRowVirtualLayout fits the same cardW).
-            OnBoundsChanged = r => { if (r.W > 0f && MathF.Abs(r.W - _w.Peek()) > 0.5f) _w.Value = r.W; },
-            Children = children,
         });
     }
 

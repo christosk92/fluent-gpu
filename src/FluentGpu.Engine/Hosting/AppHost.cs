@@ -25,6 +25,14 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public double Fps { get; init; }
     public double FrameMs { get; init; }
     public int ComponentsRendered { get; init; }
+    // Always-on per-segment timing of the last Paint (ms): flush=reconcile/component-render, layout=FlexLayout,
+    // anim=phase-7 ticks, record=SceneRecorder (+ text shaping), submit=command build + GPU submit + present. ~5
+    // Stopwatch reads/frame, zero alloc — so a profiler/probe can attribute a frame-time spike to a phase without FG_ALLOC_DIAG.
+    public double FlushMs { get; init; }
+    public double LayoutMs { get; init; }
+    public double AnimMs { get; init; }
+    public double RecordMs { get; init; }
+    public double SubmitMs { get; init; }
 }
 
 /// <summary>
@@ -64,7 +72,7 @@ public sealed class PopupWindowSlot
     public DrawList DrawList { get; } = new();
 }
 
-public sealed class AppHost : IDisposable
+public sealed class AppHost : IDisposable, IScrollHost
 {
     private readonly IPlatformApp _app;
     private readonly IPlatformWindow _window;
@@ -88,8 +96,10 @@ public sealed class AppHost : IDisposable
     private readonly InputEventRing _ring = new();
     private readonly IFrameTimeSource _frameTime;
     private readonly AnimEngine _anim;
+    private readonly ConnectedAnimation _connected;
     private readonly InteractionAnimator _interact;
     private readonly ScrollAnimator _scrollAnim;
+    private readonly ScrollSourceMux _scrollSources;   // integrator (+ optional OS DM source) behind the scroll seam
     private readonly RepeatTicker _repeat;
     private readonly CaretBlinker _caretBlinker;
     private readonly ImageCache _images;
@@ -214,6 +224,7 @@ public sealed class AppHost : IDisposable
 
     // FG_RESIZE_DIAG: stopwatch ticks since <paramref name="sinceTicks"/> as milliseconds (modal-loop tick segment timing).
     private static double ElapsedMs(long sinceTicks) => (Stopwatch.GetTimestamp() - sinceTicks) * 1000.0 / Stopwatch.Frequency;
+    private static double ToMs(long ticks) => ticks * 1000.0 / Stopwatch.Frequency;   // FrameStats per-segment timing
 
     // FG_RESIZE_DIAG: one line per modal move/size-loop keep-alive tick — total paint, ensureSize (swapchain resize),
     // layout (flush/reconcile/relayout), and submit+present spans — so the live-resize cost split is measurable. Only
@@ -285,19 +296,36 @@ public sealed class AppHost : IDisposable
     private double _frameMs;
     private const double FpsWindowSeconds = 1.0;
 
-    // Ambient-animation frame-rate cap (FG_ANIM_FPS env, default 60; 0 = uncapped/display-rate). Perpetual/looping
-    // animations — a spinner, skeleton shimmer, reveal fade, implicit brush transition, caret blink — don't need the
-    // full display refresh (a 120 Hz panel spins a ProgressRing 120×/s, pinning a core for no visible benefit). Pacing
-    // them to AmbientAnimationFps halves/quarters that CPU with no perceptible change. Latency-SENSITIVE motion
+    // Ambient-animation frame-rate cap (FG_ANIM_FPS env, default 0 = UNCAPPED/display-rate). 0 lets the vsync-locked
+    // present pace the loop to the panel's refresh — a clean 120 on a 120 Hz panel, a clean 60 on a 60 Hz panel — with
+    // no extra software wait. A POSITIVE cap is an OPT-IN power throttle for perpetual loops (a spinner, skeleton
+    // shimmer, reveal fade, implicit brush transition, caret blink) where a sub-refresh rate is imperceptible and idles
+    // the CPU; an app/battery policy sets it via this property. WARNING: a positive cap BELOW the panel's refresh BEATS
+    // against the vsync-locked present (the software wait stacks onto the vblank quantization), so e.g. a 60 cap on a
+    // 120 Hz panel reads ~40–60, not a clean 60 — the default is 0 precisely to avoid that. Latency-SENSITIVE motion
     // (scroll/hover/press/drag/repeat — motion the user actively drives) is exempt and always runs at display rate; and
     // input/worker-posts wake the loop instantly regardless of the wait, so the cap NEVER adds input latency.
     private long _lastFrameStartTicks;
+    // Pacing → timestep coupling (fps consistency). The wait the loop used to pace INTO the current frame: 0 = display
+    // rate; >0 = ambient-throttled / HUD; -1 = blocked idle. A non-zero value means the frame clock's pending delta is a
+    // STALE throttle/idle gap, not a real render interval — so Paint resyncs the clock before the anim tick when this
+    // frame drives interactive or one-shot motion, killing the first-frame lurch on a scroll-start or a connected fly.
+    private int _lastWaitMs;
+    // Post-scroll grace window: keep display-rate pacing for a short tail after the last scroll-active frame so the eased
+    // settle + any in-flight art reveal finish smoothly instead of snapping to the 30 Hz ambient cadence mid-motion.
+    private long _scrollGraceUntil;
+    private static readonly long ScrollGraceTicks = (long)(0.15 * Stopwatch.Frequency);
     public int AmbientAnimationFps { get; set; } = s_ambientFpsDefault;
     private static readonly int s_ambientFpsDefault = ReadAmbientFps();
-    private static int ReadAmbientFps() => int.TryParse(Environment.GetEnvironmentVariable("FG_ANIM_FPS"), out var v) && v >= 0 ? v : 60;
+    private static int ReadAmbientFps() => int.TryParse(Environment.GetEnvironmentVariable("FG_ANIM_FPS"), out var v) && v >= 0 ? v : 0;
     private const WakeReasons LatencySensitiveWake =
         WakeReasons.Interact | WakeReasons.ScrollAnim | WakeReasons.Repeat |
-        WakeReasons.DragActive | WakeReasons.DragDropWork | WakeReasons.GestureHold;
+        WakeReasons.DragActive | WakeReasons.DragDropWork | WakeReasons.GestureHold |
+        // Album-art reveals (decode → crossfade) fire DURING and right after a homepage scroll, and they are transient,
+        // user-visible motion — keep them at the display rate instead of letting the ambient cap drop the reveal to 30 Hz
+        // the instant the fling settles (a driver of the "scroll feels 24 fps then 120 fps" inconsistency). Both bits
+        // clear the moment decode/reveal finishes, so this never holds the loop awake the way a perpetual loop would.
+        WakeReasons.ImageCrossfades | WakeReasons.ImagesPending;
     // Dynamic-text (HUD) intern-on-change cache, indexed by (int)DynamicTextKind (None..FrameMs = 0..5). Each slot
     // holds the last DISPLAYED quantized value (the int fps / int cmd|draw|cull / 0.1-rounded ms — exactly the display
     // granularity) and the StringId it interned to (the host holds ONE ref per cached id). When a kind's quantized
@@ -311,6 +339,10 @@ public sealed class AppHost : IDisposable
 
     public SceneStore Scene => _scene;
     public AnimEngine Animation => _anim;
+    /// <summary>Probe/diagnostic only: a live shared-element (connected-animation) key, so a harness can trigger a REAL Hero fly.</summary>
+    public string? FirstMorphKey => _connected.FirstTaggedKey;
+    /// <summary>Probe/diagnostic only: collect distinct live <c>pl:</c> shared-element keys (home cards) for fresh-page fly measurement.</summary>
+    public void CollectMorphKeys(System.Collections.Generic.List<string> into) => _connected.CollectTaggedKeys(into);
 
     /// <summary>The input dispatcher. Exposed for the validation.md §12.6 arena-determinism gate (the harness attaches a
     /// gesture-arena recorder to <c>Input.Arena</c> and reads the resolution trace after a scripted sequence). The
@@ -333,14 +365,25 @@ public sealed class AppHost : IDisposable
     /// (~10), and it reports the real frame rate again the instant anything else animates.</summary>
     public int RecommendedWaitMs()
     {
+        int w = RecommendedWaitMsCore();
+        _lastWaitMs = w;   // remembered so Paint can detect a throttle/idle → display-rate step-up and resync the frame clock
+        return w;
+    }
+
+    private int RecommendedWaitMsCore()
+    {
         if (IsMinimized) { MaybeTrimOnIdle(); return -1; }   // nothing to paint; only the restore message wakes us (see RunFrame's minimize gate)
         WakeReasons r = ComputeWakeReasons();
         if (r == WakeReasons.None) { MaybeTrimOnIdle(); return -1; }   // fully idle: trim the slab tail once, then block until a message arrives
         if (r == WakeReasons.DynamicText) return 100;   // HUD-only: 10 Hz readout, ~0% idle CPU
+        // A live scroll arms a short display-rate grace so the eased settle + any in-flight art reveal finish at the
+        // display rate instead of snapping back to the 30 Hz ambient cadence the instant the fling drops below cutoff.
+        if ((r & WakeReasons.ScrollAnim) != 0) _scrollGraceUntil = Stopwatch.GetTimestamp() + ScrollGraceTicks;
         // Ambient-only animation (no latency-sensitive interaction live, and any AnimEngine activity is loop-only — a
         // spinner/shimmer, NOT a one-shot transition mid-flight): pace to AmbientAnimationFps instead of the full
         // display refresh. A real input/post still wakes WaitForWork early, so this paces only the autonomous tick.
-        if (AmbientAnimationFps > 0 && (r & LatencySensitiveWake) == 0 && AnimIsAmbient())
+        if (AmbientAnimationFps > 0 && (r & LatencySensitiveWake) == 0 && AnimIsAmbient()
+            && Stopwatch.GetTimestamp() >= _scrollGraceUntil)
             return AmbientFrameWaitMs();
         return 0;                                   // latency-sensitive / one-shot motion: display-rate pacing
     }
@@ -348,7 +391,12 @@ public sealed class AppHost : IDisposable
     /// <summary>True when capping the frame rate won't dull a one-shot transition: either no AnimEngine track is running,
     /// or every active track is a perpetual LOOP (an indeterminate spinner, skeleton shimmer). A one-shot transition
     /// (page entrance, number pop, reveal) keeps the full display rate so it stays crisp.</summary>
-    private bool AnimIsAmbient() => !_anim.HasActive || _anim.LoopTrackCount == _anim.TrackCount;
+    // A connected-animation fly OR a pending snapshot awaiting its dest is a one-shot transition — NEVER ambient. Without
+    // the _connected guard, the AWAIT-DEST phase (snapshot captured, dest not yet laid out: _connected is active but no
+    // spring track is seeded yet, and only the skeleton's LOOP shimmer runs) reads as all-loop → throttles to the 30 Hz
+    // ambient cap, so the detail page mounts at 30 Hz and the transition stalls before the spring starts — the residual
+    // "connected animation is sometimes laggy." Keeping the whole transition at display rate mounts the dest ~4× faster.
+    private bool AnimIsAmbient() => !_connected.HasActive && (!_anim.HasActive || _anim.LoopTrackCount == _anim.TrackCount);
 
     /// <summary>Milliseconds to wait before the next AMBIENT-animation frame so the loop holds ~<see cref="AmbientAnimationFps"/>
     /// instead of free-running at the display refresh. = frame budget minus the time the just-finished frame took (this is
@@ -382,11 +430,14 @@ public sealed class AppHost : IDisposable
     {
         WakeReasons r = WakeReasons.None;
         if (_frameNeeded) r |= WakeReasons.FrameNeeded;
+        // A bound virtual list spreading its initial window across frames (cold-realize stagger) needs frames to keep
+        // coming until it finishes — it's neither a re-render nor an animation, so fold it into FrameNeeded.
+        if (_reconciler.HasWarmingVirtuals) r |= WakeReasons.FrameNeeded;
         if (_runtime.HasPending) r |= WakeReasons.RuntimePending;
         if (_scene.HasDynamicText) r |= WakeReasons.DynamicText;
-        if (_anim.HasActive) r |= WakeReasons.Anim;
+        if (_anim.HasActive || _connected.HasActive) r |= WakeReasons.Anim;   // connected-animation fly in flight / snapshot awaiting its dest
         if (_interact.HasActive) r |= WakeReasons.Interact;
-        if (_scrollAnim.HasActive) r |= WakeReasons.ScrollAnim;
+        if (_scrollSources.HasActive) r |= WakeReasons.ScrollAnim;
         if (_repeat.HasActive) r |= WakeReasons.Repeat;
         if (_caretBlinker.HasActive) r |= WakeReasons.Caret;
         if (_scene.HasBrushAnims) r |= WakeReasons.BrushAnims;
@@ -439,7 +490,8 @@ public sealed class AppHost : IDisposable
     public IReadOnlyList<PopupWindowSlot> PopupWindows => _popupWindows;
 
     public AppHost(IPlatformApp app, IPlatformWindow window, IGpuDevice device, IFontSystem fonts,
-                   StringTable strings, Component root, ImageCache? images = null, IFrameTimeSource? frameTime = null)
+                   StringTable strings, Component root, ImageCache? images = null, IFrameTimeSource? frameTime = null,
+                   ScrollTuning? scrollTuning = null)
     {
         _app = app;
         _window = window;
@@ -463,11 +515,16 @@ public sealed class AppHost : IDisposable
         _reconciler = new TreeReconciler(_scene, strings, _runtime);
         _layout = new FlexLayout(_scene, fonts);
         _invalidator = new LayoutInvalidator(_scene, _layout);
-        _dispatcher = new InputDispatcher(_scene);
+        var scrollProfile = scrollTuning ?? ScrollTuning.WinUiLike;   // WinUI-parity wheel distance + feel (the Win32 app default)
+        _dispatcher = new InputDispatcher(_scene) { Tuning = scrollProfile };
         _reconciler.OnSubtreeDeactivated = _dispatcher.DeactivateSubtree;
         _anim = new AnimEngine(_scene);
+        _connected = new ConnectedAnimation(_scene, _anim, _images);   // shared-element (connected-animation) Hero flies
         _interact = new InteractionAnimator(_scene);
-        _scrollAnim = new ScrollAnimator(_scene);
+        _scrollAnim = new ScrollAnimator(_scene, scrollProfile);
+        // The scroll seam: the deterministic integrator is always present; a platform backend may add an OS-manipulation
+        // source (Windows DirectManipulation). Null on headless/non-Windows ⇒ the mux is byte-identical to the integrator.
+        _scrollSources = new ScrollSourceMux(new IntegratorScrollSource(_scrollAnim), _window.CreateScrollSource(this));
         _repeat = new RepeatTicker(_scene);
         _caretBlinker = new CaretBlinker(_scene);
         _lastSize = window.ClientSizePx;
@@ -513,15 +570,17 @@ public sealed class AppHost : IDisposable
         _inputHooks.GetNodeRect = _scene.AbsoluteRect;
         var chromeEpoch = new Signal<int>(0);
         _inputHooks.WindowChromeEpoch = chromeEpoch;
-        // Mica deactivation parity (WinUI): a Mica window paints a flat dark fallback when INACTIVE — DWM stops the live
+        // Mica deactivation parity (WinUI): a Mica window paints a flat SOLID fallback when INACTIVE — DWM stops the live
         // blur, so without this the transparent client lets the desktop wallpaper bleed through, giving a too-light,
-        // wallpaper-tinted chrome whenever the window isn't focused. Active → Transparent (the real Mica shows);
-        // inactive → SolidBackgroundFillColorBase. Only a Mica window (FluentApp set WindowBackground=Transparent) swaps.
+        // wallpaper-tinted chrome whenever the window isn't focused. Active → Transparent (the real Mica shows); inactive →
+        // SolidBackgroundFillColorBase (theme-aware). Only a Mica window (FluentApp set WindowBackground=Transparent) swaps.
         bool micaWindow = Theme.WindowBackground.A <= 0.004f;
-        var micaInactiveBg = ColorF.FromRgba(0x20, 0x20, 0x20);
         _dispatcher.OnWindowActivationChanged = () =>
         {
-            if (micaWindow) Theme.WindowBackground = _window.IsActive ? ColorF.Transparent : micaInactiveBg;
+            // Read the base LIVE off Tok.T so it follows a theme toggle: dark #202020 / light warm canvas. A hardcoded dark
+            // fallback showed near-black chrome in LIGHT mode the instant the window lost focus (the translucent light
+            // chrome composited over #202020 instead of the light canvas).
+            if (micaWindow) Theme.WindowBackground = _window.IsActive ? ColorF.Transparent : Tok.T.WindowBackground;
             chromeEpoch.Value = chromeEpoch.Peek() + 1;
         };
 
@@ -610,10 +669,16 @@ public sealed class AppHost : IDisposable
         _inputHooks.AnimatePopupClose = AnimatePopupCloseWindow;
 
         _reconciler.Anim = _anim;
+        _reconciler.Connected = _connected;   // shared-element (connected-animation) participant registry, fed by Element.MorphId
         _reconciler.ArmScroll = _scrollAnim.Arm;   // controls can request a smooth programmatic scroll (set Target + arm → phase 7 eases)
         // KeepAlive park/un-park → quiesce/resume the parked subtree's animation + scroll tickers so a backgrounded tab's
-        // looping animation or mid-fling scroll can't keep the frame loop awake (defeating the idle wake-stop).
-        _reconciler.OnNodeParkedChanged = (node, parked) => { _anim.SetNodeParked(node, parked); _scrollAnim.SetNodeParked(node, parked); };
+        // looping animation or mid-fling scroll can't keep the frame loop awake (defeating the idle wake-stop). A parked
+        // shared-element node also captures its reverse-fly snapshot here (Back returns to it via the like-tagged dest).
+        _reconciler.OnNodeParkedChanged = (node, parked) =>
+        {
+            _anim.SetNodeParked(node, parked); _scrollSources.SetNodeParked(node, parked);
+            _connected.OnNodeParked(node, parked);
+        };
         // Symmetric teardown of INDEX-keyed per-node side-tables on slot free (mem-06): a freed node's slot is reused,
         // so the AnimEngine layout-transition spec + the ScrollAnimator conscious-bar timers (both keyed by node index,
         // not gen-checked handle) must be dropped or the next node reusing that index inherits the stale row.
@@ -634,6 +699,8 @@ public sealed class AppHost : IDisposable
         _reconciler.SetAmbient(FrameClock.Tick, _frameClockSig);
         _hostPostSig = new Signal<object?>((Action<Action>)Post);   // ambient UI-thread poster (HostDispatch.Post / UsePost)
         _reconciler.SetAmbient(HostDispatch.Post, _hostPostSig);
+        _reconciler.SetAmbient(SharedTransition.Begin, new Signal<object?>((Action<string>)_connected.Begin));   // connected-anim forward capture-at-click
+        _reconciler.SetAmbient(SharedTransition.SetMotion, new Signal<object?>((Action<FluentGpu.Animation.ConnectedMotion>)(m => _connected.FlyMotion = m)));   // live fly-curve switcher (app A/B)
         // Window-visibility ambient: the channel value IS the visibility signal (an IReadSignal<bool>, never re-published),
         // so UseIsActive resolves it once and subscribes to the INNER signal — see Activation.IsActive.
         _reconciler.SetAmbient(Activation.IsActive, new Signal<object?>(_windowVisible));
@@ -712,6 +779,8 @@ public sealed class AppHost : IDisposable
         ref ScrollState sc = ref _scene.ScrollRef(node);
         sc.FlingVelocity = velocityPxPerS;
         sc.ScrollMode = 1;   // ScrollAnimator Fling mode
+        sc.TouchpadIdleMs = 0f;
+        sc.TouchpadInertiaStarted = false;
         // A snap-configured viewport re-solves the velocity on the FIRST fling tick (ScrollAnimator) so the same decay
         // curve lands EXACTLY on a snap value — capture the launch offset (the impulse "ignored value" anchor) and reset
         // the one-shot retarget latch here. A non-snap viewport ignores both.
@@ -720,6 +789,15 @@ public sealed class AppHost : IDisposable
         sc.FlingFromOffset = sc.Orientation == 1 ? sc.OffsetX : sc.OffsetY;
         _scrollAnim.Arm(node);
     }
+
+    // ── IScrollHost: the bridge a platform OS-manipulation scroll source (Windows DirectManipulation) uses to re-apply
+    //    its polled OS position/velocity through the SAME Input chokepoint (SetScrollOffset stays the sole clamp
+    //    authority — the source never writes the content transform itself). Dormant unless a backend supplies a source.
+    SceneStore IScrollHost.Scene => _scene;
+    bool IScrollHost.WriteScrollOffset(NodeHandle viewport, float absoluteOffset) => _dispatcher.WriteScrollOffset(viewport, absoluteOffset);
+    void IScrollHost.WriteOverscroll(NodeHandle viewport, float overscrollBandPx) => _dispatcher.WriteOverscroll(viewport, overscrollBandPx);
+    NodeHandle IScrollHost.ScrollableUnder(Point2 windowPt) => _dispatcher.ScrollableUnder(windowPt);
+    void IScrollHost.RequestFrame() => WakeFrame();
 
     /// <summary>Run one full frame: pump + input, then paint (the reactive flush + layout + record happen in Paint).</summary>
     public FrameStats RunFrame()
@@ -848,6 +926,7 @@ public sealed class AppHost : IDisposable
     {
         if (_inPaint) { _frameAfterPaint = true; return LastStats; }
         _inPaint = true;
+        _reconciler.FrameEpoch++;   // one tick per paint — caps a warming virtual list's cold-realize grow to 1 batch/frame
         long diagUiStart = s_allocDiag ? GC.GetAllocatedBytesForCurrentThread() : 0;
         try
         {
@@ -957,6 +1036,7 @@ public sealed class AppHost : IDisposable
             }
             finally { if (themeChanged) _reconciler.SetThemeTransition(float.NaN); }
             bool reconciled = _reconciler.ConsumeReconciled() || virtualsChanged;
+            long tFlush = Stopwatch.GetTimestamp();   // always-on segment timing (FrameStats.*Ms) — see below
             if (s_allocDiag) { db = Probe(SegFlush, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             bool layoutNeeded = _needFullLayout || reconciled || _scene.AnyLayoutDirty;
@@ -994,6 +1074,8 @@ public sealed class AppHost : IDisposable
             }
 
             DrainLayoutEffects();                              // 6.5 layout effects (Bounds valid)
+            _connected.ReducedMotion = Motion.ReducedMotion;   // 6.5 connected-animation: remember tag rects, seed flies to arrived dests, expire stale
+            _connected.Tick65();
             // Responsive show/hide "make room": nodes that mounted with a SizeMode.Reflow enter now have their natural
             // size — ease the main-axis LAYOUT size 0→that so neighbours reflow as the entrant reveals. Seeded here
             // (post-layout, BEFORE the anim tick) so the first ticked size is ~0 and RunReflowLayout re-solves siblings
@@ -1031,24 +1113,39 @@ public sealed class AppHost : IDisposable
             }
             if (reconciled) DumpSceneOnce(layoutSize);
             if (diagTick) { layoutMs0 = ElapsedMs(segStart); }   // flush/reconcile/relayout/layout-effects span (FG_RESIZE_DIAG)
+            long tLayout = Stopwatch.GetTimestamp();
             if (s_allocDiag) { db = Probe(SegLayout, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             if (capturedProjections) ApplyProjections();       // FLIP "Last+Invert+Play"
+            // fps consistency (root fix): if the loop paced INTO this frame from a throttled (ambient 30 Hz) or idle
+            // cadence AND this frame now drives interactive or one-shot motion (scroll/hover/drag/repeat, or a
+            // connected-animation fly / non-loop transition), the frame clock's pending delta is the stale throttle gap,
+            // not a real interval. Drop it so the first active frame advances ~one frame instead of leaping ~34 ms — the
+            // root of "scroll/connected animations feel 24 fps then 120 fps." Steady display-rate frames (prev wait 0)
+            // and genuine mid-scroll GC hitches are untouched; steady ambient frames never enter (no interactive work).
+            if (_lastWaitMs != 0)
+            {
+                WakeReasons stepUp = ComputeWakeReasons();
+                if ((stepUp & LatencySensitiveWake) != 0 || (_anim.HasActive && !AnimIsAmbient()) || _connected.HasActive)
+                    _frameTime.Resync();
+            }
             float dtMs = _frameTime.NextDeltaMs();
             _anim.Tick(dtMs);                                  // 7 animation (transform/opacity/presented-size — never relayout)
             _inputHooks.RunAfterAnimations();                  // 7.1 tree lifecycle finalizers (overlays) before record/present
             RunIncrementalLayout();                            // 7 scoped subtree relayout for SizeMode.Relayout
             RunReflowLayout(layoutSize);                       // 7 boundary-scoped re-solve for SizeMode.Reflow (smooth reflow)
             ReclaimSettledOrphans();                           // 7 free settled exit orphans
+            _connected.Settle();                               // 7 retire landed shared-element flies (reveal dest, unpin, free overlay)
             _interact.Tick(dtMs);                              // 7 eased hover/press
             _scene.AdvanceBrushAnims(dtMs);                    // 7 implicit BrushTransition (logical state flips)
-            _scrollAnim.Tick(dtMs);                            // 7 smooth scroll + scrollbar fade
+            _scrollSources.Pump(dtMs);                         // 7 smooth scroll + scrollbar fade (integrator + optional OS source)
             ApplyStickyOffsets();                              // 7 CSS position:sticky pins (after every scroll write)
             _repeat.Tick(dtMs);                                // 7 RepeatButton auto-repeat (held → re-fire click)
             _caretBlinker.Tick(dtMs);                          // 7 focused-editor caret blink (toggles TextEditState)
             _dispatcher.DragDrop.Tick(dtMs);                   // 7 E5 edge auto-scroll (drag near an overflowing viewport edge)
             _dispatcher.Drag.Tick(dtMs);                       // 7 E5 ghost: spring-lag easing + re-pin over the scrolled origin
             _dispatcher.TickGestureArenas(dtMs);               // 7 §7A arena timer tick (Hold long-press promotion on idle-held frames)
+            long tAnim = Stopwatch.GetTimestamp();
             if (s_allocDiag) { db = Probe(SegAnim, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
             _images.Pump();                                    // 7.5 apply finished decodes + evict
             _images.Tick(dtMs);
@@ -1087,6 +1184,7 @@ public sealed class AppHost : IDisposable
             // 8c consume the frame's motion bits (the glyph-snap gate read them during record). A motion frame queues ONE
             // settle frame: the last moved frame recorded its text unsnapped, so the trailing static record re-snaps crisp.
             if (_scene.AnyTransformWrote) { _frameAfterPaint = true; _scene.ClearTransformDirty(); }
+            long tRecord = Stopwatch.GetTimestamp();
             if (s_allocDiag) { db = Probe(SegRecord, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
             // Modal-loop repaint: present at SyncInterval 0 so Present is a cheap, tear-free hand-off (the composited DComp
             // flip surface is still composited at vblank by DWM) instead of blocking the WndProc thread up to a vblank — the
@@ -1099,6 +1197,7 @@ public sealed class AppHost : IDisposable
                 new FrameInfo(_window.ClientSizePx, _window.Scale, Clear)); // 10 submit
             _swapchain.Present();                              // 11 present
             long hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
+            long tSubmit = Stopwatch.GetTimestamp();
             if (s_allocDiag) { db = Probe(SegSubmit, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             DrainPassiveEffects();                             // 12 passive effects
@@ -1118,6 +1217,11 @@ public sealed class AppHost : IDisposable
                 Fps = _fps,
                 FrameMs = _frameMs,
                 ComponentsRendered = componentsRendered,
+                FlushMs = ToMs(tFlush - frameStart),   // incl. flip/FLIP-capture + reactive flush + reconcile
+                LayoutMs = ToMs(tLayout - tFlush),
+                AnimMs = ToMs(tAnim - tLayout),         // phase-7 ticks + projections
+                RecordMs = ToMs(tRecord - tAnim),       // image pump + SceneRecorder (+ text shaping) + dyntext
+                SubmitMs = ToMs(tSubmit - tRecord),     // command build + GPU submit + present
             };
             PublishFrameStats(LastStats);
             if (_frameClockSig.HasSubscribers) _frameClockSig.Value = ++_frameClock;   // drive per-frame pollers (overlay close) only when watched
@@ -1473,7 +1577,7 @@ public sealed class AppHost : IDisposable
     private void OnSceneSlotFreed(int index)
     {
         _anim.ClearForIndex(index);
-        _scrollAnim.ClearForIndex(index);
+        _scrollSources.ClearForIndex(index);
     }
 
     private void UpdateFrameTiming(long frameStart)

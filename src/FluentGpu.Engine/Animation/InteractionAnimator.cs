@@ -23,8 +23,14 @@ public sealed class InteractionAnimator
     public void SetHover(NodeHandle node, bool on)
     {
         if (node.IsNull || !_scene.IsLive(node)) return;
-        SetHoverCore(node, on, force: true);
-        SetHoverDescendants(node, on);
+        // A container reads as hovered while the pointer is anywhere in its subtree — Hovered (directly) OR HoverWithin
+        // (over an interactive child). So its reveal-on-hover descendants (a list row's #-cell play glyph) must STAY
+        // driven as the pointer crosses onto the row's buttons/links: turning the leaf hover off the row would otherwise
+        // decay this subtree and collapse the reveal. The dispatcher's UpdateHoverWithin drives the on/off edges by
+        // HoverWithin transitions; this guard makes a stray leaf-hover-off of a still-within container a no-op.
+        bool effective = on || (_scene.Flags(node) & (NodeFlags.Hovered | NodeFlags.HoverWithin)) != 0;
+        SetHoverCore(node, effective, force: true);
+        SetHoverDescendants(node, effective);
     }
 
     public void SetPress(NodeHandle node, bool on)
@@ -38,9 +44,26 @@ public sealed class InteractionAnimator
     {
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
         {
-            SetHoverCore(c, on, force: false);
+            // Only a REVEAL/scale affordance follows its CONTAINER's hover (a list-row #-cell play glyph that fades in
+            // on row hover via HoverOpacity, a part that scales). An independent interactive sibling whose only hover
+            // visual is a FILL (a ♥/like button: HoverFill, no HoverOpacity/HoverScale) must track the ACTUAL pointer,
+            // so the container hover must not light it up. A pure-fill control is not seeded an anim row by the
+            // reconciler — it only gets one after a DIRECT hover, and from then on the unconditional drive lit it up on
+            // every row hover (the reported "hover the play button → the like button highlights too"). Gate the drive
+            // on the reveal/scale intent; recurse unconditionally so a reveal nested deeper still gets reached.
+            if (FollowsContainerHover(c)) SetHoverCore(c, on, force: false);
             SetHoverDescendants(c, on);
         }
+    }
+
+    /// <summary>A descendant follows its container's hover only for a reveal (HoverOpacity/PressedOpacity) or a
+    /// hover/press scale — not for a fill-only control (which tracks the real pointer). Mirrors the reconciler's
+    /// anim-row seeding predicate minus the fill case.</summary>
+    private bool FollowsContainerHover(NodeHandle node)
+    {
+        ref NodePaint p = ref _scene.Paint(node);
+        if (!float.IsNaN(p.HoverOpacity) || !float.IsNaN(p.PressedOpacity)) return true;
+        return _scene.TryGetInteract(node, out var ia) && (ia.HoverScale != 1f || ia.PressScale != 1f);
     }
 
     private void SetPressDescendants(NodeHandle node, bool on)

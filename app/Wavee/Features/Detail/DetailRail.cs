@@ -22,19 +22,20 @@ static class DetailRail
 
     public static float CoverEdge(float railW) => MathF.Max(80f, railW - SidePadL - SidePadR);
 
-    // The side rail at an ADAPTIVE width (railW): the shell shrinks it as the window narrows (then switches to the
-    // vertical header below). The cover + every clamped run derive from railW, so they shrink with it.
-    public static Element Build(DetailModel m, DetailConfig cfg, DetailHandlers h, float railW)
+    // The side rail: the cover STRETCHES to fill the column width (a big hero — the image is NEVER shrunk for height).
+    // The height fit comes from the TEXT — titleSize (the shell lowers it on a short rail; auto-fits down to 18px) and
+    // the description's line cap (descMaxLines) — and only then the rail's own scrollbar (last resort).
+    public static Element Build(DetailModel m, DetailConfig cfg, DetailHandlers h, float railW, float titleSize, int descMaxLines)
     {
         float cover = CoverEdge(railW);
         var kids = new List<Element>(10);
 
-        // Cover (art with a graceful gradient fallback) + soft elevation.
+        // Cover (art with a graceful gradient fallback) — stretched to the full column width.
         kids.Add(new BoxEl
         {
             Width = cover, Height = cover, Corners = CornerRadius4.All(WaveeRadius.Card),
             Shadow = Elevation.Card, ClipToBounds = true,
-            Children = [Surfaces.Artwork(m.Cover, m.Title.GetHashCode() & 0x7fffffff, cover, cover, WaveeRadius.Card)],
+            Children = [Surfaces.Artwork(m.Cover, m.Title.GetHashCode() & 0x7fffffff, cover, cover, WaveeRadius.Card, m.MorphKey)],
         });
 
         // Badges row.
@@ -51,13 +52,12 @@ static class DetailRail
             kids.Add(OwnerRow(m.OwnerName, cover, h));
         }
 
-        // Hero title — a heavy run that AUTO-FITS: starts at ≈40px and shrinks (down to 18px) to fit the cover width in
-        // ≤2 LINES, minimizing wraps (engine TextEl.MinSize). A short name stays big (1 line @ 40px); a long one scales
-        // down to a compact 2-line block instead of a tall 3-line tower (the reported "font not adapting" → scroller).
-        // Natural line height (no fixed LineHeight) so spacing scales with the chosen size; ellipsis is the last resort.
+        // Hero title — a heavy run that AUTO-FITS to the cover width in ≤2 LINES, from titleSize down to 18px. The shell
+        // LOWERS titleSize on a SHORT rail so the TEXT gives (never the image). A short name stays big; a long one scales
+        // to a compact 2-line block. Natural line height; ellipsis is the last resort.
         kids.Add(WaveeType.PageHero(m.Title) with
         {
-            Size = 40f, MinSize = 18f, Weight = 900, Width = cover,
+            Size = titleSize, MinSize = 18f, Weight = 900, Width = cover,
             Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis,
         });
 
@@ -107,9 +107,11 @@ static class DetailRail
             (Loc.Get(Strings.Detail.AddToQueue), () => { /* TODO */ }),
         ], cover));
 
-        // Description / release blurb.
-        if (m.Description is { Length: > 0 } desc)
-            kids.Add(WaveeType.TrackMeta(desc) with { Width = cover, Wrap = TextWrap.Wrap, MaxLines = 6, Trim = TextTrim.CharacterEllipsis });
+        // Description / release blurb — an HTML fragment (links to artists/playlists, bold): parse → rich spans (links
+        // accent + clickable via h.Go, bold rendered, entities decoded). Trimmed to descMaxLines (shell lowers it when short).
+        if (descMaxLines > 0 && m.Description is { Length: > 0 } desc)
+            kids.Add(RichText.Of(desc, 12f, Tok.TextSecondary, Tok.AccentTextPrimary, cover, descMaxLines,
+                u => { if (RichText.RouteForUri(u) is { } k) h.Go(k, null); }));
 
         var rail = new BoxEl
         {
@@ -117,7 +119,8 @@ static class DetailRail
             Padding = new Edges4(SidePadL, WaveeSpace.XXL, SidePadR, WaveeSpace.XXL),
             Children = kids.ToArray(),
         };
-        // Own vertical scroller (independent of the right area); hidden bar by default (no AlwaysShowScrollbar).
+        // Own vertical scroller (hidden bar by default) — the LAST resort once the TEXT has shrunk and it still overflows
+        // (the image stays full-width; the text gave first).
         return ScrollView(rail) with { Grow = 0f, Shrink = 0f, Width = railW };
     }
 
@@ -159,7 +162,7 @@ static class DetailRail
                 {
                     Width = coverSz, Height = coverSz, Corners = CornerRadius4.All(WaveeRadius.Card),
                     Shadow = Elevation.Card, ClipToBounds = true,
-                    Children = [Surfaces.Artwork(m.Cover, m.Title.GetHashCode() & 0x7fffffff, coverSz, coverSz, WaveeRadius.Card)],
+                    Children = [Surfaces.Artwork(m.Cover, m.Title.GetHashCode() & 0x7fffffff, coverSz, coverSz, WaveeRadius.Card, m.MorphKey)],
                 },
                 new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = WaveeSpace.XS, Children = info.ToArray() },
             ],

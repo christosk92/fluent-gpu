@@ -50,6 +50,14 @@ public abstract class Component
     protected Loadable<T> UseLoadable<T>(Loadable<T>? initial = null) => Context.UseLoadable(initial);
     /// <summary>Kick an async loader once at mount; returns a Loadable&lt;T&gt; (Pending→Ready/Failed via UsePost; cancels on unmount).</summary>
     protected Loadable<T> UseAsyncResource<T>(Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>> loader, T seed = default!) => Context.UseAsyncResource(loader, seed);
+    /// <summary>As <see cref="UseAsyncResource{T}(Func{System.Threading.CancellationToken, System.Threading.Tasks.Task{T}}, T)"/>
+    /// but RELOADS when <paramref name="deps"/> change — a resource keyed on a reactive input (e.g. a page reused across
+    /// navigation whose id changes): the prior run cancels, the loadable resets to Pending(seed), and the loader restarts.</summary>
+    protected Loadable<T> UseAsyncResource<T>(Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>> loader, T seed, params object[] deps) => Context.UseAsyncResource(loader, seed, deps);
+    /// <summary>A fire-on-demand async command with a reactive IsRunning state (spinner/disable + re-entry guard + cancel).</summary>
+    protected AsyncCommand UseAsyncCommand(bool cancelOnUnmount = false) => Context.UseAsyncCommand(cancelOnUnmount);
+    /// <summary>A KEYED set of fire-on-demand async commands (per-item busy state, e.g. per-row play/like).</summary>
+    protected AsyncCommandSet<TKey> UseAsyncCommands<TKey>(bool cancelOnUnmount = false) where TKey : notnull => Context.UseAsyncCommands<TKey>(cancelOnUnmount);
 
     /// <summary>Create a reactive validation field over a caller-owned value signal (form-validation.md): pass the
     /// resulting <see cref="Field{T}"/> to a control's <c>Field</c> prop. Cross-field/conditional rules that read a
@@ -77,6 +85,8 @@ public abstract class Component
     protected void UseTransition(AnimChannel channel, float from, float to, float durationMs, Easing easing = Easing.EaseInOut, params object[] deps) => Context.UseTransition(channel, from, to, durationMs, easing, deps);
     /// <summary>Bind an async image and observe its load state (spinner / error fallback). Pair with <c>Ui.Image</c> to paint it.</summary>
     protected ImageBinding UseImage(string src, int decodePx, ImagePriority priority = ImagePriority.Visible, string? blurHash = null) => Context.UseImage(src, decodePx, priority, blurHash);
+    /// <summary>As <see cref="UseImage(string,int,ImagePriority,string)"/> but with a non-square decode target — shares the exact cache handle of a non-square displayed image instead of forking a second decode.</summary>
+    protected ImageBinding UseImage(string src, int decodeW, int decodeH, ImagePriority priority = ImagePriority.Visible, string? blurHash = null) => Context.UseImage(src, decodeW, decodeH, priority, blurHash);
     /// <summary>Prefetch an image the UI is about to need so it's resident before it scrolls in.</summary>
     protected void PrefetchImage(string src, int decodePx) => Context.PrefetchImage(src, decodePx);
     protected void UseKeyframes(AnimChannel channel, Keyframe[] keys, float durationMs, bool loop = false, params object[] deps) => Context.UseKeyframes(channel, keys, durationMs, loop, deps);

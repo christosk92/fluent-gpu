@@ -179,15 +179,22 @@ public struct ScrollState
     public float ViewportW, ViewportH;    // Layout-published viewport inner size (for clamp + window math)
     public byte  Orientation;             // 0 = vertical scroll (Y), 1 = horizontal scroll (X)
     public float FlingVelocity;           // touch-fling speed along Orientation (px/s, signed in offset space; Input seeds, Animation friction-decays)
-    public byte  ScrollMode;              // 0 = TargetChase (wheel ease toward Target), 1 = Fling (friction-decay inertia from FlingVelocity)
+    public byte  ScrollMode;              // 0 = TargetChase, 1 = touch fling, 2 = precision-touchpad tracking/tail
     public bool  FlingRetargeted;         // a snap-configured fling has had its velocity re-solved to land on the snap value
                                           // (the ScrollAnimator does this ONCE on fling entry; reset when a fresh fling is seeded).
     public float FlingFromOffset;         // the offset captured when the fling was seeded (the impulse "ignored value" anchor)
-    // Precision-touchpad / high-resolution scroll: a hi-res wheel delta (|notch| < 120) tracks the content 1:1 — a crisp
-    // DIRECT scroll through Input.ScrollBy → SetScrollOffset, with NO synthesized momentum. A WM_POINTERWHEEL stream has
-    // no contact-lift edge, so reconstructing a touchpad inertia fling from it is guessing (it caused the "stops midway"
-    // jitter); WinUI's touchpad glide comes from the OS InteractionTracker owning the real manipulation, which a
-    // wheel-message pipeline can't tap. Momentum + rubber-band live ONLY on the genuine touch path (WM_POINTER down/up).
+    // Precision touchpad: the PAL classifies the wheel stream by its hi-res delta signature (non-120-multiples; the OS
+    // device API is an unreliable fast-path only). Input applies each high-resolution packet directly (1:1 tracking,
+    // like WinUI during the pan); the moment the stream goes quiet ScrollAnimator continues the measured velocity as a
+    // friction glide on the very next frame (no quiet-window freeze). Velocity measured at the true end of the stream
+    // means a driver that streamed its own decay can't double the glide.
+    public uint  TouchpadLastTimestampMs; // last coalesced OS packet timestamp; 0 = no velocity baseline yet
+    public float TouchpadIdleMs;          // time since the last packet (phase-7 clock; 0 = a packet arrived this frame)
+    public bool  TouchpadInertiaStarted;  // false while a packet stream is tracking, true once the post-lift glide runs
+    public float TouchpadRawOffset;       // touchpad "raw" position that may travel PAST the clamp when the scroll chain
+                                          // is fully pinned — the touch-pan model: ApplyTouchPan splits it into the
+                                          // in-range offset + the damped rubber-band, so a precision-touchpad overpan
+                                          // rubber-bands + springs back exactly like a touch overpan (WinUI ScrollPresenter).
     public float FlingSnapTarget;         // the exact snap value a retargeted fling lands on (the integrator writes THIS on
                                           // settle, so discrete-integration drift never leaves it a fraction off the snap). NaN = no snap target.
     public bool  ContentSized;            // auto-size to content then clamp (popup lists); false = hard viewport

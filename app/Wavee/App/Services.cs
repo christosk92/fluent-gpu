@@ -47,8 +47,16 @@ public sealed class Services
         // The composition root may create the store early (to seed the theme before the first frame) and pass it in;
         // otherwise create it here. Same registry either way (the wrapper is stateless), so a second instance is harmless.
         settings ??= AppDataSettings.ForUnpackaged("Wavee", "Wavee");
-        var svc = new Services(WaveeLog.Instance, session, new FakeMusicLibrary(), player, devices, settings);
-        svc.Log.Info("app", "Services created (fake wiring)");
+        // The source-agnostic catalog seam (docs/architecture.md): the UI binds one IMusicLibrary façade that federates
+        // over ordered sources. SpotifyExportSource (real JSON, owns spotify:*) first; FakeSource (synthetic albums/
+        // artists + fallback) last. Adding a live-Spotify or local-files source later is purely additive here.
+        var library = new AggregateCatalog(new SourceRegistry(new ISource[]
+        {
+            new SpotifyExportSource(SpotifyExport.Load()),
+            new FakeSource(),
+        }));
+        var svc = new Services(WaveeLog.Instance, session, library, player, devices, settings);
+        svc.Log.Info("app", "Services created (federated catalog: spotify-export + fake)");
         return svc;
     }
 }

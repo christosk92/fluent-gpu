@@ -1,6 +1,7 @@
 using System;
 using FluentGpu;          // FluentApp (OS theme facade + SystemColorsChanged relay)
 using FluentGpu.Dsl;
+using FluentGpu.Foundation;   // Diag.CompiledIn (debug-build gate for the FPS HUD)
 using FluentGpu.Hooks;
 
 namespace Wavee;
@@ -44,8 +45,22 @@ sealed class WaveeApp : Component
 
         this.UseSoftReveal(); // app entrance (compositor-only, reduced-motion-aware)
 
-        return Ctx.Provide(Services.Slot, _services,
+        var root = Ctx.Provide(Services.Slot, _services,
             Ctx.Provide(PlaybackBridge.Slot, bridge,
                 Embed.Comp(() => new WaveeShell(_services.Settings))));
+
+        // Debug-build FPS HUD on top (const-folds out of Release; subscribes to the host's per-frame stats). The HUD pill is
+        // pinned top-right by a full-bleed PASS-THROUGH positioner (a PLAIN BoxEl — its HitTestPassThrough IS honoured, unlike
+        // a component wrapper's mirrored-but-not-passthrough node, which would swallow every hit and silently kill scrolling).
+        // ZStack carries Grow=1 to fill the window + stretch the shell exactly like the OverlayHost stack.
+        if (!Diag.CompiledIn || Diag.EnvFlag("WAVEE_NO_FPS")) return root;
+        var hud = new BoxEl
+        {
+            Grow = 1f, HitTestPassThrough = true,
+            Direction = 1, Justify = FlexJustify.Start, AlignItems = FlexAlign.End,
+            Padding = new Edges4(0f, 104f, 14f, 0f),   // clear the title bar + toolbar; pinned top-right of the content
+            Children = [ Embed.Comp(() => new FpsOverlay()) ],
+        };
+        return Ui.ZStack(root, hud) with { Grow = 1f };
     }
 }

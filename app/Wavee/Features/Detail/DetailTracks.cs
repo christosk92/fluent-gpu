@@ -30,22 +30,36 @@ sealed class TrackList : Component
     const float RowInset = WaveeSpace.S;    // rounded row-highlight inset (rows pad PadX−RowInset so columns stay header-aligned)
     const float ThumbSize = 36f;
 
-    readonly DetailModel _m;
-    readonly DetailConfig _cfg;
+    // The detail model is a Loadable: the HEADER bits (HasVideo, columns) read reactively from its current value
+    // (preview → full), and the TRACK ROWS stream in via Skel.Region — which derives the shimmer from the REAL Row
+    // template (ONE source, no hand-written skeleton). _model / _tracks are refreshed at the top of Render.
+    readonly Loadable<DetailModel> _full;
+    DetailModel _model = DetailModel.Empty;
+    IReadOnlyList<Track> _tracks = Array.Empty<Track>();
+    readonly Signal<Route> _route;                             // read reactively → cfg re-derived so ONE list serves successive detail routes
+    DetailConfig _cfg = DetailConfig.Album;                     // derived from route kind + loaded ReleaseKind at the top of Render
     readonly PlaybackBridge? _bridge;
     readonly DetailHandlers _h;                                // carries the per-context sort signal + SetSort (set by DetailShell)
     readonly bool _showToolbar;                                // false in the vertical layout (the header owns the toolbar)
-    readonly bool _hasDate;                                    // any track carries an AddedAt → the Date-added column exists
-    readonly bool _hasBy;                                      // collaborative (≥2 contributors) → the Added-by column exists
+    bool _hasDate;                                             // any track carries an AddedAt → the Date-added column exists
+    bool _hasBy;                                               // collaborative (≥2 contributors) → the Added-by column exists
     readonly Signal<int> _tier = new(0);                       // width tier (0 = widest/full), written by OnBoundsChanged
     readonly SelectionModel _selection = new();                // external → survives a tier remount
     readonly Dictionary<int, TrackSize[]> _tracksByTier = new();
+    (bool Date, bool By, bool Video) _lastCols = (false, false, false);   // the columns depend on the tracks (Date-added/Added-by/Video); when they
+                                                                          // arrive (preview→full) the cached column SIZES must be recomputed or the grid wraps
     (TrackSort Sort, string Query, TrackFilterFlags Flags) _viewKey = (new((SortColumn)(-1), false), "\0", TrackFilterFlags.None);   // invalid sentinel
     int[] _view = Array.Empty<int>();                          // filtered + sorted → original track-index map (rows read via this)
-    readonly string? _topTrackId;                              // album surfaces: the most-played track's id (gets a star); null with no play data
+    string? _topTrackId;                                       // album surfaces: the most-played track's id (gets a star); null with no play data
+    AsyncCommandSet<string>? _play;                            // per-track-id play command in flight → the row's #-cell buffering spinner
+    string? _lastCtxUri;                                       // last loaded context uri → detect a reused-slot album swap (invalidate view/columns/selection)
 
-    public TrackList(DetailModel m, DetailConfig cfg, PlaybackBridge? bridge, DetailHandlers h, bool showToolbar = true)
-    { _m = m; _cfg = cfg; _bridge = bridge; _h = h; _showToolbar = showToolbar; _hasDate = m.HasDateAdded; _hasBy = m.HasAddedBy; _topTrackId = TopTrack(m.Tracks); }
+    public TrackList(Signal<Route> route, Loadable<DetailModel> full, PlaybackBridge? bridge, DetailHandlers h, bool showToolbar = true)
+    { _route = route; _full = full; _bridge = bridge; _h = h; _showToolbar = showToolbar; }
+
+    // The placeholder row the engine derives the shimmer from — the REAL Row(...) with an empty track, so the skeleton
+    // rows always match the real rows (the single-source-of-truth the skeleton kit is built on).
+    static readonly Track EmptyTrack = new("", "", "", Array.Empty<ArtistRef>(), new AlbumRef("", "", ""), 0L, false, null);
 
     // The visible order (cached, keyed by sort + filter): view[displayPos] = original track index, for the tracks that
     // pass the filter (search query + hide-explicit), in the current sort order. Read live by the frozen row template /
@@ -61,7 +75,7 @@ sealed class TrackList : Component
         {
             bool hideX = (flags & TrackFilterFlags.HideExplicit) != 0;
             bool vidOnly = (flags & TrackFilterFlags.VideosOnly) != 0;
-            var tracks = _m.Tracks;
+            var tracks = _tracks;
             var list = new List<int>(tracks.Count);
             for (int i = 0; i < tracks.Count; i++)
             {
@@ -121,7 +135,7 @@ sealed class TrackList : Component
     };
 
     // Which optional columns are present at a tier. #, Title and Duration are always present. Cell build order (and the
-    // matching track widths) is: # · Title(+thumb) · Album · AddedBy · DateAdded · Video · Plays · ♥ · Duration.
+    // matching track widths) is: # · ♥ · (thumb) · Title · Album · AddedBy · DateAdded · Video · Plays · Duration.
     readonly record struct ColumnSet(bool Album, bool By, bool Date, bool Video, bool Plays, bool Heart, bool Thumb);
 
     // Drop order as the area narrows (most expendable first): Added-by (≥1) / Video (≥2) → Album (≥2) → Plays/Date (≥3)
@@ -130,7 +144,7 @@ sealed class TrackList : Component
         Album: _cfg.ShowAlbumColumn && tier < 2,
         By: _hasBy && tier < 1,
         Date: _hasDate && tier < 3,
-        Video: _cfg.ShowPlays && _m.HasVideo && tier < 2,
+        Video: _cfg.ShowPlays && _model.HasVideo && tier < 2,
         Plays: _cfg.ShowPlays && tier < 3,
         Heart: tier < 4,
         Thumb: _cfg.ShowArtThumb && tier < 5);
@@ -147,6 +161,7 @@ sealed class TrackList : Component
         if (_tracksByTier.TryGetValue(tier, out var cached)) return cached;
         var s = SetFor(tier);
         var t = new List<TrackSize>(10) { TrackSize.Px(36f) };
+        if (s.Heart) t.Add(TrackSize.Px(40f));         // ♥ moved to the LEFT cluster — between # and the art thumb
         if (s.Thumb) t.Add(TrackSize.Px(ThumbSize));   // dedicated art column: the Title header aligns over the title text, not the art
         t.Add(TrackSize.Star());
         if (s.Album) t.Add(TrackSize.Px(180f));
@@ -154,7 +169,6 @@ sealed class TrackList : Component
         if (s.Date) t.Add(TrackSize.Px(108f));
         if (s.Video) t.Add(TrackSize.Px(28f));
         if (s.Plays) t.Add(TrackSize.Px(84f));
-        if (s.Heart) t.Add(TrackSize.Px(40f));
         t.Add(TrackSize.Px(64f));
         var arr = t.ToArray();
         _tracksByTier[tier] = arr;
@@ -163,23 +177,40 @@ sealed class TrackList : Component
 
     public override Element Render()
     {
+        _play = UseAsyncCommands<string>();      // keyed by track id; a row's #-cell shows the buffer spinner while its PlayAsync runs (same instance each render)
+        var model = _full.Value.Value;           // subscribe → re-render preview→full (chrome columns + trailing update on load)
+        _model = model; _tracks = model.Tracks; _hasDate = model.HasDateAdded; _hasBy = model.HasAddedBy; _topTrackId = TopTrack(model.Tracks);
+        _cfg = DetailPage.ResolveConfig(DetailPage.ParseDetail(_route.Value).Kind, model);   // route kind + loaded ReleaseKind (reused slot re-derives)
+        // Reused slot: a detail-route swap changes the track set under a stable (sort,query,flags) view key, so the cached
+        // view map + per-tier column sets + selection would be STALE (wrong / out-of-range indices). Invalidate them on a
+        // context change so the new page recomputes cleanly.
+        if (model.ContextUri != _lastCtxUri)
+        {
+            _lastCtxUri = model.ContextUri;
+            _viewKey = (new((SortColumn)(-1), false), "\0", TrackFilterFlags.None);
+            _tracksByTier.Clear();
+            _selection.ClearSelection();
+        }
+
+        // The present columns depend on the tracks (Date-added/Added-by/Video appear once they load). When that set
+        // changes, drop the cached per-tier column SIZES so the header + rows rebuild with a matching track count
+        // (otherwise the grid has more cells than columns and wraps). The list key (below) folds it in to remount cleanly.
+        var cols = (_hasDate, _hasBy, model.HasVideo);
+        if (!cols.Equals(_lastCols)) { _tracksByTier.Clear(); _lastCols = cols; }
+
         int tier = _tier.Value;                  // subscribe → re-render (new header + remount list) on a breakpoint cross
         var set = SetFor(tier);
         var tracks = TracksFor(tier);
-        var items = _m.Tracks;
         var sort = _h.Sort.Value;                // subscribe → re-render (header carets) on sort change
         int density = _h.Density.Value;          // subscribe → remount with the new row height on density change
         string query = _h.Query.Value;           // subscribe → remount with the filtered set on query change
         var flags = _h.Flags.Value;              // subscribe → remount on a quick-filter toggle
         float rowH = RowHeightFor(density);
 
-        // Re-skin epoch: now-playing/buffering/play-state AND the sort (NOT the tier — the tier remounts via the keyed
-        // wrapper). A bump re-realizes the visible rows IN PLACE, so a track change recolours and a sort change REORDERS
-        // them, both keeping the scroll offset. Rows read the order/now-playing via .Peek() (recyclable, no per-row bind).
-        var nowEpoch = UseComputed(() => HashCode.Combine(
-            _bridge?.CurrentTrack.Value?.Id, _bridge?.IsBuffering.Value ?? false, _bridge?.IsPlaying.Value ?? false,
-            _h.Sort.Value));
-
+        // Now-playing / sort / column re-skin is per-row now: each bound row subscribes to the bridge + _h.Sort inside
+        // its own binds (BoundRowContent / BoundTitle), so a track change recolours and a sort change reorders the
+        // realized rows IN PLACE — no whole-list epoch, no list re-render. Tier/column changes alter the slot SET and
+        // remount via the keyed wrapper below.
         Element chrome = new BoxEl
         {
             Key = "chrome", Direction = 1, Padding = new Edges4(PadX, WaveeSpace.S, PadX, 0f),
@@ -187,27 +218,44 @@ sealed class TrackList : Component
             Children = _showToolbar ? [Toolbar(), Header(set, tracks, sort)] : [Header(set, tracks, sort)],
         };
 
-        ItemContainerFactory rowSkin = (i, content, st, oi, of) => RowSkin(i, content, st, oi, of, rowH);
-        Element list = View().Length == 0
-            ? FilterEmpty(items.Count == 0)       // empty playlist, or a filter that matched nothing
-            : ItemsView.Create(
-                // View()[displayPos] = original track index → rows render filtered+sorted; play / key map back to it.
-                View().Length, i => Row(items[View()[i]], i, set, tracks, _bridge, rowH), RepeatLayout.Stack(rowH),
+        Element RealList() => View().Length == 0
+            ? FilterEmpty(_tracks.Count == 0)     // empty playlist, or a filter that matched nothing
+            // Bound rows (signals-first): each slot mounts ONCE and recycles by an index-signal write. Selection flips a
+            // bound pill opacity — no list re-render, no remount, no Enter replay (the flash fix); now-playing/sort
+            // re-skin each row's content in place via its own subscriptions. The row maps its display position → track
+            // through View() inside its binds (sort-subscribed), so a sort change reorders in place; filter/density/tier
+            // change the slot SET and remount via the keyed wrapper below.
+            : ItemsView.CreateBound(
+                View().Length,
+                scope => BoundRowSkin(scope, BoundRow(scope, set, tracks, rowH), rowH),
+                RepeatLayout.Stack(rowH),
                 selectionMode: _cfg.Selection,
                 selection: _selection,                // external → selection survives the tier remount
                 isItemInvokedEnabled: true,
                 itemInvoked: i => _h.Play(View()[i]),   // DoubleTap / Enter → play this track (original context order)
-                containerFactory: rowSkin,
-                keyOf: i => items[View()[i]].Id,
-                displacementVersion: nowEpoch,        // now-playing / buffering / sort re-skin (ItemDisplacement null → no-op)
                 grow: _cfg.HasTrailing ? 0f : 1f,
                 // Alpha-mask edge fade: the page floats over a gradient wash (no opaque plate), so the surface-colour
                 // EdgeCues fade self-skips — this feathers the rows' own alpha at the overflowing top/bottom instead.
                 // Only when the ItemsView is itself the scroller (playlist/liked); the album path fades its outer scroll.
-                autoEdgeFade: !_cfg.HasTrailing);
+                autoEdgeFade: !_cfg.HasTrailing,
+                // Cold-mount stagger: the track list is the heaviest part of a detail-page mount (the nav cold-mount
+                // spike). Realize its initial window a few rows/frame so no single frame mounts the whole window — the
+                // skeleton/reveal masks the brief fill-in, and the scroll extent stays correct (driven by the full count).
+                staggerColdRealize: true);
 
-        // Key the list by tier + density + filter → any of those REMOUNTS it (a clean mount with the right column set /
-        // row height / filtered window). Sort is NOT in the key — it re-skins in place via the epoch (scroll preserved).
+        // The tracks stream in via the engine's skeleton boundary: while the model is Pending it shows shimmer rows the
+        // engine DERIVES from the real Row(EmptyTrack) template (ONE definition — no hand-written shimmer, no drift); on
+        // Ready it reveals the real virtualized list with a staggered row reveal.
+        // SkelReveal.None: the ItemsView owns its entrance (per-row ItemCollectionTransition adds); the engine lingers
+        // the shimmer across that entrance so the gray rows cross-dissolve INTO the real rows at the same positions —
+        // no shimmer→empty→rows gap, and no exit-timing to hand-tune here.
+        Element list = Skel.Region(_full, () => RowsShimmer(set, tracks, rowH), _ => RealList(), reveal: SkelReveal.None);
+
+        // Key the list by tier + density + filter → any of those REMOUNTS it (a clean, shape-stable slot template with
+        // the right column set / row height / filtered window). Sort is NOT in the key — each bound row re-skins itself
+        // to the new order via its sort-subscribed binds (scroll preserved). Tier IS in the key now: the cell arity
+        // (column set) is shape per slot, so a breakpoint cross rebuilds the slots (the rare-resize cost; the in-place
+        // flash fix is the priority).
         float listGrow = _cfg.HasTrailing ? 0f : 1f;
         Element listKeyed = new BoxEl { Key = "list:t" + tier + ":d" + density + ":q" + query + ":f" + (int)flags, Grow = listGrow, Direction = 1, Children = [list] };
 
@@ -239,13 +287,13 @@ sealed class TrackList : Component
     Track? DisplayTrack(int displayIndex)
     {
         var v = View();
-        return displayIndex >= 0 && displayIndex < v.Length ? _m.Tracks[v[displayIndex]] : null;
+        return displayIndex >= 0 && displayIndex < v.Length ? _tracks[v[displayIndex]] : null;
     }
 
     // album / single: an outer scroller carries the (eager) rows + the trailing sections, under the fixed chrome.
     Element TrailingBody(Element listKeyed)
     {
-        var trailing = DetailTrailing.Build(_m, _h);
+        var trailing = DetailTrailing.Build(_model, _h);
         var body = new Element[1 + trailing.Length];
         body[0] = listKeyed;
         Array.Copy(trailing, 0, body, 1, trailing.Length);
@@ -261,8 +309,8 @@ sealed class TrackList : Component
         Margin = new Edges4(0f, 0f, 0f, WaveeSpace.XS),
         Children =
         [
-            Embed.Comp(() => new FilterButton(_h.Query, _h.Flags, _h.SetFlags, _m.HasVideo)),
-            Embed.Comp(() => new MoreButton(_m, _h)),
+            Embed.Comp(() => new FilterButton(_h.Query, _h.Flags, _h.SetFlags, _model.HasVideo)),
+            Embed.Comp(() => new MoreButton(_model, _h)),
             // The Sort button opens the "sort by" flyout — the only way to sort by Artist (no column of its own).
             Embed.Comp(() => new SortMenuButton(_h.Sort, _h.SetSort, _cfg.ShowAlbumColumn, _hasDate)),
             Embed.Comp(() => new ListButton(_h.Density, _h.SetDensity)),
@@ -284,6 +332,7 @@ sealed class TrackList : Component
         {
             new BoxEl(),   // # column: no header label (the row numbers below need none) — declutters the left header slot
         };
+        if (set.Heart) cells.Add(new BoxEl());   // ♥ header (blank, not sortable) — left cluster, between # and art
         if (set.Thumb) cells.Add(new BoxEl());   // art column header (blank) — keeps the Title header aligned over the title text
         // The Title header owns a Title→Artist cycle; SortLabel reads "Artist" while artist-sorting and cross-fades the word on the flip.
         cells.Add(SortCell(Embed.Comp(() => new SortLabel(_h.Sort)), SortColumn.Title, sort, FlexJustify.Start));
@@ -292,7 +341,6 @@ sealed class TrackList : Component
         if (set.Date) cells.Add(SortCell(HLabel(Loc.Get(Strings.Detail.Column.DateAdded), SortColumn.DateAdded, sort), SortColumn.DateAdded, sort, FlexJustify.Start));
         if (set.Video) cells.Add(new BoxEl());   // video header (blank — the per-row indicator stands alone)
         if (set.Plays) cells.Add(SortCell(HLabel(Loc.Get(Strings.Detail.Column.Plays), SortColumn.Plays, sort), SortColumn.Plays, sort, FlexJustify.End));
-        if (set.Heart) cells.Add(new BoxEl());   // ♥ header (blank, not sortable)
         cells.Add(SortCell(Icon(Icons.Clock, 14f, sort.Column == SortColumn.Duration ? Tok.TextSecondary : Tok.TextTertiary),
                            SortColumn.Duration, sort, FlexJustify.End));
 
@@ -365,40 +413,154 @@ sealed class TrackList : Component
         return new TrackSort(clicked, false);
     }
 
-    // ── row ──────────────────────────────────────────────────────────────────────────────────────────────
-    Element Row(Track t, int index, ColumnSet set, TrackSize[] tracks, PlaybackBridge? bridge, float rowH)
+    // The shimmer source for the track list: N copies of the REAL Row built with an empty track. The engine derives the
+    // grey shimmer bars from this (one source of truth — the row shape can never drift from the real rows).
+    Element RowsShimmer(ColumnSet set, TrackSize[] tracks, float rowH)
     {
-        bool isNow = bridge is not null && bridge.CurrentTrack.Peek()?.Id == t.Id;
-        ColorF titleColor = isNow ? Tok.AccentTextPrimary : Tok.TextPrimary;
+        var rows = new Element[12];
+        // Static title (no bound slot index here) — the skeleton deriver only needs the row SHAPE. Plain TextEl (matches
+        // the non-now-playing real rows now), so the skeleton mount carries no per-row marquee cost either.
+        for (int i = 0; i < rows.Length; i++)
+            rows[i] = RowGrid(EmptyTrack, i, isNow: false, isPlaying: false, isBuffering: false, isTop: false,
+                              new TextEl(EmptyTrack.Title) { Size = 14f, Weight = 600, Color = Tok.TextPrimary, Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                              set, tracks, rowH);
+        return new BoxEl { Direction = 1, Children = rows };
+    }
+
+    // ── bound row ────────────────────────────────────────────────────────────────────────────────────────
+    // A bound row: ONE self-subscribing content component (re-renders on recycle/sort/now-playing, patching cells in
+    // place — never a remount, so no flash) wrapped in the shape-stable bound selection skin.
+    Element BoundRow(RowScope scope, ColumnSet set, TrackSize[] tracks, float rowH)
+        => Embed.Comp(() => new BoundRowContent(this, scope, set, tracks, rowH));
+
+    // The track shown at a display position, through the current (sort-subscribed) view. Reading _h.Sort.Value subscribes
+    // the calling bind/render so a SORT change re-skins in place; the caller also reads the slot index signal so a
+    // RECYCLE rebinds. Out-of-range (overscan past the view) → EmptyTrack.
+    internal Track BoundTrackAt(int displayPos)
+    {
+        _ = _h.Sort.Value;
+        var v = View();
+        return (uint)displayPos < (uint)v.Length ? _tracks[v[displayPos]] : EmptyTrack;
+    }
+
+    // The title element: a Marquee whose text + now-playing colour are bound to the slot's INDEX signal, so it re-skins
+    // on recycle / now-playing WITHOUT remounting. The marquee is a reused autonomous child of BoundRowContent — frozen
+    // constructor args would stick on the first track, so its inputs MUST read the signal, not a captured value.
+    Element BoundTitle(IReadSignal<int> index) => Marquee.Of(
+        Prop.Of(() => BoundTrackAt(index.Value).Title),
+        new Marquee.Style
+        {
+            FontSize = 14f, Weight = 600,
+            Foreground = Prop.Of(() =>
+                _bridge is not null && _bridge.CurrentTrack.Value?.Id == BoundTrackAt(index.Value).Id
+                    ? Tok.AccentTextPrimary : Tok.TextPrimary),
+        });
+
+    // PERF: the marquee is 2 nested components + a measure→re-render cycle + a perpetual TranslateX track PER ROW — on a
+    // 12-row cold mount that was ~24 of ~60 components and the dominant slice of the flush spike (and every one re-rendered
+    // by RethemeAll on a theme flip). A non-now-playing title never needs to scroll (Spotify only scrolls the now-playing
+    // row), so render it as a plain, bound, ellipsis TextEl — ONE node, no extra component, no measure cycle, no animation.
+    // Recycle-safe: a recycled row is non-playing → stays plain (no type swap); only the single now-playing row uses the
+    // marquee, and BoundRowContent re-renders (swapping plain↔marquee for just that row) when now-playing changes.
+    Element BoundTitlePlain(IReadSignal<int> index) => new TextEl(Prop.Of(() => BoundTrackAt(index.Value).Title))
+    {
+        Size = 14f, Weight = 600,
+        Color = Prop.Of(() =>
+            _bridge is not null && _bridge.CurrentTrack.Value?.Id == BoundTrackAt(index.Value).Id
+                ? Tok.AccentTextPrimary : Tok.TextPrimary),
+        Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+    };
+
+    // The live content of a bound row: re-renders on its OWN subscriptions (recycle index, sort, now-playing) and
+    // patches the GRID in place via diff — no remount, no flash. Child COMPONENTS (the title marquee) are reused across
+    // these re-renders, so the title is built with index-signal binds (BoundTitle) to update despite frozen args.
+    sealed class BoundRowContent : Component
+    {
+        readonly TrackList _o;
+        readonly RowScope _scope;
+        readonly ColumnSet _set;
+        readonly TrackSize[] _tracks;
+        readonly float _rowH;
+        public BoundRowContent(TrackList o, RowScope scope, ColumnSet set, TrackSize[] tracks, float rowH)
+        { _o = o; _scope = scope; _set = set; _tracks = tracks; _rowH = rowH; }
+
+        public override Element Render()
+        {
+            int i = _scope.Index.Value;                                  // recycle → re-render
+            var t = _o.BoundTrackAt(i);                                  // resolves the track; subscribes sort
+            var br = _o._bridge;
+            bool isNow = br?.CurrentTrack.Value?.Id == t.Id;             // now-playing → re-render
+            bool isPlaying = isNow && (br?.IsPlaying.Value ?? false);
+            // Buffering = this track's PlayAsync command is in flight (the Task-driven start spinner), OR the now-playing
+            // track is mid-playback re-buffering (the bridge signal). Reading _play.IsRunning subscribes this row so the
+            // spinner appears/clears as the command starts/finishes.
+            bool isBuffering = (_o._play?.IsRunning(t.Id) ?? false) || (isNow && br is not null && br.IsBuffering.Value);
+            bool isTop = _o._cfg.ShowPlays && _o._topTrackId is not null && t.Id == _o._topTrackId;
+            // Marquee only for the now-playing row; every other row is a cheap plain ellipsis title (see BoundTitlePlain).
+            Element title = isNow ? _o.BoundTitle(_scope.Index) : _o.BoundTitlePlain(_scope.Index);
+            return _o.RowGrid(t, i, isNow, isPlaying, isBuffering, isTop, title, _set, _tracks, _rowH,
+                              onPlay: () => _o.PlayRow(i));
+        }
+    }
+
+    // The # cell's play affordance: single-click PLAYS this track, or PAUSES/RESUMES it when it is already the
+    // now-playing one (the PlayerBar.PrimaryClick toggle: optimistic IsPlaying write, then the player command). Called
+    // from a click handler (not a reactive context), so the .Peek() reads here never subscribe.
+    void PlayRow(int displayPos)
+    {
+        var v = View();
+        if ((uint)displayPos >= (uint)v.Length) return;
+        int orig = v[displayPos];
+        var track = _tracks[orig];
+        // Already the now-playing track → pause/resume toggle (a distinct action, optimistic write then the command).
+        if (_bridge is not null && _bridge.CurrentTrack.Peek()?.Id == track.Id)
+        {
+            bool playing = _bridge.IsPlaying.Peek();
+            _bridge.IsPlaying.Value = !playing;
+            if (playing) _ = _bridge.Player.PauseAsync(); else _ = _bridge.Player.ResumeAsync();
+            return;
+        }
+        // A DIFFERENT track → START it through the keyed async command: the row's #-cell shows the buffer spinner while
+        // this PlayAsync Task is in flight (re-fire guarded), the await never blocks the UI, and completion clears it.
+        if (_bridge is not null && _play is not null && _model.ContextUri is { } uri)
+            _play.Run(track.Id, ct => _bridge.Player.PlayAsync(uri, orig, ct));
+        else
+            _h.Play(orig);
+    }
+
+    // ── row grid ─────────────────────────────────────────────────────────────────────────────────────────
+    // Builds the row GRID — ONE source for the live bound rows AND the skeleton shimmer. The per-track values arrive
+    // resolved (t + now-playing flags + the title element), so the caller decides static (shimmer) vs index-signal-bound
+    // (BoundRowContent) title. Plain/diffable — no Animate — so a BoundRowContent re-render patches cells in place.
+    Element RowGrid(Track t, int displayIndex, bool isNow, bool isPlaying, bool isBuffering, bool isTop, Element title,
+                    ColumnSet set, TrackSize[] tracks, float rowH, Action? onPlay = null)
+    {
         float thumb = ThumbSize;   // fixed art size → a stable dedicated art column (see TracksFor)
 
         var cells = new List<Element>(tracks.Length);
 
-        // # cell: now-playing glyph → top-track star → the track number. (Selection shows as the row's left accent bar.)
-        bool isTop = _cfg.ShowPlays && _topTrackId is not null && t.Id == _topTrackId;
-        cells.Add(CenterCell(isNow
-            ? Icon(Icons.Play, 12f, Tok.AccentTextPrimary)
-            : isTop
-                ? Icon(TopStar, 11f, Tok.AccentTextPrimary)
-                : new TextEl((index + 1).ToString()) { Size = 13f, Color = Tok.TextTertiary }));
+        // # cell: number / live equalizer / fetch spinner at rest; reveals a SINGLE-CLICK play (or pause) button on ROW hover.
+        cells.Add(NumberCell(displayIndex, isNow, isPlaying, isBuffering, isTop, onPlay));
+
+        // ♥ — moved into the left cluster (between # and the art thumb).
+        if (set.Heart) cells.Add(CenterCell(Heart(_cfg)));
 
         // Art thumb (playlist/liked) gets its OWN column before Title — so the "Title" header aligns over the title TEXT,
         // not the artwork (the WaveeMusic RowArtColDef pattern). Then the title + artist subline (subline hidden on
         // single-artist albums/singles/EPs).
         if (set.Thumb)
             cells.Add(CenterCell(Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, thumb, thumb, WaveeRadius.Control)));
-        Element title = Marquee.Of(t.Title, new Marquee.Style { FontSize = 14f, Weight = 600, Foreground = titleColor });
         var titleCol = new BoxEl
         {
             Direction = 1, Grow = 1f, Basis = 0f, Gap = 1f,
             Children = _cfg.ShowTrackArtist
-                ? [title, Marquee.Of(DetailFormat.ArtistNames(t.Artists), new Marquee.Style { FontSize = 12f, Foreground = Tok.TextSecondary })]
+                ? [title, ArtistLinks(t.Artists)]
                 : [title],
         };
         cells.Add(new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Children = [titleCol] });
 
         if (set.Album)
-            cells.Add(LeftCell(new TextEl(t.Album.Name) { Size = 13f, Color = Tok.TextSecondary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }));
+            cells.Add(LeftCell(AlbumLink(t.Album)));
         if (set.By)
             cells.Add(AddedByCell(t.AddedBy));
         if (set.Date)
@@ -407,18 +569,46 @@ sealed class TrackList : Component
             cells.Add(CenterCell(t.HasVideo ? Icon(Icons.Movie, 13f, Tok.TextTertiary) : new BoxEl()));
         if (set.Plays)
             cells.Add(EndCell(new TextEl(PlaysLabel(t.PlayCount)) { Size = 13f, Color = Tok.TextTertiary }));
-        if (set.Heart)
-            cells.Add(CenterCell(Heart(_cfg)));
         cells.Add(EndCell(new TextEl(DetailFormat.TrackTime(t.DurationMs)) { Size = 13f, Color = Tok.TextSecondary }));
 
         return new GridEl
         {
-            Columns = tracks, ColGap = ColGap, RowHeight = rowH, Grow = 1f,   // fill the RowSkin lane (ZStack content layer)
-            // Pad PadX − RowInset: with the RowSkin's RowInset margin, columns still start at PadX (header-aligned).
+            Columns = tracks, ColGap = ColGap, RowHeight = rowH, Grow = 1f,   // fill the BoundRowSkin lane (ZStack content layer)
+            // Pad PadX − RowInset: with the skin's RowInset margin, columns still start at PadX (header-aligned).
             Padding = new Edges4(PadX - RowInset, 0f, PadX - RowInset, 0f),
             Children = cells.ToArray(),
         };
     }
+
+    // The artist subline as inline HYPERLINK spans — one clickable link per artist (each navigates on its own), joined by
+    // ", ". The engine resolves the Hand cursor over each link rect and fires its OnClick on release; the press lands on
+    // this text leaf (no PressedBit) so clicking an artist navigates WITHOUT playing/selecting the row. (Hovering a name
+    // shows the hand cursor; the row-hover highlight yields to the link there — the WinUI inline-Hyperlink trade-off.)
+    Element ArtistLinks(IReadOnlyList<ArtistRef> artists)
+    {
+        if (artists.Count == 0) return new BoxEl();
+        var spans = new TextSpan[artists.Count * 2 - 1];
+        int n = 0;
+        for (int i = 0; i < artists.Count; i++)
+        {
+            if (i > 0) spans[n++] = new TextSpan(", ");
+            var a = artists[i];   // fresh per-iteration capture → each link navigates to its OWN artist
+            spans[n++] = new TextSpan(a.Name, OnClick: () => _h.Go("artist:" + a.Uri, a.Name));
+        }
+        return new SpanTextEl(spans)
+        {
+            Size = 12f, Color = Tok.TextSecondary, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MaxLines = 1,
+            MinWidth = 0f,   // the NoWrap names must not inflate the flexible title column (the row "stretch" the user hit)
+        };
+    }
+
+    // The album cell as a single clickable hyperlink (navigates to the album page).
+    Element AlbumLink(AlbumRef album) =>
+        new SpanTextEl([new TextSpan(album.Name, OnClick: () => _h.Go("album:" + album.Uri, album.Name))])
+        {
+            Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MaxLines = 1,
+            Grow = 1f, Basis = 0f,
+        };
 
     // The Added-by cell: a small initial-avatar (we carry no avatar URL in the model yet) + the contributor name.
     static Element AddedByCell(string? by)
@@ -453,30 +643,48 @@ sealed class TrackList : Component
         };
     }
 
-    // The custom row container: full-row hover/selection fill (Spotify-style), exact insets, interaction wiring.
-    // Plain BoxEl (no binds/Component/OnRealized) → recyclable; matches the SelectorVisuals press/key contract.
-    static BoxEl RowSkin(int index, Element content, ItemChromeState state,
-                         Action<ItemContainerTrigger, KeyModifiers> onInteraction, Action<bool> onFocusChanged, float rowH)
+    // The custom row container, BOUND + shape-stable so it recycles without remounting: the zebra REST fill is bound to
+    // the slot index (recycle-correct + theme-reactive via RethemeAll re-firing binds), and the left accent pill is an
+    // ALWAYS-PRESENT child revealed by a BOUND opacity on scope.IsSelected — so a selection change is a compositor-only
+    // re-skin (no list re-render, no remount, no Enter replay → no flash). Hover/press/border are uniform (HoverFill etc.
+    // are not bindable), which keeps them recycle-correct; this drops only the light-mode zebra-vs-flush hover-depth
+    // nuance + the at-rest zebra card stroke (the pill + bound fill are the cues).
+    BoxEl BoundRowSkin(RowScope scope, Element content, float rowH)
     {
-        bool odd = index % 2 != 0;   // even/odd zebra striping (WaveeMusic): odd rows get a subtle fill + card-stroke border
+        var index = scope.Index;
+        var isSel = scope.IsSelected;
+        var onInteraction = scope.OnInteraction;
+        var onFocusChanged = scope.OnFocusChanged;
+        bool light = Tok.Theme == ThemeKind.Light;
+        ColorF hoverFill = light ? ColorF.FromRgba(0xEC, 0xE9, 0xE2) : Tok.FillSubtleSecondary;
+        ColorF pressedFill = light ? ColorF.FromRgba(0xE5, 0xE2, 0xDA) : Tok.FillSubtleTertiary;
         return new()
         {
             ZStack = true, MinHeight = rowH, ClipToBounds = true,    // ZStack → the left accent bar overlays the content
             Margin = new Edges4(RowInset, 0f, RowInset, 0f),         // inset → the highlight reads as a rounded pill (#32)
             Corners = CornerRadius4.All(6f),
-            // Zebra at rest (odd → a subtle fill) + hover feedback. Selection does NOT change the fill/border — the
-            // left accent bar (below) is the ONLY selection cue.
-            Fill = odd ? Tok.FillSubtleTertiary : ColorF.Transparent,
-            HoverFill = Tok.FillSubtleSecondary,
-            PressedFill = Tok.FillSubtleTertiary,
+            // Reveal on slot MOUNT only (first load + a tier/density/filter remount). Recycling reuses the slot (no
+            // mount), so this never replays on scroll or selection — the flash fix — while keeping the entrance fade.
+            Animate = new LayoutTransition(TransitionChannels.Opacity,
+                TransitionDynamics.Tween(280f, Easing.FluentDecelerate),
+                Enter: new EnterExit(Opacity: 0f, Active: true)),
+            // Zebra REST fill bound to the slot index (recycle-correct), reading Tok so RethemeAll recolours it on a
+            // theme switch. Selection does NOT change the fill — the left accent bar (below) is the ONLY selection cue.
+            Fill = Prop.Of(() => index.Value % 2 != 0
+                ? (Tok.Theme == ThemeKind.Light ? ColorF.FromRgba(0xF7, 0xF6, 0xF3) : Tok.FillSubtleTertiary)
+                : ColorF.Transparent),
+            HoverFill = hoverFill,
+            PressedFill = pressedFill,
+            PressScale = 0.985f,   // subtle push-down on press (a depth cue so the row isn't flat)
+
             BorderWidth = 1f,
-            BorderColor = odd ? Tok.StrokeCardDefault : ColorF.Transparent,
+            BorderColor = ColorF.Transparent,        // uniform (BorderColor is not bindable) → recycle-correct
             HoverBorderColor = Tok.StrokeCardDefault,
-            Opacity = state.IsEnabled ? 1f : 0.4f,
-            IsEnabled = state.IsEnabled,
-            Focusable = true,
             FocusVisualMargin = Edges4.All(1f),
+            Focusable = false,                       // the ItemsView roving effect owns the single tab stop
             Role = AutomationRole.Button,
+            // Double-click invokes (plays), single click selects. DoubleTap is a POINTER trigger, so the ItemsView lands
+            // focus + scrolls the row into view on it (EnterKey would skip that).
             OnPointerPressed = args => onInteraction(
                 args.ClickCount >= 2 ? ItemContainerTrigger.DoubleTap : ItemContainerTrigger.Tap, args.Mods),
             OnKeyDown = args =>
@@ -485,24 +693,73 @@ sealed class TrackList : Component
                 else if (args.KeyCode == Keys.Space && !args.IsRepeat) { onInteraction(ItemContainerTrigger.SpaceKey, args.Mods); args.Handled = true; }
             },
             OnFocusChanged = onFocusChanged,
-            // Content lane (Grow fills the ZStack) + the WinUI ListView-style left accent selection bar (when selected).
-            // The pill spring-grows (ScaleY 0→1) + fades in on select and shrinks on press — the WinUI ListViewItem
-            // SelectionIndicator motion, identical to the engine's built-in SelectorVisuals.AccentPill (NavPill spring
-            // 0.30/0.85; press shrink 10/16). Keyed so the reconciler tracks its enter across the selection re-skin.
-            Children = state.IsSelected
-                ? [new BoxEl { Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center, Children = [content] },
-                   new BoxEl
-                   {
-                       Key = "row-pill", Width = 3f, Height = 16f, Margin = new Edges4(2f, 0f, 0f, 0f),
-                       Corners = CornerRadius4.All(1.5f), Fill = Tok.AccentDefault, AlignSelf = FlexAlign.Center,
-                       HitTestVisible = false, PressScale = 10f / 16f,
-                       Animate = new LayoutTransition(TransitionChannels.Opacity,
-                           new TransitionDynamics(DynamicsKind.Spring, 0.30f, 0.85f),
-                           Enter: new EnterExit(Sy: 0f, Opacity: 0f, Active: true)),
-                   }]
-                : [new BoxEl { Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center, Children = [content] }],
+            // A no-op pointer-exit registers PointerBit so the row counts as the "interactive ancestor" whose hover
+            // progress its NON-interactive descendants inherit (SceneRecorder.TryResolveInteractionProgress) — that is what
+            // lets the # cell reveal its play/pause glyph on hover ANYWHERE in the row. Cached static lambda → no per-row alloc.
+            OnPointerExit = static () => { },
+            // Content lane (Grow fills the ZStack) + the WinUI ListView-style left accent selection bar. The pill is
+            // ALWAYS present (shape-stable) and revealed by a BOUND opacity (no mount-Enter spring — the slot never
+            // remounts, so selection is a compositor-only re-skin); press still shrinks it (10/16).
+            Children =
+            [
+                new BoxEl { Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center, Children = [content] },
+                new BoxEl
+                {
+                    Key = "row-pill", Width = 3f, Height = 16f, Margin = new Edges4(2f, 0f, 0f, 0f),
+                    Corners = CornerRadius4.All(1.5f), Fill = Tok.AccentDefault, AlignSelf = FlexAlign.Center,
+                    HitTestVisible = false, PressScale = 10f / 16f,
+                    Opacity = Prop.Of(() => isSel() ? 1f : 0f),
+                },
+            ],
         };
     }
+
+    // The # cell — a small state machine over the playback of THIS track, with the transport button revealed on row hover:
+    //   • fetching/buffering → a spinner (shown whether or not you're hovering);
+    //   • now-playing + playing → a LIVE animated equalizer at rest, the PAUSE button on hover;
+    //   • now-playing + paused  → a settled equalizer at rest, the PLAY button on hover;
+    //   • album top track       → the star at rest, the PLAY button on hover;
+    //   • otherwise             → the track number at rest, the PLAY button on hover.
+    // The number/equalizer layer fades OUT on row hover and the transport layer fades IN — the recorder drives both off
+    // the nearest interactive ancestor (the row, so the reveal follows ROW hover; InteractionAnimator honours HoverWithin
+    // so it survives the pointer crossing onto the button). The transport layer is itself the SINGLE-CLICK target (its
+    // OnClick fills the #-cell + shows the hand cursor); the inner glyph PressScale-pushes on press for a real button feel.
+    static Element NumberCell(int index, bool isNow, bool isPlaying, bool isBuffering, bool isTop, Action? onPlay = null)
+    {
+        ColorF accent = Tok.AccentTextPrimary;
+        Element rest =
+            isBuffering ? Spinner()
+            : isNow     ? WaveeEqualizer.Of(isPlaying, accent)
+            : isTop     ? Icon(TopStar, 11f, accent)
+            :             new TextEl((index + 1).ToString()) { Size = 13f, Color = Tok.TextTertiary };
+        Element transport = isBuffering
+            ? Spinner()
+            : new BoxEl
+            {
+                Width = 24f, Height = 24f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                PressScale = 0.86f,   // a real button press-push (the row-driven reveal is the hover cue)
+                Children = [Icon(isNow && isPlaying ? Icons.Pause : Icons.Play, 12f, isNow ? accent : Tok.TextPrimary)],
+            };
+        return new BoxEl
+        {
+            ZStack = true,
+            Children =
+            [
+                new BoxEl { Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, HoverOpacity = 0f, Children = [rest] },
+                new BoxEl
+                {
+                    Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Opacity = 0f, HoverOpacity = 1f,
+                    OnClick = onPlay, Cursor = onPlay is null ? (CursorId?)null : CursorId.Hand,
+                    Children = [transport],
+                },
+            ],
+        };
+    }
+
+    // The indeterminate fetch/buffer spinner (WinUI ProgressRing).
+    static Element Spinner() => ProgressRing.Indeterminate(size: 16f, foreground: Tok.AccentTextPrimary);
+
+    // The now-playing equalizer is the shared WaveeEqualizer (Components/Equalizer.cs) — same bars on the rows + cards.
 
     // ── cell wrappers (the cell fills its grid rect; these vertical-center + horizontally place the content) ──
     static Element CenterCell(Element content) =>
@@ -512,6 +769,7 @@ sealed class TrackList : Component
     static Element EndCell(Element content) =>
         new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.End, Children = [content] };
 }
+
 
 // The floating multi-select command bar: appears over the track list when ≥1 row is selected — overlapping "stacked"
 // album thumbnails + "N selected" + quick actions (Add to playlist / Queue) + Clear. Self-subscribes to the

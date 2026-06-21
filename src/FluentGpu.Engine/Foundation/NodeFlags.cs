@@ -35,6 +35,11 @@ public enum NodeFlags : uint
     Focusable = 1u << 13,
     Focused = 1u << 14,
     Hovered = 1u << 15,
+    HoverWithin = 1u << 5,        // a CONTAINER whose subtree holds the hovered leaf — set on the hovered node's
+                                  // interactive STRICT-ancestor chain by the input dispatcher, so a row/group reads as
+                                  // hovered while the pointer crosses its interactive children (links / buttons): the
+                                  // recorder keeps its HoverFill + any descendant hover-reveal (inherited progress) lit,
+                                  // instead of flickering off whenever the hovered leaf is an interactive child.
     Pressed = 1u << 16,
     FocusVisual = 1u << 22,   // focus arrived via keyboard (Tab/arrows) → draw the focus ring; pointer focus does NOT set it
 
@@ -55,6 +60,10 @@ public enum NodeFlags : uint
     DragGhost = 1u << 26,         // lifted drag visual (E5): excluded from the clipped main record pass and re-walked
                                   // in an UNCLIPPED top band emitted last (escapes ancestor scissors, paints above
                                   // overlays); set/cleared by Input.DragController, published as SceneStore.DragGhost
+    ConnectedOverlay = 1u << 30,  // flying shared-element (Hero) visual: a connected-animation overlay node, excluded
+                                  // from the clipped main + orphan passes and re-walked in an UNCLIPPED top band ABOVE
+                                  // the drag ghost, so a card art flying into a clipped rail is never cut off. Set/
+                                  // cleared by FluentGpu.Animation.ConnectedAnimation, tracked in SceneStore overlays.
 
     // lifecycle
     NewThisFrame = 1u << 29,

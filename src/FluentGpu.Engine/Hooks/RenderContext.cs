@@ -81,7 +81,25 @@ internal sealed class AsyncResourceCell<T> : HookCell, IDisposableCell
     public Loadable<T> Loadable = null!;
     public CancellationTokenSource Cts = null!;
     public bool Started;
+    public object[]? Deps;   // null for the once-at-mount overload; set by the dep-keyed overload to gate a reload
     public void DisposeCell() { try { Cts.Cancel(); } catch { /* already disposed */ } Cts.Dispose(); }
+}
+
+/// <summary>Backs <see cref="RenderContext.UseAsyncCommand"/>: the persistent command + whether to cancel its in-flight
+/// run on unmount (default false — a started command should complete; the spinner is gone with the component).</summary>
+internal sealed class AsyncCommandCell : HookCell, IDisposableCell
+{
+    public AsyncCommand Command = null!;
+    public bool CancelOnUnmount;
+    public void DisposeCell() { if (CancelOnUnmount) Command.Cancel(); }
+}
+
+/// <summary>Backs <see cref="RenderContext.UseAsyncCommands{TKey}"/>: the persistent keyed command set.</summary>
+internal sealed class AsyncCommandSetCell<TKey> : HookCell, IDisposableCell where TKey : notnull
+{
+    public AsyncCommandSet<TKey> Commands = null!;
+    public bool CancelOnUnmount;
+    public void DisposeCell() { if (CancelOnUnmount) Commands.CancelAll(); }
 }
 
 /// <summary>A stable, mutable per-component box that persists across renders (the React <c>useRef</c> container).</summary>
@@ -488,10 +506,16 @@ public sealed partial class RenderContext
     /// <summary>Bind an async image and observe its load state (media-pipeline.md §5). Subscribes this component to the
     /// host's image-status epoch so a ready/failed transition re-renders just this component.</summary>
     public ImageBinding UseImage(string src, int decodePx, ImagePriority priority = ImagePriority.Visible, string? blurHash = null)
+        => UseImage(src, decodePx, decodePx, priority, blurHash);
+
+    /// <summary>As <see cref="UseImage(string,int,ImagePriority,string)"/> but with a non-square decode target, so an
+    /// observer can share the EXACT cache handle of a non-square displayed image (key is <c>(src, decodeW, decodeH)</c>)
+    /// instead of forking a second decode.</summary>
+    public ImageBinding UseImage(string src, int decodeW, int decodeH, ImagePriority priority = ImagePriority.Visible, string? blurHash = null)
     {
         _ = ImageEpoch?.Value;   // subscribe: any image status change re-renders this UseImage consumer
         if (Images is null || string.IsNullOrEmpty(src)) return default;
-        var h = Images.Request(src, decodePx, decodePx, priority, blurHash);
+        var h = Images.Request(src, decodeW, decodeH, priority, blurHash);
         return new ImageBinding(h, Images.StateOf(h), Images.FailureOf(h), Images.AttemptsOf(h));
     }
 
@@ -522,36 +546,98 @@ public sealed partial class RenderContext
     /// (e.g. an empty array so the region's content lambda is never invoked against null).</summary>
     public Loadable<T> UseAsyncResource<T>(Func<CancellationToken, Task<T>> loader, T seed = default!)
     {
-        var post = UsePost();   // UseContext consumes no hook cursor, so calling it here does not shift hook order
+        var post = UsePost();   // UsePost consumes no hook cursor, so calling it here does not shift hook order
         AsyncResourceCell<T> cell;
         if (!_mounted) { cell = new AsyncResourceCell<T> { Loadable = Loadable<T>.Pending(seed), Cts = new CancellationTokenSource() }; _cells.Add(cell); }
         else cell = (AsyncResourceCell<T>)_cells[_cursor];
         _cursor++;
 
-        if (!cell.Started)
-        {
-            cell.Started = true;
-            var loadable = cell.Loadable;
-            var token = cell.Cts.Token;
-            _ = Run();
+        if (!cell.Started) { cell.Started = true; BeginAsyncLoad(cell, loader, post); }
+        return cell.Loadable;
+    }
 
-            async Task Run()
-            {
-                try
-                {
-                    T v = await loader(token).ConfigureAwait(false);
-                    if (!token.IsCancellationRequested)
-                        post(() => { if (!token.IsCancellationRequested) loadable.SetReady(v); });
-                }
-                catch (OperationCanceledException) { /* unmounted mid-load — the CTS was cancelled */ }
-                catch (Exception ex)
-                {
-                    if (!token.IsCancellationRequested)
-                        post(() => { if (!token.IsCancellationRequested) loadable.SetFailed(ex); });
-                }
-            }
+    /// <summary>As <see cref="UseAsyncResource{T}(Func{CancellationToken, Task{T}}, T)"/> but RE-FIRES when
+    /// <paramref name="deps"/> change (value-equality, like <see cref="UseMemo"/>): the in-flight run is cancelled, the
+    /// loadable resets to <c>Pending(seed)</c>, and the loader restarts. Use for a resource keyed on a reactive input —
+    /// e.g. a detail page whose album id changes while the component instance is REUSED across navigation, so the data
+    /// follows the id with no remount. Re-evaluate <paramref name="seed"/> per render (so the reset shows the NEW key's
+    /// placeholder/preview, not the prior one's) and pass a loader that closes over the current key.</summary>
+    public Loadable<T> UseAsyncResource<T>(Func<CancellationToken, Task<T>> loader, T seed, params object[] deps)
+    {
+        var post = UsePost();
+        AsyncResourceCell<T> cell;
+        if (!_mounted)
+        {
+            cell = new AsyncResourceCell<T> { Loadable = Loadable<T>.Pending(seed), Cts = new CancellationTokenSource(), Deps = deps };
+            _cells.Add(cell);
+            _cursor++;
+            BeginAsyncLoad(cell, loader, post);
+            return cell.Loadable;
+        }
+        cell = (AsyncResourceCell<T>)_cells[_cursor];
+        _cursor++;
+        if (!DepsEqual(cell.Deps, deps))
+        {
+            cell.Deps = deps;
+            try { cell.Cts.Cancel(); } catch { /* already disposed */ }
+            cell.Cts.Dispose();
+            cell.Cts = new CancellationTokenSource();
+            cell.Loadable.SetPending(seed);   // new key → its own preview/skeleton while the fresh load runs (no stale flash)
+            BeginAsyncLoad(cell, loader, post);
         }
         return cell.Loadable;
+    }
+
+    // The loader kickoff shared by both UseAsyncResource overloads. Fires loader on cell.Cts's CURRENT token (pulled
+    // here, AFTER any restart swapped cell.Cts, so it tracks THIS run) and marshals the result to the UI thread via post,
+    // cancelled-token-guarded both before and inside the post so an unmount / re-key mid-load drops the late completion.
+    private static void BeginAsyncLoad<T>(AsyncResourceCell<T> cell, Func<CancellationToken, Task<T>> loader, Action<Action> post)
+    {
+        var loadable = cell.Loadable;
+        var token = cell.Cts.Token;
+        _ = Run();
+
+        async Task Run()
+        {
+            try
+            {
+                T v = await loader(token).ConfigureAwait(false);
+                if (!token.IsCancellationRequested)
+                    post(() => { if (!token.IsCancellationRequested) loadable.SetReady(v); });
+            }
+            catch (OperationCanceledException) { /* unmounted / re-keyed mid-load — the CTS was cancelled */ }
+            catch (Exception ex)
+            {
+                if (!token.IsCancellationRequested)
+                    post(() => { if (!token.IsCancellationRequested) loadable.SetFailed(ex); });
+            }
+        }
+    }
+
+    /// <summary>A persistent fire-on-demand <see cref="AsyncCommand"/> — run an async action from an event (a button
+    /// command), render a spinner / disable off <c>IsRunning</c>, guard re-entry, and optionally cancel. Completion is
+    /// marshalled to the UI thread via <see cref="UsePost"/>. By default an in-flight run is NOT cancelled on unmount
+    /// (a started command should complete); pass <paramref name="cancelOnUnmount"/> true to abort it.</summary>
+    public AsyncCommand UseAsyncCommand(bool cancelOnUnmount = false)
+    {
+        var post = UsePost();   // UseContext consumes no hook cursor (calling it here does not shift hook order)
+        AsyncCommandCell cell;
+        if (!_mounted) { cell = new AsyncCommandCell { Command = new AsyncCommand(post), CancelOnUnmount = cancelOnUnmount }; _cells.Add(cell); }
+        else cell = (AsyncCommandCell)_cells[_cursor];
+        _cursor++;
+        return cell.Command;
+    }
+
+    /// <summary>A persistent KEYED <see cref="AsyncCommandSet{TKey}"/> — per-item commands (e.g. per-row play/like) with
+    /// a reactive in-progress state per key. Same lifecycle as <see cref="UseAsyncCommand"/>.</summary>
+    public AsyncCommandSet<TKey> UseAsyncCommands<TKey>(bool cancelOnUnmount = false) where TKey : notnull
+    {
+        var post = UsePost();
+        AsyncCommandSetCell<TKey> cell;
+        if (!_mounted) { cell = new AsyncCommandSetCell<TKey> { Commands = new AsyncCommandSet<TKey>(post), CancelOnUnmount = cancelOnUnmount }; _cells.Add(cell); }
+        else cell = (AsyncCommandSetCell<TKey>)_cells[_cursor];
+        _cursor++;
+        return cell.Commands;
     }
 
     // ── Localization (i18n) hooks ────────────────────────────────────────────────────────────────────────────────────

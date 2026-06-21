@@ -46,7 +46,9 @@ internal static class SkeletonDeriver
             }
             case BoxEl b:
                 // Childless box (avatar/chip/cover/swatch): a shimmer bar of its declared size + corners + grow.
-                return Bar(s, b.Width.ValueOr(float.NaN), b.Height.ValueOr(float.NaN), b.Grow, b.Corners, b.Margin, b.AlignSelf);
+                // Preserve MorphId so a connected-animation cover slot stays a Hero participant THROUGH the skeleton
+                // (the art flies into the reserved slot immediately, without waiting for the async content to land).
+                return Bar(s, b.Width.ValueOr(float.NaN), b.Height.ValueOr(float.NaN), b.Grow, b.Corners, b.Margin, b.AlignSelf, b.MorphId);
 
             case TextEl t:
             {
@@ -55,7 +57,7 @@ internal static class SkeletonDeriver
             }
 
             case ImageEl img:
-                return Bar(s, img.Width, img.Height, 0f, img.Corners, img.Margin, img.AlignSelf);
+                return Bar(s, img.Width, img.Height, 0f, img.Corners, img.Margin, img.AlignSelf, img.MorphId);
 
             case GridEl g when g.Children is { Length: > 0 }:
             {
@@ -81,7 +83,7 @@ internal static class SkeletonDeriver
 
     private static float BarHeight(float textSize, in SkeletonStyle s) => MathF.Round((textSize <= 0f ? 14f : textSize) * s.TextRatio);
 
-    private static Element Bar(in SkeletonStyle s, float w, float h, float grow, CornerRadius4 corners, Edges4 margin, FlexAlign alignSelf)
+    private static Element Bar(in SkeletonStyle s, float w, float h, float grow, CornerRadius4 corners, Edges4 margin, FlexAlign alignSelf, string? morphId = null)
     {
         float bh = float.IsNaN(h) || h <= 0f ? 14f : h;
         bool noCorners = corners.Equals(default(CornerRadius4));
@@ -95,6 +97,7 @@ internal static class SkeletonDeriver
             Fill = s.BarColor,
             Corners = noCorners ? Radii.Circle(MathF.Min(bh, s.BarRadius * 2f)) : corners,
             IsEnabled = false, HitTestVisible = false,
+            MorphId = morphId,                          // keep a connected-animation (Hero) tag through the skeleton
         };
     }
 

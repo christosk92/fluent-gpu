@@ -45,6 +45,10 @@ public sealed class Loadable<T>
     public void SetReady(T value) { Value.Value = value; State.Value = (byte)LoadState.Ready; Error = null; }
     /// <summary>Re-arm the loading state (a refresh).</summary>
     public void SetPending() { Error = null; State.Value = (byte)LoadState.Pending; }
+    /// <summary>Re-arm loading AND reset the value to <paramref name="seed"/> — a RE-KEYED reload (the new key shows its
+    /// own placeholder/preview instead of the prior key's stale value while the fresh load runs). Value-then-State so the
+    /// two writes batch into one flush, matching <see cref="SetReady"/>.</summary>
+    public void SetPending(T seed) { Value.Value = seed; Error = null; State.Value = (byte)LoadState.Pending; }
     /// <summary>Route a failure through the same State signal (drives the region's onFailed branch).</summary>
     public void SetFailed(Exception e) { Error = e; State.Value = (byte)LoadState.Failed; }
 

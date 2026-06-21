@@ -28,6 +28,9 @@ public sealed record TokenSet
     public required ColorF FillCardSecondary { get; init; }
     public required ColorF FillLayerDefault { get; init; }       // flyout / expander body
     public required ColorF FillLayerAlt { get; init; }           // WinUI LayerFillColorAltBrush (ContentDialog top overlay)
+    // WinUI LayerOnMicaBaseAltFillColorDefault — the translucent "layer over Mica" chrome material (nav pane / address
+    // bar / selected tab). THEME-AWARE: dark #733A3A3A (a translucent dark layer), light #B3FFFFFF (translucent white).
+    public required ColorF LayerOnMicaBaseAlt { get; init; }
     public required ColorF FillSolidBase { get; init; }          // page background
     public required ColorF FillSolidBaseAlt { get; init; }       // pane / lower surface
     public required ColorF FillSolidSecondary { get; init; }
@@ -199,6 +202,7 @@ public static class Tok
     public static ColorF FillCardSecondary => T.FillCardSecondary;
     public static ColorF FillLayerDefault => T.FillLayerDefault;
     public static ColorF FillLayerAlt => T.FillLayerAlt;
+    public static ColorF LayerOnMicaBaseAlt => T.LayerOnMicaBaseAlt;
     public static ColorF FillSolidBase => T.FillSolidBase;
     public static ColorF FillSolidBaseAlt => T.FillSolidBaseAlt;
     public static ColorF FillSolidSecondary => T.FillSolidSecondary;
@@ -341,6 +345,7 @@ public static class Tok
         FillCardSecondary    = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x08),
         FillLayerDefault     = ColorF.FromRgba(0x3A, 0x3A, 0x3A, 0x4C),
         FillLayerAlt         = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0D),
+        LayerOnMicaBaseAlt   = ColorF.FromRgba(0x3A, 0x3A, 0x3A, 0x73),   // WinUI LayerOnMicaBaseAltFillColorDefault (dark) #733A3A3A
         FillSolidBase        = ColorF.FromRgba(0x20, 0x20, 0x20),
         FillSolidBaseAlt     = ColorF.FromRgba(0x1C, 0x1C, 0x1C),
         FillSolidSecondary   = ColorF.FromRgba(0x1C, 0x1C, 0x1C),
@@ -414,11 +419,15 @@ public static class Tok
         WindowBackground = ColorF.FromRgba(0x20, 0x20, 0x20),
     };
 
+    // Wavee's tuned LIGHT palette. DELIBERATELY DIVERGES from WinUI-faithful light (which reads as a flat "flashbang":
+    // every surface in a <5 L* sliver of near-white, invisible black-alpha borders, zero chroma). Instead: a sunken,
+    // faintly-warm off-white canvas with elevation-by-tint (cards rise toward white), real hairline borders, and
+    // off-black text — from the light-mode investigation's warm ramp. Dark (BuildDark) stays WinUI-faithful.
     private static TokenSet BuildLight() => new()
     {
-        FillControlDefault   = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3),
-        FillControlSecondary = ColorF.FromRgba(0xF9, 0xF9, 0xF9, 0x80),
-        FillControlTertiary  = ColorF.FromRgba(0xF9, 0xF9, 0xF9, 0x4D),
+        FillControlDefault   = ColorF.FromRgba(0xFC, 0xFB, 0xF9),         // opaque warm card-white control (was #B3FFFFFF)
+        FillControlSecondary = ColorF.FromRgba(0xF3, 0xF2, 0xEF),         // hover: a soft step down (translucent → invisible on the opaque rest)
+        FillControlTertiary  = ColorF.FromRgba(0xEC, 0xEB, 0xE8),         // pressed: deeper still
         FillControlDisabled  = ColorF.FromRgba(0xF9, 0xF9, 0xF9, 0x4D),
         FillControlStrong         = ColorF.FromRgba(0x00, 0x00, 0x00, 0x72),
         FillControlStrongDisabled = ColorF.FromRgba(0x00, 0x00, 0x00, 0x51),
@@ -427,27 +436,28 @@ public static class Tok
         FillSubtleTransparent= ColorF.Transparent,
         FillSubtleSecondary  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x09),
         FillSubtleTertiary   = ColorF.FromRgba(0x00, 0x00, 0x00, 0x06),
-        FillCardDefault      = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3),
-        FillCardSecondary    = ColorF.FromRgba(0xF6, 0xF6, 0xF6, 0x80),
-        FillLayerDefault     = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x80),
-        FillLayerAlt         = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
-        FillSolidBase        = ColorF.FromRgba(0xF3, 0xF3, 0xF3),
-        FillSolidBaseAlt     = ColorF.FromRgba(0xEB, 0xEB, 0xEB),
-        FillSolidSecondary   = ColorF.FromRgba(0xEE, 0xEE, 0xEE),
-        FillSolidTertiary    = ColorF.FromRgba(0xF9, 0xF9, 0xF9),
+        FillCardDefault      = ColorF.FromRgba(0xFC, 0xFB, 0xF9),         // raised warm card-white (opaque; floats on the sunken canvas)
+        FillCardSecondary    = ColorF.FromRgba(0xF7, 0xF6, 0xF3),         // nested card, one soft step below
+        FillLayerDefault     = ColorF.FromRgba(0xFA, 0xF9, 0xF6),         // floated panel, a hair under the card
+        FillLayerAlt         = ColorF.FromRgba(0xFF, 0xFF, 0xFF),         // reserve TRUE white for the highest layer (flyouts/dialogs) only
+        LayerOnMicaBaseAlt   = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3),   // WinUI LayerOnMicaBaseAltFillColorDefault (light) #B3FFFFFF
+        FillSolidBase        = ColorF.FromRgba(0xEF, 0xEE, 0xEB),         // content surface — BELOW the canvas (de-collapsed from WindowBackground)
+        FillSolidBaseAlt     = ColorF.FromRgba(0xE8, 0xE7, 0xE3),         // deepest well (recessed insets)
+        FillSolidSecondary   = ColorF.FromRgba(0xEC, 0xEB, 0xE8),         // reordered between Base and Tertiary (monotonic ramp)
+        FillSolidTertiary    = ColorF.FromRgba(0xFB, 0xFA, 0xF8),         // lightest near-white solid (raised)
         FillSmoke            = ColorF.FromRgba(0x00, 0x00, 0x00, 0x4D),
-        StrokeControlDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x0F),
-        StrokeControlSecondary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x29),
-        StrokeCardDefault    = ColorF.FromRgba(0x00, 0x00, 0x00, 0x0F),
-        StrokeDividerDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x0F),
+        StrokeControlDefault = ColorF.FromRgba(0xDE, 0xDD, 0xD9),         // real warm hairline (was 6% black ≈ 1.04:1, invisible)
+        StrokeControlSecondary = ColorF.FromRgba(0xC9, 0xC8, 0xC3),       // hover/focus edge — clears WCAG 3:1 non-text
+        StrokeCardDefault    = ColorF.FromRgba(0xE6, 0xE5, 0xE1),         // visible-on-inspection card edge
+        StrokeDividerDefault = ColorF.FromRgba(0xE3, 0xE2, 0xDF),         // section dividers that actually register
         StrokeSurfaceDefault = ColorF.FromRgba(0x75, 0x75, 0x75, 0x66),
         StrokeFlyoutDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x0F),   // SurfaceStrokeColorFlyout (light): 6% black
         StrokeControlOnAccentDefault = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x14),
         StrokeControlOnAccentSecondary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x66),
         StrokeControlOnAccentTertiary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x37),
-        TextPrimary   = ColorF.FromRgba(0x00, 0x00, 0x00, 0xE4),
-        TextSecondary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x9E),
-        TextTertiary  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x72),
+        TextPrimary   = ColorF.FromRgba(0x1F, 0x1E, 0x1B),               // off-black, warm-leaning (~14:1, halation-free vs pure black on white)
+        TextSecondary = ColorF.FromRgba(0x5C, 0x5B, 0x57),               // ~5.5:1 mid-tier
+        TextTertiary  = ColorF.FromRgba(0x73, 0x72, 0x6D),               // lifted to ~4:1 (was 2.5:1 — track #s/durations were failing AA)
         TextDisabled  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x5C),
         TextOnAccentPrimary   = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
         TextOnAccentSecondary = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3),
@@ -501,6 +511,6 @@ public static class Tok
         SystemFillAttentionBackground = ColorF.FromRgba(0xF6, 0xF6, 0xF6, 0x80),
         SystemFillSolidNeutral = ColorF.FromRgba(0x8A, 0x8A, 0x8A),
         TextInverse = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
-        WindowBackground = ColorF.FromRgba(0xF3, 0xF3, 0xF3),
+        WindowBackground = ColorF.FromRgba(0xF4, 0xF3, 0xF0),            // sunken warm off-white canvas (the visible Mica fallback / engine canvas)
     };
 }

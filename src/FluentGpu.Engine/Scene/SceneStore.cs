@@ -43,6 +43,19 @@ public sealed class SceneStore : ISceneBackend
     private readonly List<OrphanEntry> _orphans = new();
     private const int MaxOrphans = 64;
 
+    // Connected-animation overlays: standalone flying shared-element (Hero) nodes that are NOT in the logical tree but
+    // draw in an UNCLIPPED top band ABOVE the drag ghost (so a card art flying into a clipped rail escapes every
+    // ancestor scissor). Each also carries NodeFlags.ConnectedOverlay (excluded from the main + orphan passes).
+    // Set/cleared by FluentGpu.Animation.ConnectedAnimation; bounded so a nav storm cannot unbound the band.
+    private readonly List<NodeHandle> _overlays = new();
+    private const int MaxOverlays = 8;
+
+    // Clip rect for the connected-animation overlay band (window DIP). RectF.Infinite ⇒ the band escapes every scissor
+    // (the historical default); set to a content-region rect by FluentGpu.Animation.ConnectedAnimation so a flying cover
+    // is bounded to the page area (never sails over the sidebar / window chrome) while still clearing the inner rail
+    // scissor. Reset to Infinite when no fly is in flight. Read once per frame by the SceneRecorder overlay pass.
+    public RectF OverlayClip = RectF.Infinite;
+
     // topology (int indices; 0 = none)
     private int[] _parent, _firstChild, _lastChild, _prevSib, _nextSib, _childCount;
 
@@ -57,6 +70,10 @@ public sealed class SceneStore : ISceneBackend
     private NodeFlags[] _flags;
     private Action?[] _click;         // managed edge payload (GC ref at the edge only)
     private Action<RectF>?[] _boundsChanged;   // post-layout arranged-bounds callback
+    private RectF[] _boundsDelivered;   // last arranged rect actually delivered to _boundsChanged: the edge baseline for
+                                        // OnBoundsChanged. NOT the live Bounds (which Measure pre-writes to the hypothetical
+                                        // size each pass), so the callback fires on a real ARRANGED-rect change even for an
+                                        // unconstrained node whose arranged size equals its measured size (the marquee bug).
     private Action<KeyEventArgs>?[] _keyHandler;
     private Action<CharEventArgs>?[] _charHandler;   // text (character) input handler
     private Action<Point2>?[] _pointerDown;   // position-aware (local coords) press / drag handlers
@@ -164,6 +181,7 @@ public sealed class SceneStore : ISceneBackend
         _flags = new NodeFlags[capacity];
         _click = new Action?[capacity];
         _boundsChanged = new Action<RectF>?[capacity];
+        _boundsDelivered = new RectF[capacity];
         _keyHandler = new Action<KeyEventArgs>?[capacity];
         _charHandler = new Action<CharEventArgs>?[capacity];
         _pointerDown = new Action<Point2>?[capacity];
@@ -212,6 +230,7 @@ public sealed class SceneStore : ISceneBackend
         _flags[idx] = NodeFlags.Visible | NodeFlags.HitTestVisible | NodeFlags.NewThisFrame;
         _click[idx] = null;
         _boundsChanged[idx] = null;
+        _boundsDelivered[idx] = default;
         _keyHandler[idx] = null;
         _charHandler[idx] = null;
         _pointerDown[idx] = null;
@@ -251,6 +270,7 @@ public sealed class SceneStore : ISceneBackend
         ReleaseSpanRun(_layout[idx].TextStyle.SpanRunId);   // span-run + per-span family lifetime (rtb-01)
         _click[idx] = null;
         _boundsChanged[idx] = null;
+        _boundsDelivered[idx] = default;
         _keyHandler[idx] = null;
         _charHandler[idx] = null;
         _pointerDown[idx] = null;
@@ -294,6 +314,7 @@ public sealed class SceneStore : ISceneBackend
         _dropTargets.Remove(idx);
         _gestureSubs.Remove(idx);   // drop the node's UseGesture declaration with it (handler closures released)
         if (DragGhost == node) DragGhost = NodeHandle.Null;   // a freed ghost must not linger in the recorder's top band
+        if ((_flags[idx] & NodeFlags.ConnectedOverlay) != 0) RemoveOverlay(node);   // a freed overlay must not linger in the band
         OnFreeIndex?.Invoke(idx);   // symmetric teardown of INDEX-keyed external side-tables (AnimEngine transitions / ScrollAnimator timers)
         _gen[idx]++;
         if (_gen[idx] == 0) _gen[idx] = 1;
@@ -375,6 +396,39 @@ public sealed class SceneStore : ISceneBackend
     /// loop forever.</summary>
     public long OrphanEnqueuedTicks(int i) => _orphans[i].EnqueuedTicks;
 
+    // ── connected-animation overlays (flying shared-element heroes) ───────────────────────────────
+    /// <summary>Register a node as a connected-animation overlay: it draws in an UNCLIPPED top band ABOVE the drag
+    /// ghost (escaping every ancestor scissor) and is excluded from the main + orphan passes. The node's
+    /// <see cref="NodePaint.LocalTransform"/> carries the animated fly position/scale. Bounded by <c>MaxOverlays</c>
+    /// (overflow instant-frees the oldest). Cleared by <see cref="RemoveOverlay"/> or when the node is freed.</summary>
+    public void AddOverlay(NodeHandle node)
+    {
+        if (!IsLive(node) || _overlays.Contains(node)) return;
+        if (_overlays.Count >= MaxOverlays) { var old = _overlays[0]; _overlays.RemoveAt(0); FreeSubtree(old); }
+        _flags[node.Raw.Index] |= NodeFlags.ConnectedOverlay;
+        _overlays.Add(node);
+    }
+
+    /// <summary>Drop a node from the overlay band (does NOT free it — the caller owns its lifetime).</summary>
+    public void RemoveOverlay(NodeHandle node)
+    {
+        for (int i = _overlays.Count - 1; i >= 0; i--)
+            if (_overlays[i] == node) { _overlays.RemoveAt(i); break; }
+        if (IsLive(node)) _flags[node.Raw.Index] &= ~NodeFlags.ConnectedOverlay;
+    }
+
+    /// <summary>Count of connected-animation overlays currently flying (the host keeps painting while &gt; 0).</summary>
+    public int OverlayCount => _overlays.Count;
+
+    /// <summary>The i-th connected-animation overlay node (for the recorder's top-band draw pass).</summary>
+    public NodeHandle OverlayAt(int i) => _overlays[i];
+
+    public bool IsOverlay(NodeHandle node)
+    {
+        for (int i = 0; i < _overlays.Count; i++) if (_overlays[i] == node) return true;
+        return false;
+    }
+
     // ── column accessors (re-fetch after any CreateNode that may grow) ─────────────
     public ref LayoutInput Layout(NodeHandle h) => ref _layout[h.Raw.Index];
     public ref RectF Bounds(NodeHandle h) => ref _bounds[h.Raw.Index];
@@ -419,6 +473,10 @@ public sealed class SceneStore : ISceneBackend
         _boundsChanged[idx] = handler;
     }
     public Action<RectF>? GetBoundsChangedHandler(NodeHandle h) => _boundsChanged[LiveIndexOrZero(h)];
+    /// <summary>The last arranged rect delivered to this node's OnBoundsChanged (the edge baseline). FlexLayout fires the
+    /// handler when the freshly-arranged rect differs from this — NOT from the live <see cref="Bounds"/>, which Measure
+    /// pre-writes to the hypothetical size each pass (so an unconstrained node would otherwise never re-notify).</summary>
+    public ref RectF BoundsDeliveredRef(NodeHandle h) => ref _boundsDelivered[LiveIndex(h)];
     public void SetKeyHandler(NodeHandle h, Action<KeyEventArgs>? handler) => _keyHandler[LiveIndex(h)] = handler;
     public Action<KeyEventArgs>? GetKeyHandler(NodeHandle h) => _keyHandler[LiveIndexOrZero(h)];
     public void SetCharHandler(NodeHandle h, Action<CharEventArgs>? handler) => _charHandler[LiveIndex(h)] = handler;
@@ -925,7 +983,7 @@ public sealed class SceneStore : ISceneBackend
         Array.Resize(ref _prevSib, n); Array.Resize(ref _nextSib, n); Array.Resize(ref _childCount, n);
         Array.Resize(ref _elementTypeId, n); Array.Resize(ref _layout, n); Array.Resize(ref _bounds, n);
         Array.Resize(ref _paint, n); Array.Resize(ref _dynamicText, n); Array.Resize(ref _interaction, n); Array.Resize(ref _flags, n);
-        Array.Resize(ref _click, n); Array.Resize(ref _boundsChanged, n); Array.Resize(ref _keyHandler, n); Array.Resize(ref _charHandler, n);
+        Array.Resize(ref _click, n); Array.Resize(ref _boundsChanged, n); Array.Resize(ref _boundsDelivered, n); Array.Resize(ref _keyHandler, n); Array.Resize(ref _charHandler, n);
         Array.Resize(ref _pointerDown, n); Array.Resize(ref _drag, n); Array.Resize(ref _hoverMove, n); Array.Resize(ref _pointerExit, n);
         Array.Resize(ref _pointerPressed, n); Array.Resize(ref _pointerWheel, n); Array.Resize(ref _contextRequested, n);
         Array.Resize(ref _focusChanged, n);

@@ -2,6 +2,8 @@ using System;
 using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Forms;
@@ -152,6 +154,25 @@ sealed class MarqueeProbeRoot : Component
     };
 }
 
+// The M2 gate's root: mirrors the PlayerBar's now-playing meta column — a grow/shrink, clip-to-bounds column whose
+// marquee title is bound to a REACTIVE Signal<string> (the real app uses Prop.Of(() => NowPlaying(b).Title), empty until
+// a track loads). Lets the gate grow the title AFTER mount and assert the marquee then scrolls (the title-after-mount bug).
+sealed class MarqueeAutostartProbe : Component
+{
+    public readonly Signal<string> Title = new("");
+    public override Element Render()
+    {
+        var marquee = Marquee.Of(Prop.Of(() => Title.Value),
+            new Marquee.Style { FontSize = 14f, Weight = 700, StartDelayMs = 0f, Speed = 200f, Trigger = Marquee.TriggerMode.Always });
+        return new BoxEl
+        {
+            Direction = 1, Grow = 1f, Shrink = 1f, Gap = 2f,
+            Justify = FluentGpu.Foundation.FlexJustify.Center, AlignItems = FluentGpu.Foundation.FlexAlign.Stretch, ClipToBounds = true,
+            Children = [marquee],
+        };
+    }
+}
+
 // Probe component for the expanded hooks.
 sealed class HookProbe : Component
 {
@@ -282,10 +303,160 @@ sealed class BoundVirtualProbe : Component
            with { Width = 300, Height = 400 };
 }
 
+// The ItemsView BOUND row path (CreateBound): rows are persistent slots, so selection flips a bound pill OPACITY and
+// Generic async-command primitive: a SINGLE fire-on-demand command. The probe exposes the AsyncCommand so the test can
+// drive a TaskCompletionSource-backed op and assert the IsRunning lifecycle / re-entry guard / cancel.
+sealed class AsyncCommandProbe : Component
+{
+    public AsyncCommand Cmd = null!;
+    public override Element Render() { Cmd = UseAsyncCommand(); _ = Cmd.IsRunning; return new BoxEl(); }
+}
+
+// The KEYED variant — independent per-key in-progress state.
+sealed class AsyncCommandsProbe : Component
+{
+    public AsyncCommandSet<int> Cmds = null!;
+    public override Element Render() { Cmds = UseAsyncCommands<int>(); _ = Cmds.AnyRunning(); return new BoxEl(); }
+}
+
+// now-playing recolours a bound TEXT WITHOUT re-running the row template (the anti-flash proof — a re-run would mean a
+// rebuild/remount + Enter replay). Content carries no per-row `$"…"` so the re-skin frames stay 0-alloc on the paint phases.
+sealed class BoundItemsViewProbe : Component
+{
+    public const int N = 2_000;
+    public const float RowH = 40f;
+    public readonly SelectionModel Selection = new();
+    public readonly Signal<int> NowPlaying = new(-1);   // the "current track" index the title-colour bind compares against
+    public int TemplateCalls;                            // bound rowTemplate invocations (slot mounts) — must stay flat on a re-skin
+    public override Element Render()
+        => new BoxEl
+        {
+            Width = 360, Height = 400,
+            Children =
+            [
+                ItemsView.CreateBound(N, scope =>
+                {
+                    TemplateCalls++;
+                    var idx = scope.Index;
+                    var now = NowPlaying;
+                    Element content = new TextEl("row")
+                    {
+                        Size = 13f,
+                        Color = Prop.Of(() => now.Value == idx.Value
+                            ? ColorF.FromRgba(0x4C, 0xC2, 0xFF) : ColorF.FromRgba(0xE0, 0xE0, 0xE0)),
+                    };
+                    return SelectorVisualsBound.AccentPill(scope, content);
+                }, RepeatLayout.Stack(RowH), selectionMode: ItemsSelectionMode.Multiple, selection: Selection),
+            ],
+        };
+}
+
+// Reproduces the Wavee bound-row SHAPE exactly: a ZStack skin (OnPointerPressed = the row tap) whose content is a
+// COMPONENT (mirrors BoundRowContent) wrapping a GridEl that holds a CLICKABLE child (the heart) + an inline-link
+// SpanTextEl (the album link). The question: does a click on the child reach the child, or fall through to the row?
+sealed class RowButtonHitProbe : Component
+{
+    public int RowPress, HeartClick, LinkClick;
+    public override Element Render()
+    {
+        Element rowContent = Embed.Comp(() => new RowGridComp(this));
+        Element skin = new BoxEl
+        {
+            ZStack = true, MinHeight = 48f, ClipToBounds = true, Focusable = false,
+            OnPointerPressed = _ => RowPress++,
+            OnPointerExit = static () => { },
+            Children =
+            [
+                new BoxEl { Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center, Children = [rowContent] },
+                new BoxEl { Key = "pill", Width = 3f, Height = 16f, HitTestVisible = false, Opacity = 0f, AlignSelf = FlexAlign.Center },
+            ],
+        };
+        return new BoxEl { Width = 400f, Height = 60f, Children = [skin] };
+    }
+
+    sealed class RowGridComp : Component
+    {
+        readonly RowButtonHitProbe _o;
+        public RowGridComp(RowButtonHitProbe o) { _o = o; }
+        public override Element Render() => new GridEl
+        {
+            Columns = [TrackSize.Px(40f), TrackSize.Px(40f), TrackSize.Star(), TrackSize.Px(120f)], Grow = 1f, RowHeight = 48f,
+            Children =
+            [
+                new BoxEl { AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Children = [new TextEl("1")] },
+                new BoxEl { AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                    Children = [new BoxEl { Width = 28f, Height = 28f, OnClick = () => _o.HeartClick++,
+                                            HoverFill = ColorF.FromRgba(40, 40, 40), Children = [new TextEl("H")] }] },
+                new TextEl("title"),
+                new BoxEl { AlignItems = FlexAlign.Center, Children = [
+                    new SpanTextEl([new TextSpan("album", OnClick: () => _o.LinkClick++)]) { Size = 13f } ] },
+            ],
+        };
+    }
+}
+
 // A LARGE bound list whose rows bind ONLY a struct channel (Fill) — no per-row `$"…"` interpolation, so a cross-boundary
 // recycle re-runs the row's bind WITHOUT minting a never-before-seen string into the interner. This isolates the fling
 // integrator + virtual re-realize + slot-rebind MACHINERY (which must be 0-alloc) from the user-template string churn that
 // any unique-text-per-row list streams through StringTable.Intern (a 100k-row list's documented bounded-Gen0 reconcile edge).
+// The VIRTUALIZED bound path: a clickable child inside a CreateBound slot row. Tests that tapping an in-row button on a
+// realized bound SLOT (RealizeBoundWindow + the scroll content transform) reaches the child, not the row's tap handler.
+sealed class BoundListHitProbe : Component
+{
+    public int RowPress, ChildClick;
+    public readonly SelectionModel Selection = new();
+    public readonly Signal<int> Now = new(-1);   // a "now-playing" signal the row CONTENT re-renders on (like BoundRowContent)
+    public override Element Render()
+        => new BoxEl
+        {
+            Width = 360, Height = 400,
+            Children =
+            [
+                ItemsView.CreateBound(50, scope =>
+                {
+                    var onInteraction = scope.OnInteraction;
+                    return new BoxEl
+                    {
+                        ZStack = true, MinHeight = 40f, Focusable = false, ClipToBounds = true,
+                        // The Wavee skin's once-per-slot reveal — a faithful repro detail.
+                        Animate = new LayoutTransition(TransitionChannels.Opacity,
+                            TransitionDynamics.Tween(280f, Easing.FluentDecelerate),
+                            Enter: new EnterExit(Opacity: 0f, Active: true)),
+                        OnPointerPressed = args => { RowPress++; onInteraction(
+                            args.ClickCount >= 2 ? ItemContainerTrigger.DoubleTap : ItemContainerTrigger.Tap, args.Mods); },
+                        OnPointerExit = static () => { },
+                        Children = [new BoxEl { Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center,
+                                                Children = [Embed.Comp(() => new HitRowContent(this, scope.Index))] }],
+                    };
+                }, RepeatLayout.Stack(40f), selection: Selection),
+            ],
+        };
+
+    // Mirrors BoundRowContent: re-renders on the index signal + the Now signal, rebuilding the clickable child each time.
+    sealed class HitRowContent : Component
+    {
+        readonly BoundListHitProbe _o; readonly IReadSignal<int> _idx;
+        public HitRowContent(BoundListHitProbe o, IReadSignal<int> idx) { _o = o; _idx = idx; }
+        public override Element Render()
+        {
+            int i = _idx.Value;                 // recycle → re-render
+            bool now = _o.Now.Value == i;       // now-playing → re-render (rebuilds the child + handler)
+            // Mirror the Wavee # cell: a fixed-width ZStack of a HoverOpacity reveal layer + a Grow=1f click-catcher.
+            return new BoxEl
+            {
+                Width = 40f, ZStack = true,
+                Children =
+                [
+                    new BoxEl { Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                                Opacity = 0f, HoverOpacity = 1f, Children = [new TextEl(now ? "P" : "H")] },
+                    new BoxEl { Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                                OnClick = () => _o.ChildClick++ },
+                ],
+            };
+        }
+    }
+}
+
 sealed class BoundVirtualFillOnlyProbe : Component
 {
     public const int N = 10_000;
@@ -4470,6 +4641,245 @@ static class Slice
             hoverSettledIdle, $"active={host.HasActiveWork}");
     }
 
+    // Generic async-command primitive (UseAsyncCommand / UseAsyncCommands<TKey>): the in-progress state tracks the
+    // Task, a re-fire while running is blocked, Cancel clears it, keyed runs are independent, and an idle frame is 0-alloc.
+    static void AsyncCommandChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("async-cmd", new Size2(320, 240), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+
+        // ── single command: lifecycle + re-entry guard ──
+        var probe = new AsyncCommandProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, probe);
+        host.RunFrame();
+
+        var gate = new TaskCompletionSource<bool>();
+        int starts = 0;
+        probe.Cmd.Run(_ => { starts++; return gate.Task; });
+        bool runningWhilePending = probe.Cmd.IsRunningNow;
+        probe.Cmd.Run(_ => { starts++; return Task.CompletedTask; });   // BLOCKED — first is still in flight (op not invoked)
+        bool blocked = starts == 1;
+        gate.SetResult(true);
+        for (int k = 0; k < 16 && probe.Cmd.IsRunningNow; k++) host.RunFrame();
+        bool clearedAfter = !probe.Cmd.IsRunningNow;
+        Check("AC-1/2. async command: IsRunning tracks the Task, and a re-fire while running is blocked",
+            runningWhilePending && blocked && clearedAfter,
+            $"runningWhilePending={runningWhilePending} opStarts={starts} clearedAfter={clearedAfter}");
+
+        // ── cancellation: Cancel() clears IsRunning; a late completion of the underlying task does not revive it ──
+        var gate2 = new TaskCompletionSource<bool>();
+        probe.Cmd.Run(ct => gate2.Task.WaitAsync(ct));
+        bool runningC = probe.Cmd.IsRunningNow;
+        probe.Cmd.Cancel();
+        for (int k = 0; k < 16 && probe.Cmd.IsRunningNow; k++) host.RunFrame();
+        bool clearedAfterCancel = !probe.Cmd.IsRunningNow;
+        gate2.TrySetResult(true);
+        host.RunFrame();
+        bool stayedCleared = !probe.Cmd.IsRunningNow;
+        Check("AC-3. async command: Cancel() clears IsRunning; a late completion does not revive it",
+            runningC && clearedAfterCancel && stayedCleared,
+            $"runningC={runningC} clearedAfterCancel={clearedAfterCancel} stayedCleared={stayedCleared}");
+
+        // ── 0-alloc when idle ──
+        var fIdle = host.RunFrame();
+        Check("AC-5. an idle async-command frame is 0-alloc on the hot phases",
+            fIdle.HotPhaseAllocBytes == 0, $"{fIdle.HotPhaseAllocBytes} bytes");
+
+        // ── keyed: per-key independence ──
+        using var app2 = new HeadlessPlatformApp();
+        var window2 = new HeadlessWindow(new WindowDesc("async-cmd-keyed", new Size2(320, 240), 1f));
+        window2.Show();
+        var kp = new AsyncCommandsProbe();
+        using var host2 = new AppHost(app2, window2, new HeadlessGpuDevice(), fonts, strings, kp);
+        host2.RunFrame();
+        var g1 = new TaskCompletionSource<bool>();
+        var g2 = new TaskCompletionSource<bool>();
+        kp.Cmds.Run(1, _ => g1.Task);
+        kp.Cmds.Run(2, _ => g2.Task);
+        bool bothRunning = kp.Cmds.IsRunningNow(1) && kp.Cmds.IsRunningNow(2);
+        g1.SetResult(true);
+        for (int k = 0; k < 16 && kp.Cmds.IsRunningNow(1); k++) host2.RunFrame();
+        bool oneDoneTwoRunning = !kp.Cmds.IsRunningNow(1) && kp.Cmds.IsRunningNow(2);
+        g2.SetResult(true);
+        for (int k = 0; k < 16 && kp.Cmds.IsRunningNow(2); k++) host2.RunFrame();
+        bool allDone = !kp.Cmds.IsRunningNow(2);
+        Check("AC-4. keyed async commands: each key's IsRunning is independent (key 1 finishing leaves key 2 running)",
+            bothRunning && oneDoneTwoRunning && allDone,
+            $"both={bothRunning} oneDoneTwoRunning={oneDoneTwoRunning} allDone={allDone}");
+    }
+
+    // The first node at or under <paramref name="n"/> that owns a scroll viewport (the VirtualListEl that ItemsView builds).
+    static NodeHandle FindScrollNode(SceneStore s, NodeHandle n)
+    {
+        if (n.IsNull) return NodeHandle.Null;
+        if (s.HasScroll(n)) return n;
+        for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+        {
+            var r = FindScrollNode(s, c);
+            if (!r.IsNull) return r;
+        }
+        return NodeHandle.Null;
+    }
+
+    // ItemsView BOUND row path (CreateBound): selection / now-playing re-skin the persistent slots IN PLACE via binds —
+    // no row-template re-run (no rebuild/remount/Enter replay = no flash), 0-alloc on the paint phases, one roving tab stop.
+    static void BoundItemsViewChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("bound-iv", new Size2(640, 480), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var probe = new BoundItemsViewProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, probe);
+
+        host.RunFrame();
+        var scene = host.Scene;
+        var vp = FindScrollNode(scene, scene.Root);
+        scene.TryGetScroll(vp, out var sc);
+        var content = sc.ContentNode;
+
+        // slot root (the AccentPill BoxEl) → [ lv-content → [text] , lv-pill ].
+        var slot0 = scene.FirstChild(content);
+        var lane0 = scene.FirstChild(slot0);
+        var text0 = scene.FirstChild(lane0);
+        var pill0 = scene.NextSibling(lane0);
+
+        float pillRest = scene.Paint(pill0).Opacity;
+        int callsBase = probe.TemplateCalls;
+
+        // 1. Selecting a visible row flips its bound pill opacity 0→1 with NO row-template re-run (no rebuild = no flash).
+        probe.Selection.Select(0);
+        host.RunFrame();
+        float pillSel = scene.Paint(pill0).Opacity;
+        int callsSel = probe.TemplateCalls;
+        Check("IV-bound 1. select flips the bound pill in place (no template re-run = no flash)",
+            pillRest < 0.01f && pillSel > 0.99f && callsSel == callsBase,
+            $"pill {pillRest:0.00}→{pillSel:0.00} templateCalls {callsBase}→{callsSel}");
+
+        // 2. The selection re-skin frame allocates 0 managed bytes on the hot (paint) phases — it is a bound opacity write,
+        //    not a rebuild.
+        probe.Selection.Deselect(0);
+        var fDe = host.RunFrame();
+        Check("IV-bound 2. selection re-skin is 0-alloc on the hot phases",
+            fDe.HotPhaseAllocBytes == 0, $"{fDe.HotPhaseAllocBytes} bytes");
+
+        // 3. Now-playing recolours the bound title in place, again with NO row-template re-run.
+        var colorRest = scene.Paint(text0).TextColor;
+        int callsNowBase = probe.TemplateCalls;
+        probe.NowPlaying.Value = 0;
+        host.RunFrame();
+        var colorNow = scene.Paint(text0).TextColor;
+        Check("IV-bound 3. now-playing recolours the title in place (no template re-run)",
+            !colorRest.Equals(colorNow) && probe.TemplateCalls == callsNowBase,
+            $"colorChanged={!colorRest.Equals(colorNow)} templateCalls {callsNowBase}→{probe.TemplateCalls}");
+
+        // 4. Exactly ONE realized slot carries the roving tab stop (NodeFlags.Focusable) — slot 0 via the no-current
+        //    fallback (the others are Focusable=false, so the list has a single tab stop, moved without a re-render).
+        int focusable = 0; NodeHandle theStop = NodeHandle.Null;
+        for (var c = scene.FirstChild(content); !c.IsNull; c = scene.NextSibling(c))
+            if ((scene.Flags(c) & NodeFlags.Focusable) != 0) { focusable++; theStop = c; }
+        Check("IV-bound 4. exactly one realized slot holds the roving tab stop (no-current fallback = slot 0)",
+            focusable == 1 && theStop == slot0, $"focusable={focusable} isSlot0={theStop == slot0}");
+
+        // 5/6. A clickable child + an inline link inside a COMPONENT-wrapped bound row must receive the click — not have
+        //      it fall through to the row's tap/double-tap. Mirrors the exact Wavee row shape (skin → lane → component → grid).
+        using var app2 = new HeadlessPlatformApp();
+        var window2 = new HeadlessWindow(new WindowDesc("bound-iv-hit", new Size2(640, 480), 1f));
+        window2.Show();
+        var hitProbe = new RowButtonHitProbe();
+        using var host2 = new AppHost(app2, window2, new HeadlessGpuDevice(), fonts, strings, hitProbe);
+        host2.RunFrame();
+        var s2 = host2.Scene;
+        var skin2 = s2.FirstChild(s2.Root);
+        var lane2 = s2.FirstChild(skin2);
+        var comp2 = s2.FirstChild(lane2);
+        var grid2 = s2.FirstChild(comp2);
+        var heartCell = s2.NextSibling(s2.FirstChild(grid2));    // grid child 1 (after the # cell)
+        var heart = s2.FirstChild(heartCell);                    // the clickable heart BoxEl
+        var hr = s2.AbsoluteRect(heart);
+        var heartCenter = new Point2(hr.X + hr.W / 2f, hr.Y + hr.H / 2f);
+        var hitNode = host2.Input.HitTest(heartCenter);
+        window2.QueueInput(new InputEvent(InputKind.PointerDown, heartCenter, 0, 0));
+        window2.QueueInput(new InputEvent(InputKind.PointerUp, heartCenter, 0, 0));
+        host2.RunFrame();
+        Check("IV-bound 5. a clickable child in a component-wrapped bound row gets the click (not the row's tap)",
+            hitProbe.HeartClick == 1 && hitProbe.RowPress == 0 && hitNode == heart,
+            $"heartClick={hitProbe.HeartClick} rowPress={hitProbe.RowPress} hitIsHeart={hitNode == heart}");
+
+        var linkCell = s2.NextSibling(s2.NextSibling(heartCell)); // grid child 3 (#, heart, title, album)
+        var span = s2.FirstChild(linkCell);                       // the SpanTextEl link node
+        var lr = s2.AbsoluteRect(span);
+        var linkPt = new Point2(lr.X + 4f, lr.Y + lr.H / 2f);     // over the link glyphs (left edge)
+        window2.QueueInput(new InputEvent(InputKind.PointerDown, linkPt, 0, 0));
+        window2.QueueInput(new InputEvent(InputKind.PointerUp, linkPt, 0, 0));
+        host2.RunFrame();
+        Check("IV-bound 6. an inline link in a component-wrapped bound row navigates (not the row's tap)",
+            hitProbe.LinkClick == 1 && hitProbe.RowPress == 0,
+            $"linkClick={hitProbe.LinkClick} rowPress={hitProbe.RowPress}");
+
+        // 7. The VIRTUALIZED bound path: a clickable child on a realized CreateBound SLOT row must get the tap (not the row).
+        using var app3 = new HeadlessPlatformApp();
+        var window3 = new HeadlessWindow(new WindowDesc("bound-iv-vhit", new Size2(640, 480), 1f));
+        window3.Show();
+        var vProbe = new BoundListHitProbe();
+        using var host3 = new AppHost(app3, window3, new HeadlessGpuDevice(), fonts, strings, vProbe);
+        host3.RunFrame();
+        vProbe.Now.Value = 0;     // trigger a row-content re-render first (rebuilds the child + its handler) — the Wavee path
+        host3.RunFrame();
+        var s3 = host3.Scene;
+        var vp3 = FindScrollNode(s3, s3.Root);
+        s3.TryGetScroll(vp3, out var sc3);
+        var slotR = s3.FirstChild(sc3.ContentNode);          // slot 0 root (the row skin)
+        var laneR = s3.FirstChild(slotR);                    // content lane
+        var compR = s3.FirstChild(laneR);                    // the row-content component anchor
+        var cellR = s3.FirstChild(compR);                    // the # cell (ZStack: reveal layer + click-catcher)
+        var catcher = s3.NextSibling(s3.FirstChild(cellR));  // the Grow=1f click-catcher (2nd child)
+        var cr = s3.AbsoluteRect(cellR);
+        var cellCenter = new Point2(cr.X + cr.W / 2f, cr.Y + cr.H / 2f);
+        var vHit = host3.Input.HitTest(cellCenter);
+        window3.QueueInput(new InputEvent(InputKind.PointerDown, cellCenter, 0, 0));
+        window3.QueueInput(new InputEvent(InputKind.PointerUp, cellCenter, 0, 0));
+        host3.RunFrame();
+        // …and again near the cell EDGE — proving the Grow=1f catcher FILLS the cell (not just a centered point).
+        var cellEdge = new Point2(cr.X + 3f, cr.Y + cr.H - 3f);
+        window3.QueueInput(new InputEvent(InputKind.PointerDown, cellEdge, 0, 0));
+        window3.QueueInput(new InputEvent(InputKind.PointerUp, cellEdge, 0, 0));
+        host3.RunFrame();
+        Check("IV-bound 7. the # cell play-catcher (Grow=1f over a HoverOpacity reveal) takes the click across the cell, not the row",
+            vProbe.ChildClick == 2 && vProbe.RowPress == 0 && vHit == catcher,
+            $"childClick={vProbe.ChildClick} rowPress={vProbe.RowPress} hitIsCatcher={vHit == catcher} cellRect=({cr.X:0},{cr.Y:0},{cr.W:0},{cr.H:0})");
+
+        // 8. THE REPORTED BUG: hovering an interactive CHILD (the # cell catcher) must KEEP the row's HoverWithin set, so
+        //    the # cell's HoverOpacity reveal stays revealed (the play glyph must not snap back to the number when you
+        //    move the pointer onto it to click). Hover the empty row body first, then move onto the catcher.
+        var skinR = s3.FirstChild(sc3.ContentNode);
+        var skinRect = s3.AbsoluteRect(skinR);
+        window3.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(skinRect.X + 200f, skinRect.Y + skinRect.H / 2f), 0, 0));
+        host3.RunFrame();
+        bool bodyHover = (s3.Flags(skinR) & NodeFlags.Hovered) != 0;
+        var catcherRect = s3.AbsoluteRect(catcher);
+        window3.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(catcherRect.X + catcherRect.W / 2f, catcherRect.Y + catcherRect.H / 2f), 0, 0));
+        host3.RunFrame();
+        bool withinSet = (s3.Flags(skinR) & NodeFlags.HoverWithin) != 0;
+        Check("IV-bound 8. hovering the # cell catcher keeps the row HoverWithin (so the play glyph stays revealed)",
+            bodyHover && withinSet, $"bodyHover={bodyHover} rowHoverWithin={withinSet}");
+
+        // 9. THE FIX (engine): with the pointer ON the catcher (from gate 8), the # cell's HoverOpacity reveal layer must
+        //    stay DRIVEN (hover target 1 — it does not collapse to the number); it decays only when the pointer leaves
+        //    the row entirely. Verifies the InteractionAnimator honors the container's HoverWithin.
+        var revealLayer = s3.FirstChild(cellR);   // the HoverOpacity reveal layer (sibling of the catcher)
+        bool revealOnCatcher = s3.TryGetInteract(revealLayer, out var raOn) && raOn.HoverTarget > 0.99f;
+        window3.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(skinRect.X + skinRect.W + 80f, skinRect.Y + skinRect.H + 80f), 0, 0));
+        host3.RunFrame();
+        bool revealOffOutside = s3.TryGetInteract(revealLayer, out var raOff) && raOff.HoverTarget < 0.01f;
+        Check("IV-bound 9. the # cell reveal stays driven while the pointer is on the play button, decays only off the row",
+            revealOnCatcher && revealOffOutside, $"onCatcher={revealOnCatcher} offRow={revealOffOutside}");
+    }
+
     static void VirtualChecks(StringTable strings)
     {
         using var app = new HeadlessPlatformApp();
@@ -4744,12 +5154,10 @@ static class Slice
                 $"maxRun={maxRun} settledAt={settledAt} offset={afterUp.OffsetY:0}->{settled.OffsetY:0} (clamp={maxOff:0}) reRealized={reRealized}");
         }
 
-        // gate.scroll.wheel-eases-unified: ALL wheel input — precision touchpad (reported as a hi-res wheel, deltas of any
-        // magnitude) AND a discrete mouse notch — rides ONE eased TargetChase path. There is NO magnitude-based "hi-res"
-        // branch: a precision touchpad's WM_POINTERWHEEL notches span the whole range within a single gesture, so any
-        // threshold straddled a normal flick and flip-flopped the offset between an eased target and a 1:1 jump every
-        // gesture (the "ultra buggy / stops midway" regression this gate guards against). A MIXED stream of small + large
-        // deltas must advance MONOTONICALLY toward the summed target, never enter Fling mode, and converge — no flip-flop.
+        // gate.scroll.mouse-wheel-eases-discrete: a synthetic PointerKind.Mouse stream remains on ONE eased TargetChase
+        // path regardless of delta magnitude. Precision touchpad selection is device-tag based (never magnitude based)
+        // and is covered separately by ScrollParityChecks. A mixed mouse stream must advance monotonically toward the
+        // summed target, never enter Fling mode, and converge without a post-target coast.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("wheel-eases", new Size2(360, 460), 1f)); window.Show();
@@ -4757,8 +5165,7 @@ static class Slice
             host.RunFrame();
             var vp = host.Scene.Root;
 
-            // A mixed stream like a real precision-touchpad flick: deltas straddling the OLD 120 threshold (some <, some >)
-            // at ~16ms cadence. Under the broken magnitude-split these flip-flopped paths; unified, they must all ease.
+            // Mixed synthetic mouse deltas straddling the old magnitude threshold: device type keeps all on one path.
             float[] mixed = { 20f, 60f, 30f, 90f, 15f, 70f, 40f, 25f, 50f, 35f };   // sum = 435
             uint t = 1000; bool everFlung = false; float prev = 0f; bool monotonic = true;
             foreach (float d in mixed)
@@ -4778,7 +5185,7 @@ static class Slice
             float coastMax = offSettled;
             for (int i = 0; i < 30; i++) { host.RunFrame(); host.Scene.TryGetScroll(vp, out var s); coastMax = MathF.Max(coastMax, s.OffsetY); }
             bool noMomentum = coastMax <= offSettled + 1f;
-            Check("gate.scroll.wheel-eases-unified a MIXED-magnitude wheel stream (touchpad) eases monotonically via ONE TargetChase path to the summed target — no flip-flop, no fling/momentum",
+            Check("gate.scroll.mouse-wheel-eases-discrete a MIXED-magnitude PointerKind.Mouse stream eases monotonically via ONE TargetChase path to the summed target — no magnitude split, no post-target momentum",
                 monotonic && !everFlung && converged && noMomentum,
                 $"settled={offSettled:0} (expect 435) monotonic={monotonic} flung={everFlung} coastTo={coastMax:0} mode={settled.ScrollMode}");
         }
@@ -5566,6 +5973,274 @@ static class Slice
             s_touchClockMs = t + 2000;
             Check("gate.touch4.dispatch-alloc-zero the per-event pinch path itself — TryOpenPinch (OnSecondContact + arena sweep) + UpdatePinch (scale + SetScrollOffset transform) per coalesced move + the pinch-end commit/continuation, measured by a delta wrapped DIRECTLY around host.Input.Dispatch — allocates 0 managed bytes across a full pinch",
                 delta == 0, $"dispatchDelta={delta}B (direct phase-2 dispatch delta over a 40-move pinch)");
+        }
+    }
+
+    // ── WinUI-parity scroll exit criteria: content-relative wheel distance (max(48,15%·viewport) per notch, not a flat
+    //    60), the windowed-regression velocity sampler (true flick speed, no stationary up-sample bias), the IScrollSource
+    //    seam transparency (headless ⇒ integrator only), and the deterministic DM transform→offset/band mapping.
+    static void ScrollParityChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        // gate.scroll.wheel-distance-viewport-relative: ONE device wheel notch (InputEvent.WheelNotch) scrolls
+        // max(48 DIP, 15%·viewport) — the WinUI content-relative mouse-wheel line height — NOT the old flat 60 DIP. A TALL
+        // viewport steps by the 15% term (>48); a SHORT viewport floors at 48. The two distinct steps prove it is
+        // viewport-relative. (A synthetic DIP ScrollDelta — every other wheel gate — bypasses this scale, so they are
+        // unchanged.)
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("wheel-dist", new Size2(360, 460), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
+            host.RunFrame();
+            var vp = host.Scene.Root;
+            // ScrollBy reads ViewportH at dispatch (phase 2) — BEFORE layout re-publishes it at phase 6 — so forcing it
+            // probes the per-notch distance for any viewport. TALL: max(48, 0.15·800) = 120. SHORT: max(48, 0.15·200) = 48.
+            host.Scene.ScrollRef(vp).ViewportH = 800f; host.Scene.ScrollRef(vp).OffsetY = 0f; host.Scene.ScrollRef(vp).TargetY = 0f;
+            window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0, WheelNotch: 1f));
+            host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var scTall);
+            float stepTall = scTall.TargetY;
+
+            host.Scene.ScrollRef(vp).ViewportH = 200f; host.Scene.ScrollRef(vp).OffsetY = 0f; host.Scene.ScrollRef(vp).TargetY = 0f;
+            window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0, WheelNotch: 1f));
+            host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var scShort);
+            float stepShort = scShort.TargetY;
+
+            bool tallOk = Near(stepTall, 120f, 0.6f);    // 15%·800
+            bool shortOk = Near(stepShort, 48f, 0.6f);   // floored (0.15·200 = 30 < 48)
+            Check("gate.scroll.wheel-distance-viewport-relative one wheel notch scrolls max(48 DIP, 15%·viewport) — content-relative (WinUI line height), not a flat 60: viewport 800 ⇒ step 120, viewport 200 ⇒ step 48 (floor); distinct ⇒ genuinely viewport-relative",
+                tallOk && shortOk && !Near(stepTall, stepShort, 1f),
+                $"vp800 step={stepTall:0.#} (expect 120) vp200 step={stepShort:0.#} (expect 48)");
+        }
+
+        // gate.scroll.touchpad-device-routing: a touchpad (hi-res) wheel event pixel-follows — it writes Offset==Target in
+        // the dispatch frame (direct hand tracking) — while the same physical distance as a detented mouse notch sets a
+        // farther Target and leaves Offset trailing on the discrete eased target-chase curve. The engine routes on
+        // PointerKind; the Win32 PAL classifies touchpad by its hi-res delta signature (non-120-multiples).
+        {
+            using var app = new HeadlessPlatformApp();
+            var touchpadWindow = new HeadlessWindow(new WindowDesc("touchpad-route", new Size2(360, 460), 1f)); touchpadWindow.Show();
+            using var touchpadHost = new AppHost(app, touchpadWindow, new HeadlessGpuDevice(), fonts, strings,
+                new TouchFlingSettleProbe(), frameTime: new FixedFrameTimeSource(16f));
+            touchpadHost.SmoothScroll = true;
+            touchpadHost.RunFrame();
+            var touchpadVp = touchpadHost.Scene.Root;
+            touchpadWindow.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0,
+                ScrollDelta: 12f, Pointer: PointerKind.Touchpad, TimestampMs: 1000));
+            touchpadHost.RunFrame();
+            touchpadHost.Scene.TryGetScroll(touchpadVp, out var touchpadState);
+
+            var mouseWindow = new HeadlessWindow(new WindowDesc("mouse-route", new Size2(360, 460), 1f)); mouseWindow.Show();
+            using var mouseHost = new AppHost(app, mouseWindow, new HeadlessGpuDevice(), fonts, strings,
+                new TouchFlingSettleProbe(), frameTime: new FixedFrameTimeSource(16f));
+            mouseHost.SmoothScroll = true;
+            mouseHost.RunFrame();
+            var mouseVp = mouseHost.Scene.Root;
+            mouseWindow.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0,
+                ScrollDelta: 60f, Pointer: PointerKind.Mouse, TimestampMs: 1000, WheelNotch: 1f));
+            mouseHost.RunFrame();
+            mouseHost.Scene.TryGetScroll(mouseVp, out var mouseState);
+
+            bool touchpadDirect = Near(touchpadState.OffsetY, 12f, 0.05f) && Near(touchpadState.TargetY, 12f, 0.05f)
+                                  && touchpadState.ScrollMode == 2;
+            // Mouse wheel now seeds a MOMENTUM fling (WheelFlingMode=3): the offset COASTS under friction with Target
+            // pinned to Offset — distinct from the touchpad's direct 1:1 hand-tracking (mode 2, Offset==exact delta).
+            bool mouseFling = mouseState.ScrollMode == 3 && mouseState.OffsetY > 1f && Near(mouseState.TargetY, mouseState.OffsetY, 0.5f);
+            Check("gate.scroll.touchpad-device-routing a hi-res touchpad wheel tracks content directly 1:1 (Offset==Target==delta, mode 2) while a mouse notch seeds a momentum fling (WheelFlingMode: Offset coasts, Target==Offset); PointerKind routes the engine (the PAL classifies touchpad by its hi-res delta signature)",
+                touchpadDirect && mouseFling,
+                $"touchpad=({touchpadState.OffsetY:0.00}->{touchpadState.TargetY:0.00},mode={touchpadState.ScrollMode}) mouse=({mouseState.OffsetY:0.00}->{mouseState.TargetY:0.00},mode={mouseState.ScrollMode})");
+        }
+
+        // gate.scroll.touchpad-trajectory: a constant-rate packet stream tracks exactly 1:1 while active (no coast-ahead),
+        // then the FIRST quiet frame begins the glide immediately (no quiet-window freeze — the old 42ms hitch is gone),
+        // coasting monotonically under the WinUI fling friction and settling. Checks the whole trajectory + the phase-7
+        // glide's zero-allocation contract.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("touchpad-trajectory", new Size2(360, 460), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings,
+                new ScrollProbe(), frameTime: new FixedFrameTimeSource(16f));
+            host.SmoothScroll = true;
+            host.RunFrame();
+            var vp = host.Scene.Root;
+            var pointer = new Point2(100, 100);
+
+            // Warm the new packet->quiet->inertia path once (the established touch-fling allocation gate does the
+            // same): first execution pays runtime/JIT costs that are not managed allocations from a steady frame.
+            uint warmStamp = 1000;
+            for (int i = 0; i < 6; i++)
+            {
+                warmStamp += 8;
+                window.QueueInput(new InputEvent(InputKind.Wheel, pointer, 0, 0,
+                    ScrollDelta: 12f, Pointer: PointerKind.Touchpad, TimestampMs: warmStamp));
+                host.RunFrame();
+            }
+            for (int i = 0; i < 180; i++)
+            {
+                host.RunFrame();
+                if (host.Scene.ScrollRef(vp).ScrollMode == 0) break;
+            }
+            host.Input.WriteScrollOffset(vp, 0f);
+            ref ScrollState reset = ref host.Scene.ScrollRef(vp);
+            reset.ScrollMode = 0; reset.FlingVelocity = 0f; reset.TouchpadLastTimestampMs = 0;
+            reset.TouchpadIdleMs = 0f; reset.TouchpadInertiaStarted = false;
+            host.RunFrame();
+
+            uint stamp = 2000;
+            for (int i = 0; i < 6; i++)
+            {
+                stamp += 8;
+                window.QueueInput(new InputEvent(InputKind.Wheel, pointer, 0, 0,
+                    ScrollDelta: 12f, Pointer: PointerKind.Touchpad, TimestampMs: stamp));
+                host.RunFrame();
+            }
+            host.Scene.TryGetScroll(vp, out var afterPackets);
+            float tracked = afterPackets.OffsetY;
+            bool trackedExactly = Near(tracked, 72f, 0.1f) && Near(afterPackets.TargetY, tracked, 0.05f);
+
+            float previous = tracked;
+            bool monotonic = true;
+            long worstHotAlloc = 0;
+            bool coasted = false;
+            float byFrame6 = float.NaN;
+            for (int i = 0; i < 180; i++)
+            {
+                FrameStats frame = host.RunFrame();
+                host.Scene.TryGetScroll(vp, out var s);
+                if (i == 6) byFrame6 = s.OffsetY;   // the glide must have engaged within the brief lift window (~40ms ≈ 3 frames)
+                worstHotAlloc = Math.Max(worstHotAlloc, frame.HotPhaseAllocBytes);
+                if (s.OffsetY + 0.001f < previous) monotonic = false;
+                if (s.OffsetY > tracked + 1f) coasted = true;
+                previous = s.OffsetY;
+                if (s.ScrollMode == 0 && i > 8) break;
+            }
+            host.Scene.TryGetScroll(vp, out var settled);
+            bool glidesPromptly = byFrame6 > tracked + 1f;   // tracked 1:1 during the stream (no mid-gesture coast), then glided right after the lift window
+            bool settledCleanly = settled.ScrollMode == 0 && settled.FlingVelocity == 0f && settled.OffsetY > tracked + 40f;
+            Check("gate.scroll.touchpad-trajectory a hi-res touchpad stream tracks exactly 1:1 while active (no mid-gesture coast), then glides right after the brief lift window, coasting monotonically under WinUI fling friction and settling allocation-free",
+                trackedExactly && glidesPromptly && coasted && monotonic && settledCleanly && worstHotAlloc == 0,
+                $"tracked={tracked:0.0} byFrame6={byFrame6:0.0} final={settled.OffsetY:0.0} mode={settled.ScrollMode} coasted={coasted} monotonic={monotonic} glides={glidesPromptly} hotAlloc={worstHotAlloc}B");
+        }
+
+        // gate.scroll.touchpad-glide-floor: a stream whose terminal (lift) velocity is below the glide FLOOR settles on the
+        // spot with no inertia — a gentle scroll that ends doesn't micro-glide, and a driver that streamed its own decaying
+        // tail ends slow → no second glide. A decaying packet run lands here.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("touchpad-driver-tail", new Size2(360, 460), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings,
+                new TouchFlingSettleProbe(), frameTime: new FixedFrameTimeSource(16f));
+            host.SmoothScroll = true;
+            host.RunFrame();
+            var vp = host.Scene.Root;
+            ReadOnlySpan<float> decaying = [12f, 8f, 4f, 1f, 0.2f];
+            uint stamp = 3000;
+            foreach (float delta in decaying)
+            {
+                stamp += 16;
+                window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0,
+                    ScrollDelta: delta, Pointer: PointerKind.Touchpad, TimestampMs: stamp));
+                host.RunFrame();
+            }
+            host.Scene.TryGetScroll(vp, out var terminalPacket);
+            float packetEnd = terminalPacket.OffsetY;
+            for (int i = 0; i < 8; i++) host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var afterQuiet);
+            Check("gate.scroll.touchpad-glide-floor a decaying packet stream ends below the glide floor, so it settles in place with no extra inertia",
+                Near(afterQuiet.OffsetY, packetEnd, 0.5f) && afterQuiet.ScrollMode == 0,
+                $"packetEnd={packetEnd:0.00} afterQuiet={afterQuiet.OffsetY:0.00} terminalV={terminalPacket.FlingVelocity:0.0} mode={afterQuiet.ScrollMode}");
+        }
+
+        // gate.scroll.touchpad-overscroll: a pinned touchpad pull rubber-bands the OUTERMOST scroller (OverscrollPx grows,
+        // the offset stays clamped, Overscrolling set) like a touch overpan, then springs back to 0 when the stream goes
+        // quiet — the WinUI ScrollPresenter overpan (ON by default; FG_TP_NOBOUNCE disables it).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("touchpad-overscroll", new Size2(360, 460), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new ScrollProbe(), frameTime: new FixedFrameTimeSource(16f));
+            host.SmoothScroll = true;
+            host.RunFrame();
+            var vp = host.Scene.Root;
+            // At offset 0 (pinned at the top), pull UP (negative) for several packets → damped rubber-band, offset stays 0.
+            uint stamp = 5000;
+            for (int i = 0; i < 5; i++)
+            {
+                stamp += 8;
+                window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(100, 100), 0, 0, ScrollDelta: -40f, Pointer: PointerKind.Touchpad, TimestampMs: stamp));
+                host.RunFrame();
+            }
+            host.Scene.TryGetScroll(vp, out var pulled);
+            bool banded = pulled.OverscrollPx < -0.5f && pulled.Overscrolling && Near(pulled.OffsetY, 0f, 0.01f);
+            bool released = false;
+            for (int i = 0; i < 200; i++) { host.RunFrame(); host.Scene.TryGetScroll(vp, out var s); if (!s.Overscrolling && MathF.Abs(s.OverscrollPx) < 0.1f) { released = true; break; } }
+            host.Scene.TryGetScroll(vp, out var sprung);
+            Check("gate.scroll.touchpad-overscroll a pinned touchpad pull rubber-bands the outermost scroller (band grows, offset clamped) then springs back to 0 when the stream goes quiet",
+                banded && released && Near(sprung.OverscrollPx, 0f, 0.1f) && !sprung.Overscrolling,
+                $"band={pulled.OverscrollPx:0.0} overscrolling={pulled.Overscrolling} off={pulled.OffsetY:0.00} released={released} finalBand={sprung.OverscrollPx:0.00}");
+        }
+
+        // gate.touch.flick-velocity-windowed: the windowed least-squares velocity sampler reads a fast constant-velocity
+        // flick's TRUE terminal speed (the 50ms EMA under-read it — gain dt/(dt+50) lags before convergence), AND a finger
+        // that moves fast then HOLDS STILL before lift decays to ~0 (the old EMA's stationary up-sample bias kept stale
+        // momentum). Drives the dispatcher directly and reads PointerVelocity.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("flick-vel", new Size2(360, 460), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
+            host.RunFrame();
+            uint t = s_touchClockMs;
+            var ev = new InputEvent[1];
+            ev[0] = Touch(InputKind.PointerDown, new Point2(150, 384), t, 21); host.Input.Dispatch(ev); host.RunFrame();
+            float y = 384f;
+            for (int i = 0; i < 10; i++) { t += 8; y -= 16f; ev[0] = Touch(InputKind.PointerMove, new Point2(150, y), t, 21); host.Input.Dispatch(ev); host.RunFrame(); }
+            float vFast = host.Input.PointerVelocity.Y;   // ≈ -2000 px/s (16px / 8ms, upward ⇒ negative)
+            bool accurate = vFast <= -1700f;              // near the true -2000 (the EMA lagged to ~-1500); regression reads true
+            // Now HOLD the finger still for several samples → the in-window slope goes to 0 (no stale momentum carried).
+            for (int i = 0; i < 8; i++) { t += 8; ev[0] = Touch(InputKind.PointerMove, new Point2(150, y), t, 21); host.Input.Dispatch(ev); host.RunFrame(); }
+            float vRest = host.Input.PointerVelocity.Y;
+            bool restZero = MathF.Abs(vRest) < 60f;
+            ev[0] = Touch(InputKind.PointerUp, new Point2(150, y), t + 8, 21); host.Input.Dispatch(ev); host.RunFrame();
+            s_touchClockMs = t + 1000;
+            Check("gate.touch.flick-velocity-windowed the windowed-regression velocity sampler reads a fast flick's TRUE terminal speed (no EMA under-read) and decays a paused-then-held finger to ~0 (the stationary up-sample bias is gone)",
+                accurate && restZero, $"fastV={vFast:0} (true≈-2000, want ≤-1700) heldStillV={vRest:0} (want ~0)");
+        }
+
+        // gate.scroll.source-mux-falls-back-to-integrator: the headless PAL supplies NO OS scroll source (the
+        // IPlatformWindow.CreateScrollSource seam default is null) ⇒ the ScrollSourceMux is transparent and the
+        // deterministic integrator drives scrolling alone — the additive guarantee for the Windows DM source.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("mux-fallback", new Size2(360, 460), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
+            host.RunFrame();
+            bool noOsSource = ((IPlatformWindow)window).CreateScrollSource((IScrollHost)host) is null;
+            var vp = host.Scene.Root;
+            window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0, 200f));   // DIP ScrollDelta (integrator path)
+            for (int i = 0; i < 40; i++) host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var s);
+            bool integratorRan = s.OffsetY > 0f && s.ScrollMode == 0;
+            Check("gate.scroll.source-mux-falls-back-to-integrator the headless PAL supplies no OS scroll source (CreateScrollSource null) ⇒ the ScrollSourceMux is transparent and the deterministic integrator drives scrolling alone",
+                noOsSource && integratorRan, $"noOsSource={noOsSource} integratorRan={integratorRan} off={s.OffsetY:0}");
+        }
+
+        // gate.scroll.dm-transform-maps: the DirectManipulation content-transform → engine offset/band mapping
+        // (DmScrollMath) — the only CI-testable slice of the Windows DM source (the live physics is touchscreen-only,
+        // validated manually). Clamp the in-range offset, split the past-edge excess into a signed band, and map the 2×3
+        // translation sign to offset-space displacement.
+        {
+            var inRange = DmScrollMath.Split(100f, 50f, 1000f);      // 150, band 0
+            var pastBottom = DmScrollMath.Split(980f, 50f, 1000f);   // 1000, band +30
+            var pastTop = DmScrollMath.Split(10f, -40f, 1000f);      // 0, band -30
+            float dispY = DmScrollMath.DisplacementFromTransform(new float[] { 1f, 0f, 0f, 1f, 0f, -42f }, horizontal: false);   // +42
+            float dispX = DmScrollMath.DisplacementFromTransform(new float[] { 1f, 0f, 0f, 1f, -17f, 0f }, horizontal: true);    // +17
+            bool ok = Near(inRange.offset, 150f) && Near(inRange.band, 0f)
+                   && Near(pastBottom.offset, 1000f) && Near(pastBottom.band, 30f)
+                   && Near(pastTop.offset, 0f) && Near(pastTop.band, -30f)
+                   && Near(dispY, 42f) && Near(dispX, 17f);
+            Check("gate.scroll.dm-transform-maps the DirectManipulation content-transform → engine offset/band mapping (DmScrollMath) clamps the in-range offset, splits the past-edge excess into a signed band, and maps the 2×3 translation sign to offset-space displacement (the deterministic slice of the Windows DM source)",
+                ok, $"inRange=({inRange.offset:0},{inRange.band:0}) pastBottom=({pastBottom.offset:0},{pastBottom.band:0}) pastTop=({pastTop.offset:0},{pastTop.band:0}) dispY={dispY:0} dispX={dispX:0}");
         }
     }
 
@@ -9281,15 +9956,16 @@ static class Slice
         }
 
         // B.9 — TextEl's default Color resolves the LIVE theme's TextFillColorPrimary at construction
-        // (dark #FFFFFF / light #E4000000) — guards the Tok.TextPrimary default against a hardcoded revert.
+        // (dark #FFFFFF / light #1F1E1B) — guards the Tok.TextPrimary default against a hardcoded revert. Light is Wavee's
+        // warm off-black (the light-mode warm-ramp retint), NOT WinUI's #E4000000; dark stays WinUI-faithful.
         {
             var darkDefault = new TextEl("x").Color;
             Tok.Use(ThemeKind.Light);
             var lightDefault = new TextEl("x").Color;
             Tok.Use(ThemeKind.Dark);
             bool dark = darkDefault.Value == Tok.TextPrimary && darkDefault.Value == ColorF.FromRgba(0xFF, 0xFF, 0xFF);
-            bool light = lightDefault.Value == ColorF.FromRgba(0x00, 0x00, 0x00, 0xE4);
-            Check("B.9 TextEl default color = theme TextFillColorPrimary (dark #FFFFFF / light #E4000000)",
+            bool light = lightDefault.Value == ColorF.FromRgba(0x1F, 0x1E, 0x1B);
+            Check("B.9 TextEl default color = theme TextFillColorPrimary (dark #FFFFFF / light #1F1E1B warm off-black)",
                 dark && light, $"dark={dark} light={light}");
         }
 
@@ -17378,6 +18054,23 @@ static class Slice
         for (int i = 0; i < 40; i++) { host.RunFrame(); maxTrack = MathF.Max(maxTrack, MaxAbsTrackX(host, host.Scene.Root)); }
         Check("M1. marquee scrolls overflowing text (OnBoundsChanged initial delivery + nested-component TranslateX seed)",
               maxTrack > 1f, $"maxAbsTrackX={maxTrack:0.##}");
+
+        // M2: a REACTIVE title that grows AFTER the marquee mounted must still start scrolling — the real PlayerBar binds
+        // Prop.Of(() => NowPlaying(b).Title), empty until a track loads. The marquee's text box is Shrink=0, so its
+        // arranged width equals its measured width; its OnBoundsChanged must edge-trigger on the real arranged-rect change
+        // (vs the LAST DELIVERED rect), NOT on a Bounds delta — Measure pre-writes Bounds to that same width each pass, so
+        // a Bounds-delta check never re-fires and TextW stays 0 forever (it scrolled only after a window resize remounted
+        // it). Guards the SetArrangedBounds delivered-baseline fix. M1 covers title-at-mount; this covers title-after-mount.
+        var probe2 = new MarqueeAutostartProbe();
+        var window2 = new HeadlessWindow(new WindowDesc("marquee-reactive", new Size2(220, 120), 1f)); window2.Show();
+        using var host2 = new AppHost(app, window2, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe2);
+        host2.RunFrame();                                  // mount with an EMPTY title
+        for (int i = 0; i < 8; i++) host2.RunFrame();      // settle: the mount one-shot delivers TextW = 0 (no overflow yet)
+        probe2.Title.Value = "This is a very long track title that should overflow and scroll";   // "a track loads"
+        float maxTrack2 = 0f;
+        for (int i = 0; i < 40; i++) { host2.RunFrame(); maxTrack2 = MathF.Max(maxTrack2, MaxAbsTrackX(host2, host2.Scene.Root)); }
+        Check("M2. marquee scrolls when its reactive title grows AFTER mount (OnBoundsChanged edge-triggers on the real arranged-rect change, not the Measure-corrupted Bounds delta)",
+              maxTrack2 > 1f, $"maxAbsTrackX={maxTrack2:0.##}");
     }
 
     static int Main()
@@ -17469,6 +18162,8 @@ static class Slice
         ScrollCrossAxisChecks(strings);
         ScrollOverlayChecks(strings);
         VirtualChecks(strings);
+        BoundItemsViewChecks(strings);   // ItemsView CreateBound: bound-slot re-skin (no rebuild on select/now-playing = no flash), roving tab stop
+        AsyncCommandChecks(strings);     // UseAsyncCommand(s): in-progress state tracks the Task, re-fire blocked, cancel, keyed independence, idle 0-alloc
         ExtentTableChecks();
         VariableChecks(strings);
         ZeroAllocScrollChecks(strings);
@@ -17479,6 +18174,7 @@ static class Slice
         ArenaDeterminismChecks(strings); // Phase 3 determinism (validation.md §12.6): bit-identical replay trace + dt-sweep resolution identity + fast-path-sync + multi-recognizer 0-alloc
         PinchZoomChecks(strings);      // Phase 4 pinch-zoom (gate.touch4.*): second-contact → Pinch sweeps Pan, scale-about-midpoint transform (no relayout), clamp 0.1..10.0, per-id cancel, pan continuation, 0-alloc
         TouchSnapOverscrollChecks(strings); // Phase 4 snap + overscroll (gate.touch4.*): fling-snap lands on a snap point (dt-invariant), touch-pan rubber-band + spring-back (offset never leaves clamp), wheel hard-clamps, 0-alloc
+        ScrollParityChecks(strings);   // WinUI-parity scroll: content-relative wheel distance, windowed velocity sampler, IScrollSource seam transparency, DM transform→offset math
         Touch4SipChecks(strings);      // Phase 4 SIP (gate.touch4.sip.*): touch focus shows the touch keyboard once (mouse focus doesn't), focus loss hides, a Showing OccludedRect reflows the caret into view, 0-alloc steady
         Touch4HoldWakeChecks(strings); // Phase 4 Hold EXECUTION + stationary-hold wake (gate.touch4.*): touch long-press fires the context flyout, the GestureHold wake bit keeps frames coming for a motionless held finger then clears, RatingControl touch tap-to-rate
         ImageCacheChecks();

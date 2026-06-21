@@ -17,12 +17,17 @@ public enum SkelReveal : byte
     StaggerRows,
     /// <summary>A plain opacity cross-fade (no translate/blur) — for content that should not move.</summary>
     FadeOnly,
+    /// <summary>No root reveal — the content animates its OWN entrance (e.g. an ItemsView's per-row
+    /// <c>ItemCollectionTransition</c> adds). Pair with a longer <see cref="SkeletonStyle.ExitMs"/> so the shimmer
+    /// lingers and cross-dissolves with the content's own fade-in instead of leaving a gap.</summary>
+    None,
 }
 
 /// <summary>The look of the derived shimmer (bar color + corner, the breathing pulse, and the inter-row gap the list
 /// shimmer stacks at). Defaults to the WinUI-flavoured subtle fill + a 1s breathe (matches the gallery skeleton bars).</summary>
 public readonly record struct SkeletonStyle(
-    ColorF BarColor, float PulseMs = 1000f, float PulseMin = 0.5f, float RowGap = 8f, float BarRadius = 4f, float TextRatio = 0.72f)
+    ColorF BarColor, float PulseMs = 1000f, float PulseMin = 0.5f, float RowGap = 8f, float BarRadius = 4f, float TextRatio = 0.72f,
+    float ExitMs = Expressive.Fast)
 {
     public static SkeletonStyle Default => new(Tok.FillSubtleSecondary);
 }
@@ -118,6 +123,8 @@ internal static class SkeletonReveal
         if (realRoot.IsNull || !scene.IsLive(realRoot)) return;
         switch (reveal)
         {
+            case SkelReveal.None:
+                break;   // content owns its entrance (its rows cross-dissolve with the lingering shimmer)
             case SkelReveal.FadeOnly:
                 anim.Animate(realRoot, AnimChannel.Opacity, 0f, 1f, Expressive.Fast, Easing.SmoothOut);
                 break;

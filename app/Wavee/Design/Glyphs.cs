@@ -13,6 +13,7 @@ internal static class Mdl
     public static readonly string ChevronLeft = Of(0xE76B);    // rail page back
     public static readonly string ChevronRight = Of(0xE76C);   // rail page forward
     public static readonly string Album = Of(0xE93C);          // albums
+    public static readonly string Equalizer = Of(0xE9E9);      // now-playing track indicator
     public static readonly string Friends = Of(0xE716);        // friends
     public static readonly string Bell = Of(0xEA8F);           // notifications
     public static readonly string Moon = Of(0xE708);           // theme (dark → show moon)

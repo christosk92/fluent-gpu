@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using FluentGpu.Animation;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Pal;
@@ -141,7 +142,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private const nuint MoveLoopTimerId = 1;   // SetTimer id for the modal move/size loop keep-alive pump
     private const uint WM_FG_COALESCED_SIZE_PAINT = 0x8000 + 0x4F; // WM_APP-range queued paint for modal live-resize coalescing
     // ── Pointer input (EnableMouseInPointer): the WM_MOUSE* client stream is retired — mouse, touch and pen all arrive
-    //    here as WM_POINTER* (PT_MOUSE/PT_TOUCH/PT_PEN). One contact = one PointerId; implicit contact→window capture
+    //    here as WM_POINTER* (PT_MOUSE/PT_TOUCH/PT_PEN/PT_TOUCHPAD). One contact = one PointerId; implicit contact→window capture
     //    replaces the SetCapture refcount. WM_POINTERWHEEL/HWHEEL REPLACE WM_MOUSEWHEEL/HWHEEL once mouse-in-pointer is on.
     private const uint WM_POINTERUPDATE = 0x0245, WM_POINTERDOWN = 0x0246, WM_POINTERUP = 0x0247,
                        WM_POINTERLEAVE = 0x024A, WM_POINTERCAPTURECHANGED = 0x024C,
@@ -169,11 +170,12 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private const uint MF_BYCOMMAND = 0x0, MF_ENABLED = 0x0, MF_GRAYED = 0x1;
     private const uint TPM_RETURNCMD = 0x0100;
     private const uint SWP_FRAMECHANGED = 0x0020, SWP_NOSIZE = 0x0001;
-    // DIP scrolled per wheel notch (120 units). ~3.75 lines × ~16px — a notch covers real ground (48 felt sluggish
-    // on long lists; paired with the shorter ScrollAnimator.WheelEaseTauMs the wheel now tracks the hand).
+    // DIP per wheel notch (120 units) for ELEMENT-level PointerWheel handlers ONLY (e.g. NumberBox). The VIEWPORT scroll
+    // distance no longer uses this flat value — it derives from the per-event WheelNotch count as max(48 DIP, 15%·viewport)
+    // per notch in the dispatcher (the WinUI content-relative wheel line height, ScrollTuning.PerNotchDip).
     private const float WheelDipPerNotch = 60f;
     // POINTER_INPUT_TYPE (winuser.h): the physical device class behind a WM_POINTER message.
-    private const uint PT_TOUCH = 2, PT_PEN = 3, PT_MOUSE = 4;
+    private const uint PT_TOUCH = 2, PT_PEN = 3, PT_MOUSE = 4, PT_TOUCHPAD = 5;
     // POINTER_BUTTON_CHANGE_TYPE (winuser.h): which button transitioned on this WM_POINTERDOWN/UP — maps a PT_MOUSE
     // contact back onto the engine's 0=left/1=right/2=middle convention (touch/pen down is always the primary action).
     private const uint POINTER_CHANGE_FIRSTBUTTON_DOWN = 1, POINTER_CHANGE_FIRSTBUTTON_UP = 2,
@@ -220,6 +222,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool GetPointerInfo(uint pointerId, POINTER_INFO* pointerInfo);
 
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetPointerDevice(nint device, POINTER_DEVICE_INFO* pointerDevice);
+
     // Drains the OS-coalesced history of ONE pointer's WM_POINTERUPDATE: entriesCount entries, NEWEST first (index 0).
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -238,7 +244,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     [StructLayout(LayoutKind.Sequential)]
     private struct POINTER_INFO
     {
-        public uint pointerType;            // POINTER_INPUT_TYPE (PT_TOUCH/PT_PEN/PT_MOUSE)
+        public uint pointerType;            // POINTER_INPUT_TYPE (PT_TOUCH/PT_PEN/PT_MOUSE/PT_TOUCHPAD)
         public uint pointerId;
         public uint frameId;
         public uint pointerFlags;
@@ -254,6 +260,19 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         public uint dwKeyStates;
         public ulong PerformanceCount;
         public uint ButtonChangeType;       // POINTER_BUTTON_CHANGE_TYPE
+    }
+
+    private const uint POINTER_DEVICE_TYPE_TOUCH_PAD = 4;
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private unsafe struct POINTER_DEVICE_INFO
+    {
+        public uint displayOrientation;
+        public nint device;
+        public uint pointerDeviceType;
+        public nint monitor;
+        public uint startingCursorId;
+        public ushort maxActiveContacts;
+        public fixed char productString[520];
     }
 
     // POINTER_TOUCH_INFO (winuser.h) — pressure is 0..1024 (0 when the digitizer reports none).
@@ -287,6 +306,26 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     [ThreadStatic] private static Win32Window? s_constructing;
 
     private readonly HWND _hwnd;
+    // Precision-touchpad wheel detection (latched per gesture). A detented mouse wheel always reports the HIWORD delta as
+    // an EXACT multiple of WHEEL_DELTA (120); a precision touchpad streams high-resolution sub-120 / non-multiple deltas
+    // (MS "highResolutionScrollingAware" docs; Chromium uses the same signature). GetPointerInfo/GetPointerDevice do NOT
+    // surface PT_TOUCHPAD for these PT_MOUSE-promoted wheel messages on this hardware, so the delta signature — not the
+    // device API — is the reliable classifier. We latch the mode for the whole gesture and only re-evaluate after an idle
+    // gap, so a stray 120-multiple mid-stream can't flip the physics path (a true mouse is always 120-multiples).
+    private uint _lastWheelMs;
+    private bool _wheelHiRes;
+    private const uint WheelGestureGapMs = 200;   // gap that ends a wheel gesture and re-evaluates the hi-res latch
+    // OS DirectManipulation touch scrolling (default ON; FG_DM_SCROLL=0 disables): the manual-update DM source + pointer ids
+    // it currently owns (whose pointer events are NOT forwarded to the engine — DM reads them itself, avoiding a
+    // double-drive). The environment switch is an emergency/A-B fallback, not a shipping feature gate.
+    private static readonly bool s_dmScroll =
+        !string.Equals(System.Environment.GetEnvironmentVariable("FG_DM_SCROLL"), "0", StringComparison.OrdinalIgnoreCase) &&
+        !string.Equals(System.Environment.GetEnvironmentVariable("FG_DM_SCROLL"), "false", StringComparison.OrdinalIgnoreCase);
+    private Win32DmScrollSource? _dmScroll;
+    private readonly HashSet<uint> _dmOwned = new();
+    private readonly HashSet<uint> _dmCanceled = new();   // DM contacts whose movement already cancelled the engine tap candidate
+    private readonly Dictionary<uint, Point2> _dmDown = new();
+    private readonly Dictionary<nint, bool> _touchpadDeviceCache = new();   // source HANDLE -> POINTER_DEVICE_TYPE_TOUCH_PAD
     private readonly GCHandle _self;
     private readonly Queue<InputEvent> _queue = new();
     private Win32TextInput _textInput = null!;   // created right after the HWND exists (WndProc IME cases route to it)
@@ -446,6 +485,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     internal HWND Hwnd => _hwnd;
     internal float ScaleInternal => _scale;
     internal void EnqueueExternal(in InputEvent e) => _queue.Enqueue(e);
+
+    /// <summary>Inject a synthetic input event onto the SAME queue the WndProc feeds (parity with HeadlessPlatform.QueueInput):
+    /// it is drained by <see cref="PumpInto"/> into the dispatcher ring identically to a real OS message, so a test/diagnostic
+    /// harness exercises the full hit-test → routing → inertia path (not the WriteScrollOffset bypass). UI-thread only.</summary>
+    public void QueueInput(in InputEvent e) => _queue.Enqueue(e);
 
     public void Show()
     {
@@ -659,6 +703,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         Win32DropTarget.Revoke(_dropReg);   // RevokeDragDrop + free the CCW before the HWND dies
         _dropReg = null;
         _textInput?.DisposeSip();   // release the WinRT InputPane refs + SIP event subscriptions before the HWND dies
+        _dmScroll?.Dispose();       // tear down DirectManipulation (manager/viewport/CCWs) before the HWND dies
+        _dmScroll = null;
         if (_hwnd != HWND.NULL) { KillTimer(_hwnd, MoveLoopTimerId); DestroyWindow(_hwnd); }
         if (_self.IsAllocated) _self.Free();
     }
@@ -821,11 +867,24 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 PointerUpdate(GET_POINTERID_WPARAM(wParam));
                 return true;
             case WM_POINTERDOWN:
+                // A DM candidate still reaches the engine on DOWN so a stationary contact can remain a tap/click.
+                // Its first MOVE cancels that candidate before DM takes exclusive movement ownership.
+                TryDmEngagePointer(GET_POINTERID_WPARAM(wParam));
                 PointerDownUp(GET_POINTERID_WPARAM(wParam), down: true);
                 return true;
             case WM_POINTERUP:
-                PointerDownUp(GET_POINTERID_WPARAM(wParam), down: false);
+            {
+                uint upId = GET_POINTERID_WPARAM(wParam);
+                if (_dmOwned.Remove(upId))
+                {
+                    _dmDown.Remove(upId);
+                    bool movementCancelledTap = _dmCanceled.Remove(upId);
+                    if (!movementCancelledTap) PointerDownUp(upId, down: false);   // stationary DM contact => normal tap
+                    return true;
+                }
+                PointerDownUp(upId, down: false);
                 return true;
+            }
             case WM_POINTERLEAVE:
             {
                 // The hovering pointer left the window (the WM_POINTER analogue of WM_MOUSELEAVE): clear engine hover so
@@ -840,6 +899,14 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 // Per-pointer capture loss (gesture stolen, contact aborted): cancel just THAT contact's interaction —
                 // the dispatcher releases that PointerId's capture/press without firing a click.
                 uint capId = GET_POINTERID_WPARAM(wParam);
+                if (_dmOwned.Remove(capId))
+                {
+                    _dmDown.Remove(capId);
+                    if (!_dmCanceled.Remove(capId))
+                        _queue.Enqueue(new InputEvent(InputKind.PointerCancel, default, 0, 0,
+                            Pointer: PointerKindOf(capId), TimestampMs: Now(), PointerId: capId));
+                    return true;
+                }
                 _queue.Enqueue(new InputEvent(InputKind.PointerCancel, default, 0, 0,
                     Pointer: PointerKindOf(capId), TimestampMs: Now(), PointerId: capId));
                 return true;
@@ -854,21 +921,33 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 // content end". Horizontal: +notch = tilt/swipe RIGHT = offsetX↑, already "toward content end" (no flip).
                 short notch = unchecked((short)((ulong)(nuint)wParam >> 16));
                 bool horizontal = msg == WM_POINTERHWHEEL;
-                float dipY = horizontal ? 0f : -(notch / 120f) * WheelDipPerNotch;
-                float dipX = horizontal ? (notch / 120f) * WheelDipPerNotch : 0f;
-                // Precision touchpad, free-spin/hi-res mice, AND a clicky wheel ALL arrive here as WM_POINTERWHEEL with a
-                // signed (×120) HIGH-RESOLUTION notch — and the magnitude does NOT cleanly separate them (confirmed: MS
-                // Precision-Touchpad docs + the w3c uievents thread — a precision touchpad streams notches spanning the
-                // whole range, single-digit to 800+, WITHIN one gesture). Any magnitude threshold straddles a normal flick
-                // and makes the scroller flip-flop paths mid-gesture (the "stops midway" bug). So we DON'T classify here:
-                // every wheel delta rides ONE unified eased path (ScrollAnimator.WheelEaseTauMs), exactly as Edge/Chromium
-                // give mousewheel/keyboard/scrollbar a single "smooth personality" curve. The proportional dip scaling
-                // above gives the fractional px move. (True touchpad inertia/bounce is a separate DirectManipulation path.)
+                // The signed device notch count (rawAmount/120) drives the VIEWPORT scroll distance — the dispatcher
+                // scales it to max(48 DIP, 15%·viewport) per notch (WinUI content-relative wheel line height). The DIP
+                // (dipY/dipX, via WheelDipPerNotch) is retained ONLY for ELEMENT-level PointerWheel handlers (NumberBox).
+                float notchY = horizontal ? 0f : -(notch / 120f);
+                float notchX = horizontal ? (notch / 120f) : 0f;
+                float dipY = notchY * WheelDipPerNotch;
+                float dipX = notchX * WheelDipPerNotch;
+                // Classify touchpad vs mouse by the delta SIGNATURE (see _wheelHiRes remarks), NOT the OS device API
+                // (which reports these PT_MOUSE-promoted wheel messages as Mouse on this hardware). A precision touchpad
+                // streams non-120-multiple hi-res deltas → pixel-follow + measured-velocity inertia; a detented mouse
+                // wheel (every delta a multiple of 120) keeps the discrete eased per-notch chase. PointerKindOf, when a
+                // stack DOES expose PT_TOUCHPAD/device-info, corroborates as a fast path. Latched per gesture; an idle
+                // gap (> WheelGestureGapMs) re-evaluates so a stray 120-multiple can't flip the path mid-stream.
+                uint nowMs = Now();
+                bool streamIdle = nowMs - _lastWheelMs > WheelGestureGapMs;
+                _lastWheelMs = nowMs;
+                bool thisHiRes = notch != 0 && (notch % 120) != 0;
+                if (streamIdle) _wheelHiRes = thisHiRes;
+                else if (thisHiRes) _wheelHiRes = true;
+                uint wheelPid = GET_POINTERID_WPARAM(wParam);
+                if (PointerKindOf(wheelPid) == PointerKind.Touchpad) _wheelHiRes = true;
+                PointerKind wheelKind = _wheelHiRes ? PointerKind.Touchpad : PointerKind.Mouse;
                 if (FluentGpu.Foundation.ScrollLog.On)
-                    FluentGpu.Foundation.ScrollLog.Line($"WHEEL {(horizontal ? "H" : "V")} notch={notch} dip={(horizontal ? dipX : dipY):0.0} kind={PointerKindOf(GET_POINTERID_WPARAM(wParam))}");
+                    FluentGpu.Foundation.ScrollLog.Line($"WHEEL {(horizontal ? "H" : "V")} notch={notch} dip={(horizontal ? dipX : dipY):0.0} hiRes={_wheelHiRes} kind={wheelKind}");
                 _queue.Enqueue(new InputEvent(InputKind.Wheel, WheelPt(lp), 0, 0, dipY, Mods(),
-                    Pointer: PointerKindOf(GET_POINTERID_WPARAM(wParam)), TimestampMs: Now(),
-                    PointerId: GET_POINTERID_WPARAM(wParam), ScrollDeltaX: dipX));
+                    Pointer: wheelKind, TimestampMs: nowMs,
+                    PointerId: wheelPid, ScrollDeltaX: dipX, WheelNotch: notchY, WheelNotchX: notchX));
                 return true;
             }
             case WM_KEYDOWN:
@@ -1097,6 +1176,23 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     // the ring re-coalesces to the latest per contact. One screen→client→DIP convert per sample (never double-converted).
     private void PointerUpdate(uint pointerId)
     {
+        if (_dmOwned.Count > 0 && _dmOwned.Contains(pointerId))
+        {
+            if (_dmCanceled.Contains(pointerId)) return;
+            POINTER_INFO current;
+            if (_dmDown.TryGetValue(pointerId, out Point2 down) && GetPointerInfo(pointerId, &current))
+            {
+                Point2 now = ScreenPtToDip(current.ptPixelLocation);
+                if (MathF.Abs(now.X - down.X) > 4f || MathF.Abs(now.Y - down.Y) > 4f)
+                {
+                    _dmCanceled.Add(pointerId);
+                    _queue.Enqueue(new InputEvent(InputKind.PointerCancel, default, 0, 0,
+                        Pointer: PointerKindOf(pointerId), TimestampMs: Now(), PointerId: pointerId));
+                    return;
+                }
+            }
+            // Sub-slop digitizer jitter remains visible to the engine's tap recognizer.
+        }
         POINTER_INFO* hist = stackalloc POINTER_INFO[PointerHistoryMax];
         uint count = PointerHistoryMax;
         if (GetPointerInfoHistory(pointerId, &count, hist) && count > 0)
@@ -1136,6 +1232,36 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
             button, 0, Mods: Mods(), Pointer: kind, TimestampMs: time, PointerId: pointerId, Pressure: pressure));
     }
 
+    /// <summary>Bind a genuine touch WM_POINTERDOWN to the OS DirectManipulation source. Returns
+    /// true when DM engaged the contact (its later pointer events are then suppressed from the engine — DM reads them).
+    /// A precision touchpad pan arrives as WM_POINTERWHEEL, never here, so it rides the dedicated direct-tracking path.</summary>
+    private bool TryDmEngagePointer(uint pointerId)
+    {
+        if (_dmScroll is null) return false;
+        POINTER_INFO pi;
+        if (!GetPointerInfo(pointerId, &pi)) return false;
+        Decode(in pi, out PointerKind kind, out _, out _);
+        if (kind != PointerKind.Touch) return false;
+        Point2 down = ScreenPtToDip(pi.ptPixelLocation);
+        if (_dmScroll.TrySetContact(pointerId, down, _scale))
+        {
+            _dmOwned.Add(pointerId);
+            _dmDown[pointerId] = down;
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>IPlatformWindow seam: the default Windows OS-manipulation source. FG_DM_SCROLL=0 disables it for an A/B
+    /// fallback. The returned manual-update DM source owns no GPU COM and re-applies its polled position through the
+    /// host's clamp chokepoint.</summary>
+    public IScrollSource? CreateScrollSource(IScrollHost host)
+    {
+        if (!s_dmScroll) return null;
+        _dmScroll = Win32DmScrollSource.Create((nint)_hwnd, host);
+        return _dmScroll;
+    }
+
     // ── windowed-popup pointer forwarding (Win32PopupWindow → owner) ─────────────────────────────────────────────────
     // A windowed (out-of-bounds) popup HWND owns its own message pump but no dispatcher; under mouse-in-pointer ITS input
     // also arrives as WM_POINTER* (the retired WM_MOUSE* never fires), so it forwards the pointer stream here. The owner
@@ -1148,10 +1274,12 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     // semantics as the owner's own wheel path, mapped to owner DIP so the forwarded wheel feels identical.
     internal void ForwardPopupPointerWheel(uint pointerId, long lp, short notch, bool horizontal)
     {
-        float dipY = horizontal ? 0f : -(notch / 120f) * WheelDipPerNotch;
-        float dipX = horizontal ? (notch / 120f) * WheelDipPerNotch : 0f;
+        float notchY = horizontal ? 0f : -(notch / 120f);
+        float notchX = horizontal ? (notch / 120f) : 0f;
+        float dipY = notchY * WheelDipPerNotch;
+        float dipX = notchX * WheelDipPerNotch;
         _queue.Enqueue(new InputEvent(InputKind.Wheel, WheelPt(lp), 0, 0, dipY, Mods(),
-            Pointer: PointerKindOf(pointerId), TimestampMs: Now(), PointerId: pointerId, ScrollDeltaX: dipX));
+            Pointer: PointerKindOf(pointerId), TimestampMs: Now(), PointerId: pointerId, ScrollDeltaX: dipX, WheelNotch: notchY, WheelNotchX: notchX));
     }
 
     // WM_POINTERCAPTURECHANGED over the popup: the contact's implicit capture broke — cancel just THAT PointerId's
@@ -1162,9 +1290,15 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
 
     // Classify a contact + read its normalized pressure and timestamp. PT_TOUCH/PT_PEN pressure is 0..1024 (0 = the
     // digitizer reports none → keep 1 like a mouse); dwTime may be 0 (injected/synthetic) → fall back to the message clock.
-    private static void Decode(in POINTER_INFO pi, out PointerKind kind, out float pressure, out uint time)
+    private void Decode(in POINTER_INFO pi, out PointerKind kind, out float pressure, out uint time)
     {
         time = pi.dwTime != 0 ? pi.dwTime : Now();
+        if (IsTouchpadDevice(in pi))
+        {
+            kind = PointerKind.Touchpad;
+            pressure = 1f;
+            return;
+        }
         switch (pi.pointerType)
         {
             case PT_TOUCH:
@@ -1181,6 +1315,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 pressure = GetPointerPenInfo(pi.pointerId, &pp) && pp.pressure != 0 ? pp.pressure / 1024f : 1f;
                 return;
             }
+            case PT_TOUCHPAD:
+                kind = PointerKind.Touchpad;
+                pressure = 1f;
+                return;
             default:
                 kind = PointerKind.Mouse;
                 pressure = 1f;
@@ -1188,13 +1326,42 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         }
     }
 
-    // Just the device-class tag (GetPointerType, lighter than a full POINTER_INFO) — used where only the kind is needed
-    // (wheel, leave, capture-changed). A failed query (the pointer already ended) defaults to Mouse, the safe identity.
-    private static PointerKind PointerKindOf(uint pointerId)
+    // Device-class tag used by wheel/leave/capture. Some precision-touchpad stacks expose the message-level pointer type
+    // as PT_MOUSE; sourceDevice -> POINTER_DEVICE_INFO is the physical-device authority in that case.
+    private PointerKind PointerKindOf(uint pointerId)
     {
+        POINTER_INFO pi;
+        if (GetPointerInfo(pointerId, &pi))
+        {
+            if (IsTouchpadDevice(in pi)) return PointerKind.Touchpad;
+            return pi.pointerType switch
+            {
+                PT_TOUCH => PointerKind.Touch,
+                PT_PEN => PointerKind.Pen,
+                _ => PointerKind.Mouse,
+            };
+        }
         uint type;
         if (!GetPointerType(pointerId, &type)) return PointerKind.Mouse;
-        return type switch { PT_TOUCH => PointerKind.Touch, PT_PEN => PointerKind.Pen, _ => PointerKind.Mouse };
+        return type switch
+        {
+            PT_TOUCH => PointerKind.Touch,
+            PT_PEN => PointerKind.Pen,
+            PT_TOUCHPAD => PointerKind.Touchpad,
+            _ => PointerKind.Mouse,
+        };
+    }
+
+    private bool IsTouchpadDevice(in POINTER_INFO pi)
+    {
+        if (pi.pointerType == PT_TOUCHPAD) return true;
+        if (pi.sourceDevice == 0) return false;
+        if (_touchpadDeviceCache.TryGetValue(pi.sourceDevice, out bool cached)) return cached;
+        POINTER_DEVICE_INFO device;
+        bool touchpad = GetPointerDevice(pi.sourceDevice, &device) &&
+                        device.pointerDeviceType == POINTER_DEVICE_TYPE_TOUCH_PAD;
+        _touchpadDeviceCache[pi.sourceDevice] = touchpad;
+        return touchpad;
     }
 
     private static int ButtonForChange(uint change) => change switch

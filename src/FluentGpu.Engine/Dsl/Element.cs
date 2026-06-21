@@ -8,6 +8,12 @@ public abstract record Element
 {
     public string? Key { get; init; }
 
+    /// <summary>Optional shared-element (connected-animation / matched-geometry "Hero") key: a node tagged with a
+    /// MorphId is a transition participant — when a like-tagged node mounts on the next route, this node's art flies
+    /// from the rect it occupied to the new node's rect (backdrop-effects-animation.md §5.4/§5.6). Drives the engine's
+    /// <c>ConnectedAnimation</c> registry. Null = not a participant (the default).</summary>
+    public string? MorphId { get; init; }
+
     /// <summary>Stable per-record-type id for integer type-dispatch in the reconciler (the source-gen'd ElementTypeId).</summary>
     public abstract ushort ElementTypeId { get; }
 
@@ -275,10 +281,6 @@ public sealed record BoxEl : Element
     /// it (an opaque fill so content can't show through, a shadow, a compact variant, different children) — strictly
     /// more flexible than a fixed pinned style. Fired at most once per transition, never per frame.</summary>
     public Action<bool>? OnPinned { get; init; }
-
-    /// <summary>Optional shared-element key: a node with the same MorphId across reconciles morphs from the old node's
-    /// rect to the new one (matched-geometry / Hero). Reserved for v1.1.</summary>
-    public string? MorphId { get; init; }
 
     /// <summary>Opt this child OUT of a <see cref="FluentGpu.Foundation.SizeMode.ScaleCorrect"/> ancestor's scale: the
     /// recorder applies the inverse scale so the child stays undistorted (Framer-Motion projection correction).</summary>

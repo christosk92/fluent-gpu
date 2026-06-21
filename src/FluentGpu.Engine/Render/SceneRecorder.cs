@@ -75,10 +75,19 @@ public static class SceneRecorder
         // a skipped popup subtree stays with its popup window (no main-window hoist).
         var ghost = scene.DragGhost;
         bool hasGhost = !ghost.IsNull && scene.IsLive(ghost) && !UnderAnySkipRoot(scene, skipRoots, ghost);
-        Span<NodeHandle> skips = stackalloc NodeHandle[skipRoots.Length + 1];
+        int overlayCount = scene.OverlayCount;
+        Span<NodeHandle> skips = stackalloc NodeHandle[skipRoots.Length + 1 + overlayCount];
         skipRoots.CopyTo(skips);
         int skipCount = skipRoots.Length;
         if (hasGhost) skips[skipCount++] = ghost;
+        // Connected-animation overlays are excluded from the clipped main pass and re-walked LAST in their own
+        // top band (below). Add them to the skip set so a tree-resident overlay (the DragGhost case) is not also
+        // drawn clipped in the main pass; standalone overlays are not tree descendants so this is belt-and-suspenders.
+        for (int i = 0; i < overlayCount; i++)
+        {
+            var ov = scene.OverlayAt(i);
+            if (scene.IsLive(ov)) skips[skipCount++] = ov;
+        }
 
         Walk(scene, dl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, skips[..skipCount], ref stats);
 
@@ -88,6 +97,7 @@ public static class SceneRecorder
         for (int i = 0; i < scene.OrphanCount; i++)
         {
             var o = scene.OrphanAt(i, out float px, out float py);
+            if ((scene.Flags(o) & NodeFlags.ConnectedOverlay) != 0) continue;   // an overlay-flagged orphan draws in the top band, not here
             Walk(scene, dl, images, o, Affine2D.Translation(px, py), 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, skipRoots, ref stats);
         }
 
@@ -102,6 +112,24 @@ public static class SceneRecorder
             Walk(scene, dl, images, ghost,
                  Affine2D.Translation(abs.X - gb.X - gp.LocalTransform.Dx, abs.Y - gb.Y - gp.LocalTransform.Dy),
                  1f, 1 << 16, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, default, ref stats);
+        }
+
+        // Connected-animation overlay band: flying shared-element (Hero) visuals. Each overlay draws in a top band ABOVE
+        // the drag ghost (depth (1<<16)|1) at its own world origin, clipped to scene.OverlayClip (RectF.Infinite ⇒
+        // unbounded; a content-region rect ⇒ the fly stays on the page and never sails over the sidebar/chrome, while
+        // still clearing the inner rail scissor so the cover isn't cut off). Its LocalTransform carries the animated fly
+        // translate+scale (set by ConnectedAnimation); AbsoluteRect strips only the node's own bounds offset + translate.
+        RectF overlayClip = scene.OverlayClip;
+        for (int i = 0; i < overlayCount; i++)
+        {
+            var ov = scene.OverlayAt(i);
+            if (!scene.IsLive(ov)) continue;
+            var abs = scene.AbsoluteRect(ov);
+            ref RectF ob = ref scene.Bounds(ov);
+            ref NodePaint op = ref scene.Paint(ov);
+            Walk(scene, dl, images, ov,
+                 Affine2D.Translation(abs.X - ob.X - op.LocalTransform.Dx, abs.Y - ob.Y - op.LocalTransform.Dy),
+                 1f, (1 << 16) | 1, overlayClip, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, default, ref stats);
         }
         return stats.ToStats();
     }
@@ -628,16 +656,21 @@ public static class SceneRecorder
         bool hasOwn = scene.TryGetInteract(node, out var own);
         if (hasOwn)
         {
-            hoverT = own.HoverT;
+            // HoverWithin (set on a container whose subtree holds the hovered leaf) pins hover FULL, so the container's
+            // HoverFill stays steady as the pointer crosses its interactive children; else the eased own progress.
+            hoverT = (scene.Flags(node) & NodeFlags.HoverWithin) != 0 ? 1f : own.HoverT;
             pressT = own.PressT;
             return true;
         }
+        // No own anim yet (e.g. the pointer entered straight onto a child) — a HoverWithin container still reads hovered.
+        if ((scene.Flags(node) & NodeFlags.HoverWithin) != 0) { hoverT = 1f; return true; }
 
         if (!nodeInteractive)
         {
             for (var anc = scene.Parent(node); !anc.IsNull; anc = scene.Parent(anc))
             {
                 if ((scene.Interaction(anc).HandlerMask & interactive) == 0) continue;
+                if ((scene.Flags(anc) & NodeFlags.HoverWithin) != 0) { hoverT = 1f; pressT = 0f; return true; }
                 if (!scene.TryGetInteract(anc, out var parent)) continue;
                 hoverT = parent.HoverT;
                 pressT = parent.PressT;
