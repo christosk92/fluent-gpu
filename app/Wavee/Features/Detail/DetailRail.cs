@@ -19,6 +19,10 @@ static class DetailRail
     const float SidePadL = WaveeSpace.L;   // 16
     const float SidePadR = WaveeSpace.S;   // 8
     const float FabSize = 40f;
+    // Decode the rail/header cover at the SAME size the Home shelf card uses (MediaCard's ShelfDecodePx, 256) so a Hero
+    // fly hands the cover off to the SAME cached texture — pixel-identical, with NO fresh first-visit cover decode (the
+    // cold connected-animation spike). Displayed larger (the ~300px rail cover) is a slight, imperceptible upscale.
+    const int HeroCoverDecodePx = 256;
 
     public static float CoverEdge(float railW) => MathF.Max(80f, railW - SidePadL - SidePadR);
 
@@ -35,7 +39,7 @@ static class DetailRail
         {
             Width = cover, Height = cover, Corners = CornerRadius4.All(WaveeRadius.Card),
             Shadow = Elevation.Card, ClipToBounds = true,
-            Children = [Surfaces.Artwork(m.Cover, m.Title.GetHashCode() & 0x7fffffff, cover, cover, WaveeRadius.Card, m.MorphKey)],
+            Children = [Surfaces.Artwork(m.Cover, m.Title.GetHashCode() & 0x7fffffff, cover, cover, WaveeRadius.Card, m.MorphKey, decodePx: HeroCoverDecodePx)],
         });
 
         // Badges row.
@@ -162,7 +166,7 @@ static class DetailRail
                 {
                     Width = coverSz, Height = coverSz, Corners = CornerRadius4.All(WaveeRadius.Card),
                     Shadow = Elevation.Card, ClipToBounds = true,
-                    Children = [Surfaces.Artwork(m.Cover, m.Title.GetHashCode() & 0x7fffffff, coverSz, coverSz, WaveeRadius.Card, m.MorphKey)],
+                    Children = [Surfaces.Artwork(m.Cover, m.Title.GetHashCode() & 0x7fffffff, coverSz, coverSz, WaveeRadius.Card, m.MorphKey, decodePx: HeroCoverDecodePx)],
                 },
                 new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = WaveeSpace.XS, Children = info.ToArray() },
             ],

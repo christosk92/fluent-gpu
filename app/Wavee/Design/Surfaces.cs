@@ -48,22 +48,23 @@ public static class Surfaces
     /// <summary>Artwork slot: a neutral <see cref="Shimmer"/> tile under the async image (which cross-fades in over it
     /// once decoded). <paramref name="morphKey"/> tags the image as a connected-animation (Hero) participant so it flies
     /// to/from the like-tagged Home card. The tile shares ONE decode handle with the image (matched W×H, any aspect).</summary>
-    public static Element Artwork(Image? image, int seed, float width, float height, float corners, string? morphKey = null)
+    public static Element Artwork(Image? image, int seed, float width, float height, float corners, string? morphKey = null, int decodePx = 0)
     {
         string? url = image?.Url is { Length: > 0 } u ? u : null;
-        // The stacked image is Ui.Image(url, width, height) → decodes at ((int)width, (int)height); match it exactly so
-        // the shimmer's load-state read shares that handle for ANY aspect ratio (not just squares).
+        // Decode target: the display size by default; when decodePx>0 decode at THAT square size and COVER-fit it into the
+        // slot instead. A connected-animation dest (the detail cover) passes the SAME decodePx as the Home card (256) so it
+        // resolves to the SAME cached texture — the Hero fly hands off pixel-identically with NO fresh decode (killing the
+        // cold first-visit cover-decode spike). The shimmer shares the chosen decode handle (matched W×H), so no fork.
+        int dw = decodePx > 0 ? decodePx : (int)width, dh = decodePx > 0 ? decodePx : (int)height;
+        Element img = url is null ? new BoxEl()
+            : decodePx > 0
+                ? Ui.Image(url, ImageFit.Cover, 1f, decodePx, corners, ColorF.Transparent, image!.BlurHash) with { MorphId = morphKey }
+                : Ui.Image(url, width, height, corners, ColorF.Transparent, image!.BlurHash) with { MorphId = morphKey };
         return new BoxEl
         {
             ZStack = true, Width = width, Height = height, ClipToBounds = true,
             Corners = CornerRadius4.All(corners),
-            Children =
-            [
-                Shimmer(url, (int)width, (int)height, width, height, corners),
-                url is null
-                    ? new BoxEl()
-                    : Ui.Image(url, width, height, corners, ColorF.Transparent, image!.BlurHash) with { MorphId = morphKey },
-            ],
+            Children = [ Shimmer(url, dw, dh, width, height, corners), img ],
         };
     }
 }
