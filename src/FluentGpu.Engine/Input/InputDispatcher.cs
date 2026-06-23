@@ -52,10 +52,10 @@ public sealed class InputDispatcher
     private bool _panAxisX;            // the scroll axis of _panTarget (Orientation == 1) — pan tracks this axis only
     private TouchVelocity _panVel;     // per-contact windowed-regression velocity sampler for the touch fling hand-off
 
-    // ── precision-touchpad pan (the engine OWNS this: the Win32 backend routes hi-res WM_POINTERWHEEL deltas here because
-    // DirectManipulation is unreliable on this device's promoted-wheel path — it wedges in SUSPENDED). Model: direct 1:1
-    // offset move + overscroll band (reusing ApplyTouchPan), render-clock-smoothed by TickTouchpad, converted to an inertia
-    // fling at lift. A wheel stream has no "up" event, so a packet GAP (TouchpadGestureEndMs) ends the gesture. ──
+    // ── precision-touchpad pan (engine-owned — the Win32 backend soft-knees + scales hi-res WM_POINTERWHEEL deltas and
+    // routes them here as PointerKind.Touchpad; there is no OS scroll source). Model: direct 1:1 offset move + overscroll
+    // band (reusing ApplyTouchPan), render-clock-smoothed by TickTouchpad, converted to an inertia fling at lift. A wheel
+    // stream has no "up" event, so a packet GAP (TouchpadGestureEndMs) ends the gesture. ──
     private NodeHandle _tpTarget;      // viewport the active touchpad gesture drives (axis-resolved at gesture start)
     private bool _tpHoriz;             // its scroll axis (true = horizontal)
     private float _tpAppliedRaw;       // the raw (pre-clamp) offset actually applied — eased toward _tpDemandRaw by the one-pole low-pass
@@ -969,9 +969,8 @@ public sealed class InputDispatcher
                     if (DispatchWheel(in e)) { handled++; break; }
                     {
                         // Mouse / free-spin wheel: a device NOTCH amount → the discrete max(48 DIP, 15%·viewport) eased
-                        // notch; a synthetic DIP-only ScrollDelta (the headless harness) is used directly. (Precision
-                        // touchpad pan is driven entirely by the DirectManipulation source, not this wheel path — the
-                        // Win32 backend consumes hi-res touchpad wheels and routes them to DM.)
+                        // notch; a synthetic DIP-only ScrollDelta (the headless harness) is used directly. (A precision-
+                        // touchpad pan never reaches here — it is PointerKind.Touchpad and was routed to PanTouchpad above.)
                         bool useNotch = e.WheelNotch != 0f || e.WheelNotchX != 0f;
                         float wAxisY = useNotch ? e.WheelNotch : e.ScrollDelta;
                         float wAxisX = useNotch ? e.WheelNotchX : e.ScrollDeltaX;
@@ -2289,9 +2288,8 @@ public sealed class InputDispatcher
 
     // ── scrolling (layout-free: write the content's -ScrollOffset transform; never relayout) ──
 
-    /// <summary>Scroll the nearest scrollable ancestor under the pointer; bubbles to an outer scroller at the edge.</summary>
-    /// <summary>The nearest scrollable viewport under the pointer (for revealing its scrollbar on hover, and for binding
-    /// an OS manipulation to a viewport at contact-down via <see cref="FluentGpu.Animation.IScrollHost"/>).</summary>
+    /// <summary>The nearest scrollable viewport under the pointer (for revealing its scrollbar on hover and for resolving
+    /// the wheel/pan target).</summary>
     public NodeHandle ScrollableUnder(Point2 p)
     {
         for (var n = HitTestAny(p); !n.IsNull; n = _scene.Parent(n))
@@ -2299,13 +2297,12 @@ public sealed class InputDispatcher
         return NodeHandle.Null;
     }
 
-    /// <summary>The viewport an OS manipulation should bind for a pan on a KNOWN axis (window-space point). Mirrors the
-    /// same-axis climbing of <see cref="ScrollAxis"/>: the nearest scrollable ancestor whose orientation matches
-    /// <paramref name="wantHorizontal"/> AND still has room to move, climbing PAST a cross-axis inner scroller (a
-    /// horizontal shelf must not eat the vertical page's pan) and past a same-axis scroller already at full extent.
-    /// Strictly same-axis — no opposite-axis fallback: feeding a vertical wheel to a horizontal-framed DM viewport yields
-    /// zero motion, so the rare standalone-opposite-axis carousel is left to the notch fallback path. Null ⇒ caller lets
-    /// the wheel fall through.</summary>
+    /// <summary>The viewport a pan on a KNOWN axis should drive (window-space point). Mirrors the same-axis climbing of
+    /// <see cref="ScrollAxis"/>: the nearest scrollable ancestor whose orientation matches <paramref name="wantHorizontal"/>
+    /// AND still has room to move, climbing PAST a cross-axis inner scroller (a horizontal shelf must not eat the vertical
+    /// page's pan) and past a same-axis scroller already at full extent. Strictly same-axis — no opposite-axis fallback, so
+    /// the rare standalone-opposite-axis carousel is left to the notch fallback path. Null ⇒ caller lets the pan fall
+    /// through. Used by <see cref="PanTouchpad"/> to resolve the touchpad gesture's target.</summary>
     public NodeHandle ScrollableUnderForAxis(Point2 p, bool wantHorizontal)
     {
         for (var n = HitTestAny(p); !n.IsNull; n = _scene.Parent(n))
@@ -2324,8 +2321,7 @@ public sealed class InputDispatcher
     /// with <see cref="InputEvent.ScrollDelta"/>/<c>ScrollDeltaX</c> already in offset-space DIP). Accumulates the demanded
     /// raw offset and tracks release velocity; <see cref="TickTouchpad"/> eases the applied offset toward it on the render
     /// clock and ends the gesture at the input gap. Axis-resolved like the notch path so a vertical pan over a horizontal
-    /// shelf reaches the vertical page behind it. The engine owns touchpad scroll because DirectManipulation is unreliable
-    /// on this device's promoted-wheel path.</summary>
+    /// shelf reaches the vertical page behind it. Touchpad scroll is fully engine-owned (no OS manipulation source).</summary>
     /// <summary>True while a precision-touchpad gesture is live (panning OR coasting) — its target is armed and
     /// <see cref="TickTouchpad"/> is driving/coasting it. Clears when the coast settles. Test/diagnostic observability for
     /// the touchpad-feel gates (the coast is otherwise only visible as offset motion).</summary>

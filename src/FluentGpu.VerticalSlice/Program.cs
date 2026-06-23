@@ -5977,8 +5977,8 @@ static class Slice
     }
 
     // ── WinUI-parity scroll exit criteria: content-relative wheel distance (max(48,15%·viewport) per notch, not a flat
-    //    60), the windowed-regression velocity sampler (true flick speed, no stationary up-sample bias), the IScrollSource
-    //    seam transparency (headless ⇒ integrator only), and the deterministic DM transform→offset/band mapping.
+    //    60), the windowed-regression velocity sampler (true flick speed, no stationary up-sample bias), and the
+    //    engine-owned integrator driving scrolling (the single, portable scroll source — no OS scroll source seam).
     static void ScrollParityChecks(StringTable strings)
     {
         var fonts = new HeadlessFontSystem(strings);
@@ -6041,40 +6041,22 @@ static class Slice
                 accurate && restZero, $"fastV={vFast:0} (true≈-2000, want ≤-1700) heldStillV={vRest:0} (want ~0)");
         }
 
-        // gate.scroll.source-mux-falls-back-to-integrator: the headless PAL supplies NO OS scroll source (the
-        // IPlatformWindow.CreateScrollSource seam default is null) ⇒ the ScrollSourceMux is transparent and the
-        // deterministic integrator drives scrolling alone — the additive guarantee for the Windows DM source.
+        // gate.scroll.engine-owned-integrator: scroll is fully engine-owned — the deterministic ScrollAnimator is the
+        // single, portable scroll source on every platform (there is no OS scroll-source seam; DirectManipulation is
+        // gone). A wheel notch drives the integrator's target-chase to a NON-ZERO offset in plain TargetChase mode,
+        // proving the engine integrator alone moves the viewport.
         {
             using var app = new HeadlessPlatformApp();
-            var window = new HeadlessWindow(new WindowDesc("mux-fallback", new Size2(360, 460), 1f)); window.Show();
+            var window = new HeadlessWindow(new WindowDesc("engine-scroll", new Size2(360, 460), 1f)); window.Show();
             using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
             host.RunFrame();
-            bool noOsSource = ((IPlatformWindow)window).CreateScrollSource((IScrollHost)host) is null;
             var vp = host.Scene.Root;
             window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0, 200f));   // DIP ScrollDelta (integrator path)
             for (int i = 0; i < 40; i++) host.RunFrame();
             host.Scene.TryGetScroll(vp, out var s);
             bool integratorRan = s.OffsetY > 0f && s.ScrollMode == 0;
-            Check("gate.scroll.source-mux-falls-back-to-integrator the headless PAL supplies no OS scroll source (CreateScrollSource null) ⇒ the ScrollSourceMux is transparent and the deterministic integrator drives scrolling alone",
-                noOsSource && integratorRan, $"noOsSource={noOsSource} integratorRan={integratorRan} off={s.OffsetY:0}");
-        }
-
-        // gate.scroll.dm-transform-maps: the DirectManipulation content-transform → engine offset/band mapping
-        // (DmScrollMath) — the only CI-testable slice of the Windows DM source (the live physics is touchscreen-only,
-        // validated manually). Clamp the in-range offset, split the past-edge excess into a signed band, and map the 2×3
-        // translation sign to offset-space displacement.
-        {
-            var inRange = DmScrollMath.Split(100f, 50f, 1000f);      // 150, band 0
-            var pastBottom = DmScrollMath.Split(980f, 50f, 1000f);   // 1000, band +30
-            var pastTop = DmScrollMath.Split(10f, -40f, 1000f);      // 0, band -30
-            float dispY = DmScrollMath.DisplacementFromTransform(new float[] { 1f, 0f, 0f, 1f, 0f, -42f }, horizontal: false);   // +42
-            float dispX = DmScrollMath.DisplacementFromTransform(new float[] { 1f, 0f, 0f, 1f, -17f, 0f }, horizontal: true);    // +17
-            bool ok = Near(inRange.offset, 150f) && Near(inRange.band, 0f)
-                   && Near(pastBottom.offset, 1000f) && Near(pastBottom.band, 30f)
-                   && Near(pastTop.offset, 0f) && Near(pastTop.band, -30f)
-                   && Near(dispY, 42f) && Near(dispX, 17f);
-            Check("gate.scroll.dm-transform-maps the DirectManipulation content-transform → engine offset/band mapping (DmScrollMath) clamps the in-range offset, splits the past-edge excess into a signed band, and maps the 2×3 translation sign to offset-space displacement (the deterministic slice of the Windows DM source)",
-                ok, $"inRange=({inRange.offset:0},{inRange.band:0}) pastBottom=({pastBottom.offset:0},{pastBottom.band:0}) pastTop=({pastTop.offset:0},{pastTop.band:0}) dispY={dispY:0} dispX={dispX:0}");
+            Check("gate.scroll.engine-owned-integrator scroll is fully engine-owned — the deterministic ScrollAnimator integrator alone drives the viewport (no OS scroll source); a wheel notch chases the target to a non-zero offset in TargetChase mode",
+                integratorRan, $"integratorRan={integratorRan} off={s.OffsetY:0} mode={s.ScrollMode}");
         }
 
         // gate.scroll.overscroll-physics: WinUI-parity overpan resistance + inverse + spring settle (translation-only band).
@@ -18175,7 +18157,7 @@ static class Slice
         ArenaDeterminismChecks(strings); // Phase 3 determinism (validation.md §12.6): bit-identical replay trace + dt-sweep resolution identity + fast-path-sync + multi-recognizer 0-alloc
         PinchZoomChecks(strings);      // Phase 4 pinch-zoom (gate.touch4.*): second-contact → Pinch sweeps Pan, scale-about-midpoint transform (no relayout), clamp 0.1..10.0, per-id cancel, pan continuation, 0-alloc
         TouchSnapOverscrollChecks(strings); // Phase 4 snap + overscroll (gate.touch4.*): fling-snap lands on a snap point (dt-invariant), touch-pan rubber-band + spring-back (offset never leaves clamp), wheel hard-clamps, 0-alloc
-        ScrollParityChecks(strings);   // WinUI-parity scroll: content-relative wheel distance, windowed velocity sampler, IScrollSource seam transparency, DM transform→offset math
+        ScrollParityChecks(strings);   // WinUI-parity scroll: content-relative wheel distance, windowed velocity sampler, engine-owned integrator (single portable scroll source)
         TouchpadFeelChecks(strings);   // Touchpad scroll feel: WinUI-0.95 coast friction, frame-rate-independent exact integrator, softened band round-trip, deterministic settle, 0-alloc pan→coast→settle
         Touch4SipChecks(strings);      // Phase 4 SIP (gate.touch4.sip.*): touch focus shows the touch keyboard once (mouse focus doesn't), focus loss hides, a Showing OccludedRect reflows the caret into view, 0-alloc steady
         Touch4HoldWakeChecks(strings); // Phase 4 Hold EXECUTION + stationary-hold wake (gate.touch4.*): touch long-press fires the context flyout, the GestureHold wake bit keeps frames coming for a motionless held finger then clears, RatingControl touch tap-to-rate

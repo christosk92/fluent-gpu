@@ -12,7 +12,7 @@ namespace FluentGpu.Animation;
 /// content-relative mouse-wheel line height (ScrollViewer_Partial.h: <c>max(48, 15%·viewport)</c>), replacing the old
 /// flat 60-DIP/notch that under-scrolled tall lists and over-scrolled short ones. Synthetic/test wheel input that
 /// carries a DIP <c>ScrollDelta</c> (no notch) bypasses this scaling entirely (the headless harness path). (Precision
-/// touchpad pan is driven by the OS DirectManipulation source, not this wheel path.)</para>
+/// touchpad pan rides the dedicated engine-owned <c>PanTouchpad</c>/<c>TickTouchpad</c> path, not this wheel notch path.)</para>
 ///
 /// <para><b>Velocity sampler note.</b> The touch fling velocity estimator (a fixed-ring windowed least-squares
 /// regression in <c>InputDispatcher.TouchVelocity</c>) uses an engine-internal fixed window identical across profiles,

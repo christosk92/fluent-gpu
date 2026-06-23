@@ -347,17 +347,9 @@ public sealed class ScrollAnimator
 
             // ── rubber-band overscroll spring ─────────────────────────────────────────────────────────────
             // Touch = the finger drives OverscrollPx 1:1 (Overscrolling) then a spring pulls it to 0 on pointer-up. All
-            // writes are TransformDirty-only through OverscrollWrite. (Precision-touchpad overpan is owned by the OS
-            // DirectManipulation source — the OverscrollDmOwned branch below — never an engine spring.)
+            // writes are TransformDirty-only through OverscrollWrite.
             bool bandActive = false;
-            if (sc.OverscrollDmOwned)
-            {
-                // DirectManipulation owns this band (its native OS overscroll). OBSERVE ONLY — never spring it: DM writes
-                // the band every frame and settles it to 0 itself, so a second engine spring just fights it and the edges
-                // jitter (the diagnostics caught 266 engine-spring writes racing 641 DM writes). Stay armed while it's non-0.
-                bandActive = sc.OverscrollPx != 0f;
-            }
-            else if ((sc.OverscrollPx != 0f || sc.OverscrollVel != 0f) && !sc.Overscrolling)
+            if ((sc.OverscrollPx != 0f || sc.OverscrollVel != 0f) && !sc.Overscrolling)
             {
                 float p = sc.OverscrollPx, vsp = sc.OverscrollVel;   // TOUCH release spring-back to 0 (unchanged)
                 bool settled = OverscrollPhysics.StepSpring(ref p, ref vsp, dtMs, OverscrollPhysics.SpringOmegaRadPerS);
@@ -371,10 +363,8 @@ public sealed class ScrollAnimator
                 bandActive = true;   // a touch finger is holding the band displaced — stay armed (the indicator shows through it)
             }
 
-            // DIAGNOSTIC (FG_SCROLL_LOG / FG_DM_PROBE): per-frame state of this scroll node WHEN anything is moving. The
-            // timestamped intervals expose stutter/gaps (raw values hide it); an "anim" line that MOVES offset/band during a
-            // DirectManipulation gesture (which logs its own "DM" lines) exposes the engine fighting DM — DM's log stays
-            // clean while the rendered frames alternate writers ("looks fine, feels like dogshit").
+            // DIAGNOSTIC (FG_SCROLL_LOG): per-frame state of this scroll node WHEN anything is moving. The timestamped
+            // intervals expose stutter/gaps that raw offset values hide.
             if (FluentGpu.Foundation.ScrollLog.On)
             {
                 float offNow = horizontal ? sc.OffsetX : sc.OffsetY;

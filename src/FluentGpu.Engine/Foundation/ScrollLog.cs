@@ -14,11 +14,10 @@ namespace FluentGpu.Foundation;
 /// never even built when disabled — keeping the zero-alloc frame phases clean. Remove once the feel is dialed in.</summary>
 public static class ScrollLog
 {
-    /// <summary>True iff <c>FG_SCROLL_LOG=1</c> or <c>FG_DM_PROBE=1</c> was set at process start. Every line is prefixed
-    /// with ms-since-first-line, so inter-line intervals reveal frame pacing / stutter / gaps that raw offset values hide.</summary>
+    /// <summary>True iff <c>FG_SCROLL_LOG=1</c> was set at process start. Every line is prefixed with ms-since-first-line,
+    /// so inter-line intervals reveal frame pacing / stutter / gaps that raw offset values hide.</summary>
     public static readonly bool On =
-        Environment.GetEnvironmentVariable("FG_SCROLL_LOG") == "1" ||
-        Environment.GetEnvironmentVariable("FG_DM_PROBE") == "1";
+        Environment.GetEnvironmentVariable("FG_SCROLL_LOG") == "1";
 
     private static readonly object _gate = new();
     private static StreamWriter? _file;

@@ -72,7 +72,7 @@ public sealed class PopupWindowSlot
     public DrawList DrawList { get; } = new();
 }
 
-public sealed class AppHost : IDisposable, IScrollHost
+public sealed class AppHost : IDisposable
 {
     private readonly IPlatformApp _app;
     private readonly IPlatformWindow _window;
@@ -98,8 +98,7 @@ public sealed class AppHost : IDisposable, IScrollHost
     private readonly AnimEngine _anim;
     private readonly ConnectedAnimation _connected;
     private readonly InteractionAnimator _interact;
-    private readonly ScrollAnimator _scrollAnim;
-    private readonly ScrollSourceMux _scrollSources;   // integrator (+ optional OS DM source) behind the scroll seam
+    private readonly ScrollAnimator _scrollAnim;   // the deterministic, engine-owned scroll integrator (wheel/touchpad/touch/spring) — the ONLY scroll source
     private readonly RepeatTicker _repeat;
     private readonly CaretBlinker _caretBlinker;
     private readonly ImageCache _images;
@@ -437,7 +436,7 @@ public sealed class AppHost : IDisposable, IScrollHost
         if (_scene.HasDynamicText) r |= WakeReasons.DynamicText;
         if (_anim.HasActive || _connected.HasActive) r |= WakeReasons.Anim;   // connected-animation fly in flight / snapshot awaiting its dest
         if (_interact.HasActive) r |= WakeReasons.Interact;
-        if (_scrollSources.HasActive) r |= WakeReasons.ScrollAnim;
+        if (_scrollAnim.HasActive) r |= WakeReasons.ScrollAnim;
         if (_repeat.HasActive) r |= WakeReasons.Repeat;
         if (_caretBlinker.HasActive) r |= WakeReasons.Caret;
         if (_scene.HasBrushAnims) r |= WakeReasons.BrushAnims;
@@ -521,10 +520,10 @@ public sealed class AppHost : IDisposable, IScrollHost
         _anim = new AnimEngine(_scene);
         _connected = new ConnectedAnimation(_scene, _anim, _images);   // shared-element (connected-animation) Hero flies
         _interact = new InteractionAnimator(_scene);
+        // Scroll is fully engine-owned: the deterministic ScrollAnimator is the single, portable scroll source on every
+        // platform (wheel target-chase + touch/touchpad fling + overscroll spring + conscious scrollbar). There is no OS
+        // scroll source — touchpad arrives as hi-res WM_POINTERWHEEL → PanTouchpad, touch as the dispatcher's gesture path.
         _scrollAnim = new ScrollAnimator(_scene, scrollProfile);
-        // The scroll seam: the deterministic integrator is always present; a platform backend may add an OS-manipulation
-        // source (Windows DirectManipulation). Null on headless/non-Windows ⇒ the mux is byte-identical to the integrator.
-        _scrollSources = new ScrollSourceMux(new IntegratorScrollSource(_scrollAnim), _window.CreateScrollSource(this));
         _repeat = new RepeatTicker(_scene);
         _caretBlinker = new CaretBlinker(_scene);
         _lastSize = window.ClientSizePx;
@@ -676,7 +675,7 @@ public sealed class AppHost : IDisposable, IScrollHost
         // shared-element node also captures its reverse-fly snapshot here (Back returns to it via the like-tagged dest).
         _reconciler.OnNodeParkedChanged = (node, parked) =>
         {
-            _anim.SetNodeParked(node, parked); _scrollSources.SetNodeParked(node, parked);
+            _anim.SetNodeParked(node, parked); _scrollAnim.SetNodeParked(node, parked);
             _connected.OnNodeParked(node, parked);
         };
         // Symmetric teardown of INDEX-keyed per-node side-tables on slot free (mem-06): a freed node's slot is reused,
@@ -787,16 +786,6 @@ public sealed class AppHost : IDisposable, IScrollHost
         sc.FlingFromOffset = sc.Orientation == 1 ? sc.OffsetX : sc.OffsetY;
         _scrollAnim.Arm(node);
     }
-
-    // ── IScrollHost: the bridge a platform OS-manipulation scroll source (Windows DirectManipulation) uses to re-apply
-    //    its polled OS position/velocity through the SAME Input chokepoint (SetScrollOffset stays the sole clamp
-    //    authority — the source never writes the content transform itself). Dormant unless a backend supplies a source.
-    SceneStore IScrollHost.Scene => _scene;
-    bool IScrollHost.WriteScrollOffset(NodeHandle viewport, float absoluteOffset) => _dispatcher.WriteScrollOffset(viewport, absoluteOffset);
-    void IScrollHost.WriteOverscroll(NodeHandle viewport, float overscrollBandPx) => _dispatcher.WriteOverscroll(viewport, overscrollBandPx);
-    NodeHandle IScrollHost.ScrollableUnder(Point2 windowPt) => _dispatcher.ScrollableUnder(windowPt);
-    NodeHandle IScrollHost.ScrollableUnderForAxis(Point2 windowPt, bool horizontal) => _dispatcher.ScrollableUnderForAxis(windowPt, horizontal);
-    void IScrollHost.RequestFrame() => WakeFrame();
 
     /// <summary>Run one full frame: pump + input, then paint (the reactive flush + layout + record happen in Paint).</summary>
     public FrameStats RunFrame()
@@ -1138,7 +1127,7 @@ public sealed class AppHost : IDisposable, IScrollHost
             _interact.Tick(dtMs);                              // 7 eased hover/press
             _scene.AdvanceBrushAnims(dtMs);                    // 7 implicit BrushTransition (logical state flips)
             _dispatcher.TickTouchpad(dtMs);                    // 7 precision-touchpad pan: ease applied offset + lift→inertia (before the pump so the fling it seeds runs this frame)
-            _scrollSources.Pump(dtMs);                         // 7 smooth scroll + scrollbar fade (integrator + optional OS source)
+            _scrollAnim.Tick(dtMs);                            // 7 smooth scroll + fling + overscroll spring + scrollbar fade (the engine-owned integrator)
             ApplyStickyOffsets();                              // 7 CSS position:sticky pins (after every scroll write)
             _repeat.Tick(dtMs);                                // 7 RepeatButton auto-repeat (held → re-fire click)
             _caretBlinker.Tick(dtMs);                          // 7 focused-editor caret blink (toggles TextEditState)
@@ -1577,7 +1566,7 @@ public sealed class AppHost : IDisposable, IScrollHost
     private void OnSceneSlotFreed(int index)
     {
         _anim.ClearForIndex(index);
-        _scrollSources.ClearForIndex(index);
+        _scrollAnim.ClearForIndex(index);
     }
 
     private void UpdateFrameTiming(long frameStart)

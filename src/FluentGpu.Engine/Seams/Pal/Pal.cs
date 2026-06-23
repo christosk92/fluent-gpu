@@ -1,5 +1,4 @@
 using FluentGpu.Foundation;
-using FluentGpu.Animation;
 using FluentGpu.Scene;
 
 namespace FluentGpu.Pal;
@@ -317,13 +316,6 @@ public interface IPlatformWindow : IDisposable
     /// <see cref="WaitForWork"/> already returns immediately, so the next loop iteration drains the post anyway).
     /// </summary>
     void Wake() { }
-
-    /// <summary>Create the platform's OS-manipulation scroll source (Windows DirectManipulation in manual-update mode),
-    /// or <c>null</c> = the deterministic integrator only (headless / non-Windows — the default). The returned source
-    /// consumes OS position/velocity/inertia in the input pump and re-applies it through <paramref name="host"/>'s clamp
-    /// chokepoint each frame; it owns NO GPU COM (D3D12/DXGI/DComp) and never touches the swapchain. Same defaulted-no-op
-    /// seam pattern as <see cref="Wake"/> / <see cref="SetTitleBarRegions"/>.</summary>
-    IScrollSource? CreateScrollSource(IScrollHost host) => null;
 
     /// <summary>
     /// Invoked by the platform when the OS demands an immediate repaint *outside* the app's frame loop —

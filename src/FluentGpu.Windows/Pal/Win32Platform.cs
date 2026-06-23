@@ -1,5 +1,4 @@
 using System.Runtime.InteropServices;
-using FluentGpu.Animation;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Pal;
@@ -146,11 +145,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     //    replaces the SetCapture refcount. WM_POINTERWHEEL/HWHEEL REPLACE WM_MOUSEWHEEL/HWHEEL once mouse-in-pointer is on.
     private const uint WM_POINTERUPDATE = 0x0245, WM_POINTERDOWN = 0x0246, WM_POINTERUP = 0x0247,
                        WM_POINTERLEAVE = 0x024A, WM_POINTERCAPTURECHANGED = 0x024C,
-                       WM_POINTERWHEEL = 0x024E, WM_POINTERHWHEEL = 0x024F,
-                       DM_POINTERHITTEST = 0x0250;   // DirectManipulation solicits SetContact for a viewport via this
-    // Diagnostic: FG_DM_PROBE=1 logs which pointer messages a two-finger touchpad pan actually delivers (DOWN/HITTEST =
-    // DM-engageable; only WHEEL = promoted-mouse fallback). Decides the engagement path for the DirectManipulation re-route.
-    private static readonly bool s_dmProbe = Diag.EnvFlag("FG_DM_PROBE");
+                       WM_POINTERWHEEL = 0x024E, WM_POINTERHWHEEL = 0x024F;
     // Precision-touchpad pan distance: DIP of content travel per raw wheel-delta unit (HIWORD of WM_POINTERWHEEL). This
     // device's promoted-wheel deltas are large/accelerated (−400…−1700 per packet), so a small factor keeps the felt speed
     // sane; the engine then smooths + adds inertia. Env FG_TP_SCALE overrides for on-device tuning (a VALUE, never logic).
@@ -332,16 +327,6 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private uint _lastWheelMs;
     private bool _wheelHiRes;
     private const uint WheelGestureGapMs = 200;   // gap that ends a wheel gesture and re-evaluates the hi-res latch
-    // OS DirectManipulation touch scrolling (default ON; FG_DM_SCROLL=0 disables): the manual-update DM source + pointer ids
-    // it currently owns (whose pointer events are NOT forwarded to the engine — DM reads them itself, avoiding a
-    // double-drive). The environment switch is an emergency/A-B fallback, not a shipping feature gate.
-    private static readonly bool s_dmScroll =
-        !string.Equals(System.Environment.GetEnvironmentVariable("FG_DM_SCROLL"), "0", StringComparison.OrdinalIgnoreCase) &&
-        !string.Equals(System.Environment.GetEnvironmentVariable("FG_DM_SCROLL"), "false", StringComparison.OrdinalIgnoreCase);
-    private Win32DmScrollSource? _dmScroll;
-    private readonly HashSet<uint> _dmOwned = new();
-    private readonly HashSet<uint> _dmCanceled = new();   // DM contacts whose movement already cancelled the engine tap candidate
-    private readonly Dictionary<uint, Point2> _dmDown = new();
     private readonly Dictionary<nint, bool> _touchpadDeviceCache = new();   // source HANDLE -> POINTER_DEVICE_TYPE_TOUCH_PAD
     private readonly GCHandle _self;
     private readonly Queue<InputEvent> _queue = new();
@@ -720,8 +705,6 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         Win32DropTarget.Revoke(_dropReg);   // RevokeDragDrop + free the CCW before the HWND dies
         _dropReg = null;
         _textInput?.DisposeSip();   // release the WinRT InputPane refs + SIP event subscriptions before the HWND dies
-        _dmScroll?.Dispose();       // tear down DirectManipulation (manager/viewport/CCWs) before the HWND dies
-        _dmScroll = null;
         if (_hwnd != HWND.NULL) { KillTimer(_hwnd, MoveLoopTimerId); DestroyWindow(_hwnd); }
         if (_self.IsAllocated) _self.Free();
     }
@@ -872,11 +855,6 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
             // client (the NC path holds no capture), cancel it exactly like the NC-leave path, then let real pointer
             // updates own hover again.
             case WM_POINTERUPDATE:
-                if (s_dmProbe)
-                {
-                    uint upd = GET_POINTERID_WPARAM(wParam);
-                    FluentGpu.Foundation.ScrollLog.Line($"PUPDATE pid={upd} kind={PointerKindOf(upd)} dmOwned={(_dmOwned.Count > 0 && _dmOwned.Contains(upd))}");
-                }
                 if (_ncPress != TitleBarHit.Client)
                 {
                     _ncPress = TitleBarHit.Client;
@@ -889,25 +867,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 PointerUpdate(GET_POINTERID_WPARAM(wParam));
                 return true;
             case WM_POINTERDOWN:
-                if (s_dmProbe) FluentGpu.Foundation.ScrollLog.Line($"DOWN    pid={GET_POINTERID_WPARAM(wParam)} kind={PointerKindOf(GET_POINTERID_WPARAM(wParam))}");
-                // A DM candidate still reaches the engine on DOWN so a stationary contact can remain a tap/click.
-                // Its first MOVE cancels that candidate before DM takes exclusive movement ownership.
-                TryDmEngagePointer(GET_POINTERID_WPARAM(wParam));
                 PointerDownUp(GET_POINTERID_WPARAM(wParam), down: true);
                 return true;
             case WM_POINTERUP:
-            {
-                uint upId = GET_POINTERID_WPARAM(wParam);
-                if (_dmOwned.Remove(upId))
-                {
-                    _dmDown.Remove(upId);
-                    bool movementCancelledTap = _dmCanceled.Remove(upId);
-                    if (!movementCancelledTap) PointerDownUp(upId, down: false);   // stationary DM contact => normal tap
-                    return true;
-                }
-                PointerDownUp(upId, down: false);
+                PointerDownUp(GET_POINTERID_WPARAM(wParam), down: false);
                 return true;
-            }
             case WM_POINTERLEAVE:
             {
                 // The hovering pointer left the window (the WM_POINTER analogue of WM_MOUSELEAVE): clear engine hover so
@@ -922,27 +886,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 // Per-pointer capture loss (gesture stolen, contact aborted): cancel just THAT contact's interaction —
                 // the dispatcher releases that PointerId's capture/press without firing a click.
                 uint capId = GET_POINTERID_WPARAM(wParam);
-                if (_dmOwned.Remove(capId))
-                {
-                    _dmDown.Remove(capId);
-                    if (!_dmCanceled.Remove(capId))
-                        _queue.Enqueue(new InputEvent(InputKind.PointerCancel, default, 0, 0,
-                            Pointer: PointerKindOf(capId), TimestampMs: Now(), PointerId: capId));
-                    return true;
-                }
                 _queue.Enqueue(new InputEvent(InputKind.PointerCancel, default, 0, 0,
                     Pointer: PointerKindOf(capId), TimestampMs: Now(), PointerId: capId));
                 return true;
-            }
-            case DM_POINTERHITTEST:
-            {
-                // DirectManipulation is soliciting SetContact for this pan (precision touchpad arrives here, not as
-                // WM_POINTERDOWN). Engage it into the DM source → pixel-precise tracking + OS inertia + native overscroll,
-                // and the OS stops synthesizing the accelerated WM_POINTERWHEEL fallback once DM owns the contact.
-                uint hitId = GET_POINTERID_WPARAM(wParam);
-                bool eng = TryDmEngagePointer(hitId, viaHitTest: true);
-                if (s_dmProbe) FluentGpu.Foundation.ScrollLog.Line($"HITTEST pid={hitId} kind={PointerKindOf(hitId)} engaged={eng}");
-                return eng;   // engaged ⇒ handled; otherwise fall through to default handling
             }
             case WM_POINTERWHEEL:
             case WM_POINTERHWHEEL:
@@ -960,16 +906,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 else if (thisHiRes) _wheelHiRes = true;
                 uint wheelPid = GET_POINTERID_WPARAM(wParam);
                 if (PointerKindOf(wheelPid) == PointerKind.Touchpad) _wheelHiRes = true;
-                if (s_dmProbe) FluentGpu.Foundation.ScrollLog.Line($"WHEEL   pid={wheelPid} kind={PointerKindOf(wheelPid)} notch={notch} hiRes={_wheelHiRes} dmActive={(_dmScroll?.IsActivelyDriving ?? false)}");
 
-                // Precision-touchpad pan (hi-res): DirectManipulation is the PRIMARY driver — it drives the pan through the
-                // contact it captures via DM_POINTERHITTEST (the smooth, OS-inertial scrolling). Whenever DM owns the gesture
-                // (engaged — driving OR settling), drop the redundant OS-promoted wheel so the two can't double-drive (a
-                // dual-writer fight = "cannot scroll"). We never INJECT the wheel into DM (ProcessInput rejects it S_FALSE and
-                // the MOUSEFOCUS contact churn suspends the live manipulation — proven dead). Only when DM never engaged the
-                // gesture at all does the wheel fall through to the engine's own capped touchpad pan, so it still moves.
-                if (_wheelHiRes && _dmScroll is not null && _dmScroll.IsEngaged)
-                    return true;
+                // Precision-touchpad pan (hi-res): the engine owns it. The OS-promoted hi-res WM_POINTERWHEEL packet is
+                // soft-kneed and scaled here, then handed to the engine's PanTouchpad path (smooth coast + lift→inertia).
                 if (_wheelHiRes)
                 {
                     // Soft-knee on the raw notch BEFORE scaling: |notch| ≤ s_tpKnee stays exactly linear (precise panning
@@ -983,7 +922,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                     // Vertical: −delta = scroll toward content end (offset increases). Horizontal: +delta = right (offset increases).
                     float tpDipY = horizontal ? 0f : -dip;
                     float tpDipX = horizontal ? dip : 0f;
-                    if (s_dmProbe)
+                    if (FluentGpu.Foundation.ScrollLog.On)
                         FluentGpu.Foundation.ScrollLog.Line($"TPPAN   {(horizontal ? "H" : "V")} notch={notch} dip={(horizontal ? tpDipX : tpDipY):0.0}");
                     _queue.Enqueue(new InputEvent(InputKind.Wheel, WheelPt(lp), 0, 0, tpDipY, Mods(),
                         Pointer: PointerKind.Touchpad, TimestampMs: nowMs,
@@ -1231,23 +1170,6 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     // the ring re-coalesces to the latest per contact. One screen→client→DIP convert per sample (never double-converted).
     private void PointerUpdate(uint pointerId)
     {
-        if (_dmOwned.Count > 0 && _dmOwned.Contains(pointerId))
-        {
-            if (_dmCanceled.Contains(pointerId)) return;
-            POINTER_INFO current;
-            if (_dmDown.TryGetValue(pointerId, out Point2 down) && GetPointerInfo(pointerId, &current))
-            {
-                Point2 now = ScreenPtToDip(current.ptPixelLocation);
-                if (MathF.Abs(now.X - down.X) > 4f || MathF.Abs(now.Y - down.Y) > 4f)
-                {
-                    _dmCanceled.Add(pointerId);
-                    _queue.Enqueue(new InputEvent(InputKind.PointerCancel, default, 0, 0,
-                        Pointer: PointerKindOf(pointerId), TimestampMs: Now(), PointerId: pointerId));
-                    return;
-                }
-            }
-            // Sub-slop digitizer jitter remains visible to the engine's tap recognizer.
-        }
         POINTER_INFO* hist = stackalloc POINTER_INFO[PointerHistoryMax];
         uint count = PointerHistoryMax;
         if (GetPointerInfoHistory(pointerId, &count, hist) && count > 0)
@@ -1285,41 +1207,6 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
             FluentGpu.Foundation.ScrollLog.Line($"{(down ? "DOWN" : "UP  ")} {kind} id={pointerId} pos=({dipPos.X:0},{dipPos.Y:0})");
         _queue.Enqueue(new InputEvent(down ? InputKind.PointerDown : InputKind.PointerUp, dipPos,
             button, 0, Mods: Mods(), Pointer: kind, TimestampMs: time, PointerId: pointerId, Pressure: pressure));
-    }
-
-    /// <summary>Bind a genuine touch WM_POINTERDOWN to the OS DirectManipulation source. Returns
-    /// true when DM engaged the contact (its later pointer events are then suppressed from the engine — DM reads them).
-    /// A precision touchpad pan arrives as WM_POINTERWHEEL, never here, so it rides the dedicated direct-tracking path.</summary>
-    private bool TryDmEngagePointer(uint pointerId, bool viaHitTest = false)
-    {
-        if (_dmScroll is null) return false;
-        POINTER_INFO pi;
-        if (!GetPointerInfo(pointerId, &pi)) return false;
-        Decode(in pi, out PointerKind kind, out _, out _);
-        // Touchpad scroll is ENGINE-OWNED. DM is unreliable on this device: the OS won't consistently feed DM's captured
-        // contact (every engage produces disp=0 and the viewport sits SUSPENDED → dead scroll), and we can't control that
-        // routing. So only a genuine touchSCREEN contact engages DM; precision-touchpad pan rides the engine's own path via
-        // the hi-res WM_POINTERWHEEL route (reliable by construction, tuned for feel).
-        bool reject = kind != PointerKind.Touch;
-        if (reject) return false;
-        Point2 down = ScreenPtToDip(pi.ptPixelLocation);
-        if (_dmScroll.TrySetContact(pointerId, down, _scale))
-        {
-            _dmOwned.Add(pointerId);
-            _dmDown[pointerId] = down;
-            return true;
-        }
-        return false;
-    }
-
-    /// <summary>IPlatformWindow seam: the default Windows OS-manipulation source. FG_DM_SCROLL=0 disables it for an A/B
-    /// fallback. The returned manual-update DM source owns no GPU COM and re-applies its polled position through the
-    /// host's clamp chokepoint.</summary>
-    public IScrollSource? CreateScrollSource(IScrollHost host)
-    {
-        if (!s_dmScroll) return null;
-        _dmScroll = Win32DmScrollSource.Create((nint)_hwnd, host);
-        return _dmScroll;
     }
 
     // ── windowed-popup pointer forwarding (Win32PopupWindow → owner) ─────────────────────────────────────────────────
