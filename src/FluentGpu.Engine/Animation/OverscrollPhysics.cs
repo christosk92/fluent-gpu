@@ -18,6 +18,10 @@ public static class OverscrollPhysics
     // ScrollInputHelper.cpp:309 — ScrollViewer / ScrollPresenter default overpan cap.
     public const float ViewportLimitFraction = 0.1f;
 
+    // TODO (§5f, deferred): snap on touchpad coast — when a precision-touchpad coast settles within ~5f DIP of a
+    // configured snap point, nudge the final rest ONTO it (the touch-fling snap-retarget already does this for a flick;
+    // a touchpad coast currently settles wherever the momentum lands). Deferred until on-device snap-list tuning.
+
     // InteractionTracker-style release — snappy bounce (WinUI ScrollPresenter elastic settle).
     public static readonly float SpringOmegaRadPerS = Env("FG_OS_OMEGA", 42f);
     public static readonly float SpringDampingRatio = Env("FG_OS_ZETA", 1f);
@@ -28,25 +32,30 @@ public static class OverscrollPhysics
     public static float BandLimit(float viewportExtent)
         => ViewportLimitFraction * MathF.Max(0f, viewportExtent);
 
-    /// <summary>Signed visual band for a past-edge excess (offset space). Ratio damping capped at 10% viewport — the
-    /// WinUI overpan cap. Near 1:1 for the first pixels, stiffens toward the limit (DM / IT elastic family).</summary>
+    /// <summary>Signed visual band for a past-edge excess (offset space). Ratio damping with a SOFT knee at
+    /// <c>soft = 2·limit</c> (gentler initial give — the band tracks the finger more closely for the first pixels of
+    /// touch overpan), still hard-capped at the 10% viewport <see cref="BandLimit"/>. The softer denominator only
+    /// changes the APPROACH; the cap is unchanged (DM / IT elastic family). Saturates to <c>limit</c> at <c>excess ≥ soft</c>.</summary>
     public static float BandFromExcess(float excess, float viewportExtent)
     {
         if (excess == 0f || viewportExtent <= 0f) return 0f;
         float limit = BandLimit(viewportExtent);
+        float soft = limit * 2f;                          // gentler initial give (the soft knee)
         float raw = MathF.Abs(excess);
-        float d = limit * raw / (raw + limit);
+        float d = MathF.Min(limit, soft * raw / (raw + soft));
         return excess < 0f ? -d : d;
     }
 
-    /// <summary>Inverse of <see cref="BandFromExcess"/> for re-seeding raw position mid-spring (|band| &lt; limit).</summary>
+    /// <summary>EXACT inverse of <see cref="BandFromExcess"/> for re-seeding raw position mid-spring (|band| &lt; limit).
+    /// Uses the same <c>soft = 2·limit</c> knee so a re-seed round-trips (a headless gate pins this within 0.5px).</summary>
     public static float ExcessFromBand(float band, float viewportExtent)
     {
         if (band == 0f || viewportExtent <= 0f) return 0f;
         float limit = BandLimit(viewportExtent);
+        float soft = limit * 2f;                          // must match BandFromExcess for the inverse to hold
         float abs = MathF.Abs(band);
         if (abs >= limit) return band < 0f ? -limit : limit;
-        float excess = abs * limit / (limit - abs);
+        float excess = abs * soft / (soft - abs);
         return band < 0f ? -excess : excess;
     }
 
@@ -59,6 +68,23 @@ public static class OverscrollPhysics
         if (limit <= 0f) return 1f;
         float t = MathF.Min(bandAbs / limit, 1f);
         return 1f - (1f - DmScaleAtMaxOverpan) * t;
+    }
+
+    /// <summary>Advance a friction coast one frame: decay the velocity by <paramref name="decayPerS"/>^dt and add the
+    /// EXACT closed-form position integral of <c>v·decay^τ</c> over <c>[0, dt]</c> — <c>Δpos = v·(1 − decay^dt) / k</c>
+    /// where <c>k = −ln(decay)</c>. Using the closed form (not a <c>v·dt</c> Riemann step) makes the total coast distance
+    /// FRAME-RATE-INDEPENDENT (the per-step integrals telescope to the same geometric sum at any dt). Mutates
+    /// <paramref name="velPxPerS"/> in place and returns the offset displacement to apply this frame. The shared owner of
+    /// the touchpad-coast integrator (<c>InputDispatcher.TickTouchpad</c>); headless-gated for distance + dt-invariance.</summary>
+    public static float CoastStep(ref float velPxPerS, float dtMs, float decayPerS)
+    {
+        if (decayPerS <= 0f || decayPerS >= 1f || dtMs <= 0f) return 0f;
+        float dtS = dtMs * 0.001f;
+        float f = MathF.Pow(decayPerS, dtS);
+        float k = -MathF.Log(decayPerS);            // > 0
+        float dpos = velPxPerS * (1f - f) / k;      // exact ∫₀^dt v·decay^τ dτ
+        velPxPerS *= f;
+        return dpos;
     }
 
     /// <summary>Seed band + spring velocity when inertia hits a clamp (touch fling or touchpad glide). One code path for

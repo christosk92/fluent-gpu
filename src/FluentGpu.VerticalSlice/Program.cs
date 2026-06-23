@@ -6080,14 +6080,16 @@ static class Slice
         // gate.scroll.overscroll-physics: WinUI-parity overpan resistance + inverse + spring settle (translation-only band).
         {
             float vp = 400f;
-            float bandNeg = OverscrollPhysics.BandFromExcess(-80f, vp);
-            float bandPos = OverscrollPhysics.BandFromExcess(120f, vp);
+            // Excess values kept below the soft knee (soft = 2·limit = 80 at vp=400) so the band is in the elastic region
+            // and round-trips exactly; a value AT/above the cap is information-lossy by design (the inverse caps at limit).
+            float bandNeg = OverscrollPhysics.BandFromExcess(-30f, vp);
+            float bandPos = OverscrollPhysics.BandFromExcess(120f, vp);   // > soft ⇒ saturates the 10% cap
             float inv = OverscrollPhysics.ExcessFromBand(bandNeg, vp);
             float p = bandNeg, v = 0f;
             for (int i = 0; i < 120; i++) OverscrollPhysics.StepSpring(ref p, ref v, 16f);
             bool ok = bandNeg < -1f && bandNeg > -OverscrollPhysics.BandLimit(vp) - 0.1f
                    && bandPos > 1f && bandPos < OverscrollPhysics.BandLimit(vp) + 0.1f
-                   && Near(inv, -80f, 1f)
+                   && Near(inv, -30f, 1f)
                    && Near(p, 0f, 0.1f) && Near(v, 0f, 1f);
             Check("gate.scroll.overscroll-physics WinUI-parity overpan band caps at 10% viewport, inverts excess, and springs back to 0 (translation-only — IT touchpad path)",
                 ok, $"bandNeg={bandNeg:0.0} bandPos={bandPos:0.0} inv={inv:0.0} final=({p:0.00},{v:0.0})");
@@ -6253,6 +6255,155 @@ static class Slice
             Check("gate.touch4.snap-overscroll-alloc-zero an overscroll pan-past-edge + spring-back + snap fling sequence allocates 0 managed bytes on the hot half (the band write, the phase-7 spring step, the snap retarget + friction decay, and the virtual re-realize stayed clean)",
                 worst == 0, $"worstHotAlloc={worst}B");
         }
+    }
+
+    // ── Touchpad scroll-feel exit criteria (gate.touchpad.*): the engine-owned precision-touchpad coast (TickTouchpad)
+    // and its physics. Locks the WinUI-0.95 friction (FlingDecayPerS/s_tpDecayPerS = 0.05), the EXACT closed-form coast
+    // integrator (frame-rate-independent), the softened rubber-band round-trip, deterministic settle, and 0-alloc on the
+    // pan→coast→settle path. The mouse-wheel path is unaffected (it never enters PanTouchpad/TickTouchpad).
+    static void TouchpadFeelChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        // gate.touchpad.coast-distance: seed a coast at v0 = 1000 px/s and integrate OverscrollPhysics.CoastStep (the
+        // shared touchpad-coast integrator) at a fixed 60 Hz dt until the speed drops below the 30 px/s settle cutoff. The
+        // total coast = ~324 px (the v→0 asymptote is v0/−ln(0.05) = 333.8 px; the 30 px/s cutoff stops it ~10 px short).
+        // This LOCKS s_tpDecayPerS = FlingDecayPerS = 0.05 — a wrong decay moves this number well outside ±2.
+        {
+            const float v0 = 1000f, dtMs = 1000f / 60f, settle = 30f;
+            float v = v0, coast = 0f; int frames = 0;
+            while (frames < 100000)
+            {
+                coast += OverscrollPhysics.CoastStep(ref v, dtMs, ScrollAnimator.FlingDecayPerS);
+                frames++;
+                if (MathF.Abs(v) < settle) break;
+            }
+            bool ok = Near(coast, 324f, 2f);
+            Check("gate.touchpad.coast-distance a v0=1000 px/s coast at fixed 60 Hz integrated by the exact closed-form CoastStep settles at ~324 px (locks FlingDecayPerS=0.05; v0/k asymptote 333.8 px, the 30 px/s settle cutoff stops it ~10 px short)",
+                ok, $"coast={coast:0.##}px (expect ~324 ±2) frames={frames} k={-MathF.Log(ScrollAnimator.FlingDecayPerS):0.###}");
+        }
+
+        // gate.touchpad.frame-rate-independence: the SAME v0=1000 px/s coast integrated at dt = 1000/60, 1000/120, 1000/144
+        // settles at the IDENTICAL distance (within 0.5 px). The exact closed-form per-step integral (Δpos = v(1−decay^dt)/k)
+        // telescopes to the same geometric sum at any timestep — a plain v·dt Riemann step would diverge ~4 px across these
+        // rates. Locks the Pow(decay, dt) decay form AND the closed-form position step.
+        {
+            static float Coast(float dtMs)
+            {
+                float v = 1000f, coast = 0f; int frames = 0;
+                while (frames < 100000)
+                {
+                    coast += OverscrollPhysics.CoastStep(ref v, dtMs, ScrollAnimator.FlingDecayPerS);
+                    frames++;
+                    if (MathF.Abs(v) < 30f) break;
+                }
+                return coast;
+            }
+            float c60 = Coast(1000f / 60f), c120 = Coast(1000f / 120f), c144 = Coast(1000f / 144f);
+            bool ok = Near(c60, c120, 0.5f) && Near(c120, c144, 0.5f) && Near(c60, c144, 0.5f);
+            Check("gate.touchpad.frame-rate-independence the same v0=1000 px/s coast at dt∈{60,120,144}Hz settles at the IDENTICAL distance within 0.5px (the exact closed-form integral is frame-rate-independent; v·dt would diverge ~4px)",
+                ok, $"coast 60Hz={c60:0.###} 120Hz={c120:0.###} 144Hz={c144:0.###} (spread={MathF.Max(MathF.Max(c60, c120), c144) - MathF.Min(MathF.Min(c60, c120), c144):0.###})");
+        }
+
+        // gate.touchpad.band-roundtrip: the softened rubber-band (soft knee = 2·limit) must round-trip — ExcessFromBand is
+        // the EXACT inverse of BandFromExcess for excess in the elastic region. Uses a large viewport (limit=300, soft=600)
+        // so x∈{5,50,200} all stay below the soft knee (none saturate the cap), and asserts the round-trip within 0.5 px.
+        {
+            const float vp = 3000f;   // limit = 0.1·vp = 300, soft = 600 ⇒ band(200) = 150 < limit (no saturation)
+            float worst = 0f;
+            foreach (float x in new[] { 5f, 50f, 200f })
+            {
+                float band = OverscrollPhysics.BandFromExcess(x, vp);
+                float rt = OverscrollPhysics.ExcessFromBand(band, vp);
+                worst = MathF.Max(worst, MathF.Abs(rt - x));
+            }
+            bool ok = worst < 0.5f;
+            Check("gate.touchpad.band-roundtrip ExcessFromBand(BandFromExcess(x)) ≈ x for x∈{5,50,200} within 0.5px (the softened soft=2·limit knee keeps the inverse exact in the elastic region)",
+                ok, $"worstRoundTripErr={worst:0.######}px");
+        }
+
+        // gate.touchpad.settle-determinism: a scripted touchpad pan → coast → settle driven through AppHost (the real
+        // PanTouchpad → TickTouchpad → ApplyTouchPan chokepoint) lands at a FIXED offset in a FIXED tick count, and a
+        // bit-identical replay produces the identical (offset, ticks). Determinism over the full live path (the windowed
+        // velocity tracker + the one-pole low-pass + the exact coast), not just the math kernel.
+        {
+            (float off, int ticks) Run()
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("tp-settle", new Size2(360, 460), 1f)); window.Show();
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
+                host.RunFrame();
+                var vp = host.Scene.Root;
+                DriveTouchpadPan(window, host, horizontal: false, deltaPerPacket: 16f, packets: 6, msPerPacket: 16);
+                int ticks = 0;
+                for (int i = 0; i < 600; i++)
+                {
+                    host.RunFrame(); ticks++;
+                    host.Scene.TryGetScroll(vp, out var s);
+                    if (!host.Input.TouchpadActive) { break; }   // coast cleared its target ⇒ settled
+                }
+                host.Scene.TryGetScroll(vp, out var settled);
+                return (settled.OffsetY, ticks);
+            }
+            var a = Run();
+            var b = Run();
+            bool deterministic = a.off == b.off && a.ticks == b.ticks;
+            bool settledForward = a.off > 5f;   // it actually moved + coasted to a rest
+            Check("gate.touchpad.settle-determinism a scripted touchpad pan→coast→settle through the live PanTouchpad→TickTouchpad chokepoint lands at a FIXED offset in a FIXED tick count (bit-identical on replay)",
+                deterministic && settledForward, $"runA=(off {a.off:0.###},ticks {a.ticks}) runB=(off {b.off:0.###},ticks {b.ticks})");
+        }
+
+        // gate.touchpad.alloc-zero: the full touchpad pan→coast→settle path allocates 0 managed bytes on the hot half. The
+        // struct-only bound list keeps the reconcile edge clean; the two TouchVelocity instances are InlineArray value
+        // types and Point2 is a struct, so the windowed-regression sampler, the one-pole filter, the exact coast, and the
+        // ApplyTouchPan → SetScrollOffset re-realize must all stay non-allocating across the whole gesture and its coast.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("tp-alloc", new Size2(360, 460), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
+            host.RunFrame();
+            var vp = host.Scene.Root;
+            // Warm the path (JIT) outside the measured window, then drain to a clean rest.
+            DriveTouchpadPan(window, host, horizontal: false, deltaPerPacket: 16f, packets: 6, msPerPacket: 16);
+            for (int i = 0; i < 120 && host.Input.TouchpadActive; i++) host.RunFrame();
+            for (int i = 0; i < 20; i++) host.RunFrame();
+
+            long worst = DriveTouchpadPan(window, host, horizontal: false, deltaPerPacket: 16f, packets: 6, msPerPacket: 16);
+            int coastFrames = 0;
+            for (int i = 0; i < 200; i++)
+            {
+                bool coasting = host.Input.TouchpadActive;
+                var f = host.RunFrame();
+                if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes;
+                if (coasting) coastFrames++;
+                if (!host.Input.TouchpadActive) break;
+            }
+            Check("gate.touchpad.alloc-zero a touchpad pan→coast→settle allocates 0 managed bytes on the hot half (the windowed velocity tracker, the one-pole low-pass, the exact coast, and the ApplyTouchPan re-realize stayed clean — InlineArray/struct value types, no boxing)",
+                worst == 0 && coastFrames >= 5, $"worstHotAlloc={worst}B coastFrames={coastFrames}");
+        }
+    }
+
+    /// <summary>Drive a precision-touchpad pan through the live wheel→PanTouchpad path: <paramref name="packets"/>
+    /// <see cref="PointerKind.Touchpad"/> Wheel events of <paramref name="deltaPerPacket"/> offset-space DIP each, spaced
+    /// <paramref name="msPerPacket"/> ms apart with monotonic stamps (so the windowed regression measures a real velocity),
+    /// one RunFrame per packet. Returns the worst <see cref="FrameStats.HotPhaseAllocBytes"/> across the packet frames.
+    /// The caller pumps further frames to integrate the coast. Leaves the gesture coasting (no synthetic "up").</summary>
+    static long DriveTouchpadPan(HeadlessWindow window, AppHost host, bool horizontal, float deltaPerPacket, int packets, uint msPerPacket)
+    {
+        long worst = 0;
+        uint t = s_touchClockMs;
+        for (int i = 0; i < packets; i++)
+        {
+            t += msPerPacket;
+            var e = horizontal
+                ? new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0, ScrollDelta: 0f, Pointer: PointerKind.Touchpad, TimestampMs: t, ScrollDeltaX: deltaPerPacket)
+                : new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0, ScrollDelta: deltaPerPacket, Pointer: PointerKind.Touchpad, TimestampMs: t);
+            window.QueueInput(e);
+            var f = host.RunFrame();
+            if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes;
+        }
+        s_touchClockMs = t + 1000;
+        return worst;
     }
 
     /// <summary>Viewport inner extent along the scroll axis (for the overscroll cap assertion). Reads the published
@@ -18025,6 +18176,7 @@ static class Slice
         PinchZoomChecks(strings);      // Phase 4 pinch-zoom (gate.touch4.*): second-contact → Pinch sweeps Pan, scale-about-midpoint transform (no relayout), clamp 0.1..10.0, per-id cancel, pan continuation, 0-alloc
         TouchSnapOverscrollChecks(strings); // Phase 4 snap + overscroll (gate.touch4.*): fling-snap lands on a snap point (dt-invariant), touch-pan rubber-band + spring-back (offset never leaves clamp), wheel hard-clamps, 0-alloc
         ScrollParityChecks(strings);   // WinUI-parity scroll: content-relative wheel distance, windowed velocity sampler, IScrollSource seam transparency, DM transform→offset math
+        TouchpadFeelChecks(strings);   // Touchpad scroll feel: WinUI-0.95 coast friction, frame-rate-independent exact integrator, softened band round-trip, deterministic settle, 0-alloc pan→coast→settle
         Touch4SipChecks(strings);      // Phase 4 SIP (gate.touch4.sip.*): touch focus shows the touch keyboard once (mouse focus doesn't), focus loss hides, a Showing OccludedRect reflows the caret into view, 0-alloc steady
         Touch4HoldWakeChecks(strings); // Phase 4 Hold EXECUTION + stationary-hold wake (gate.touch4.*): touch long-press fires the context flyout, the GestureHold wake bit keeps frames coming for a motionless held finger then clears, RatingControl touch tap-to-rate
         ImageCacheChecks();

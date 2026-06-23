@@ -47,19 +47,18 @@ public sealed class ScrollAnimator
     public const float MinBarOverflowPx = 4f;
 
     /// <summary>Touch/trackpad-fling friction: the per-second exponential SURVIVAL factor applied to the velocity each
-    /// tick (v *= FlingDecayPerS^dt_s). NOT WinUI's 0.95: WinUI's <c>c_scrollPresenterDefaultInertiaDecayRate</c>
-    /// (ScrollPresenter.cpp:31) is the InteractionTracker's <c>PositionInertiaDecayRate</c> param, integrated inside the
-    /// closed Windows.UI.Composition curve — far more frictional than 0.95 applied per SECOND here. 0.95/s is
-    /// near-frictionless (k = −ln0.95 ≈ 0.05/s ⇒ coast v0/k ≈ 19.5·v0 ⇒ "coasts for tens of seconds" — the wrong-inertia
-    /// bug). The decay constant is <c>k = −ln(FlingDecayPerS)</c> per second; a fling's asymptotic coast is <c>v0/k</c>
-    /// and it settles (≤ <see cref="FlingMinVelocityPxPerS"/>) after ≈ <c>ln(v0/v_min)/k</c> s. At 0.03 ⇒ k ≈ 3.5/s ⇒ a
-    /// 1600 px/s flick coasts ~460 px and settles in ~1 s — a WinUI-like glide. THIS IS THE FEEL KNOB: tune on-device
-    /// against a real WinUI ScrollViewer. The snap-retarget integral below derives k from this value, so it stays
-    /// consistent when only this constant changes.</summary>
-    public const float FlingDecayPerS = 0.03f;   // per-second velocity survival (k ≈ 3.5/s); tune on-device. WAS 0.95 (near-frictionless — the bug)
+    /// tick (v *= FlingDecayPerS^dt_s). MATCHES WinUI's InteractionTracker resting feel via the engine-internal base
+    /// <c>r = 1 − 0.95 = 0.05</c> per SECOND: the integrator <c>v(t) = v0·r^t</c> is fed <c>r</c> directly (no ^(1/60)
+    /// conversion). The decay constant is <c>k = −ln(FlingDecayPerS)</c> per second (≈3.0/s at 0.05); a fling's
+    /// asymptotic coast is <c>v0/k</c> and it settles (≤ <see cref="FlingMinVelocityPxPerS"/>) after ≈ <c>ln(v0/v_min)/k</c> s.
+    /// At 0.05 ⇒ k ≈ 3.0/s ⇒ a 1600 px/s flick coasts ~534 px and settles in ~1.33 s — a WinUI-like glide. (1000 px/s ⇒
+    /// ~334 px asymptote, settling near ~324 px at the 30 px/s cutoff.) THIS IS THE FEEL KNOB: tune on-device against a
+    /// real WinUI ScrollViewer. The snap-retarget integral below derives k from this value, so it stays consistent when
+    /// only this constant changes.</summary>
+    public const float FlingDecayPerS = 0.05f;   // per-second velocity survival (k ≈ 3.0/s) — WinUI 0.95 InteractionTracker feel (r = 1 − 0.95). WAS 0.03
     /// <summary>Below this speed the fling has settled: it reverts to TargetChase with zero velocity (a slow drift
-    /// reads as stopped, and snapping idle keeps the frame loop quiet). px/s.</summary>
-    public const float FlingMinVelocityPxPerS = 40f;
+    /// reads as stopped, and snapping idle keeps the frame loop quiet). px/s. == WinUI <c>s_minimumVelocity</c>.</summary>
+    public const float FlingMinVelocityPxPerS = 30f;
     /// <summary>A snap fling's landing tolerance: once the decay's remaining asymptotic travel is within this many DIP of
     /// the snap value, the integrator writes the exact snap offset and ends (so a snap fling lands ON the snap rather
     /// than v_min/k short). Sub-pixel; deterministic across the integrator dt sweep. px.</summary>
@@ -229,7 +228,7 @@ public sealed class ScrollAnimator
                 if (sc.ScrollMode == FlingMode && !sc.FlingRetargeted && sc.HasSnap)   // snap-retarget is touch-fling only; a wheel fling never snaps
                 {
                     sc.FlingRetargeted = true;
-                    float k = -MathF.Log(_flingDecayPerS);                 // per-second decay rate (≈0.0513/s for 0.95)
+                    float k = -MathF.Log(_flingDecayPerS);                 // per-second decay rate (≈3.0/s for 0.05)
                     float natural = off + sc.FlingVelocity / k;           // unsnapped asymptotic rest
                     // Clamp the natural rest to the reachable offset range BEFORE snapping — a flick can't coast past the
                     // content, so a snap beyond the clamp is meaningless (and would re-solve to an absurd velocity that
@@ -248,8 +247,8 @@ public sealed class ScrollAnimator
                 float flingDecay = sc.ScrollMode == WheelFlingMode ? WheelFlingDecayPerS : _flingDecayPerS;
                 float v = sc.FlingVelocity * MathF.Pow(flingDecay, dtS);
                 // A SNAP fling terminates on DISTANCE-TO-TARGET, not on velocity: the re-solved velocity asymptotes to the
-                // snap value, but the 0.95/s decay is near-frictionless, so waiting for |v| < v_min would coast for tens of
-                // seconds. Instead, once this tick's advance would reach (or pass) the stored snap target, write the EXACT
+                // snap value, so waiting for |v| < v_min would coast slightly past the intended landing. Instead, once this
+                // tick's advance would reach (or pass) the stored snap target, write the EXACT
                 // FlingSnapTarget and end — so the fling lands ON the snap with no integration drift. A free (non-snap)
                 // fling keeps the velocity-cutoff/clamp settle below. The next-position estimate (off + v·dt) tells us when
                 // the advance has arrived at the target this frame.

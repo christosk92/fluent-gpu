@@ -22,7 +22,7 @@ public readonly record struct ScrollTuning(
     float WheelPerNotchMinDip,        // WinUI mouse-wheel line-height floor (DIP per notch)
     float WheelPerNotchViewportFrac,  // content-relative wheel distance (fraction of the viewport extent per notch)
     float WheelEaseTauMs,             // wheel/scrollbar TargetChase smoothing time constant (ms)
-    float FlingDecayPerS,             // touch-fling per-second velocity SURVIVAL factor (k = −ln(decay))
+    float FlingDecayPerS,             // touch-fling per-second velocity SURVIVAL factor (k = −ln(decay); 0.05 ⇒ WinUI 0.95 feel)
     float FlingSettleVelocityPxPerS,  // below this fling speed the integrator reverts to TargetChase (settles)
     float OverscrollSpringOmega)      // critically-damped overscroll release spring frequency (rad/s)
 {

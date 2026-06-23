@@ -58,11 +58,13 @@ public sealed class InputDispatcher
     // fling at lift. A wheel stream has no "up" event, so a packet GAP (TouchpadGestureEndMs) ends the gesture. ──
     private NodeHandle _tpTarget;      // viewport the active touchpad gesture drives (axis-resolved at gesture start)
     private bool _tpHoriz;             // its scroll axis (true = horizontal)
-    private float _tpAppliedRaw;       // the raw (pre-clamp) offset currently applied — moved 1:1 by packets, then by momentum
-    private float _tpPendingDelta;     // packet deltas accumulated since the last frame (applied as one 1:1 step → de-jitter)
-    private bool  _tpGotPacket;        // a packet arrived this frame → drive 1:1; else coast on momentum
-    private float _tpVel;              // EMA of offset-space velocity (px/s) — drives the coast when packets pause/stop
-    private uint  _tpLastEventMs;      // last packet timestamp (inter-packet dt for the velocity estimate)
+    private float _tpAppliedRaw;       // the raw (pre-clamp) offset actually applied — eased toward _tpDemandRaw by the one-pole low-pass
+    private float _tpDemandRaw;        // the raw (pre-clamp) offset DEMANDED by packets/coast — _tpAppliedRaw chases it (τ = s_tpSmoothTau)
+    private float _tpPendingDelta;     // packet deltas accumulated since the last frame (folded into _tpDemandRaw each frame)
+    private bool  _tpGotPacket;        // a packet arrived this frame → fold the demand; else advance demand by the coast
+    private float _tpVel;              // offset-space coast velocity (px/s) from the windowed regression — drives the coast when packets pause/stop
+    private TouchVelocity _tpVelTracker;   // windowed least-squares velocity sampler for the touchpad coast hand-off (replaces the EMA — fixes the first-packet dt=0.001 saturation)
+    private float _tpVelPos;           // synthetic 1-D position fed to _tpVelTracker (accumulated packet delta on the active axis)
     // §7A drag-reorder-over-touch: the contact enrolled a DragReorder member (a CanDrag chain under the press) whose
     // axis-locked vote competes with Pan in the arena. The reorder's item axis (the source row's parent-container main
     // axis); when the arena resolves DragReorder, _touchReorder latches and the contact DRIVES Input.DragController
@@ -131,21 +133,30 @@ public sealed class InputDispatcher
     /// near-zero release velocity as a settle, not a flick). px/s.</summary>
     public const float FlingMinVelocityPxPerS = 50f;
 
-    /// <summary>Touchpad momentum decay: fraction of coast velocity SURVIVING per second once packets stop (lower = snappier
-    /// stop, less glide). The device delivers packets in ~60ms bursts even mid-scroll, so there's no "lift" event — instead
-    /// the pan coasts on this decay whenever a frame has no packet, which makes inter-burst gaps seamless AND gives a real
-    /// lift its momentum. Coast distance ≈ v₀ / −ln(decay). Env <c>FG_TP_DECAY</c>.</summary>
+    /// <summary>Touchpad momentum decay: per-second velocity SURVIVAL factor once packets stop (the WinUI 0.95
+    /// InteractionTracker feel — <c>r = 1 − 0.95 = 0.05</c> per SECOND, matching <see cref="ScrollAnimator.FlingDecayPerS"/>).
+    /// The device delivers packets in ~60ms bursts even mid-scroll, so there's no "lift" event — instead the pan coasts on
+    /// this decay whenever a frame has no packet, which makes inter-burst gaps seamless AND gives a real lift its momentum.
+    /// Asymptotic coast distance ≈ v₀ / −ln(decay) = v₀ / 3.0 (settling near that at the 30 px/s cutoff). Env <c>FG_TP_DECAY</c>.</summary>
     private static readonly float s_tpDecayPerS =
-        float.TryParse(Environment.GetEnvironmentVariable("FG_TP_DECAY"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float dp) && dp > 0f && dp < 1f ? dp : 0.0008f;
-    /// <summary>Below this coast speed (px/s) the momentum settles and the gesture ends. Env <c>FG_TP_SETTLE</c>.</summary>
+        float.TryParse(Environment.GetEnvironmentVariable("FG_TP_DECAY"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float dp) && dp > 0f && dp < 1f ? dp : 0.05f;
+    /// <summary>Below this coast speed (px/s) the momentum settles and the gesture ends (== <see cref="ScrollAnimator.FlingMinVelocityPxPerS"/>).
+    /// Env <c>FG_TP_SETTLE</c>.</summary>
     private static readonly float s_tpSettleVel =
-        float.TryParse(Environment.GetEnvironmentVariable("FG_TP_SETTLE"), out float sv) && sv > 0f ? sv : 60f;
+        float.TryParse(Environment.GetEnvironmentVariable("FG_TP_SETTLE"), out float sv) && sv > 0f ? sv : 30f;
     /// <summary>Hard ceiling on touchpad scroll speed (px/s) for BOTH the live drive and the coast. This device's
     /// promoted-wheel deltas are wildly accelerated (a single packet can demand 270+ DIP), so without a cap one flick
     /// blasts through the whole list into the edge. Caps the felt max speed while leaving slow/precise panning untouched
     /// (small deltas never reach the cap). Env <c>FG_TP_MAXVEL</c>.</summary>
     private static readonly float s_tpMaxVel =
         float.TryParse(Environment.GetEnvironmentVariable("FG_TP_MAXVEL"), out float mv) && mv > 0f ? mv : 3500f;
+    /// <summary>One-pole low-pass time constant (ms) separating the touchpad DEMANDED offset (<c>_tpDemandRaw</c>, moved
+    /// by packets/coast) from the APPLIED offset (<c>_tpAppliedRaw</c>, written to the scroller): each frame
+    /// <c>applied += (demand − applied)·(1 − e^(−dt/τ))</c>. Smooths the device's bursty/accelerated packet jitter into a
+    /// continuous glide WITHOUT lagging the finger noticeably (τ ≈ one frame). Env <c>FG_TP_SMOOTH_TAU</c>. NOT applied to
+    /// the mouse-wheel path (that keeps its own TargetChase ease in the ScrollAnimator).</summary>
+    private static readonly float s_tpSmoothTau =
+        float.TryParse(Environment.GetEnvironmentVariable("FG_TP_SMOOTH_TAU"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float st) && st > 0f ? st : 14f;
 
     /// <summary>Rubber-band overscroll cap as a fraction of the viewport extent: WinUI lets a ScrollViewer over/underpan
     /// up to 10% of its viewport (ScrollInputHelper.cpp:309-311). Delegates to <see cref="OverscrollPhysics"/>.</summary>
@@ -1139,7 +1150,8 @@ public sealed class InputDispatcher
         _scrollDragGrab = 0f; _contextDown = NodeHandle.Null; _middleDown = NodeHandle.Null;
         _panTarget = NodeHandle.Null; _panClaimed = false; _panAnchorPx = default; _panAnchorOffset = 0f;
         _panAxisX = false; _panVel = default;
-        _tpTarget = NodeHandle.Null; _tpPendingDelta = 0f; _tpGotPacket = false; _tpAppliedRaw = 0f; _tpVel = 0f;
+        _tpTarget = NodeHandle.Null; _tpPendingDelta = 0f; _tpGotPacket = false; _tpAppliedRaw = 0f; _tpDemandRaw = 0f;
+        _tpVel = 0f; _tpVelTracker = default; _tpVelPos = 0f;
         _reorderTarget = NodeHandle.Null; _touchReorder = false; _reorderAxisX = false;
         _swipeDrag = NodeHandle.Null; _swipeAxisX = false;
         _gesturePanNode = NodeHandle.Null;
@@ -2314,6 +2326,11 @@ public sealed class InputDispatcher
     /// clock and ends the gesture at the input gap. Axis-resolved like the notch path so a vertical pan over a horizontal
     /// shelf reaches the vertical page behind it. The engine owns touchpad scroll because DirectManipulation is unreliable
     /// on this device's promoted-wheel path.</summary>
+    /// <summary>True while a precision-touchpad gesture is live (panning OR coasting) — its target is armed and
+    /// <see cref="TickTouchpad"/> is driving/coasting it. Clears when the coast settles. Test/diagnostic observability for
+    /// the touchpad-feel gates (the coast is otherwise only visible as offset motion).</summary>
+    public bool TouchpadActive => !_tpTarget.IsNull;
+
     public void PanTouchpad(in InputEvent e)
     {
         float dy = e.ScrollDelta, dx = e.ScrollDeltaX;
@@ -2331,18 +2348,24 @@ public sealed class InputDispatcher
             _tpTarget = vp; _tpHoriz = horiz;
             ref ScrollState s0 = ref _scene.ScrollRef(vp);
             s0.ScrollMode = 0; s0.FlingVelocity = 0f;   // cancel any prior animator fling so this pan owns the offset
-            _tpAppliedRaw = horiz ? s0.OffsetX : s0.OffsetY;
-            _tpVel = 0f; _tpPendingDelta = 0f; _tpLastEventMs = e.TimestampMs;
+            float startOff = horiz ? s0.OffsetX : s0.OffsetY;
+            _tpDemandRaw = _tpAppliedRaw = startOff;    // demand AND applied start at the live offset (no first-frame catch-up jump)
+            _tpVel = 0f; _tpPendingDelta = 0f;
+            // Seed the windowed-regression velocity sampler at a synthetic 1-D origin on the active axis (the other coord 0).
+            // This replaces the prior EMA, whose first packet computed dtSec = max(1,0)/1000 = 0.001 → inst = delta/0.001,
+            // saturating _tpVel to ±s_tpMaxVel on EVERY gesture start (the poison). The regression needs ≥2 in-window
+            // samples before it reports a non-zero velocity, so a single-packet tap measures zero coast.
+            _tpVelPos = 0f;
+            _tpVelTracker.Reset(new Point2(0f, 0f), e.TimestampMs);
         }
 
-        _tpPendingDelta += delta;   // applied as one 1:1 step in TickTouchpad (coalesces the frame's bursts → de-jitter)
+        _tpPendingDelta += delta;   // folded into _tpDemandRaw in TickTouchpad (coalesces the frame's bursts → de-jitter)
         _tpGotPacket = true;
 
-        float dtSec = MathF.Max(1f, (float)(e.TimestampMs - _tpLastEventMs)) / 1000f;
-        _tpLastEventMs = e.TimestampMs;
-        float inst = delta / dtSec;                                   // offset-space px/s
-        _tpVel = _tpVel == 0f ? inst : _tpVel * 0.6f + inst * 0.4f;   // EMA → de-noised coast speed
-        _tpVel = Math.Clamp(_tpVel, -s_tpMaxVel, s_tpMaxVel);         // never coast faster than the speed ceiling
+        // Feed the synthetic 1-D position to the windowed least-squares sampler (identical math to the touch fling): the
+        // active axis carries the accumulated travel, the cross axis stays 0. Vx/Vy then give the offset-space coast speed.
+        _tpVelPos += delta;
+        _tpVelTracker.Sample(new Point2(horiz ? _tpVelPos : 0f, horiz ? 0f : _tpVelPos), e.TimestampMs);
         OnScrollArmed?.Invoke(_tpTarget);   // keep frames flowing so TickTouchpad drives/coasts
     }
 
@@ -2357,34 +2380,49 @@ public sealed class InputDispatcher
     }
 
     /// <summary>Phase-7 advance of an active precision-touchpad pan. ONE seamless model (no pan/fling split, no lift
-    /// threshold — the device has no "up" event and bursts packets ~60ms apart mid-scroll): a frame that received packets
-    /// moves the offset 1:1 (tight, lag-free); a frame with none COASTS on the tracked momentum, decaying by
-    /// <see cref="s_tpDecayPerS"/>. So an inter-burst gap is a tiny seamless coast (no stutter) and a real lift just coasts
-    /// to rest. Past an edge the overscroll band builds 1:1 and releases to the phase-7 spring once the coast reaches the
-    /// edge / settles. Re-arms each frame; clears ownership when the momentum settles. Called before the scroll-source pump.</summary>
+    /// threshold — the device has no "up" event and bursts packets ~60ms apart mid-scroll). The applied offset is the
+    /// output of a one-pole low-pass (τ = <see cref="s_tpSmoothTau"/>) chasing a DEMANDED offset: packets fold their
+    /// coalesced delta into the demand 1:1; a frame with none advances the demand by the coasting momentum (the windowed
+    /// regression's terminal velocity, decayed by <see cref="s_tpDecayPerS"/> via an EXACT closed-form per-step integral,
+    /// so the coast distance is frame-rate-independent). The filter de-jitters the device's bursty/accelerated packets
+    /// without lagging the finger. Past an edge the overscroll band builds via the demand clamp and releases to the
+    /// phase-7 spring once the coast settles. Re-arms each frame; clears ownership when the momentum settles AND the
+    /// filter has caught up. Called before the scroll-source pump.</summary>
     public void TickTouchpad(float dtMs)
     {
         if (_tpTarget.IsNull) return;
         if (!_scene.IsLive(_tpTarget) || !_scene.HasScroll(_tpTarget)) { _tpTarget = NodeHandle.Null; return; }
 
         ref ScrollState sc = ref _scene.ScrollRef(_tpTarget);
-        float maxStep = s_tpMaxVel * dtMs / 1000f;   // cap per-frame travel — the device's monster deltas can't explode
 
         if (_tpGotPacket)
         {
-            float step = Math.Clamp(_tpPendingDelta, -maxStep, maxStep);   // 1:1 with the finger, but speed-capped
+            // Fold the frame's coalesced packet delta straight into the DEMAND 1:1 (no maxStep clamp — the soft-knee in
+            // Win32Platform + the low-pass below tame an accelerated burst). Clamp keeps the demand within range + one band.
+            _tpDemandRaw = ClampTpRaw(in sc, _tpDemandRaw + _tpPendingDelta);
             _tpPendingDelta = 0f; _tpGotPacket = false;
-            _tpAppliedRaw = ClampTpRaw(in sc, _tpAppliedRaw + step);       // never run past the edge (no reverse dead-zone)
-            ApplyTouchPan(_tpTarget, _tpAppliedRaw);
-            OnScrollArmed?.Invoke(_tpTarget);
-            return;
+            // Refresh the coast velocity from the windowed regression so the FIRST coast frame after packets stop inherits
+            // the measured terminal speed (clamped to the safety ceiling — a single packet ⇒ <2 in-window samples ⇒ 0).
+            _tpVel = Math.Clamp(_tpHoriz ? _tpVelTracker.Vx : _tpVelTracker.Vy, -s_tpMaxVel, s_tpMaxVel);
+        }
+        else
+        {
+            // No packet this frame → coast: advance the DEMAND by the EXACT closed-form integral of v·decay^t over [0,dt]
+            // (frame-rate-independent; OverscrollPhysics.CoastStep is the single owner of this integrator). The band, if
+            // any, is HELD by the demand clamp until the momentum settles below.
+            _tpDemandRaw = ClampTpRaw(in sc, _tpDemandRaw + OverscrollPhysics.CoastStep(ref _tpVel, dtMs, s_tpDecayPerS));
         }
 
-        // No packet this frame → coast on momentum (this is BOTH the inter-burst bridge AND the post-lift glide; the band,
-        // if any, is HELD by the raw clamp and only released to the spring once the momentum has actually settled — so
-        // pushing into an edge with bursty packets no longer chops into a stutter of mini-bounces).
-        _tpVel *= MathF.Pow(s_tpDecayPerS, dtMs / 1000f);   // friction
-        if (MathF.Abs(_tpVel) < s_tpSettleVel)
+        // One-pole low-pass: the APPLIED offset chases the DEMAND each frame (every frame — packet AND coast), so a burst
+        // is spread over a few frames into a continuous glide. kOff = 1 − e^(−dt/τ).
+        float kOff = 1f - MathF.Exp(-dtMs / s_tpSmoothTau);
+        _tpAppliedRaw += (_tpDemandRaw - _tpAppliedRaw) * kOff;
+        ApplyTouchPan(_tpTarget, _tpAppliedRaw);
+        OnScrollArmed?.Invoke(_tpTarget);
+
+        // Settle: the momentum has decayed below the cutoff AND the filter has caught up to the demand (don't end mid
+        // catch-up, which would leave a visible gap). Release any held band to the phase-7 critically-damped spring.
+        if (!_tpGotPacket && MathF.Abs(_tpVel) < s_tpSettleVel && MathF.Abs(_tpDemandRaw - _tpAppliedRaw) < 0.5f)
         {
             if (sc.OverscrollPx != 0f)
             {
@@ -2394,11 +2432,7 @@ public sealed class InputDispatcher
             }
             else if (FluentGpu.Foundation.ScrollLog.On) FluentGpu.Foundation.ScrollLog.Line($"TPEND settle off={_tpAppliedRaw:0}");
             _tpVel = 0f; _tpTarget = NodeHandle.Null;
-            return;
         }
-        _tpAppliedRaw = ClampTpRaw(in sc, _tpAppliedRaw + _tpVel * dtMs / 1000f);
-        ApplyTouchPan(_tpTarget, _tpAppliedRaw);
-        OnScrollArmed?.Invoke(_tpTarget);
     }
 
     /// <summary>Nearest self-or-ancestor viewport under <paramref name="p"/> whose <see cref="ScrollState.Zoomable"/> opt-in

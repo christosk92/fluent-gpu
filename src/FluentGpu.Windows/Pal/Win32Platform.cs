@@ -156,6 +156,14 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     // sane; the engine then smooths + adds inertia. Env FG_TP_SCALE overrides for on-device tuning (a VALUE, never logic).
     private static readonly float s_tpScale =
         float.TryParse(Environment.GetEnvironmentVariable("FG_TP_SCALE"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float tps) && tps > 0f ? tps : 0.08f;
+    // Soft-knee that tames the device's accelerated raw notch BEFORE scaling: small deltas stay EXACTLY linear (precise
+    // panning untouched), only the big accelerated packets are compressed toward a soft ceiling — |notch| below s_tpKnee
+    // is passed through 1:1, above it the curve asymptotes toward s_tpMaxRaw. Env FG_TP_KNEE / FG_TP_MAXRAW (values, not
+    // logic). Applies ONLY to the hi-res (precision-touchpad) branch; the detented mouse-wheel branch is untouched.
+    private static readonly float s_tpKnee =
+        float.TryParse(Environment.GetEnvironmentVariable("FG_TP_KNEE"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float tpk) && tpk > 0f ? tpk : 240f;
+    private static readonly float s_tpMaxRaw =
+        float.TryParse(Environment.GetEnvironmentVariable("FG_TP_MAXRAW"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float tpm) && tpm > 0f ? tpm : 1600f;
     private const long ISC_SHOWUICOMPOSITIONWINDOW = 0x80000000L;
     private const int VK_SHIFT = 0x10, VK_CONTROL = 0x11, VK_MENU = 0x12, VK_LWIN = 0x5B, VK_RWIN = 0x5C;
     private const int HTCLIENT = 1;
@@ -964,9 +972,17 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                     return true;
                 if (_wheelHiRes)
                 {
+                    // Soft-knee on the raw notch BEFORE scaling: |notch| ≤ s_tpKnee stays exactly linear (precise panning
+                    // untouched); above the knee the surplus is compressed so the curve asymptotes toward s_tpMaxRaw (a big
+                    // accelerated packet no longer blasts through the whole list). s_tpScale is applied AFTER (unchanged).
+                    float a = MathF.Abs((float)notch);
+                    float tamed = a <= s_tpKnee
+                        ? a
+                        : s_tpKnee + (s_tpMaxRaw - s_tpKnee) * (1f - MathF.Exp(-(a - s_tpKnee) / (s_tpMaxRaw - s_tpKnee)));
+                    float dip = MathF.Sign((float)notch) * tamed * s_tpScale;
                     // Vertical: −delta = scroll toward content end (offset increases). Horizontal: +delta = right (offset increases).
-                    float tpDipY = horizontal ? 0f : -notch * s_tpScale;
-                    float tpDipX = horizontal ? notch * s_tpScale : 0f;
+                    float tpDipY = horizontal ? 0f : -dip;
+                    float tpDipX = horizontal ? dip : 0f;
                     if (s_dmProbe)
                         FluentGpu.Foundation.ScrollLog.Line($"TPPAN   {(horizontal ? "H" : "V")} notch={notch} dip={(horizontal ? tpDipX : tpDipY):0.0}");
                     _queue.Enqueue(new InputEvent(InputKind.Wheel, WheelPt(lp), 0, 0, tpDipY, Mods(),
