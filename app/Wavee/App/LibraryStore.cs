@@ -1,0 +1,146 @@
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+using FluentGpu.Foundation;
+using FluentGpu.Hooks;
+using FluentGpu.Signals;
+using Wavee.Core;
+
+namespace Wavee;
+
+/// <summary>
+/// The root-level library cache (docs/architecture.md §3 cache-first instant paint; §6 "a LibraryBridge" for delta
+/// streams). A sibling of <see cref="LibraryBridge"/>: built in <see cref="Services"/>, <see cref="Activate"/>-d once at
+/// the app root (which never unmounts). It holds the cached collections as engine <see cref="Loadable{T}"/> signals so
+/// every page READS already-loaded data — ZERO refetch on navigation, instant paint — and it processes source deltas
+/// (saves / playlist edits / future collection deltas) EVEN WHEN NO PAGE IS MOUNTED. Per-entity detail caches make the
+/// library master-detail right pane + detail revisits instant (A→B→A). Provided once via <see cref="Slot"/>.
+/// </summary>
+public sealed class LibraryStore
+{
+    public static readonly Context<LibraryStore?> Slot = new(null);
+
+    readonly IMusicLibrary _lib;
+    readonly IMutationSource _mut;
+    readonly UserPlaylistSource _pls;
+    readonly ICollectionEvents? _events;
+    readonly List<IDisposable> _subs = [];
+    Action<Action> _post = static a => a();
+    bool _active;
+
+    // ── cached collections: each Loadable allocated ONCE here, reused by every page forever ──
+    public Loadable<IReadOnlyList<Album>> Albums { get; } = Loadable<IReadOnlyList<Album>>.Pending(Array.Empty<Album>());
+    public Loadable<IReadOnlyList<Artist>> Artists { get; } = Loadable<IReadOnlyList<Artist>>.Pending(Array.Empty<Artist>());
+    public Loadable<IReadOnlyList<PlaylistSummary>> Playlists { get; } = Loadable<IReadOnlyList<PlaylistSummary>>.Pending(Array.Empty<PlaylistSummary>());
+    public Loadable<IReadOnlyList<Track>> Liked { get; } = Loadable<IReadOnlyList<Track>>.Pending(Array.Empty<Track>());
+    public Loadable<IReadOnlyList<Show>> Shows { get; } = Loadable<IReadOnlyList<Show>>.Pending(Array.Empty<Show>());
+    public Loadable<LibraryStats> Stats { get; } = Loadable<LibraryStats>.Pending(new LibraryStats(0, 0, 0, 0));
+
+    bool _albumsLoaded, _artistsLoaded, _playlistsLoaded, _likedLoaded, _showsLoaded, _statsLoaded;
+
+    // ── per-entity detail caches (master-detail right pane + detail revisits) ──
+    readonly Dictionary<string, Loadable<DetailModel>> _details = new(StringComparer.Ordinal);
+    readonly Dictionary<string, Loadable<Artist>> _artistDetails = new(StringComparer.Ordinal);
+
+    public LibraryStore(IMusicLibrary lib, IMutationSource mut, UserPlaylistSource pls, ICollectionEvents? events)
+    {
+        _lib = lib; _mut = mut; _pls = pls; _events = events;
+    }
+
+    // ── lazy one-shot warmers (idempotent — first access OR the eager warm at Activate) ──
+    public void EnsureAlbums() { if (_albumsLoaded) return; _albumsLoaded = true; Fill(Albums, _lib.GetAlbumsAsync); }
+    public void EnsureArtists() { if (_artistsLoaded) return; _artistsLoaded = true; Fill(Artists, _lib.GetArtistsAsync); }
+    public void EnsurePlaylists() { if (_playlistsLoaded) return; _playlistsLoaded = true; Fill(Playlists, _lib.GetPlaylistsAsync); }
+    public void EnsureLiked() { if (_likedLoaded) return; _likedLoaded = true; Fill(Liked, _lib.GetLikedSongsAsync); }
+    public void EnsureShows() { if (_showsLoaded) return; _showsLoaded = true; Fill(Shows, _lib.GetShowsAsync); }
+    public void EnsureStats() { if (_statsLoaded) return; _statsLoaded = true; Fill(Stats, _lib.GetStatsAsync); }
+    /// <summary>Eager warm of the cheap collections (Liked is large + lazy). Synthetic data is synchronous → Ready next frame.</summary>
+    public void WarmCheap() { EnsureAlbums(); EnsureArtists(); EnsurePlaylists(); EnsureShows(); EnsureStats(); }
+
+    void Fill<T>(Loadable<T> cell, Func<CancellationToken, Task<T>> read)
+    {
+        _ = Run();
+        async Task Run()
+        {
+            try { var v = await read(default).ConfigureAwait(false); _post(() => cell.SetReady(v)); }
+            catch (Exception e) { _post(() => cell.SetFailed(e)); }
+        }
+    }
+
+    /// <summary>Re-read WITHOUT flipping to Pending — keep the old value visible and swap in place (the cache-first
+    /// "+ background refresh" path: no skeleton flash on a delta).</summary>
+    void Refresh<T>(Loadable<T> cell, Func<CancellationToken, Task<T>> read)
+    {
+        _ = Run();
+        async Task Run()
+        {
+            try { var v = await read(default).ConfigureAwait(false); _post(() => cell.SetReady(v)); }
+            catch { /* keep last-good on a refresh failure */ }
+        }
+    }
+
+    // ── off-page freshness: subscribe the source deltas at the root (always alive) ──
+    public void Activate(Action<Action> post)
+    {
+        if (_active) return;
+        _active = true;
+        _post = post;
+
+        _subs.Add(_mut.SavedChanged.Subscribe(_ => post(() =>
+        {
+            if (_likedLoaded) Refresh(Liked, _lib.GetLikedSongsAsync);
+            if (_statsLoaded) Refresh(Stats, _lib.GetStatsAsync);    // the liked count lives in stats
+            _details.Remove("liked");                                // the liked track SET changed → reload its detail fresh
+        })));
+        _subs.Add(_pls.PlaylistsChanged.Subscribe(_ => post(() =>
+        {
+            if (_playlistsLoaded) Refresh(Playlists, _lib.GetPlaylistsAsync);
+            if (_statsLoaded) Refresh(Stats, _lib.GetStatsAsync);
+            InvalidateWhere(k => k.Contains("playlist", StringComparison.Ordinal));
+        })));
+        if (_events is not null)
+            _subs.Add(_events.CollectionsChanged.Subscribe(k => post(() => OnCollectionsChanged(k))));
+
+        WarmCheap();   // eager: by the time the user clicks Albums/Artists/Podcasts the signal is already Ready
+    }
+
+    void OnCollectionsChanged(CollectionKind kind)
+    {
+        switch (kind)
+        {
+            case CollectionKind.Albums when _albumsLoaded: Refresh(Albums, _lib.GetAlbumsAsync); break;
+            case CollectionKind.Artists when _artistsLoaded: Refresh(Artists, _lib.GetArtistsAsync); break;
+            case CollectionKind.Shows when _showsLoaded: Refresh(Shows, _lib.GetShowsAsync); break;
+            case CollectionKind.Playlists when _playlistsLoaded: Refresh(Playlists, _lib.GetPlaylistsAsync); break;
+            case CollectionKind.Liked when _likedLoaded: Refresh(Liked, _lib.GetLikedSongsAsync); break;
+        }
+        if (_statsLoaded) Refresh(Stats, _lib.GetStatsAsync);
+    }
+
+    // ── per-entity detail caches (instant A→B→A; the loader is injected by the caller) ──
+    public Loadable<DetailModel> Detail(string routeKey, Func<CancellationToken, Task<DetailModel>> load, DetailModel seed)
+    {
+        if (_details.TryGetValue(routeKey, out var l)) return l;   // hit → already Ready → instant
+        l = Loadable<DetailModel>.Pending(seed);
+        _details[routeKey] = l;
+        Fill(l, load);
+        return l;
+    }
+
+    public Loadable<Artist> ArtistDetail(string uri, Func<CancellationToken, Task<Artist>> load, Artist seed)
+    {
+        if (_artistDetails.TryGetValue(uri, out var l)) return l;
+        l = Loadable<Artist>.Pending(seed);
+        _artistDetails[uri] = l;
+        Fill(l, load);
+        return l;
+    }
+
+    void InvalidateWhere(Func<string, bool> match)
+    {
+        List<string>? keys = null;
+        foreach (var k in _details.Keys) if (match(k)) (keys ??= new()).Add(k);
+        if (keys is not null) foreach (var k in keys) _details.Remove(k);
+    }
+}

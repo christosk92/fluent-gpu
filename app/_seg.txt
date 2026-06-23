@@ -1,0 +1,62 @@
+I [app] Wavee starting
+I [app] Services created (federated catalog: spotify-export + fake)
+I [app] Shell online; playback started
+[wavee-nav-probe] warmup
+[wavee-nav-probe] home<->detail (the named case)
+[wavee-nav-probe] nav-settle (13 routes x 2 sweeps)
+[wavee-nav-probe] nav-hammer (400 frames)
+[wavee-nav-probe] back-forward (240 frames)
+[wavee-nav-probe] scroll (400 frames)
+[wavee-nav-probe] theme-toggle (240 frames)
+[wavee-nav-probe] idle (180 frames)
+[wavee-nav-probe] conn-anim fly key = pl:spotify:playlist:37i9dQZF1E8M6EbeyEdZ3n
+[fly-fps] complete connected animations at REAL vsync cadence — 44 fresh home-card keys (interval ms / fps):
+[fly-fps] fresh fly#0: 60 frames 502ms | mean 8.4ms (119 fps) | worst 11.8ms (85 fps) | >16.7ms(<60fps)=0 >33ms(<30fps)=0
+           first 18 intervals(ms): 9 7 8 9 9 9 8 8 9 8 9 8 8 10 6 8 9 9
+[fly-fps] fresh fly#1: 60 frames 499ms | mean 8.3ms (120 fps) | worst 10.3ms (97 fps) | >16.7ms(<60fps)=0 >33ms(<30fps)=0
+           first 18 intervals(ms): 6 9 8 8 8 9 8 8 8 9 8 9 8 8 9 8 9 9
+[fly-fps] fresh fly#2: 60 frames 515ms | mean 8.6ms (116 fps) | worst 17.7ms (56 fps) | >16.7ms(<60fps)=1 >33ms(<30fps)=0
+           first 18 intervals(ms): 7 9 11 9 9 9 18 15 8 7 7 9 8 8 8 8 8 11
+[fly-fps] fresh fly#3: 60 frames 509ms | mean 8.5ms (118 fps) | worst 15.1ms (66 fps) | >16.7ms(<60fps)=0 >33ms(<30fps)=0
+           first 18 intervals(ms): 9 8 11 9 9 7 9 10 15 9 8 9 5 10 7 8 9 10
+[fly-fps] fresh fly#4: 60 frames 499ms | mean 8.3ms (120 fps) | worst 11.4ms (88 fps) | >16.7ms(<60fps)=0 >33ms(<30fps)=0
+           first 18 intervals(ms): 8 9 11 10 9 6 9 8 8 9 9 8 8 9 8 7 10 7
+[fly-fps] fresh fly#5: 60 frames 516ms | mean 8.6ms (116 fps) | worst 15.1ms (66 fps) | >16.7ms(<60fps)=0 >33ms(<30fps)=0
+           first 18 intervals(ms): 9 8 12 9 10 15 8 7 8 10 8 8 8 8 8 9 8 7
+
+=== WAVEE STRESS — per-frame PRODUCTION time (ms); target = every frame < 8.33 ms (one 120 Hz vblank) ===
+(vsync/latency throttle removed ? pure work cost)
+
+phase              n    p50    p90     p99   p99.9      max    over8.3ms (ofwhich GC)
+idle             180   2.02   3.34    7.56    8.42     8.49            1            0
+scroll           400   1.77   4.12    5.30    6.28     6.34            0            0
+back-forward     240   3.23   4.97    6.55    7.86     8.10            0            0
+conn-anim no-fly   392   2.37   6.53    9.60   11.08    11.19           13            1
+conn-anim FLY    192   6.14  10.16   12.83   14.73    14.97           45            3
+home<->detail     96   6.20   9.21   13.34   27.34    28.90           18            0
+nav-settle       364   4.57   7.21    9.22   12.75    13.13           17            1
+nav-hammer       400   5.21   7.59    9.35   15.04    15.35           25            4
+theme-toggle     240   2.17   6.02   14.46   36.59    42.81           14            4
+------------------------------------------------------------------------------------------------
+ALL             2504   3.65   7.07   11.88   16.06    42.81          133           13
+
+over8.3ms = frames whose WORK would miss a vblank (the stutters). (ofwhich GC) = those coinciding with a Gen0+ collection.
+
+Worst 15 frames —   total =  flush + layout +  anim + record + submit  (gc=Gen0)  transition
+    42.81 =   0.07 +   0.10 +  0.01 +   1.23 +  41.30  gc=0  theme-toggle:settle
+    28.90 =  17.63 +   4.28 +  0.75 +   1.29 +   4.14  gc=0  home<->detail:pl:spotify:playlist:pl0
+    16.78 =   6.36 +   6.85 +  0.44 +   1.64 +   1.33  gc=0  theme-toggle:flip
+    15.35 =   7.11 +   4.48 +  1.18 +   1.51 +   1.02  gc=0  nav-hammer:home
+    14.97 =   0.38 +   0.63 +  0.87 +   1.25 +  11.64  gc=0  conn-anim FLY:fresh
+    14.70 =   7.43 +   4.75 +  0.06 +   1.48 +   0.91  gc=1  theme-toggle:flip
+    14.58 =   3.24 +   7.67 +  1.28 +   1.50 +   0.84  gc=0  nav-hammer:home
+    14.08 =   7.76 +   4.50 +  0.04 +   1.23 +   0.53  gc=1  theme-toggle:flip
+    13.74 =  10.17 +   0.97 +  0.04 +   1.47 +   0.95  gc=1  conn-anim FLY:fresh
+    13.42 =   6.80 +   4.68 +  0.05 +   1.33 +   0.54  gc=1  theme-toggle:flip
+    13.33 =   6.61 +   4.70 +  0.05 +   1.32 +   0.61  gc=0  theme-toggle:settle
+    13.13 =   2.69 +   6.78 +  1.30 +   1.42 +   0.89  gc=0  nav-settle:home
+    12.79 =   6.79 +   4.12 +  0.05 +   1.22 +   0.58  gc=1  theme-toggle:flip
+    12.74 =   0.91 +   1.37 +  0.53 +   1.57 +   8.31  gc=0  conn-anim FLY:fresh
+    12.71 =   0.64 +   0.72 +  1.15 +   1.43 +   8.71  gc=0  conn-anim FLY:fresh
+[wavee-nav-probe] wrote C:\tmp\wavee-nav-probe.csv + -summary.txt
+I [app] Wavee exiting

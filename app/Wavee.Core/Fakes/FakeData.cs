@@ -100,7 +100,31 @@ public static class FakeData
         var s = Seed[i % Seed.Length];
         var albums = new Album[6];
         for (int k = 0; k < albums.Length; k++) albums[k] = Album(i * 6 + k);
-        return new Artist($"ar{i % Seed.Length}", $"spotify:artist:ar{i % Seed.Length}", s.Artist, Cover(i, 300), albums);
+        int h = Math.Abs(s.Artist.GetHashCode());
+        long monthly = 850_000L + (h % 32) * 940_000L;          // ~0.85M – ~30M monthly listeners
+        long followers = monthly / 2 + (h % 11) * 130_000L;
+        bool verified = h % 5 != 0;
+        return new Artist($"ar{i % Seed.Length}", $"spotify:artist:ar{i % Seed.Length}", s.Artist, Cover(i, 300), albums,
+            monthly, followers, ArtistBio(s.Artist, monthly), verified);
+    }
+
+    static string ArtistBio(string name, long monthly) =>
+        $"{name} is an artist whose sound moves between intimate, late-night textures and wide, festival-scale moments. " +
+        $"With {monthly:N0} monthly listeners, the catalogue spans early EPs, breakout singles and the records that " +
+        $"defined the run — built for headphones at 2am and crowds at midnight alike.";
+
+    /// <summary>An artist's "Popular" list: the highest-played, title-deduped tracks across their discography — the SAME
+    /// ordered set the artist context plays (see <see cref="ContextTracks"/>), so the artist page and playback agree.</summary>
+    public static IReadOnlyList<Track> TopTracksOf(Artist a, int count = 5)
+    {
+        if (a.TopAlbums is not { Count: > 0 } albums) return Array.Empty<Track>();
+        var all = new List<Track>();
+        foreach (var al in albums) if (al.Tracks is { } ts) all.AddRange(ts);
+        all.Sort((x, y) => y.PlayCount.CompareTo(x.PlayCount));
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var top = new List<Track>(count);
+        foreach (var t in all) { if (seen.Add(t.Title)) { top.Add(t); if (top.Count >= count) break; } }
+        return top;
     }
 
     public static Playlist Playlist(int i, int trackCount = 40)
@@ -136,6 +160,98 @@ public static class FakeData
     /// <summary>The big list (Liked Songs) — generated on demand so 50k stays cheap.</summary>
     public static Track[] LikedSongs(int count = 5000) => Tracks(count, 1000);
 
+    // ── local files (the peer source: docs/architecture.md "Local files") ────────────────────────────────────────────
+    // Synthetic "imported" tracks — distinct names from the streamed catalog, TrackOrigin.Local, Source="local", and
+    // wavee:local:* uris. The LocalSource serves these; ContextTracks resolves a local context so they actually play.
+    static readonly (string Title, string Artist)[] LocalSeed =
+    [
+        ("Sunset Boulevard", "Marble Sounds"), ("Paper Planes", "Hollow Coves"), ("Northern Lights", "Aurora Fields"),
+        ("Coastline", "Sea Glass"), ("Old Cassette", "Lo-Fi Attic"), ("Rainy Window", "Kettle & Keys"),
+        ("First Snow", "Pinecone"), ("Long Drive Home", "Headlights"), ("Attic Tapes", "Dust & Vinyl"),
+        ("Quiet Hours", "Night Shift"), ("Garden Path", "Greenhouse"), ("Backroads", "Gravel & Pine"),
+        ("Harbor Lights", "Lantern"), ("Morning Pages", "Inkwell"),
+    ];
+
+    static Track[]? _localCache;
+    public static IReadOnlyList<Track> LocalTracks()
+    {
+        if (_localCache is not null) return _localCache;
+        var list = new Track[LocalSeed.Length];
+        for (int i = 0; i < LocalSeed.Length; i++)
+        {
+            var (title, artist) = LocalSeed[i];
+            var ar = new ArtistRef("localar" + i, "wavee:local:artist:" + i, artist);
+            var al = new AlbumRef("localal" + i, "wavee:local:album:" + i, title);
+            long dur = 150_000 + (i * 41 % 140) * 1000L;
+            list[i] = new Track("localtr" + i, "wavee:local:track:" + i, title, new[] { ar }, al, dur, false,
+                Cover(700 + i, 64), Origin: TrackOrigin.Local, Source: "local");
+        }
+        return _localCache = list;
+    }
+
+    // ── podcasts (the Podcasts facet: synthesized, since the export has none — docs/architecture.md §9) ──────────────
+    static readonly (string Name, string Publisher)[] ShowSeed =
+    [
+        ("Signals & Noise", "Wavee Studios"), ("The Long Take", "Reel Talk Media"), ("Night Coding", "Indie Dev FM"),
+        ("Coffee & Code", "Brewed Bytes"), ("Synth History", "Analog Archives"), ("Field Notes", "Wander Audio"),
+        ("Deep Focus Talks", "Mindful Media"), ("Release Notes", "Shipping It"),
+    ];
+    static readonly string[] EpTitles =
+    [
+        "The Build Trap", "Latency, Honestly", "On Craft", "Tape Loops", "The Quiet Release", "Edge Cases",
+        "First Principles", "After Hours", "The Long Game", "Cold Start", "Postmortem", "Signal Lost",
+    ];
+
+    public static IReadOnlyList<Show> Shows()
+    {
+        var list = new Show[ShowSeed.Length];
+        for (int i = 0; i < ShowSeed.Length; i++)
+        {
+            var (name, pub) = ShowSeed[i];
+            list[i] = new Show("show" + i, "wavee:show:" + i, name, pub, Cover(800 + i, 300), ShowBlurb(name, pub));
+        }
+        return list;
+    }
+
+    public static Show? Show(string uri)
+    {
+        int idx = ((IndexFromUri(uri) % ShowSeed.Length) + ShowSeed.Length) % ShowSeed.Length;
+        var (name, pub) = ShowSeed[idx];
+        return new Show("show" + idx, uri, name, pub, Cover(800 + idx, 300), ShowBlurb(name, pub), ShowEpisodes(idx, name));
+    }
+
+    static string ShowBlurb(string name, string pub) => $"{name} — conversations, deep dives and field recordings from {pub}. New episodes weekly.";
+
+    static IReadOnlyList<Episode> ShowEpisodes(int showIdx, string showName)
+    {
+        int n = 8 + showIdx % 5;
+        var eps = new Episode[n];
+        var now = DateTimeOffset.Now;
+        for (int i = 0; i < n; i++)
+        {
+            long dur = (22 + (showIdx * 7 + i * 13) % 50) * 60_000L;     // 22–72 min
+            long prog = i == 1 ? dur / 3 : 0;                            // one "continue listening" episode
+            string title = $"#{n - i} · {EpTitles[(showIdx * 5 + i) % EpTitles.Length]}";
+            eps[i] = new Episode("ep" + showIdx + "_" + i, $"wavee:episode:{showIdx}:{i}", title, showName,
+                Cover(800 + showIdx, 300), dur, now.AddDays(-(i * 7L + showIdx)),
+                $"In this episode of {showName}: notes, tangents and a few hard-won lessons.", prog);
+        }
+        return eps;
+    }
+
+    static IReadOnlyList<Track> EpisodesAsTracks(IReadOnlyList<Episode> eps)
+    {
+        var list = new Track[eps.Count];
+        for (int i = 0; i < eps.Count; i++)
+        {
+            var e = eps[i];
+            var ar = new ArtistRef("show", "wavee:show", e.ShowName);
+            list[i] = new Track(e.Id, e.Uri, e.Title, new[] { ar }, new AlbumRef("show", "wavee:show", e.ShowName),
+                e.DurationMs, false, e.Image, Source: "podcast");
+        }
+        return list;
+    }
+
     /// <summary>The trailing numeric id of a <c>spotify:kind:xx{n}</c> uri (the same parse <see cref="FakeSource"/>
     /// uses to resolve a synthetic detail page) — so a context resolves to the IDENTICAL deterministic track list.</summary>
     public static int IndexFromUri(string uri)
@@ -147,6 +263,19 @@ public static class FakeData
         return i;
     }
 
+    /// <summary>Resolve a <c>spotify:track:*</c> uri back to its synthetic track (the inverse of <see cref="Track"/>), so
+    /// playing a single track (search, a row) loads the SAME track its card showed. Null for a non-track uri.</summary>
+    public static Track? TrackByUri(string uri)
+    {
+        if (uri.StartsWith("spotify:track:", StringComparison.Ordinal)) return Track(IndexFromUri(uri));
+        if (uri.StartsWith("wavee:local:track:", StringComparison.Ordinal))
+        {
+            var lt = LocalTracks(); int i = IndexFromUri(uri);
+            return (uint)i < (uint)lt.Count ? lt[i] : null;
+        }
+        return null;
+    }
+
     /// <summary>Resolve a context uri (album / playlist / liked-songs) to ITS ordered track list — the same catalog the
     /// detail page loads, so playing a context at a start index plays the ACTUAL track that row shows. Empty for an
     /// unknown context.</summary>
@@ -156,6 +285,9 @@ public static class FakeData
         if (contextUri == "spotify:collection:tracks") return LikedSongs(161);
         if (contextUri.StartsWith("spotify:album:", StringComparison.Ordinal)) return Album(IndexFromUri(contextUri)).Tracks ?? Array.Empty<Track>();
         if (contextUri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) return Playlist(IndexFromUri(contextUri)).Tracks ?? Array.Empty<Track>();
+        if (contextUri.StartsWith("spotify:artist:", StringComparison.Ordinal)) return TopTracksOf(Artist(IndexFromUri(contextUri)));
+        if (contextUri.StartsWith("wavee:local:", StringComparison.Ordinal) || contextUri.StartsWith("local:", StringComparison.Ordinal)) return LocalTracks();
+        if (contextUri.StartsWith("wavee:show:", StringComparison.Ordinal) && Show(contextUri) is { Episodes: { } eps }) return EpisodesAsTracks(eps);
         return Array.Empty<Track>();
     }
 

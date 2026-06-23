@@ -404,11 +404,12 @@ public sealed class ItemsView : Component
             () => spec.Kind switch
             {
                 RepeatKind.Stack => new StackVirtualLayout(spec.Extent, spec.Horizontal),
-                RepeatKind.Grid => new GridVirtualLayout(spec.Columns, spec.Extent, spec.Gap),
+                RepeatKind.Grid => new GridVirtualLayout(spec.Columns, spec.Extent, spec.Gap, spec.MinCellWidth,
+                    spec.Estimate > 0f ? spec.Estimate : 120f),
                 RepeatKind.Custom => spec.CustomLayout,
                 _ => null,   // Wrap/Inline — non-virtual fallback
             },
-            spec.Kind, spec.Extent, spec.Gap, spec.Columns, spec.Horizontal, spec.CustomLayout ?? (object)0);
+            spec.Kind, spec.Extent, spec.Gap, spec.Columns, spec.MinCellWidth, spec.Estimate, spec.Horizontal, spec.CustomLayout ?? (object)0);
         bool horizontal = spec.Horizontal;
 
         var sceneRef = Context.Scene;
@@ -610,9 +611,12 @@ public sealed class ItemsView : Component
                     int dStack = spec.Horizontal ? dx : dy;
                     return dStack == 0 ? from : StepEnabled(from, dStack);
                 case RepeatKind.Grid:
-                    // Left/Right = index ±1 (may wrap rows — the cpp index-based path); Up/Down = ±columns
-                    // (column-railed), both walking past disabled items.
-                    return StepEnabled(from, dx != 0 ? dx : dy * spec.Columns);
+                {
+                    // Left/Right = index ±1; Up/Down = ±columns (column-railed). Responsive grids read live column count.
+                    int cols = spec.Columns > 0 ? spec.Columns
+                        : layout is GridVirtualLayout gv ? gv.EffectiveColumns(CrossExtent()) : 1;
+                    return StepEnabled(from, dx != 0 ? dx : dy * cols);
+                }
                 case RepeatKind.Custom:
                     return NavigateGeometric(from, dx, dy);
                 default:

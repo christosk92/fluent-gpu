@@ -52,7 +52,8 @@ public sealed class SpotifyExportSource : ICatalogSource
     {
         var fake = FakeData.Artist(FakeData.IndexFromUri(uri));
         _x.TryGetCard(uri, out var card);
-        return Ok(new Artist(IdFromUri(uri), uri, card?.Title ?? fake.Name, card?.Image ?? fake.Image, fake.TopAlbums));
+        return Ok(new Artist(IdFromUri(uri), uri, card?.Title ?? fake.Name, card?.Image ?? fake.Image, fake.TopAlbums,
+            fake.MonthlyListeners, fake.Followers, fake.Bio, fake.Verified));
     }
 
     public async IAsyncEnumerable<TrackPage> StreamTracksAsync(string contextUri, [EnumeratorCancellation] CancellationToken ct = default)
@@ -104,6 +105,7 @@ public sealed class SpotifyExportSource : ICatalogSource
     public Task<SearchResults> SearchAsync(string query, CancellationToken ct = default)
     {
         var q = query.Trim();
+        if (q.Length == 0) return Task.FromResult(SearchResults.Empty);
         var matches = _x.LibraryPlaylists
             .Where(p => p.Name.Contains(q, StringComparison.OrdinalIgnoreCase))
             .Select(p => new Playlist(IdFromUri(p.Uri), p.Uri, p.Name, null, p.OwnerName, p.Cover, p.TrackCount))

@@ -164,7 +164,7 @@ sealed class PlayerBarContent : Component
     {
         // Hooks FIRST (stable call order — rule #7), before any early return.
         var b = UseContext(PlaybackBridge.Slot);
-        var (liked, setLiked) = UseState(false);
+        var lib = UseContext(LibraryBridge.Slot);    // Mutations: the now-playing like reflects + toggles the saved-set
         var titleHover = UseSignal(false);           // hover the now-playing text → BOTH lines scroll together (synced); idle = static + edge fade
         var L = _layout.Value;                       // coarse breakpoint signal; does NOT change for every resize pixel
         if (DiagEnabled)
@@ -175,6 +175,7 @@ sealed class PlayerBarContent : Component
 
         // ── state derivation (low-frequency signals only) ──────────────────────────────────────────
         var track = b.CurrentTrack.Value;
+        bool liked = track is not null && (lib?.IsSaved(track.Uri) ?? false);   // subscribe → the heart re-skins on a like toggle / track change
         string? err = b.Error.Value;
         bool loading = b.IsLoading.Value;
         bool buffering = b.IsBuffering.Value;
@@ -258,7 +259,7 @@ sealed class PlayerBarContent : Component
             });
         leftKids.Add(metaCol);
         if (showLike)
-            leftKids.Add(Transport(Icons.Heart, () => setLiked(!liked), true, liked, accent, MathF.Min(30f, buttonBox), 15f)
+            leftKids.Add(Transport(liked ? Mdl.HeartFill : Icons.Heart, () => { if (track is { } lt) lib?.ToggleSaved(lt.Uri); }, true, liked, accent, MathF.Min(30f, buttonBox), 15f)
                 with { Key = "like", Animate = ItemMotion });
 
         var left = new BoxEl
@@ -323,7 +324,7 @@ sealed class PlayerBarContent : Component
             overflowCommands.Add(new AppBarCommand(repeat == RepeatMode.Track ? Icons.RepeatOne : Icons.RepeatAll, Loc.Get(Strings.Player.Repeat), () => CycleRepeat(b), AppBarCommandKind.ToggleButton, repeat != RepeatMode.Off, canTransport));
         }
         if (!showLike && active)
-            overflowCommands.Add(new AppBarCommand(Icons.Heart, Loc.Get(Strings.Player.Like), () => setLiked(!liked), AppBarCommandKind.ToggleButton, liked, true));
+            overflowCommands.Add(new AppBarCommand(liked ? Mdl.HeartFill : Icons.Heart, Loc.Get(Strings.Player.Like), () => { if (track is { } lt) lib?.ToggleSaved(lt.Uri); }, AppBarCommandKind.ToggleButton, liked, true));
         if (!showQueue)
             overflowCommands.Add(new AppBarCommand(Icons.Queue, Loc.Get(Strings.Player.Queue), () => { /* TODO: queue panel not wired yet */ }, Enabled: canTransport));
         if (!showDevices)

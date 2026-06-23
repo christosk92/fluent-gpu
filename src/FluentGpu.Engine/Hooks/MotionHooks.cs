@@ -15,10 +15,12 @@ public static class MotionHooks
     /// component whose rendered root is the node to animate. <paramref name="key"/> distinguishes deps if re-armed.</summary>
     public static void UseEntrance(this Component c, float offsetPx = Motion.EntranceOffsetPx, object? key = null)
     {
-        if (Motion.ReducedMotion) return;
+        // Reduced-motion as a VALUE, never an early-return — Motion.ReducedMotion is a mutable global (a resize grip flips
+        // it), and skipping these two hooks mid-life would shift every later hook slot in the caller → a cell-cast crash.
+        bool reduce = Motion.ReducedMotion;
         object dep = key ?? "enter";
-        c.Context.UseTransition(AnimChannel.Opacity, 0f, 1f, Motion.Fade, Easing.FluentDecelerate, dep);
-        c.Context.UseTransition(AnimChannel.TranslateY, offsetPx, 0f, Motion.OffsetEntrance, Easing.FluentDecelerate, dep);
+        c.Context.UseTransition(AnimChannel.Opacity, reduce ? 1f : 0f, 1f, Motion.Fade, Easing.FluentDecelerate, dep);
+        c.Context.UseTransition(AnimChannel.TranslateY, reduce ? 0f : offsetPx, 0f, Motion.OffsetEntrance, Easing.FluentDecelerate, dep);
     }
 
     /// <summary>A subtle pointer-over scale lift (spring), the WinUI card/button micro-interaction.</summary>

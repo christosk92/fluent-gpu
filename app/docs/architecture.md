@@ -1,11 +1,12 @@
 # Wavee music-domain architecture — the source-agnostic provider seam
 
 > **Status:** living architecture doc. This is the canonical reference for the layer **between the UI and
-> the underlying data/services** in the Wavee-fluent app. The first implementation pass wires the **catalog**
-> surface (Home, Library/Sidebar, playlist/album/artist detail) from real Spotify export JSON; **playback,
-> Spotify Connect/remote, session, lyrics, mutations, and local-files** are designed-for here and must land
-> *in line* with this seam when they arrive. Keep this file honest: when a capability moves from "seam" to
-> "implemented", update the status matrix (§9).
+> the underlying data/services** in the Wavee-fluent app. It wires the **catalog** surface (Home, Library/Sidebar,
+> playlist/album/**artist**/**show** detail, **search**, **library grids**) from real Spotify export JSON + synthesized
+> peers, plus **mutations** (save/like/follow with an optimistic+persisted outbox), a **local-files** peer source, and
+> **podcasts**. Playback / Connect-remote / session / lyrics now implement their seam ports behind the in-process fakes
+> and register in the source list; per-facet **federation** (`Federated*`) stays the documented `registry.OfCapability`
+> hook, deferred until a 2nd real source (§4.3). Keep this file honest: when a capability moves, update the matrix (§9).
 
 This design is grounded in a 14-domain, 292-capability functional inventory of the production **WaveeMusic**
 client (full report archived alongside the planning session) and in industry best practice:
@@ -47,8 +48,11 @@ local tags) are translated to clean domain models inside each adapter (the ACL) 
    ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
    │  SpotifyExportSource   owns spotify:*     [Catalog,Home,Search]   ACL: GraphQL JSON → domain   (IMPLEMENTED)           │
    │  FakeSource            owns fake/synth     [Catalog,…]            wraps FakeData (synth/fallback) (IMPLEMENTED)        │
+   │  LocalSource           owns local:*        [Catalog,Search,LocalDecode]  synth imported library    (IMPLEMENTED)      │
+   │  FakePodcastSource     owns wavee:show:*    [Podcasts]                  synth shows/episodes       (IMPLEMENTED)      │
+   │  LocalMutationSource   (cross-cutting)      [Mutations]                 optimistic + persisted outbox (IMPLEMENTED)   │
+   │  FakePlayback/Session/ConnectDevices        [Playback|Lyrics / Session / Remote]  in-proc fakes implement seam ports │
    │  (future) SpotifyLiveSource  spotify:*     [Catalog,Playback,Remote,Session,Lyrics,Mutations]   real backend          │
-   │  (future) LocalSource        local:*       [Catalog,Playback]    scan + tags + direct decode                          │
    └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -263,40 +267,56 @@ provider, so geo/tier/region checks are baked in rather than re-derived in the U
 
 ## 9. Implementation status matrix (keep current)
 
-| Capability / facet | Port | This pass | Notes |
+| Capability / facet | Port | Status | Notes |
 |---|---|---|---|
-| Catalog: library, playlists, album, artist | `ICatalogSource` | **Implemented** | SpotifyExportSource (real JSON) + FakeSource |
+| Catalog: library, playlists, album, **artist** | `ICatalogSource` | **Implemented** | SpotifyExportSource (real JSON) + FakeSource; artist detail is a real page now (`ArtistPage`) |
 | Home feed (grouped/condensed) | `ICatalogSource.GetHomeAsync` | **Implemented** | `SpotifyHomeComposer` collapses 22 baseline sections → 1 "Made for you" grid; caps shelves |
 | Streamed tracks (skeleton-then-stream) | `StreamTracksAsync` | **Implemented** | Iced Americano = 15 real; others synthesized (seeded by URI) |
 | Playlist permissions | `PlaylistCapabilities` | **Implemented** | from `currentUserCapabilities`; gates UI edit affordances |
-| Per-track availability/origin | `Availability`/`TrackOrigin` | **Implemented (model)** | from `playability`; UI dims+disables `Unavailable` |
+| Per-track availability/origin | `Availability`/`TrackOrigin` | **Implemented** | from `playability`; local tracks carry `TrackOrigin.Local` |
 | Real cover art | image pipeline | **Implemented** | real `i.scdn.co` URLs; HTTP/2 fetch + disk cache |
-| Search | `ICatalogSource.SearchAsync` | Partial / fallback | merged; real where export has data, else Fake |
-| Playback (transport, resolve, gapless, DSP) | `IPlaybackSource` | **Seam + existing fake** | `FakePlaybackProvider` stays the concrete player facet |
-| Spotify Connect / remote / devices | `IRemoteSource` | **Seam + existing fake** | `FakeConnectDevices` |
-| Session / auth / account tier / market | `ISessionSource` | **Seam + existing fake** | `FakeSpotifySession` |
-| Lyrics | `ILyricsSource` | **Seam + existing fake** | provider returns fake synced lyrics |
-| Mutations (save/follow/playlist edits/folders) | `IMutationSource` | **Seam** | optimistic + outbox contract documented |
-| Local files as a source | `LocalSource` | **Seam** | `local:` namespace reserved; adds Catalog+Playback later |
-| Provider-mappings / dedup / fallback | model + `Federated*` | **Seam** | trivial with one real source; hooks present |
-| Podcasts / shows / episodes | `ICatalogSource` (Podcasts cap) | **Seam** | not in this pass's data scope |
+| Search | `ICatalogSource.SearchAsync` | **Implemented** | federated `SearchAsync` + a per-facet results page (`SearchPage`), live as-you-type from the omnibar |
+| Library collection pages (albums / artists / podcasts) | collection reads | **Implemented** | `LibraryGridPage` over `GetAlbums/Artists/ShowsAsync` (these routes were "Coming soon") |
+| Mutations: save / like / follow | `IMutationSource` | **Implemented** | `LocalMutationSource` (optimistic + persisted outbox) + `LibraryBridge`; hearts/follow wired everywhere, capability-gated |
+| Local files as a source | `LocalSource` | **Implemented** | owns `local:` / `wavee:local:*`; `TrackOrigin.Local`; opens via the sidebar Local row through the shared detail surface |
+| Podcasts / shows / episodes | `IPodcastSource` | **Implemented (synthetic)** | `FakePodcastSource`; podcasts grid + `ShowPage` (episodes, date/duration, resume-progress); playable |
+| Playback (transport, resolve, gapless, DSP) | `IPlaybackSource` | **Seam port live** | `FakePlaybackProvider` implements `IPlaybackSource` + registered (Playback\|Lyrics); legacy `IPlaybackPlayer` stays the app surface |
+| Spotify Connect / remote / devices | `IRemoteSource` | **Seam port live** | `FakeConnectDevices` implements `IRemoteSource` + registered (Remote) |
+| Session / auth / account tier / market | `ISessionSource` | **Seam port live** | `FakeSpotifySession` implements `ISessionSource` + registered (Session) |
+| Lyrics | `ILyricsSource` | **Seam port live** | `FakePlaybackProvider` implements `ILyricsSource` (the Playback+Lyrics source) |
+| Provider-mappings / dedup / fallback | `ProviderRef` / `ProviderPolicy` | **Model + hooks** | `ProviderRef`/`ProviderMapping`/`ProviderPolicy`/`PlayableTrack` groundwork; federation = `registry.OfCapability` |
+| Mutations: playlist create / add / queue | `UserPlaylistSource` + `EnqueueAsync` | **Implemented** | create (sidebar +), add-to-playlist (default target), add-to-queue, batch selection actions — all wired with toasts; session-scoped user playlists are playable (player context resolver) |
+| Mutations: playlist picker / reorder / folders | `IMutationSource` | **Seam** | the remaining increment — a "choose which playlist" flyout, drag-reorder, the folder tree, and durable persistence of user playlists |
+| Federated playback / remote / session | `Federated*` | **Seam (deferred)** | per §4.3, deferred until a 2nd real source; the hook is `registry.OfCapability(cap)`, now exercised by the registered facet sources |
 
 ---
 
 ## 10. File map
 
-- **Seam & domain (Wavee.Core):** `Domain/Models.cs`; `Library/Library.cs` (IMusicLibrary + `TrackPage` +
-  `StreamTracksAsync` + `GetHomeAsync`); `Library/HomeFeed.cs`; `Sources/SourceCapabilities.cs`;
-  `Sources/ICatalogSource.cs` (defines `ISource` + `ICatalogSource`); `Sources/SeamPorts.cs` (defines
-  `IPlaybackSource`/`IRemoteSource`/`ISessionSource`/`ILyricsSource`/`IMutationSource`);
-  `Sources/SourceRegistry.cs`; `Sources/AggregateCatalog.cs`.
+- **Seam & domain (Wavee.Core):** `Domain/Models.cs` (incl. `Show`/`Episode`, `Owner`, and the provider-mapping
+  groundwork); `Library/Library.cs` (IMusicLibrary + `TrackPage` + `StreamTracksAsync` + `GetHomeAsync` +
+  `GetShows/ShowAsync`); `Library/HomeFeed.cs`; `Sources/SourceCapabilities.cs`; `Sources/ICatalogSource.cs` (defines
+  `ISource` + `ICatalogSource`); `Sources/SeamPorts.cs` (defines `IPlaybackSource`/`IRemoteSource`/`ISessionSource`/
+  `ILyricsSource`/`IMutationSource`/`IPodcastSource`); `Sources/SourceRegistry.cs`; `Sources/AggregateCatalog.cs`;
+  `Sources/LocalMutationSource.cs` (Mutations); `Sources/UserPlaylistSource.cs` (user playlists); `Sources/LocalSource.cs`
+  (local files); `Sources/FakePodcastSource.cs` (podcasts); `Sources/ProviderMappings.cs` (`ProviderRef`/`ProviderPolicy`/
+  `PlayableTrack`); `Sources/CollectionEvents.cs` (the `ICollectionEvents` off-page library-delta seam, §3/§6).
 - **Spotify adapter (Wavee.Core/Spotify):** `SpotifyExport.cs` (parse), `SpotifyExportMapper.cs` (ACL),
   `SpotifyHomeComposer.cs` (grouping), `SpotifyExportSource.cs`.
-- **Fake adapter:** `Wavee.Core/Fakes/FakeSource.cs` (wraps `FakeData`).
-- **Wiring/assets:** `app/Wavee/App/Services.cs`; `app/Wavee/Wavee.csproj`; `app/Wavee/assets/spotify/*.json`.
-- **UI:** `Features/Home/HomePage.cs`; `Features/Detail/{DetailPage, DetailShell, DetailTracks, DetailConfig}.cs`;
-  `Components/NavPreview.cs`. Reuse: `Loadable<T>`, `Skel.Region`/`StatefulRegion`, `Surfaces.Artwork`,
-  `PagedShelf`/`AutoGrid`/Spotlight, `PlaybackBridge`.
+- **Fake adapter:** `Wavee.Core/Fakes/FakeSource.cs` (wraps `FakeData`); the in-process facet fakes
+  (`FakePlaybackProvider` = Playback+Lyrics, `FakeSpotifySession` = Session, `FakeConnectDevices` = Remote) now
+  implement their seam ports + register in the source list.
+- **Wiring/assets:** `app/Wavee/App/Services.cs` (the unified `SourceRegistry`); `app/Wavee/App/LibraryBridge.cs`
+  (the Mutations Core→Signal bridge); `app/Wavee/App/LibraryStore.cs` (the root collection + per-entity detail cache —
+  cache-first instant navigation + off-page freshness, §3/§6); `app/Wavee/Wavee.csproj`; `app/Wavee/assets/spotify/*.json`;
+  `assets/loc/en-US.json`.
+- **UI:** `Features/Home/HomePage.cs`; the ONE shared detail surface `Features/Detail/{DetailPage, DetailShell,
+  DetailRail, DetailTracks, DetailConfig, EpisodeList}.cs` — album / playlist / liked / local / user-playlist AND
+  **podcast shows** (`DetailKind.Show` renders `EpisodeList` instead of the track table); the separate `ArtistPage.cs`
+  (the magazine layout, the one exception); `Features/Search/SearchPage.cs` (filter chips + unified results +
+  browse-all); `Features/Library/LibraryPage.cs` (the Albums / Artists / Podcasts **master–detail**, right pane reuses
+  the shared detail surface); `Components/{NavPreview, SaveButton}.cs`. Reuse: `Loadable<T>`, `LibraryStore`,
+  `Skel.Region`/`StatefulRegion`, `Surfaces.Artwork`, `PagedShelf`/`AutoGrid`/`SelectorBar`, `PlaybackBridge`, `LibraryBridge`.
 
 ---
 

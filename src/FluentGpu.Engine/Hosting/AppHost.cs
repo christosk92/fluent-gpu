@@ -779,8 +779,6 @@ public sealed class AppHost : IDisposable, IScrollHost
         ref ScrollState sc = ref _scene.ScrollRef(node);
         sc.FlingVelocity = velocityPxPerS;
         sc.ScrollMode = 1;   // ScrollAnimator Fling mode
-        sc.TouchpadIdleMs = 0f;
-        sc.TouchpadInertiaStarted = false;
         // A snap-configured viewport re-solves the velocity on the FIRST fling tick (ScrollAnimator) so the same decay
         // curve lands EXACTLY on a snap value — capture the launch offset (the impulse "ignored value" anchor) and reset
         // the one-shot retarget latch here. A non-snap viewport ignores both.
@@ -797,6 +795,7 @@ public sealed class AppHost : IDisposable, IScrollHost
     bool IScrollHost.WriteScrollOffset(NodeHandle viewport, float absoluteOffset) => _dispatcher.WriteScrollOffset(viewport, absoluteOffset);
     void IScrollHost.WriteOverscroll(NodeHandle viewport, float overscrollBandPx) => _dispatcher.WriteOverscroll(viewport, overscrollBandPx);
     NodeHandle IScrollHost.ScrollableUnder(Point2 windowPt) => _dispatcher.ScrollableUnder(windowPt);
+    NodeHandle IScrollHost.ScrollableUnderForAxis(Point2 windowPt, bool horizontal) => _dispatcher.ScrollableUnderForAxis(windowPt, horizontal);
     void IScrollHost.RequestFrame() => WakeFrame();
 
     /// <summary>Run one full frame: pump + input, then paint (the reactive flush + layout + record happen in Paint).</summary>
@@ -1138,6 +1137,7 @@ public sealed class AppHost : IDisposable, IScrollHost
             _connected.Settle();                               // 7 retire landed shared-element flies (reveal dest, unpin, free overlay)
             _interact.Tick(dtMs);                              // 7 eased hover/press
             _scene.AdvanceBrushAnims(dtMs);                    // 7 implicit BrushTransition (logical state flips)
+            _dispatcher.TickTouchpad(dtMs);                    // 7 precision-touchpad pan: ease applied offset + lift→inertia (before the pump so the fling it seeds runs this frame)
             _scrollSources.Pump(dtMs);                         // 7 smooth scroll + scrollbar fade (integrator + optional OS source)
             ApplyStickyOffsets();                              // 7 CSS position:sticky pins (after every scroll write)
             _repeat.Tick(dtMs);                                // 7 RepeatButton auto-repeat (held → re-fire click)

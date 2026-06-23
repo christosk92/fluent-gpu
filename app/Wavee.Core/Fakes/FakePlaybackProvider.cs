@@ -7,7 +7,7 @@ namespace Wavee.Core;
 /// (<see cref="IPlaybackState"/>), and lyrics (<see cref="ILyricsProvider"/>). A 1 Hz clock advances position while
 /// playing and emits <see cref="PositionTicks"/> — modelling the real IPC snapshot cadence the UI interpolates between.
 /// </summary>
-public sealed class FakePlaybackProvider : IPlaybackPlayer, IPlaybackState, ILyricsProvider, IDisposable
+public sealed class FakePlaybackProvider : IPlaybackPlayer, IPlaybackState, ILyricsProvider, IPlaybackSource, ILyricsSource, IDisposable
 {
     readonly SimpleSubject<IPlaybackState> _changes = new();
     readonly SimpleSubject<long> _ticks = new();
@@ -18,6 +18,11 @@ public sealed class FakePlaybackProvider : IPlaybackPlayer, IPlaybackState, ILyr
     /// <summary>Simulated audio-resolve / buffering latency before a freshly-started track begins to play — the row's
     /// #-cell spinner and the player-bar activity sweep show for this long, then playback starts.</summary>
     const int BufferingMs = 700;
+
+    /// <summary>Optional external context resolver (wired by the composition root to query user playlists etc.). Tried
+    /// before the built-in synthetic <see cref="FakeData.ContextTracks"/>, so a played context the fake data doesn't
+    /// know (a user-created playlist) still resolves to its real tracks.</summary>
+    public Func<string, IReadOnlyList<Track>?>? ContextResolver { get; set; }
 
     public FakePlaybackProvider()
     {
@@ -47,13 +52,20 @@ public sealed class FakePlaybackProvider : IPlaybackPlayer, IPlaybackState, ILyr
 
     public IPlaybackState State => this;
 
+    // ── ISource: the Playback + Lyrics facets, declared so this fake registers as a capability source in the federation
+    // registry (docs/architecture.md §4.2). The legacy IPlaybackPlayer/ILyricsProvider stay the app-facing surface; a
+    // future FederatedPlayback routes play(contextUri) to the OWNING IPlaybackSource via registry.OfCapability(Playback).
+    public string Id => "local-player";
+    public bool Owns(string uri) => true;   // the in-process player can play any resolvable context (one player today)
+    public SourceCapabilities Capabilities => SourceCapabilities.Playback | SourceCapabilities.Lyrics;
+
     // ── IPlaybackPlayer (commands) ──────────────────────────────────────────────────────────────────────────────────
     public async Task PlayAsync(string contextUri, int startIndex = 0, CancellationToken ct = default)
     {
         // Resolve the context to ITS ordered track list (the same deterministic catalog the detail page loads) and
         // replace the queue with it, so we start the ACTUAL track the clicked row shows (startIndex into THIS context),
         // not a fixed default queue. Next/Previous then walk this context.
-        var tracks = FakeData.ContextTracks(contextUri);
+        var tracks = ContextResolver?.Invoke(contextUri) is { Count: > 0 } ext ? ext : FakeData.ContextTracks(contextUri);
         if (tracks.Count == 0) return;
         ContextUri = contextUri;          // the now-playing context (cards compare their uri to this)
         _queue.Clear();
@@ -63,7 +75,18 @@ public sealed class FakePlaybackProvider : IPlaybackPlayer, IPlaybackState, ILyr
         _cursor = Math.Clamp(startIndex, 0, _queue.Count - 1);
         await StartWithBufferingAsync(_queue[_cursor].Track, ct).ConfigureAwait(false);
     }
-    public Task PlayTrackAsync(string trackUri, CancellationToken ct = default) { IsPlaying = true; Bump(); return Task.CompletedTask; }
+    public Task PlayTrackAsync(string trackUri, CancellationToken ct = default)
+    {
+        // Resolve the uri to its track and start it as a standalone single (a 1-item queue, no owning context) — so
+        // playing a track from search / a one-off row actually loads + plays THAT track, not just a play-state flip.
+        if (FakeData.TrackByUri(trackUri) is not { } t) { IsPlaying = true; Bump(); return Task.CompletedTask; }
+        ContextUri = null;
+        _queue.Clear();
+        _queue.Add(new QueueEntry("q0", t, QueueBucket.NowPlaying, false));
+        Queue = _queue.ToArray();
+        _cursor = 0;
+        return StartWithBufferingAsync(t, ct);
+    }
     public Task PauseAsync(CancellationToken ct = default) { IsPlaying = false; Bump(); return Task.CompletedTask; }
     public Task ResumeAsync(CancellationToken ct = default) { IsPlaying = true; Bump(); return Task.CompletedTask; }
     public Task NextAsync(CancellationToken ct = default) { _cursor = (_cursor + 1) % _queue.Count; Load(_queue[_cursor].Track); Bump(); return Task.CompletedTask; }
@@ -83,6 +106,17 @@ public sealed class FakePlaybackProvider : IPlaybackPlayer, IPlaybackState, ILyr
     public Task RemoveFromQueueAsync(string entryId, CancellationToken ct = default)
     {
         if (_queue.RemoveAll(q => q.EntryId == entryId) > 0) { Queue = _queue.ToArray(); Bump(); }
+        return Task.CompletedTask;
+    }
+
+    public Task EnqueueAsync(string trackUri, CancellationToken ct = default)
+    {
+        if (FakeData.TrackByUri(trackUri) is { } t)
+        {
+            _queue.Add(new QueueEntry("uq" + _queue.Count + "_" + t.Id, t, QueueBucket.UserQueue, false));
+            Queue = _queue.ToArray();
+            Bump();
+        }
         return Task.CompletedTask;
     }
 

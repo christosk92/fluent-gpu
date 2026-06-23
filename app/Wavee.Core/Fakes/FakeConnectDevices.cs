@@ -1,8 +1,13 @@
 namespace Wavee.Core;
 
 /// <summary>Four hard-coded Connect devices; <see cref="TransferAsync"/> flips the active one.</summary>
-public sealed class FakeConnectDevices : IConnectDevices
+public sealed class FakeConnectDevices : IConnectDevices, IRemoteSource
 {
+    // ── ISource: the Remote/Connect facet, declared for the federation registry (docs/architecture.md §4.2). ──
+    public string Id => "local-remote";
+    public bool Owns(string uri) => false;
+    public SourceCapabilities Capabilities => SourceCapabilities.Remote;
+
     readonly SimpleSubject<IReadOnlyList<PlaybackDevice>> _changed = new();
     PlaybackDevice[] _devices =
     [

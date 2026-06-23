@@ -84,8 +84,8 @@ sealed class ShellToolbar : ReactiveComponent
                     // Fills the omnibar slot, capped at 720 (shrinks below that on a narrow window).
                     AutoSuggestBox.Create(NoSuggestions, Loc.Get(Strings.Shell.SearchPlaceholder),
                         grow: 1f, maxFillWidth: 720f, text: _searchText,
-                        onQuerySubmitted: _ => _go("search", null),
-                        onSuggestionChosen: _ => _go("search", null),
+                        onQuerySubmitted: q => _go("search", string.IsNullOrWhiteSpace(q) ? null : q),
+                        onSuggestionChosen: q => _go("search", string.IsNullOrWhiteSpace(q) ? null : q),
                         minHeight: 36f, cornerRadius: 18f),
                 ],
             },

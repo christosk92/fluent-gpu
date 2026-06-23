@@ -19,6 +19,8 @@ public interface IPlaybackPlayer
     Task SetRepeatAsync(RepeatMode mode, CancellationToken ct = default);
     Task MoveQueueAsync(string entryId, int toIndex, CancellationToken ct = default);
     Task RemoveFromQueueAsync(string entryId, CancellationToken ct = default);
+    /// <summary>Append a track to the user-queue (the "Add to queue" affordance).</summary>
+    Task EnqueueAsync(string trackUri, CancellationToken ct = default);
     IPlaybackState State { get; }
 }
 

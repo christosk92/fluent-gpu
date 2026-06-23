@@ -1,13 +1,18 @@
 namespace Wavee.Core;
 
 /// <summary>In-process fake session: connects instantly to a fake premium user. No network, no auth.</summary>
-public sealed class FakeSpotifySession : ISpotifySession
+public sealed class FakeSpotifySession : ISpotifySession, ISessionSource
 {
     readonly SimpleSubject<AuthStatus> _status = new(AuthStatus.LoggedOut);
 
     public AuthStatus Status { get; private set; } = AuthStatus.LoggedOut;
     public WaveeUser? CurrentUser { get; private set; }
     public IObservable<AuthStatus> StatusChanged => _status;
+
+    // ── ISource: the Session facet, declared for the federation registry (docs/architecture.md §4.2). ──
+    public string Id => "local-session";
+    public bool Owns(string uri) => false;
+    public SourceCapabilities Capabilities => SourceCapabilities.Session;
 
     public async Task<bool> ConnectAsync(CancellationToken ct = default)
     {

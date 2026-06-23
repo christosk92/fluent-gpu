@@ -19,6 +19,8 @@ sealed class WaveeApp : Component
     public override Element Render()
     {
         var bridge = _services.Playback;
+        var libBridge = _services.LibraryBridge;
+        var store = _services.LibraryStore;
 
         // Follow the OS dark-mode / accent live WHILE the user hasn't pinned an explicit theme (mode == System). The host
         // relays WM_SETTINGCHANGE on the UI thread; we re-read the OS state, apply it, and animate the in-place re-theme.
@@ -38,6 +40,8 @@ sealed class WaveeApp : Component
         Context.UseEffect(() =>
         {
             bridge.Activate(post);
+            libBridge.Activate(post);
+            store.Activate(post);
             _ = _services.Session.ConnectAsync();
             _ = _services.Player.ResumeAsync();
             _services.Log.Info("app", "Shell online; playback started");
@@ -47,7 +51,9 @@ sealed class WaveeApp : Component
 
         var root = Ctx.Provide(Services.Slot, _services,
             Ctx.Provide(PlaybackBridge.Slot, bridge,
-                Embed.Comp(() => new WaveeShell(_services.Settings))));
+            Ctx.Provide(LibraryBridge.Slot, libBridge,
+            Ctx.Provide(LibraryStore.Slot, store,
+                Embed.Comp(() => new WaveeShell(_services.Settings))))));
 
         // Debug-build FPS HUD on top (const-folds out of Release; subscribes to the host's per-frame stats). The HUD pill is
         // pinned top-right by a full-bleed PASS-THROUGH positioner (a PLAIN BoxEl — its HitTestPassThrough IS honoured, unlike

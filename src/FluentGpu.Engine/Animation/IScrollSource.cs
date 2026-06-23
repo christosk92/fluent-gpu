@@ -27,6 +27,13 @@ public interface IScrollHost
     /// contact-down).</summary>
     NodeHandle ScrollableUnder(Point2 windowPt);
 
+    /// <summary>The viewport an OS manipulation should bind for a pan/wheel on a KNOWN axis — the nearest scrollable
+    /// ancestor whose orientation matches <paramref name="horizontal"/> AND has room to move, climbing PAST a cross-axis
+    /// inner scroller (so a vertical pan over a horizontal shelf reaches the vertical page behind it instead of being
+    /// eaten by the shelf). Mirrors the wheel notch path's <c>ScrollAxis</c> routing so DM and the fallback agree on the
+    /// target. Null ⇒ nothing on this axis is scrollable under the point (the caller lets the wheel fall through).</summary>
+    NodeHandle ScrollableUnderForAxis(Point2 windowPt, bool horizontal);
+
     /// <summary>Request another frame (keep the loop alive while an OS manipulation/inertia is running).</summary>
     void RequestFrame();
 }

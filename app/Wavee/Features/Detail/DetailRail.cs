@@ -96,7 +96,9 @@ static class DetailRail
                     Children =
                     [
                         Fab(Icons.Shuffle, h.Shuffle),
-                        Fab(cfg.Heart == HeartMode.Follow ? Icons.Add : Icons.Heart, () => { /* TODO: ILibraryMutations */ }),
+                        m.ContextUri is { Length: > 0 } saveUri
+                            ? Embed.Comp(() => new SaveButton(saveUri, 16f, FabSize))
+                            : Fab(Icons.Heart, () => { }),
                         Fab(Icons.Share, () => { /* TODO: share */ }),
                     ],
                 },
@@ -107,8 +109,8 @@ static class DetailRail
         // rail is tight, and only drop to the next line when even condensed they won't fit (whole pill → never clips).
         kids.Add(SecondaryPills(
         [
-            (cfg.Heart == HeartMode.Follow ? Loc.Get(Strings.Detail.CopyToPlaylist) : Loc.Get(Strings.Detail.AddToPlaylist), () => { /* TODO */ }),
-            (Loc.Get(Strings.Detail.AddToQueue), () => { /* TODO */ }),
+            (cfg.Heart == HeartMode.Follow ? Loc.Get(Strings.Detail.CopyToPlaylist) : Loc.Get(Strings.Detail.AddToPlaylist), h.AddToPlaylist),
+            (Loc.Get(Strings.Detail.AddToQueue), h.AddToQueue),
         ], cover));
 
         // Description / release blurb — an HTML fragment (links to artists/playlists, bold): parse → rich spans (links
@@ -192,7 +194,9 @@ static class DetailRail
             [
                 PlayPill(h.Accent, h.PlayAll),
                 Fab(Icons.Shuffle, h.Shuffle),
-                Fab(cfg.Heart == HeartMode.Follow ? Icons.Add : Icons.Heart, () => { /* TODO */ }),
+                m.ContextUri is { Length: > 0 } saveUri
+                    ? Embed.Comp(() => new SaveButton(saveUri, 16f, FabSize))
+                    : Fab(Icons.Heart, () => { }),
                 Fab(Icons.Share, () => { /* TODO */ }),
             ],
         };

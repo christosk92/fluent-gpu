@@ -179,22 +179,10 @@ public struct ScrollState
     public float ViewportW, ViewportH;    // Layout-published viewport inner size (for clamp + window math)
     public byte  Orientation;             // 0 = vertical scroll (Y), 1 = horizontal scroll (X)
     public float FlingVelocity;           // touch-fling speed along Orientation (px/s, signed in offset space; Input seeds, Animation friction-decays)
-    public byte  ScrollMode;              // 0 = TargetChase, 1 = touch fling, 2 = precision-touchpad tracking/tail
+    public byte  ScrollMode;              // 0 = TargetChase, 1 = touch fling, 3 = mouse-wheel momentum fling
     public bool  FlingRetargeted;         // a snap-configured fling has had its velocity re-solved to land on the snap value
                                           // (the ScrollAnimator does this ONCE on fling entry; reset when a fresh fling is seeded).
     public float FlingFromOffset;         // the offset captured when the fling was seeded (the impulse "ignored value" anchor)
-    // Precision touchpad: the PAL classifies the wheel stream by its hi-res delta signature (non-120-multiples; the OS
-    // device API is an unreliable fast-path only). Input applies each high-resolution packet directly (1:1 tracking,
-    // like WinUI during the pan); the moment the stream goes quiet ScrollAnimator continues the measured velocity as a
-    // friction glide on the very next frame (no quiet-window freeze). Velocity measured at the true end of the stream
-    // means a driver that streamed its own decay can't double the glide.
-    public uint  TouchpadLastTimestampMs; // last coalesced OS packet timestamp; 0 = no velocity baseline yet
-    public float TouchpadIdleMs;          // time since the last packet (phase-7 clock; 0 = a packet arrived this frame)
-    public bool  TouchpadInertiaStarted;  // false while a packet stream is tracking, true once the post-lift glide runs
-    public float TouchpadRawOffset;       // touchpad "raw" position that may travel PAST the clamp when the scroll chain
-                                          // is fully pinned — the touch-pan model: ApplyTouchPan splits it into the
-                                          // in-range offset + the damped rubber-band, so a precision-touchpad overpan
-                                          // rubber-bands + springs back exactly like a touch overpan (WinUI ScrollPresenter).
     public float FlingSnapTarget;         // the exact snap value a retargeted fling lands on (the integrator writes THIS on
                                           // settle, so discrete-integration drift never leaves it a fraction off the snap). NaN = no snap target.
     public bool  ContentSized;            // auto-size to content then clamp (popup lists); false = hard viewport
@@ -227,9 +215,11 @@ public struct ScrollState
     // (the SetScrollOffset clamp contract is untouched: wheel/keyboard/programmatic stay hard-clamped, no band). On
     // release the band springs back to 0 with the critically-damped StepSpring in phase 7 (TransformDirty only). Signed
     // in offset space (negative = pulled past the top/left, positive = past the bottom/right). 0 at rest.
-    public float OverscrollPx;            // current visual displacement past the clamp (Input writes on overpan; Animation springs back)
-    public float OverscrollVel;           // spring velocity for the release spring-back (px/s; 0 while the finger drives it)
-    public bool  Overscrolling;           // a finger is actively driving the band (no spring-back yet); cleared on release
+    public float OverscrollPx;            // current visual displacement past the clamp (Animation springs it back to 0)
+    public float OverscrollVel;           // spring velocity for the release spring-back (px/s)
+    public bool  Overscrolling;           // TOUCH only: finger drives the band 1:1 (no spring-back yet); cleared on pointer-up
+    public bool  OverscrollDmOwned;       // band is driven by the OS DirectManipulation source (its native overscroll) — the
+                                          // engine animator must NOT spring it (DM writes it every frame; a second spring fights it)
 
     public float FadeT;                   // scrollbar indicator opacity 0..1 (eased in on scroll/hover, auto-hides after idle)
     public float ExpandT;                 // WinUI conscious scrollbar expansion 0=thin indicator, 1=full gutter + buttons

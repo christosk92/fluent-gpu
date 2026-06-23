@@ -105,51 +105,24 @@ public sealed class ScrollAnimator
 
     /// <summary><see cref="ScrollState.ScrollMode"/> value for an active touch fling (vs 0 = TargetChase).</summary>
     private const byte FlingMode = 1;
-    /// <summary>Precision-touchpad direct tracking / measured post-stream kinetic tail.</summary>
-    private const byte TouchpadMode = 2;
     /// <summary>Mouse-wheel momentum fling (browser-like coast): seeded by InputDispatcher's smooth-wheel path, decayed by
     /// <see cref="WheelFlingDecayPerS"/>, and — unlike a touch fling — hard-clamps at the edge with NO rubber-band/snap.</summary>
     private const byte WheelFlingMode = 3;
-    /// <summary>How long a rubber-band overpan is HELD across inter-packet gaps before a real gesture-end releases it to
-    /// the spring-back. Longer than the ~30ms intra-gesture packet gaps (so a momentary gap mid-overpan doesn't
-    /// spring-then-reseed — the overscroll jitter), short enough to feel responsive on lift. ms.</summary>
-    private const float TouchpadOverscrollReleaseMs = 90f;
-    /// <summary>Quiet time after the last packet before the post-lift inertial glide starts. The content tracks the
-    /// fingers 1:1 while the stream is live AND through brief inter-packet gaps below this — coasting during those gaps
-    /// (mid-gesture) makes the content run ahead and snap back, the "laggy + sudden jump" feel. Just above the ~30ms
-    /// intra-gesture packet gap so a real lift is distinguished from a momentary stutter; small enough that the glide
-    /// still feels immediate. ms.</summary>
-    private const float TouchpadGlideStartMs = 40f;
-    /// <summary>Diagnostic isolation: FG_TP_NOGLIDE=1 disables the post-lift inertial glide entirely (the touchpad then
-    /// tracks 1:1 and stops dead on lift), so a "pure tracking" baseline can be A/B-tested against the full WinUI feel.</summary>
-    private static readonly bool s_noGlide = System.Environment.GetEnvironmentVariable("FG_TP_NOGLIDE") == "1";
-    /// <summary>Touchpad glide-into-edge BOUNCE — ON by default; FG_TP_NOBOUNCE=1 disables it (matches the input-side
-    /// overscroll). The earlier "up/down glitch" was a dropped-frame GPU spike (fixed by triple-buffering), not the bounce.</summary>
-    private static readonly bool s_tpBounce = System.Environment.GetEnvironmentVariable("FG_TP_NOBOUNCE") != "1";
 
     // Feel knobs seeded from the active ScrollTuning. The public consts above remain the WinUiLike DEFAULTS (and the
     // values FlipView/SwipeControl derive their flick projection from); Tick reads these instance fields so on-device
-    // tuning is a value edit, not a logic edit. HeadlessGolden == WinUiLike for all four, so determinism gates are
-    // unperturbed.
+    // tuning is a value edit, not a logic edit. HeadlessGolden == WinUiLike for all, so determinism gates are unperturbed.
     private readonly float _wheelEaseTauMs;
-    private readonly float _touchpadDecayPerS;
-    private readonly float _touchpadMinInertiaPxPerS;
-    private readonly float _touchpadSettlePxPerS;
     private readonly float _flingDecayPerS;
     private readonly float _flingSettleVelPxPerS;
-    private readonly float _overscrollSpringOmega;
 
     public ScrollAnimator(SceneStore scene, ScrollTuning? tuning = null)
     {
         _scene = scene;
         var t = tuning ?? ScrollTuning.WinUiLike;
         _wheelEaseTauMs = t.WheelEaseTauMs;
-        _touchpadDecayPerS = t.TouchpadDecayPerS;
-        _touchpadMinInertiaPxPerS = t.TouchpadMinInertiaPxPerS;
-        _touchpadSettlePxPerS = t.TouchpadSettlePxPerS;
         _flingDecayPerS = t.FlingDecayPerS;
         _flingSettleVelPxPerS = t.FlingSettleVelocityPxPerS;
-        _overscrollSpringOmega = t.OverscrollSpringOmega;
     }
     public Action RequestRerender { get; set; } = static () => { };
 
@@ -165,9 +138,9 @@ public sealed class ScrollAnimator
     /// the band toward 0 through here, NEVER the offset — the clamp contract is never relaxed. Null = no band write wired.</summary>
     public Action<NodeHandle, float>? OverscrollWrite { get; set; }
 
-    /// <summary>Critically-damped spring frequency for the overscroll release bounce-back (rad/s) — the same
-    /// <see cref="DragController.FollowOmega"/> the drag-ghost lag spring uses (semi-implicit Euler, ≤16ms substeps).</summary>
-    public const float OverscrollSpringOmega = 38f;
+    /// <summary>Critically-damped spring frequency for the overscroll release bounce-back (rad/s) — delegates to
+    /// <see cref="OverscrollPhysics.SpringOmegaRadPerS"/>.</summary>
+    public const float OverscrollSpringOmega = 42f;
 
     // HasActive EXCLUDES parked viewports (a backgrounded tab mid-fling/transition must not keep the loop awake).
     public bool HasActive => _active.Count - _parkedActive.Count > 0;
@@ -201,8 +174,6 @@ public sealed class ScrollAnimator
         ref ScrollState sc = ref _scene.ScrollRef(n);
         sc.ScrollMode = 0;
         sc.FlingVelocity = 0f;
-        sc.TouchpadIdleMs = 0f;
-        sc.TouchpadInertiaStarted = false;
     }
 
     /// <summary>Reveal a viewport's scrollbar (pointer is over the scrollable area) and reset its idle timer so it
@@ -230,7 +201,6 @@ public sealed class ScrollAnimator
     public void Tick(float dtMs)
     {
         if (_active.Count == 0) return;
-        float kOff = 1f - MathF.Exp(-dtMs / _wheelEaseTauMs);   // unified wheel/scrollbar offset smoothing (the feel knob)
         for (int i = _active.Count - 1; i >= 0; i--)
         {
             NodeHandle n = _active[i];
@@ -245,13 +215,7 @@ public sealed class ScrollAnimator
             // Target away from Offset (SetScrollOffset keeps Target==Offset every fling tick) → yield to TargetChase. ──
             bool moved;
             bool flinging = false;
-            if (sc.ScrollMode == TouchpadMode && MathF.Abs(tgt - off) < 0.5f)
-            {
-                moved = TickTouchpad(n, ref sc, horizontal, off, dtMs, out flinging);
-                off = horizontal ? sc.OffsetX : sc.OffsetY;
-                tgt = horizontal ? sc.TargetX : sc.TargetY;
-            }
-            else if ((sc.ScrollMode == FlingMode || sc.ScrollMode == WheelFlingMode) && MathF.Abs(tgt - off) < 0.5f)
+            if ((sc.ScrollMode == FlingMode || sc.ScrollMode == WheelFlingMode) && MathF.Abs(tgt - off) < 0.5f)
             {
                 // Snap retarget (once, on fling entry): pick the snap value the natural decay would settle nearest, then
                 // re-solve the velocity so the SAME exponential curve lands EXACTLY there. With v *= decay^dt per tick the
@@ -332,8 +296,10 @@ public sealed class ScrollAnimator
                         if (sc.ScrollMode == FlingMode && (hitClamp || !moved) && MathF.Abs(v) >= FlingBounceMinPxPerS && !sc.Overscrolling)
                         {
                             float viewport = horizontal ? sc.ViewportW : sc.ViewportH;
-                            sc.OverscrollPx = FlingOverscrollBand(v / -MathF.Log(_flingDecayPerS), viewport);
-                            sc.OverscrollVel = v;   // seed the rubber-band spring (offset-space sign points past the hit edge)
+                            float band = sc.OverscrollPx, bandVel = sc.OverscrollVel;
+                            OverscrollPhysics.SeedFromEdgeMomentum(ref band, ref bandVel, v, viewport, _flingDecayPerS);
+                            sc.OverscrollPx = band;
+                            sc.OverscrollVel = bandVel;
                         }
                         sc.ScrollMode = 0;
                         sc.FlingVelocity = 0f;
@@ -348,12 +314,7 @@ public sealed class ScrollAnimator
             else
             {
                 if (sc.ScrollMode == FlingMode || sc.ScrollMode == WheelFlingMode) { sc.ScrollMode = 0; sc.FlingVelocity = 0f; }   // retargeted away → TargetChase
-                if (sc.ScrollMode == TouchpadMode)
-                {
-                    sc.ScrollMode = 0;
-                    sc.FlingVelocity = 0f;
-                    sc.TouchpadInertiaStarted = false;
-                }
+                float kOff = 1f - MathF.Exp(-dtMs / _wheelEaseTauMs);   // unified wheel/scrollbar offset smoothing (the feel knob)
                 float oldOff = off;
                 off += (tgt - off) * kOff;
                 if (MathF.Abs(tgt - off) < 0.5f) off = tgt;
@@ -385,33 +346,42 @@ public sealed class ScrollAnimator
                 }
             }
 
-            // ── rubber-band overscroll spring-back (touch-pan release past the clamp) ─────────────────────
-            // While a finger drives the band (Overscrolling) Input owns OverscrollPx and the animator leaves it alone. On
-            // release Input clears Overscrolling; here the critically-damped spring (the DragController StepSpring shape,
-            // OverscrollSpringOmega) pulls the displacement to 0 — TransformDirty only, through OverscrollWrite (the band
-            // rides the SAME content translation as the unchanged -offset, so the offset/clamp contract is untouched). The
-            // band's existence keeps the node armed + the thin indicator revealed until it settles at exactly 0.
+            // ── rubber-band overscroll spring ─────────────────────────────────────────────────────────────
+            // Touch = the finger drives OverscrollPx 1:1 (Overscrolling) then a spring pulls it to 0 on pointer-up. All
+            // writes are TransformDirty-only through OverscrollWrite. (Precision-touchpad overpan is owned by the OS
+            // DirectManipulation source — the OverscrollDmOwned branch below — never an engine spring.)
             bool bandActive = false;
-            if ((sc.OverscrollPx != 0f || sc.OverscrollVel != 0f) && !sc.Overscrolling)   // released touch-pan overpan OR a seeded fling-into-edge bounce → spring back to 0
+            if (sc.OverscrollDmOwned)
             {
-                float p = sc.OverscrollPx, vsp = sc.OverscrollVel;
-                float remaining = dtMs;
-                while (remaining > 0f)
-                {
-                    float h = MathF.Min(remaining, 16f) / 1000f;   // ≤16ms substeps for ω·dt < 2 stability
-                    remaining -= 16f;
-                    vsp += (_overscrollSpringOmega * _overscrollSpringOmega * (0f - p) - 2f * _overscrollSpringOmega * vsp) * h;
-                    p += vsp * h;
-                }
-                if (MathF.Abs(p) <= 0.05f && MathF.Abs(vsp) <= 1f) { p = 0f; vsp = 0f; }   // settled at the edge
+                // DirectManipulation owns this band (its native OS overscroll). OBSERVE ONLY — never spring it: DM writes
+                // the band every frame and settles it to 0 itself, so a second engine spring just fights it and the edges
+                // jitter (the diagnostics caught 266 engine-spring writes racing 641 DM writes). Stay armed while it's non-0.
+                bandActive = sc.OverscrollPx != 0f;
+            }
+            else if ((sc.OverscrollPx != 0f || sc.OverscrollVel != 0f) && !sc.Overscrolling)
+            {
+                float p = sc.OverscrollPx, vsp = sc.OverscrollVel;   // TOUCH release spring-back to 0 (unchanged)
+                bool settled = OverscrollPhysics.StepSpring(ref p, ref vsp, dtMs, OverscrollPhysics.SpringOmegaRadPerS);
                 sc.OverscrollVel = vsp;
-                OverscrollWrite?.Invoke(n, p);            // writes OverscrollPx + re-applies the content transform
+                OverscrollWrite?.Invoke(n, p);
                 if (FluentGpu.Foundation.ScrollLog.On) FluentGpu.Foundation.ScrollLog.Line($"  spring band={p:0.00} v={vsp:0}");
-                bandActive = p != 0f;
+                bandActive = !settled;
             }
             else if (sc.Overscrolling && sc.OverscrollPx != 0f)
             {
-                bandActive = true;   // a finger is holding the band displaced — stay armed (the indicator shows through it)
+                bandActive = true;   // a touch finger is holding the band displaced — stay armed (the indicator shows through it)
+            }
+
+            // DIAGNOSTIC (FG_SCROLL_LOG / FG_DM_PROBE): per-frame state of this scroll node WHEN anything is moving. The
+            // timestamped intervals expose stutter/gaps (raw values hide it); an "anim" line that MOVES offset/band during a
+            // DirectManipulation gesture (which logs its own "DM" lines) exposes the engine fighting DM — DM's log stays
+            // clean while the rendered frames alternate writers ("looks fine, feels like dogshit").
+            if (FluentGpu.Foundation.ScrollLog.On)
+            {
+                float offNow = horizontal ? sc.OffsetX : sc.OffsetY;
+                float tgtNow = horizontal ? sc.TargetX : sc.TargetY;
+                if (moved || flinging || bandActive || sc.OverscrollPx != 0f || MathF.Abs(tgtNow - offNow) > 0.5f)
+                    FluentGpu.Foundation.ScrollLog.Line($"anim    off={offNow:0.0} band={sc.OverscrollPx:0.0} tgt={tgtNow:0.0} mode={sc.ScrollMode} moved={(moved ? 1 : 0)} fling={(flinging ? 1 : 0)} bandAct={(bandActive ? 1 : 0)}");
             }
 
             // ── conscious scrollbar state machine (WinUI timings; see class remarks) ──────────────────────
@@ -495,97 +465,6 @@ public sealed class ScrollAnimator
         }
     }
 
-    /// <summary>Precision-touchpad kinetic phase (phase 7). While packets keep arriving the content tracks the fingers
-    /// 1:1 — Input writes each packet through <c>SetScrollOffset</c> and zeros <see cref="ScrollState.TouchpadIdleMs"/>,
-    /// so a fresh-packet frame adds NO coast (exactly WinUI's "track during the pan"). The moment the stream goes quiet
-    /// (one frame with no packet = the fingers lifted) we continue the LAST measured velocity under the shared WinUI
-    /// fling friction, starting on that very frame so there is no quiet-window freeze (the old 42ms hitch). Measuring
-    /// velocity at the true END of the stream means a driver that streamed its own decaying tail can't double the glide
-    /// (it ends slow), while a flick coasts far. Below the glide floor the residual just settles (a gentle scroll that
-    /// ends does not micro-glide). Hitting a clamp with speed converts to the same rubber-band bounce as a touch fling.</summary>
-    private bool TickTouchpad(NodeHandle n, ref ScrollState sc, bool horizontal, float off, float dtMs, out bool active)
-    {
-        sc.TouchpadIdleMs += dtMs;
-
-        // Active rubber-band overpan: HOLD it across brief inter-packet gaps; only a real gesture-end (a longer quiet)
-        // releases it to the phase-7 spring-back. Without this hold, a 1-frame gap mid-overpan clears Overscrolling,
-        // starts the spring, and the next packet re-seeds the raw position from the edge — the spring/re-seed jitter.
-        if (sc.Overscrolling && sc.OverscrollPx != 0f)
-        {
-            if (sc.TouchpadIdleMs < TouchpadOverscrollReleaseMs) { active = true; return false; }   // still pulling → hold the band
-            StopTouchpad(ref sc);   // gesture ended → clears Overscrolling + raw; the spring-back pulls the band to 0
-            active = false;
-            return false;
-        }
-
-        // While the packet stream is live (and across brief inter-packet gaps) the content tracks the fingers 1:1 via
-        // ScrollByTouchpad — HOLD here, do NOT coast. Coasting between packets mid-gesture made the content run ahead and
-        // snap back to the next packet's truth (the "laggy + sudden jump" feel). Only once the stream has been quiet past
-        // the brief lift window do we start the inertial glide from the measured lift velocity.
-        if (sc.TouchpadIdleMs < TouchpadGlideStartMs)
-        {
-            sc.TouchpadInertiaStarted = false;   // re-arm the glide decision for after the lift window
-            active = true;
-            return false;
-        }
-
-        if (!sc.TouchpadInertiaStarted)
-        {
-            // First quiet frame after the stream stopped: below the floor settle on the spot (gentle scroll ends clean),
-            // else begin the glide NOW (no freeze) from the velocity measured over the packet stream.
-            if (s_noGlide || MathF.Abs(sc.FlingVelocity) < _touchpadMinInertiaPxPerS)
-            {
-                if (FluentGpu.Foundation.ScrollLog.On)
-                    FluentGpu.Foundation.ScrollLog.Line($"  tp.STOP {(s_noGlide ? "no-glide" : "below-floor")} v={sc.FlingVelocity:0} (floor {_touchpadMinInertiaPxPerS:0}) off={off:0} idle={sc.TouchpadIdleMs:0}");
-                StopTouchpad(ref sc); active = false; return false;
-            }
-            sc.TouchpadInertiaStarted = true;
-            // A glide that begins while the idle is only just over the lift window (≈ TouchpadGlideStartMs) is a TRUE
-            // lift; one that begins at a much larger idle would mean a mid-gesture stall fired the glide (the glitch).
-            if (FluentGpu.Foundation.ScrollLog.On)
-                FluentGpu.Foundation.ScrollLog.Line($"  tp.GLIDE start v={sc.FlingVelocity:0} off={off:0} idle={sc.TouchpadIdleMs:0}");
-        }
-
-        float dtS = dtMs * 0.001f;
-        float v = sc.FlingVelocity * MathF.Pow(_touchpadDecayPerS, dtS);
-        float requested = off + v * dtS;
-        float z = sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f;
-        float max = horizontal ? MathF.Max(0f, sc.ContentW * z - sc.ViewportW) : MathF.Max(0f, sc.ContentH * z - sc.ViewportH);
-        bool hitClamp = requested < 0f || requested > max;
-        bool moved = ScrollWrite?.Invoke(n, requested) ?? false;
-        if (FluentGpu.Foundation.ScrollLog.On)
-            FluentGpu.Foundation.ScrollLog.Line($"  tp.glide off={off:0}->{requested:0} v={v:0} moved={moved} hitClamp={hitClamp}");
-
-        if (hitClamp || MathF.Abs(v) < _touchpadSettlePxPerS)
-        {
-            if (s_tpBounce && hitClamp && MathF.Abs(v) >= FlingBounceMinPxPerS && !sc.Overscrolling)
-            {
-                float viewport = horizontal ? sc.ViewportW : sc.ViewportH;
-                sc.OverscrollPx = FlingOverscrollBand(v / -MathF.Log(_touchpadDecayPerS), viewport);
-                sc.OverscrollVel = v;
-            }
-            StopTouchpad(ref sc);
-            active = false;
-            if (FluentGpu.Foundation.ScrollLog.On)
-                FluentGpu.Foundation.ScrollLog.Line($"  touchpad COAST END off={off:0} hitClamp={hitClamp} v={v:0}");
-            return moved;
-        }
-
-        sc.FlingVelocity = v;
-        active = true;
-        return moved;
-    }
-
-    private static void StopTouchpad(ref ScrollState sc)
-    {
-        sc.ScrollMode = 0;
-        sc.FlingVelocity = 0f;
-        sc.TouchpadIdleMs = 0f;
-        sc.TouchpadInertiaStarted = false;
-        sc.TouchpadRawOffset = 0f;
-        sc.Overscrolling = false;   // the stream lifted: release any touchpad-driven rubber-band → phase-7 spring-back pulls it to 0
-    }
-
     /// <summary>Retarget an eased track from the live value (mid-flight retargets stay continuous).</summary>
     private static void StartTrack(ref float from, ref float target, ref float clockMs, float current, float to)
     {
@@ -601,15 +480,6 @@ public sealed class ScrollAnimator
         float t = Math.Clamp(clockMs / MathF.Max(1f, durationMs), 0f, 1f);
         if (t >= 1f) return target;
         return from + (target - from) * Easings.Ease(easing, t);
-    }
-
-    private static float FlingOverscrollBand(float excess, float viewport)
-    {
-        if (excess == 0f || viewport <= 0f) return 0f;
-        float limit = 0.1f * viewport;
-        float raw = MathF.Abs(excess);
-        float d = limit * raw / (raw + limit);
-        return excess < 0f ? -d : d;
     }
 
     private void Drop(int i, NodeHandle n, bool forget)

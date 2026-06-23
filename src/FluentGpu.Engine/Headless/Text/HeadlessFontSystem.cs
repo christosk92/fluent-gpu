@@ -119,9 +119,12 @@ public sealed class HeadlessFontSystem : IFontSystem
         float baseline = BaselineOf(in style);
         float total = _spans is not null ? _xs[s.Length] : s.Length * AdvanceOf(in style);
         bool wrapped = style.Wrap != TextWrap.NoWrap && !float.IsInfinity(maxWidth) && total > maxWidth;
+        bool clampW = !float.IsInfinity(maxWidth) && total > maxWidth
+            && style.Trim != TextTrim.None;
         LayoutLines(s.AsSpan(), in style, maxWidth);
         // An unbreakable over-long word keeps the wrapped box width clamped to maxWidth (1 line, width = maxWidth).
-        var size = wrapped ? new Size2(maxWidth, _lineCount * lineH) : new Size2(total, lineH);
+        // NoWrap + Trim/MaxLines still clamps the reported box to maxWidth so virtual grid cells don't spill.
+        var size = wrapped || clampW ? new Size2(maxWidth, _lineCount * lineH) : new Size2(total, lineH);
         // Span runs: publish the link/decoration rect artifacts on the run (recorder bars + dispatcher hyperlinks).
         if (style.SpanRunId != 0 && SpanRunTable.Shared.Resolve(style.SpanRunId) is { } run && ReferenceEquals(run.Spans, _spans))
             PublishSpanArtifacts(run, in style, maxWidth, lineH, baseline);

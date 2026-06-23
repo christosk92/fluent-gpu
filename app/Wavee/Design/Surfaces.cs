@@ -67,6 +67,16 @@ public static class Surfaces
             Children = [ Shimmer(url, dw, dh, width, height, corners), img ],
         };
     }
+
+    /// <summary>A square cover that FILLS the width its layout hands it (CSS aspect-ratio 1) — for responsive grid cells
+    /// whose exact width isn't known at template time (ItemsView grid tiles). Same Cover-fit + blurhash as
+    /// <see cref="Artwork"/>; pass a huge <paramref name="corners"/> (e.g. 9999) for a circular (artist) tile.</summary>
+    public static Element ArtworkFill(Image? image, float corners, int decodePx = 256)
+    {
+        string? url = image?.Url is { Length: > 0 } u ? u : null;
+        var placeholder = ColorF.FromRgba(0x2A, 0x2A, 0x2A);
+        return Ui.Image(url ?? "", ImageFit.Cover, 1f, decodePx, corners, placeholder, image?.BlurHash);
+    }
 }
 
 // The neutral shimmer cover tile. A Component (granular re-render) so it can read the image load-state and START/STOP

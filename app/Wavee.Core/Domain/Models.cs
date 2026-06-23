@@ -12,7 +12,10 @@ public sealed record AlbumRef(string Id, string Uri, string Name);
 
 public sealed record Artist(
     string Id, string Uri, string Name, Image? Image,
-    IReadOnlyList<Album>? TopAlbums = null);
+    IReadOnlyList<Album>? TopAlbums = null,
+    // Artist-detail facets (docs/architecture.md §2 "Album & artist"): monthly listeners, follower count, a short bio,
+    // and the verified flag. All defaulted/additive — synthesized by the fake source, mapped where a real source has them.
+    long MonthlyListeners = 0, long Followers = 0, string? Bio = null, bool Verified = false);
 
 /// <summary>The release type — drives the detail-page badge, the layout (a single is a one-track release), and whether
 /// the track rows show a per-track artist (compilations are various-artists).</summary>
@@ -67,3 +70,15 @@ public sealed record Palette(uint BackgroundDark, uint TintedDark, uint Light, u
 
 public enum QueueBucket { NowPlaying, UserQueue, NextUp }
 public sealed record QueueEntry(string EntryId, Track Track, QueueBucket Bucket, bool IsAutoplay);
+
+// ── Podcasts (docs/architecture.md §2 "Podcasts / shows / episodes") ──────────────────────────────────────────────────
+/// <summary>A podcast episode. <paramref name="ProgressMs"/> is the resume position (0 = unplayed); a real source also
+/// carries paywall/preview, transcripts and chapters — modelled as additive fields when they arrive.</summary>
+public sealed record Episode(
+    string Id, string Uri, string Title, string ShowName, Image? Image,
+    long DurationMs, DateTimeOffset PublishedAt, string? Description = null, long ProgressMs = 0);
+
+/// <summary>A podcast show. Episodes hydrate on the detail read (like an album's tracks).</summary>
+public sealed record Show(
+    string Id, string Uri, string Name, string Publisher, Image? Cover, string? Description = null,
+    IReadOnlyList<Episode>? Episodes = null);

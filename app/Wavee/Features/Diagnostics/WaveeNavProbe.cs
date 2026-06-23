@@ -45,7 +45,8 @@ internal static class WaveeNavProbe
     public static bool TryRun(AppHost host, IPlatformWindow window, IGpuDevice device)
     {
         bool connStress = Diag.EnvFlag("WAVEE_CONN_STRESS");
-        if (!Diag.EnvFlag("WAVEE_NAV_PROBE") && !connStress) return false;
+        bool trackShot = Diag.EnvFlag("WAVEE_TRACKLIST_SHOT");
+        if (!Diag.EnvFlag("WAVEE_NAV_PROBE") && !connStress && !trackShot) return false;
         if (window is not Win32Window w || device is not D3D12Device gpu)
         {
             Console.Error.WriteLine("[wavee-nav-probe] unavailable: requires Win32Window + D3D12Device");
@@ -56,9 +57,40 @@ internal static class WaveeNavProbe
             Console.Error.WriteLine("[wavee-nav-probe] nav hook not wired (WaveeShell not mounted?)");
             return true;
         }
-        if (connStress) RunConnStress(host, w, gpu);
+        if (trackShot) RunTrackListShot(host, w, gpu);
+        else if (connStress) RunConnStress(host, w, gpu);
         else Run(host, w, gpu);
         return true;
+    }
+
+    // WAVEE_TRACKLIST_SHOT=1: navigate to each surface that shows tracks and capture a PNG, so the unified track row (the
+    // shared TrackRow cell) can be eyeballed for 1:1 parity — a detail playlist, the Library albums pane, an artist page
+    // ("Popular"), and search results ("Songs"). Output → C:\tmp\tl_*.png.
+    static void RunTrackListShot(AppHost host, Win32Window window, D3D12Device gpu)
+    {
+        try { System.IO.Directory.CreateDirectory(@"C:\tmp"); } catch { }
+        void Frame() { if (!window.IsClosed) { gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce(); host.RunFrame(); } }
+        void Nav(string k, string? a) => WaveeShell.ProbeNav!(k, a);
+        void Settle(int n) { for (int i = 0; i < n && !window.IsClosed; i++) Frame(); }
+        void Shot(string name)
+        {
+            var px = gpu.CaptureBgra(out int cw, out int ch);
+            PngWriter.WriteBgra($@"C:\tmp\tl_{name}.png", px, cw, ch);
+            Console.Error.WriteLine($"[tracklist-shot] wrote tl_{name}.png ({cw}x{ch})");
+        }
+
+        Nav("home", null); Settle(40); System.Threading.Thread.Sleep(700); Settle(20);   // home live + card covers decode
+
+        // 1) Detail playlist (the canonical full list — must be unchanged by the cell extraction).
+        Nav("pl:spotify:playlist:pl0", "Playlist 0"); Settle(40); System.Threading.Thread.Sleep(700); Settle(60); Shot("detail");
+        // 2) Library albums → the pane auto-selects the first album → its tracks render via the embedded TrackList.
+        Nav("albums", null); Settle(50); System.Threading.Thread.Sleep(800); Settle(80); Shot("library");
+        // 3) Artist page → "Popular" top-tracks (synthesized for any artist uri).
+        Nav("artist:spotify:artist:ar0", "Artist"); Settle(50); System.Threading.Thread.Sleep(700); Settle(60); Shot("artist");
+        // 4) Search → the "Songs" rows in the All view.
+        Nav("search", "the"); Settle(50); System.Threading.Thread.Sleep(700); Settle(60); Shot("search");
+
+        Console.Error.WriteLine("[tracklist-shot] done");
     }
 
     // WAVEE_CONN_STRESS=1 (+ optional WAVEE_STRESS_N=100, WAVEE_STRESS_NOPACE=1): the user's scenario — SLOWLY click a Home

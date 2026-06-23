@@ -71,7 +71,7 @@ sealed class WaveeShell : Component
         _sidebarCompact = new(settings.Get(WaveeSettings.SidebarCollapsed));
         _sidebarWidth = new(settings.Get(WaveeSettings.SidebarWidth));
 
-        if (Diag.EnvFlag("WAVEE_NAV_PROBE") || Diag.EnvFlag("WAVEE_CONN_STRESS"))
+        if (Diag.EnvFlag("WAVEE_NAV_PROBE") || Diag.EnvFlag("WAVEE_CONN_STRESS") || Diag.EnvFlag("WAVEE_TRACKLIST_SHOT"))
         {
             ProbeNav = GoNav; ProbeBack = Back; ProbeForward = Forward; ProbeTheme = ToggleTheme; ProbeOpenTab = OpenNewTab;
             // Exactly the Home-card path: stash a preview (→ DetailShell mounts the PREVIEW path, not the skeleton path the
@@ -271,7 +271,8 @@ sealed class WaveeShell : Component
                Ctx.Provide(HistoryStore.NavCtx, (Action<string, string?>)GoNav,
                Ctx.Provide(HistoryStore.Slot, _historyStore,
                Ctx.Provide(NavPreviewStore.Slot, _navPreview,
-               Embed.Comp(() => new OverlayHost { Child = tinted })))));
+               Ctx.Provide(SearchQuery.Slot, _searchText,
+               Embed.Comp(() => new OverlayHost { Child = tinted }))))));
     }
 
     TabStrip BuildTabStrip() => new TabStrip
@@ -353,6 +354,9 @@ sealed class WaveeShell : Component
     // History always opens in its own tab (global view — same as browser convention).
     void GoNav(string key, string? arg)
     {
+        // A search route carries the query in Arg → sync the omnibar text so the box + the SearchPage (which reads
+        // SearchQuery.Slot live, as-you-type) agree, whether the nav came from the box, a history entry, or a suggestion.
+        if (key == "search" && arg is { Length: > 0 }) _searchText.Value = arg;
         if (key == "history") OpenNewTab(key);
         else Go(key, arg);
     }

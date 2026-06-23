@@ -4,6 +4,7 @@ using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Localization;
 using FluentGpu.Signals;
 using Wavee.Core;
 using static FluentGpu.Dsl.Ui;
@@ -19,7 +20,9 @@ readonly record struct DetailHandlers(
     IReadSignal<TrackSort> Sort, Action<TrackSort> SetSort,
     // List-view controls surfaced by the chrome / header toolbar (search query, quick-filter flags, row density).
     Signal<string> Query, IReadSignal<TrackFilterFlags> Flags, Action<TrackFilterFlags> SetFlags,
-    IReadSignal<int> Density, Action<int> SetDensity);
+    IReadSignal<int> Density, Action<int> SetDensity,
+    // Playlist/queue mutations for THIS context (add the context's tracks to the queue / a user playlist).
+    Action AddToQueue, Action AddToPlaylist);
 
 // The two-column detail scaffold (mounted only once data is Ready, so its lifecycle = the loaded page's lifecycle).
 // Owns: the art-derived backdrop wash + accent, the page-scoped Mica tint (set/cleared through the activation
@@ -62,6 +65,7 @@ sealed class DetailShell : Component
     {
         var svc = UseContext(Services.Slot);
         var bridge = UseContext(PlaybackBridge.Slot);
+        var libBridge = UseContext(LibraryBridge.Slot);
         var go = UseContext(HistoryStore.NavCtx);
         var shellTint = UseContext(ShellTint.Slot);
 
@@ -135,6 +139,21 @@ sealed class DetailShell : Component
             _ = svc.Player.SetShuffleAsync(true);
             _ = svc.Player.PlayAsync(uri, 0);
         }
+        // Add-to-queue / add-to-playlist act on THIS context's tracks (capped batch); each confirms with a toast.
+        void AddToQueue()
+        {
+            if (svc is null) return;
+            int n = Math.Min(m.Tracks.Count, 50);
+            for (int i = 0; i < n; i++) _ = svc.Player.EnqueueAsync(m.Tracks[i].Uri);
+            if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success);
+        }
+        void AddToPlaylist()
+        {
+            if (libBridge is null || m.Tracks.Count == 0) return;
+            var (plUri, plName) = libBridge.AddToDefaultPlaylist(m.Tracks);
+            Toasts.Show(Strings.Detail.AddedToPlaylist(plName), ToastSeverity.Success,
+                actionLabel: Loc.Get(Strings.Detail.GoToPlaylist), onAction: () => go("pl:" + plUri, plName));
+        }
         // ── persisted per-context sort: load once at mount, save on every change (must be assigned BEFORE handlers
         // captures SetSort, which closes over `settings`) ──
         var settings = svc?.Settings;
@@ -158,7 +177,7 @@ sealed class DetailShell : Component
 
         // SetSort / SetDensity are hoisted local functions; the rail + chrome toolbars read all list-view controls off here.
         var handlers = new DetailHandlers(Play, () => Play(0), Shuffle, PlayContext, go, accent, _sort, SetSort,
-            _query, _filterFlags, f => _filterFlags.Value = f, _density, SetDensity);
+            _query, _filterFlags, f => _filterFlags.Value = f, _density, SetDensity, AddToQueue, AddToPlaylist);
 
         // Single-column (liked): just the track table, full width, no rail / no wash (its toolbar stays in the chrome).
         if (!_cfg.TwoColumn)
@@ -171,7 +190,11 @@ sealed class DetailShell : Component
         // The track list (drops columns by breakpoint, owns the now-playing re-skin + an external SelectionModel). In
         // VERTICAL mode its toolbar moves into the rail header, so drop it from the chrome there.
         bool showToolbar = mode != Vertical;
-        Element right = Embed.Comp(() => new TrackList(_route, _model, bridge, handlers, showToolbar));
+        // Right column = the track table OR the episode list (podcast shows). Distinct Keys so an album↔show swap in the
+        // reused detail slot remounts the column cleanly instead of reconciling TrackList against EpisodeList.
+        Element right = _cfg.Content == DetailContent.Episodes
+            ? new BoxEl { Key = "right:eps", Grow = 1f, Direction = 1, Children = [Embed.Comp(() => new EpisodeList(_route, _model, bridge, handlers, showToolbar))] }
+            : new BoxEl { Key = "right:tracks", Grow = 1f, Direction = 1, Children = [Embed.Comp(() => new TrackList(_route, _model, bridge, handlers, showToolbar))] };
 
         // VERTICAL (narrow): the rail HEADER (cover, title, meta, play + toolbar) fixed on top + the list (Grow=1)
         // scrolling below — a single column over the wash. (The list remounts on the two-column↔vertical cross, so its

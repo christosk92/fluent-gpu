@@ -33,7 +33,8 @@ public interface IVirtualLayout
 /// <see cref="IndexAt"/>/<see cref="OffsetOf"/> so corrections above the viewport never jump the visible top
 /// (virtualization.md §6.2 — estimate-then-correct + anchoring are seam behavior now, not a special case).
 /// Built-ins: <see cref="MeasuredStackVirtualLayout"/> (the Fenwick variable list), <see cref="GroupedListVirtualLayout"/>
-/// (group headers = a measured item kind + sticky-header hook).
+/// (group headers = a measured item kind + sticky-header hook), <see cref="GridVirtualLayout"/> when
+/// <c>itemHeight ≤ 0</c> (measured rows — virtualization.md ItemExtent=0 ⇒ measure).
 /// </summary>
 public interface IMeasuredVirtualLayout : IVirtualLayout
 {
@@ -104,28 +105,196 @@ public sealed class StackVirtualLayout : IVirtualLayout
 }
 
 /// <summary>Uniform 2-D grid (album/artist card shelves) — virtualizes by ROW: realizes visible-rows × columns,
-/// recycles identically. Columns share the cross size; this is the virtualized UniformGridLayout.</summary>
-public sealed class GridVirtualLayout : IVirtualLayout
+/// recycles identically. Columns share the cross size; this is the virtualized UniformGridLayout.
+/// <para><paramref name="itemHeight"/> &gt; 0 ⇒ fixed uniform rows (the fast path). <paramref name="itemHeight"/> ≤ 0 ⇒
+/// <b>auto row height</b>: each row's extent is the max of its realized cell measures at the cell width
+/// (estimate-then-correct via <see cref="IMeasuredVirtualLayout"/> — virtualization.md ItemExtent=0 ⇒ measure).
+/// Pass <paramref name="minCellWidth"/> &gt; 0 (with <paramref name="columns"/> = 0) for responsive column count off the
+/// cross size — callers never compute cell width or column count.</para></summary>
+public sealed class GridVirtualLayout : IVirtualLayout, IMeasuredVirtualLayout
+{
+    public readonly int Columns;           // fixed column count when MinCellWidth == 0
+    public readonly float MinCellWidth;    // &gt; 0 ⇒ responsive columns from cross (Columns ignored)
+    public readonly float ItemHeight;      // ≤ 0 ⇒ measured rows
+    public readonly float Gap;
+    public readonly float Estimate;        // initial row-height estimate in measured mode
+
+    /// <summary>True when row heights come from cell measure (not a fixed <see cref="ItemHeight"/>).</summary>
+    public bool IsMeasured => ItemHeight <= 0f;
+
+    private ExtentTable? _rowTable;
+    private float[]? _rowMax;
+    private int _itemCount = -1;
+    private int _cols = 1;
+    private int _geomCols;
+    private float _geomCross = float.NaN;
+
+    public GridVirtualLayout(int columns, float itemHeight, float gap = 0f, float minCellWidth = 0f, float estimate = 120f)
+    {
+        Columns = Math.Max(0, columns);
+        MinCellWidth = minCellWidth < 0f ? 0f : minCellWidth;
+        ItemHeight = itemHeight;
+        Gap = gap;
+        Estimate = estimate <= 0f ? 120f : estimate;
+        _cols = Math.Max(1, Columns > 0 ? Columns : 1);
+    }
+
+    /// <summary>Column count at the given cross size (for keyboard nav when columns are responsive).</summary>
+    public int EffectiveColumns(float cross) => ColsOf(cross);
+
+    private int ColsOf(float cross)
+    {
+        if (MinCellWidth > 0f)
+        {
+            float c = cross <= 0f ? MinCellWidth : cross;
+            return Math.Max(1, (int)((c + Gap) / (MinCellWidth + Gap)));
+        }
+        return Math.Max(1, Columns > 0 ? Columns : 1);
+    }
+
+    private static int RowCount(int n, int cols) => n <= 0 ? 0 : (n + cols - 1) / cols;
+    private float ColWidth(float cross, int cols) => MathF.Max(1f, (cross - (cols - 1) * Gap) / cols);
+    private float FixedRowStride => ItemHeight + Gap;
+
+    private void Ensure(int n, float cross)
+    {
+        int cols = ColsOf(cross);
+        int rows = RowCount(n, cols);
+        bool geom = cols != _geomCols || MathF.Abs(cross - _geomCross) > 0.5f || n != _itemCount;
+        _cols = cols;
+        if (!IsMeasured) { _itemCount = n; _geomCols = cols; _geomCross = cross; return; }
+        if (geom || _rowTable is null || _rowTable.Count != rows)
+        {
+            _itemCount = n;
+            _geomCols = cols;
+            _geomCross = cross;
+            (_rowTable ??= new ExtentTable(rows, Estimate)).Reset(rows, Estimate);
+            _rowMax = rows > 0 ? new float[rows] : [];
+        }
+    }
+
+    /// <summary>Clears per-row measure accumulators at the start of an arrange pass (rows re-shrink after resize).</summary>
+    public void ResetMeasurePass(int itemCount, float cross)
+    {
+        Ensure(itemCount, cross);
+        if (_rowMax is not null) Array.Clear(_rowMax);
+    }
+
+    private float RowTop(int row) => IsMeasured
+        ? (_rowTable?.OffsetOf(row) ?? row * Estimate) + row * Gap
+        : row * FixedRowStride;
+
+    private float RowHeightAt(int row) => IsMeasured ? (_rowTable?.ExtentAt(row) ?? Estimate) : ItemHeight;
+
+    private int RowAtOffset(float offset)
+    {
+        if (!IsMeasured || _rowTable is null || _rowTable.Count == 0) return 0;
+        int lo = 0, hi = _rowTable.Count - 1;
+        while (lo < hi)
+        {
+            int mid = (lo + hi + 1) >> 1;
+            if (RowTop(mid) > offset) hi = mid - 1;
+            else lo = mid;
+        }
+        return lo;
+    }
+
+    public float ContentExtent(int n, float cross)
+    {
+        Ensure(n, cross);
+        if (!IsMeasured)
+        {
+            int rows = RowCount(n, _cols);
+            return rows <= 0 ? 0f : rows * ItemHeight + (rows - 1) * Gap;
+        }
+        int rc = RowCount(n, _cols);
+        return rc <= 0 ? 0f : RowTop(rc - 1) + RowHeightAt(rc - 1);
+    }
+
+    public void Window(int n, float cross, float viewport, float offset, int overscan, out int first, out int last)
+    {
+        Ensure(n, cross);
+        if (!IsMeasured)
+        {
+            int firstRow = Math.Max(0, (int)MathF.Floor(offset / FixedRowStride) - overscan);
+            int lastRow = (int)MathF.Ceiling((offset + viewport) / FixedRowStride) + overscan;
+            first = Math.Min(n, firstRow * _cols);
+            last = Math.Min(n, lastRow * _cols);
+            if (last < first) last = first;
+            return;
+        }
+        if (_rowTable is null || _rowTable.Count == 0) { first = last = 0; return; }
+        int row0 = RowAtOffset(offset);
+        int row1 = RowAtOffset(offset + viewport);
+        int fr = Math.Max(0, row0 - overscan);
+        int lr = Math.Min(_rowTable.Count - 1, row1 + overscan);
+        first = fr * _cols;
+        last = Math.Min(n, (lr + 1) * _cols);
+        if (last < first) last = first;
+    }
+
+    public RectF ItemRect(int i, float cross)
+    {
+        Ensure(Math.Max(_itemCount, i + 1), cross);
+        int row = i / _cols, col = i % _cols;
+        float cw = ColWidth(cross, _cols);
+        float x = col * (cw + Gap);
+        if (x + cw > cross + 0.5f) cw = MathF.Max(1f, cross - x);   // float/resize safety — never spill past cross
+        return new RectF(x, RowTop(row), cw, RowHeightAt(row));
+    }
+
+    public void SetMeasured(int index, float mainExtent, float crossSize)
+    {
+        if (!IsMeasured) return;
+        Ensure(Math.Max(_itemCount, index + 1), crossSize);
+        if (_rowTable is null || _rowMax is null) return;
+        int row = index / _cols;
+        if ((uint)row >= (uint)_rowMax.Length) return;
+        _rowMax[row] = MathF.Max(_rowMax[row], mainExtent);
+        _rowTable.SetExtent(row, _rowMax[row]);
+    }
+
+    public float OffsetOf(int index, float crossSize)
+    {
+        Ensure(Math.Max(_itemCount, index + 1), crossSize);
+        return RowTop(index / _cols);
+    }
+
+    public int IndexAt(float offset, float crossSize)
+    {
+        Ensure(_itemCount > 0 ? _itemCount : 1, crossSize);
+        return RowAtOffset(offset) * _cols;
+    }
+}
+
+/// <summary>A uniform card grid whose ROW HEIGHT is DERIVED from the (responsive) cell width — height =
+/// cellWidth·<see cref="Aspect"/> + <see cref="ExtraHeight"/>. For "square cover + a couple of text lines" cards, the
+/// caller passes <c>aspect = 1</c> and a text allowance and never computes a cell width itself: the layout owns BOTH
+/// axes off its own cross size, so the cover is always square and the row never under/over-budgets the text (the bug
+/// when the app guessed the cell width off a different measurement — scrollbar gutter, resize). Fixed-geometry (the
+/// height is a pure function of cross), so it rides the same arrange path as <see cref="GridVirtualLayout"/>.</summary>
+public sealed class AspectGridVirtualLayout : IVirtualLayout
 {
     public readonly int Columns;
-    public readonly float ItemHeight, Gap;
-    public GridVirtualLayout(int columns, float itemHeight, float gap = 0f)
-    { Columns = Math.Max(1, columns); ItemHeight = itemHeight <= 0 ? 1f : itemHeight; Gap = gap; }
+    public readonly float Aspect, ExtraHeight, Gap;
+    public AspectGridVirtualLayout(int columns, float aspect, float extraHeight, float gap = 0f)
+    { Columns = Math.Max(1, columns); Aspect = aspect <= 0f ? 1f : aspect; ExtraHeight = Math.Max(0f, extraHeight); Gap = gap; }
 
-    private float RowStride => ItemHeight + Gap;
-    private float ColWidth(float cross) => (cross - (Columns - 1) * Gap) / Columns;
+    private float ColWidth(float cross) => MathF.Max(1f, (cross - (Columns - 1) * Gap) / Columns);
+    private float RowHeight(float cross) => ColWidth(cross) * Aspect + ExtraHeight;
     private int RowCount(int n) => (n + Columns - 1) / Columns;
 
     public float ContentExtent(int n, float cross)
     {
         int rows = RowCount(n);
-        return rows <= 0 ? 0f : rows * ItemHeight + (rows - 1) * Gap;
+        return rows <= 0 ? 0f : rows * RowHeight(cross) + (rows - 1) * Gap;
     }
 
     public void Window(int n, float cross, float viewport, float offset, int overscan, out int first, out int last)
     {
-        int firstRow = Math.Max(0, (int)MathF.Floor(offset / RowStride) - overscan);
-        int lastRow = (int)MathF.Ceiling((offset + viewport) / RowStride) + overscan;
+        float stride = RowHeight(cross) + Gap;
+        int firstRow = Math.Max(0, (int)MathF.Floor(offset / stride) - overscan);
+        int lastRow = (int)MathF.Ceiling((offset + viewport) / stride) + overscan;
         first = Math.Min(n, firstRow * Columns);
         last = Math.Min(n, lastRow * Columns);
         if (last < first) last = first;
@@ -134,8 +303,8 @@ public sealed class GridVirtualLayout : IVirtualLayout
     public RectF ItemRect(int i, float cross)
     {
         int row = i / Columns, col = i % Columns;
-        float cw = ColWidth(cross);
-        return new RectF(col * (cw + Gap), row * RowStride, cw, ItemHeight);
+        float cw = ColWidth(cross), ih = RowHeight(cross);
+        return new RectF(col * (cw + Gap), row * (ih + Gap), cw, ih);
     }
 }
 

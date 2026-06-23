@@ -6015,172 +6015,6 @@ static class Slice
                 $"vp800 step={stepTall:0.#} (expect 120) vp200 step={stepShort:0.#} (expect 48)");
         }
 
-        // gate.scroll.touchpad-device-routing: a touchpad (hi-res) wheel event pixel-follows — it writes Offset==Target in
-        // the dispatch frame (direct hand tracking) — while the same physical distance as a detented mouse notch sets a
-        // farther Target and leaves Offset trailing on the discrete eased target-chase curve. The engine routes on
-        // PointerKind; the Win32 PAL classifies touchpad by its hi-res delta signature (non-120-multiples).
-        {
-            using var app = new HeadlessPlatformApp();
-            var touchpadWindow = new HeadlessWindow(new WindowDesc("touchpad-route", new Size2(360, 460), 1f)); touchpadWindow.Show();
-            using var touchpadHost = new AppHost(app, touchpadWindow, new HeadlessGpuDevice(), fonts, strings,
-                new TouchFlingSettleProbe(), frameTime: new FixedFrameTimeSource(16f));
-            touchpadHost.SmoothScroll = true;
-            touchpadHost.RunFrame();
-            var touchpadVp = touchpadHost.Scene.Root;
-            touchpadWindow.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0,
-                ScrollDelta: 12f, Pointer: PointerKind.Touchpad, TimestampMs: 1000));
-            touchpadHost.RunFrame();
-            touchpadHost.Scene.TryGetScroll(touchpadVp, out var touchpadState);
-
-            var mouseWindow = new HeadlessWindow(new WindowDesc("mouse-route", new Size2(360, 460), 1f)); mouseWindow.Show();
-            using var mouseHost = new AppHost(app, mouseWindow, new HeadlessGpuDevice(), fonts, strings,
-                new TouchFlingSettleProbe(), frameTime: new FixedFrameTimeSource(16f));
-            mouseHost.SmoothScroll = true;
-            mouseHost.RunFrame();
-            var mouseVp = mouseHost.Scene.Root;
-            mouseWindow.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0,
-                ScrollDelta: 60f, Pointer: PointerKind.Mouse, TimestampMs: 1000, WheelNotch: 1f));
-            mouseHost.RunFrame();
-            mouseHost.Scene.TryGetScroll(mouseVp, out var mouseState);
-
-            bool touchpadDirect = Near(touchpadState.OffsetY, 12f, 0.05f) && Near(touchpadState.TargetY, 12f, 0.05f)
-                                  && touchpadState.ScrollMode == 2;
-            // Mouse wheel now seeds a MOMENTUM fling (WheelFlingMode=3): the offset COASTS under friction with Target
-            // pinned to Offset — distinct from the touchpad's direct 1:1 hand-tracking (mode 2, Offset==exact delta).
-            bool mouseFling = mouseState.ScrollMode == 3 && mouseState.OffsetY > 1f && Near(mouseState.TargetY, mouseState.OffsetY, 0.5f);
-            Check("gate.scroll.touchpad-device-routing a hi-res touchpad wheel tracks content directly 1:1 (Offset==Target==delta, mode 2) while a mouse notch seeds a momentum fling (WheelFlingMode: Offset coasts, Target==Offset); PointerKind routes the engine (the PAL classifies touchpad by its hi-res delta signature)",
-                touchpadDirect && mouseFling,
-                $"touchpad=({touchpadState.OffsetY:0.00}->{touchpadState.TargetY:0.00},mode={touchpadState.ScrollMode}) mouse=({mouseState.OffsetY:0.00}->{mouseState.TargetY:0.00},mode={mouseState.ScrollMode})");
-        }
-
-        // gate.scroll.touchpad-trajectory: a constant-rate packet stream tracks exactly 1:1 while active (no coast-ahead),
-        // then the FIRST quiet frame begins the glide immediately (no quiet-window freeze — the old 42ms hitch is gone),
-        // coasting monotonically under the WinUI fling friction and settling. Checks the whole trajectory + the phase-7
-        // glide's zero-allocation contract.
-        {
-            using var app = new HeadlessPlatformApp();
-            var window = new HeadlessWindow(new WindowDesc("touchpad-trajectory", new Size2(360, 460), 1f)); window.Show();
-            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings,
-                new ScrollProbe(), frameTime: new FixedFrameTimeSource(16f));
-            host.SmoothScroll = true;
-            host.RunFrame();
-            var vp = host.Scene.Root;
-            var pointer = new Point2(100, 100);
-
-            // Warm the new packet->quiet->inertia path once (the established touch-fling allocation gate does the
-            // same): first execution pays runtime/JIT costs that are not managed allocations from a steady frame.
-            uint warmStamp = 1000;
-            for (int i = 0; i < 6; i++)
-            {
-                warmStamp += 8;
-                window.QueueInput(new InputEvent(InputKind.Wheel, pointer, 0, 0,
-                    ScrollDelta: 12f, Pointer: PointerKind.Touchpad, TimestampMs: warmStamp));
-                host.RunFrame();
-            }
-            for (int i = 0; i < 180; i++)
-            {
-                host.RunFrame();
-                if (host.Scene.ScrollRef(vp).ScrollMode == 0) break;
-            }
-            host.Input.WriteScrollOffset(vp, 0f);
-            ref ScrollState reset = ref host.Scene.ScrollRef(vp);
-            reset.ScrollMode = 0; reset.FlingVelocity = 0f; reset.TouchpadLastTimestampMs = 0;
-            reset.TouchpadIdleMs = 0f; reset.TouchpadInertiaStarted = false;
-            host.RunFrame();
-
-            uint stamp = 2000;
-            for (int i = 0; i < 6; i++)
-            {
-                stamp += 8;
-                window.QueueInput(new InputEvent(InputKind.Wheel, pointer, 0, 0,
-                    ScrollDelta: 12f, Pointer: PointerKind.Touchpad, TimestampMs: stamp));
-                host.RunFrame();
-            }
-            host.Scene.TryGetScroll(vp, out var afterPackets);
-            float tracked = afterPackets.OffsetY;
-            bool trackedExactly = Near(tracked, 72f, 0.1f) && Near(afterPackets.TargetY, tracked, 0.05f);
-
-            float previous = tracked;
-            bool monotonic = true;
-            long worstHotAlloc = 0;
-            bool coasted = false;
-            float byFrame6 = float.NaN;
-            for (int i = 0; i < 180; i++)
-            {
-                FrameStats frame = host.RunFrame();
-                host.Scene.TryGetScroll(vp, out var s);
-                if (i == 6) byFrame6 = s.OffsetY;   // the glide must have engaged within the brief lift window (~40ms ≈ 3 frames)
-                worstHotAlloc = Math.Max(worstHotAlloc, frame.HotPhaseAllocBytes);
-                if (s.OffsetY + 0.001f < previous) monotonic = false;
-                if (s.OffsetY > tracked + 1f) coasted = true;
-                previous = s.OffsetY;
-                if (s.ScrollMode == 0 && i > 8) break;
-            }
-            host.Scene.TryGetScroll(vp, out var settled);
-            bool glidesPromptly = byFrame6 > tracked + 1f;   // tracked 1:1 during the stream (no mid-gesture coast), then glided right after the lift window
-            bool settledCleanly = settled.ScrollMode == 0 && settled.FlingVelocity == 0f && settled.OffsetY > tracked + 40f;
-            Check("gate.scroll.touchpad-trajectory a hi-res touchpad stream tracks exactly 1:1 while active (no mid-gesture coast), then glides right after the brief lift window, coasting monotonically under WinUI fling friction and settling allocation-free",
-                trackedExactly && glidesPromptly && coasted && monotonic && settledCleanly && worstHotAlloc == 0,
-                $"tracked={tracked:0.0} byFrame6={byFrame6:0.0} final={settled.OffsetY:0.0} mode={settled.ScrollMode} coasted={coasted} monotonic={monotonic} glides={glidesPromptly} hotAlloc={worstHotAlloc}B");
-        }
-
-        // gate.scroll.touchpad-glide-floor: a stream whose terminal (lift) velocity is below the glide FLOOR settles on the
-        // spot with no inertia — a gentle scroll that ends doesn't micro-glide, and a driver that streamed its own decaying
-        // tail ends slow → no second glide. A decaying packet run lands here.
-        {
-            using var app = new HeadlessPlatformApp();
-            var window = new HeadlessWindow(new WindowDesc("touchpad-driver-tail", new Size2(360, 460), 1f)); window.Show();
-            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings,
-                new TouchFlingSettleProbe(), frameTime: new FixedFrameTimeSource(16f));
-            host.SmoothScroll = true;
-            host.RunFrame();
-            var vp = host.Scene.Root;
-            ReadOnlySpan<float> decaying = [12f, 8f, 4f, 1f, 0.2f];
-            uint stamp = 3000;
-            foreach (float delta in decaying)
-            {
-                stamp += 16;
-                window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0,
-                    ScrollDelta: delta, Pointer: PointerKind.Touchpad, TimestampMs: stamp));
-                host.RunFrame();
-            }
-            host.Scene.TryGetScroll(vp, out var terminalPacket);
-            float packetEnd = terminalPacket.OffsetY;
-            for (int i = 0; i < 8; i++) host.RunFrame();
-            host.Scene.TryGetScroll(vp, out var afterQuiet);
-            Check("gate.scroll.touchpad-glide-floor a decaying packet stream ends below the glide floor, so it settles in place with no extra inertia",
-                Near(afterQuiet.OffsetY, packetEnd, 0.5f) && afterQuiet.ScrollMode == 0,
-                $"packetEnd={packetEnd:0.00} afterQuiet={afterQuiet.OffsetY:0.00} terminalV={terminalPacket.FlingVelocity:0.0} mode={afterQuiet.ScrollMode}");
-        }
-
-        // gate.scroll.touchpad-overscroll: a pinned touchpad pull rubber-bands the OUTERMOST scroller (OverscrollPx grows,
-        // the offset stays clamped, Overscrolling set) like a touch overpan, then springs back to 0 when the stream goes
-        // quiet — the WinUI ScrollPresenter overpan (ON by default; FG_TP_NOBOUNCE disables it).
-        {
-            using var app = new HeadlessPlatformApp();
-            var window = new HeadlessWindow(new WindowDesc("touchpad-overscroll", new Size2(360, 460), 1f)); window.Show();
-            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new ScrollProbe(), frameTime: new FixedFrameTimeSource(16f));
-            host.SmoothScroll = true;
-            host.RunFrame();
-            var vp = host.Scene.Root;
-            // At offset 0 (pinned at the top), pull UP (negative) for several packets → damped rubber-band, offset stays 0.
-            uint stamp = 5000;
-            for (int i = 0; i < 5; i++)
-            {
-                stamp += 8;
-                window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(100, 100), 0, 0, ScrollDelta: -40f, Pointer: PointerKind.Touchpad, TimestampMs: stamp));
-                host.RunFrame();
-            }
-            host.Scene.TryGetScroll(vp, out var pulled);
-            bool banded = pulled.OverscrollPx < -0.5f && pulled.Overscrolling && Near(pulled.OffsetY, 0f, 0.01f);
-            bool released = false;
-            for (int i = 0; i < 200; i++) { host.RunFrame(); host.Scene.TryGetScroll(vp, out var s); if (!s.Overscrolling && MathF.Abs(s.OverscrollPx) < 0.1f) { released = true; break; } }
-            host.Scene.TryGetScroll(vp, out var sprung);
-            Check("gate.scroll.touchpad-overscroll a pinned touchpad pull rubber-bands the outermost scroller (band grows, offset clamped) then springs back to 0 when the stream goes quiet",
-                banded && released && Near(sprung.OverscrollPx, 0f, 0.1f) && !sprung.Overscrolling,
-                $"band={pulled.OverscrollPx:0.0} overscrolling={pulled.Overscrolling} off={pulled.OffsetY:0.00} released={released} finalBand={sprung.OverscrollPx:0.00}");
-        }
-
         // gate.touch.flick-velocity-windowed: the windowed least-squares velocity sampler reads a fast constant-velocity
         // flick's TRUE terminal speed (the 50ms EMA under-read it — gain dt/(dt+50) lags before convergence), AND a finger
         // that moves fast then HOLDS STILL before lift decays to ~0 (the old EMA's stationary up-sample bias kept stale
@@ -6241,6 +6075,22 @@ static class Slice
                    && Near(dispY, 42f) && Near(dispX, 17f);
             Check("gate.scroll.dm-transform-maps the DirectManipulation content-transform → engine offset/band mapping (DmScrollMath) clamps the in-range offset, splits the past-edge excess into a signed band, and maps the 2×3 translation sign to offset-space displacement (the deterministic slice of the Windows DM source)",
                 ok, $"inRange=({inRange.offset:0},{inRange.band:0}) pastBottom=({pastBottom.offset:0},{pastBottom.band:0}) pastTop=({pastTop.offset:0},{pastTop.band:0}) dispY={dispY:0} dispX={dispX:0}");
+        }
+
+        // gate.scroll.overscroll-physics: WinUI-parity overpan resistance + inverse + spring settle (translation-only band).
+        {
+            float vp = 400f;
+            float bandNeg = OverscrollPhysics.BandFromExcess(-80f, vp);
+            float bandPos = OverscrollPhysics.BandFromExcess(120f, vp);
+            float inv = OverscrollPhysics.ExcessFromBand(bandNeg, vp);
+            float p = bandNeg, v = 0f;
+            for (int i = 0; i < 120; i++) OverscrollPhysics.StepSpring(ref p, ref v, 16f);
+            bool ok = bandNeg < -1f && bandNeg > -OverscrollPhysics.BandLimit(vp) - 0.1f
+                   && bandPos > 1f && bandPos < OverscrollPhysics.BandLimit(vp) + 0.1f
+                   && Near(inv, -80f, 1f)
+                   && Near(p, 0f, 0.1f) && Near(v, 0f, 1f);
+            Check("gate.scroll.overscroll-physics WinUI-parity overpan band caps at 10% viewport, inverts excess, and springs back to 0 (translation-only — IT touchpad path)",
+                ok, $"bandNeg={bandNeg:0.0} bandPos={bandPos:0.0} inv={inv:0.0} final=({p:0.00},{v:0.0})");
         }
     }
 

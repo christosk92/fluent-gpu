@@ -1,3 +1,4 @@
+using FluentGpu.Animation;
 using FluentGpu.Foundation;
 using FluentGpu.Scene;
 using FluentGpu.Text;
@@ -165,7 +166,14 @@ public sealed class FlexLayout
         if (paint.VisualKind == VisualKind.Text)
         {
             float measureW = DefiniteWidth(in li, availW);
-            float maxW = li.TextStyle.Wrap != Foundation.TextWrap.NoWrap && !float.IsInfinity(measureW) ? MathF.Max(0f, measureW) : float.PositiveInfinity;
+            // MaxLines/Trim need a finite wrap width even when Wrap=NoWrap — otherwise a long title measures at its
+            // natural width, the grid cell's cross-size inflates, and glyphs bleed into the next column.
+            bool widthConstrained = !float.IsInfinity(measureW);
+            bool needsColumnBudget = li.TextStyle.Wrap != Foundation.TextWrap.NoWrap
+                || li.TextStyle.Trim != Foundation.TextTrim.None;
+            float maxW = widthConstrained && needsColumnBudget
+                ? MathF.Max(0f, measureW)
+                : float.PositiveInfinity;
             // Measure cache: skip re-shaping when (text, style, availWidth) are unchanged (the §2.3 down-rule win on a
             // scoped relayout). Pure-function key ⇒ self-invalidating; helps the real shaping path, neutral headless.
             ref TextMeasureCache mc = ref _scene.MeasureCacheRef(node);
@@ -512,7 +520,8 @@ public sealed class FlexLayout
         float padL = li.Padding.Left, padT = li.Padding.Top;
 
         (float contentW, float contentH) =
-              sc0.ItemCount > 0 && sc0.Layout is IMeasuredVirtualLayout ml ? ArrangeVirtualMeasured(node, ml, in sc0, content, innerW, innerH, padL, padT, horizontal)
+              sc0.ItemCount > 0 && sc0.Layout is IMeasuredVirtualLayout ml && UsesMeasuredExtent(sc0.Layout)
+                ? ArrangeVirtualMeasured(node, ml, in sc0, content, innerW, innerH, padL, padT, horizontal)
             : sc0.ItemCount > 0 && sc0.Layout is not null ? ArrangeVirtualLayout(in sc0, content, innerW, innerH, padL, padT, horizontal)
             : sc0.ItemCount > 0                           ? ArrangeVirtualVariable(node, in sc0, content, innerW, innerH, padL, padT, horizontal)
             :                                               ArrangePlainScroll(content, innerW, innerH, padL, padT, horizontal);
@@ -530,25 +539,12 @@ public sealed class FlexLayout
         if (!content.IsNull && _scene.IsLive(content))
         {
             ref NodePaint cp = ref _scene.Paint(content);
-            // Mirror Input.ApplyScrollPosition's -(offset + band) EXACTLY (incl. its zoom branch). A RELAYOUT that fires
-            // while the rubber-band is displaced — an async re-render mid-overpan/spring at an edge — must NOT drop the band
-            // for one frame: that 1-frame band-blink shifted the WHOLE content by the band amount (~tens of px), the
-            // top/bottom-edge "another viewport" flash. And for a pinch-zoomed viewport (z!=1) the relayout must NOT drop
-            // the scale to z==1 either — write the same origin-conjugated z·p−offset map the scroll path writes.
-            float band = sc.OverscrollPx;
-            float z = sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f;
-            float offX = horizontal ? sc.OffsetX + band : 0f, offY = horizontal ? 0f : sc.OffsetY + band;
-            if (z == 1f)
-            {
-                cp.LocalTransform = Affine2D.Translation(-offX, -offY);
-            }
-            else
-            {
-                ref RectF cb = ref _scene.Bounds(content);
-                float ox = cb.W * cp.OriginX, oy = cb.H * cp.OriginY;
-                var map = new Affine2D(z, 0f, 0f, z, -offX, -offY);
-                cp.LocalTransform = Affine2D.Translation(-ox, -oy).Multiply(map).Multiply(Affine2D.Translation(ox, oy));
-            }
+            float off = horizontal ? sc.OffsetX : sc.OffsetY;
+            float maxOff = horizontal ? MathF.Max(0f, sc.ContentW - innerW) : MathF.Max(0f, sc.ContentH - innerH);
+            float band = OverscrollPhysics.GuardBandSign(sc.OverscrollPx, off, maxOff);
+            if (sc.Overscrolling && band != sc.OverscrollPx) sc.OverscrollPx = band;
+            OverscrollPhysics.WriteContentTransform(ref cp, in _scene.Bounds(content), horizontal, off, band,
+                sc.ZoomFactor);
         }
 
         // D1 realize-after-layout: the realize window was computed BEFORE this arrange published the real viewport
@@ -609,13 +605,16 @@ public sealed class FlexLayout
         for (var rc = _scene.FirstChild(content); !rc.IsNull; rc = _scene.NextSibling(rc), ord++)
         {
             var rect = layout.ItemRect(first + ord, cross);   // children are in window (index) order; content-space rect
-            Measure(rc);                                       // base sizes for the cell's own internal flex
             // Inset the item by its Margin within the slot, so a list item honors Margin like any stack child (the WinUI
             // ListViewItem backplate inset {4,2,4,2}). Without this the item filled the full slot — a margined row (an
             // inset highlight pill / backplate) then started its content at padding-only, drifting out of alignment with
             // a fixed header outside the list. The slot stride (ItemRect/extent) is unchanged; only the item insets.
             ref LayoutInput rli = ref _scene.Layout(rc);
             float mL = rli.Margin.Left, mT = rli.Margin.Top, mR = rli.Margin.Right, mB = rli.Margin.Bottom;
+            // Measure at the slot's content WIDTH (its column), not unbounded — so a grid cell's text truncates/wraps to its
+            // own column instead of measuring at its full natural width and bleeding into neighbours. A stack slot's
+            // rect.W == the full cross width, so list rows are unaffected (they already filled it).
+            Measure(rc, MathF.Max(0f, rect.W - mL - mR));
             Arrange(rc, rect.X + mL, rect.Y + mT, MathF.Max(0f, rect.W - mL - mR), MathF.Max(0f, rect.H - mT - mB));
         }
         return (contentW, contentH);
@@ -663,6 +662,10 @@ public sealed class FlexLayout
         return (contentW, contentH);
     }
 
+    /// <summary>True when the layout participates in estimate-then-correct (not a fixed-geometry grid posing as measured).</summary>
+    private static bool UsesMeasuredExtent(IVirtualLayout layout)
+        => layout is not GridVirtualLayout gv || gv.IsMeasured;
+
     // Measured-seam virtualization (E11-L0): the same estimate-then-correct + scroll-anchoring contract as the
     // built-in Fenwick path (ArrangeVirtualVariable), but the extents/prefix sums live behind the user-implementable
     // IMeasuredVirtualLayout — custom layouts can be variable/sliver-like. virtualization.md §6.2 semantics.
@@ -678,16 +681,33 @@ public sealed class FlexLayout
         int anchorIndex = layout.IndexAt(offset, cross);
         float anchorWithin = offset - layout.OffsetOf(anchorIndex, cross);
 
+        if (layout is GridVirtualLayout { IsMeasured: true } grid)
+            grid.ResetMeasurePass(sc.ItemCount, cross);
+
+        // Pass 1 — measure every realized cell and feed extents (measured grids need the full row before heights lock).
         int ord = 0;
         for (var rc = _scene.FirstChild(content); !rc.IsNull; rc = _scene.NextSibling(rc), ord++)
         {
             int index = first + ord;
-            var cs = Measure(rc);                                  // the row's natural main extent
+            var rect = layout.ItemRect(index, cross);
+            ref LayoutInput rli = ref _scene.Layout(rc);
+            float mL = rli.Margin.Left, mT = rli.Margin.Top, mR = rli.Margin.Right, mB = rli.Margin.Bottom;
+            float measureW = horizontal ? MathF.Max(0f, rect.H - mT - mB) : MathF.Max(0f, rect.W - mL - mR);
+            var cs = Measure(rc, measureW);
             float main = horizontal ? cs.Width : cs.Height;
-            layout.SetMeasured(index, main, cross);                // estimate-then-correct through the seam (O(log n))
-            var rect = layout.ItemRect(index, cross);              // post-correction content-space rect
-            if (horizontal) Arrange(rc, rect.X, rect.Y, main, innerH);
-            else            Arrange(rc, rect.X, rect.Y, innerW, main);
+            layout.SetMeasured(index, main, cross);
+        }
+
+        // Pass 2 — arrange at the corrected slots (row-synced for grids).
+        ord = 0;
+        for (var rc = _scene.FirstChild(content); !rc.IsNull; rc = _scene.NextSibling(rc), ord++)
+        {
+            int index = first + ord;
+            var rect = layout.ItemRect(index, cross);
+            ref LayoutInput rli = ref _scene.Layout(rc);
+            float mL = rli.Margin.Left, mT = rli.Margin.Top, mR = rli.Margin.Right, mB = rli.Margin.Bottom;
+            Arrange(rc, rect.X + mL, rect.Y + mT,
+                MathF.Max(0f, rect.W - mL - mR), MathF.Max(0f, rect.H - mT - mB));
         }
 
         float mainContent = layout.ContentExtent(sc.ItemCount, cross);

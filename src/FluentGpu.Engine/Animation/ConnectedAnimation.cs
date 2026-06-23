@@ -124,8 +124,30 @@ public sealed class ConnectedAnimation
     /// <summary>Register a node as a shared-element participant for <paramref name="key"/> (its <c>MorphId</c>).</summary>
     public void NoteTagged(NodeHandle node, string key)
     {
-        if (_tagged.TryGetValue(node, out var t) && t.Key == key) return;   // already tagged with this key
+        if (_tagged.TryGetValue(node, out var t))
+        {
+            if (t.Key == key) return;   // already tagged with this key
+            // REASSIGNED to a different shared element on a REUSED node: the detail shell serves successive routes, so its
+            // ONE cover node re-tags (album:A → album:B / a sidebar nav to another playlist) every navigation. A fly still
+            // in flight under the OLD key is culling this node (Visible cleared + Opacity 0, re-applied each frame by
+            // Tick65) — but Settle restores visibility BY KEY, so once the node carries the new key that old flight's
+            // restore can never match it again and it stays record-culled forever: a permanently BLANK cover (only its
+            // sibling shimmer paints). Release the cull now; Tick65 re-applies it under the new key next frame iff a fly
+            // for `key` is genuinely in flight.
+            ReleaseCull(node);
+        }
         _tagged[node] = new Tag { Key = key };
+    }
+
+    // Undo a fly-cull (NodeFlags.Visible cleared + Opacity 0) left on a node whose shared-element key is being reassigned.
+    // Guarded on the Visible flag: a normal (un-culled) re-tag must never stomp a live opacity value — only this animation
+    // clears a content node's Visible, so Visible==0 on a tagged node means our own cull and nothing else.
+    private void ReleaseCull(NodeHandle node)
+    {
+        if (!_scene.IsLive(node) || (_scene.Flags(node) & NodeFlags.Visible) != 0) return;
+        _scene.Flags(node) |= NodeFlags.Visible;
+        _scene.Paint(node).Opacity = 1f;
+        _scene.Mark(node, NodeFlags.PaintDirty);
     }
 
     /// <summary>KeepAlive parked / un-parked a node. Reverse-fly capture on park is deferred to Phase 6 (capturing every

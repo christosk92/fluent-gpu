@@ -4,6 +4,7 @@ using System.Linq;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
+using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using Wavee.Core;
 using static FluentGpu.Dsl.Ui;
@@ -163,7 +164,7 @@ static class DetailTrailing
                     WaveeType.RailHeader(artist.Name) with { MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                 ],
             },
-            FollowPill(() => { /* TODO: ILibraryMutations follow (no Core command yet) */ }),
+            Embed.Comp(() => new FollowButton(artist.Uri)),
         ],
     };
 

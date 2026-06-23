@@ -26,6 +26,9 @@ static class WaveeSettings
     // the OS; an explicit in-app toggle pins Light/Dark and stops following the OS. Seeded at startup before the first frame.
     public static readonly SettingKey<int> ThemeMode = new("theme.mode", 0);
     public static readonly SettingKey<int> RowDensity = new("detail.rowdensity", 1);   // 0 Compact · 1 Default · 2 Cozy · 3 Comfortable
+    // The saved / liked / followed library set (Mutations facet) — a newline-joined list of uris. The single in-process
+    // outbox: every optimistic save/follow rewrites it. (A real source would reconcile server-side + revision conflicts.)
+    public static readonly SettingKey<string> SavedLibrary = new("library.saved", "");
 }
 
 // IAppSettings backed by the engine's AppDataStore (HKCU registry, unpackaged). Every access is DEFENSIVE — a storage

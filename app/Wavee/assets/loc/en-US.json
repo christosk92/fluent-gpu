@@ -7,6 +7,9 @@
     "addToQueue": "Add to queue",
     "addToPlaylist": "Add to playlist",
     "copyToPlaylist": "Copy to playlist",
+    "addedToQueue": "Added {count} to queue",
+    "addedToPlaylist": "Added to {name}",
+    "goToPlaylist": "Open",
     "selectAll": "Select all",
     "goToArtist": "Go to artist",
     "share": "Share",
@@ -73,6 +76,32 @@
     }
   },
 
+  "artist": {
+    "popular": "Popular",
+    "popularReleases": "Popular releases",
+    "discography": "Discography",
+    "albums": "Albums",
+    "singlesEps": "Singles & EPs",
+    "appearsOn": "Appears on",
+    "about": "About",
+    "profileFacts": "Profile facts",
+    "play": "Play",
+    "shuffle": "Shuffle",
+    "follow": "Follow",
+    "following": "Following",
+    "verified": "Verified Artist",
+    "worldRank": "#{rank} in the world",
+    "monthlyListeners": "{count} monthly listeners",
+    "followers": "{count} followers",
+    "heroMeta": "{monthly} monthly listeners · {followers} followers · {albums} albums · {singles} singles",
+    "stat": {
+      "monthly": "Monthly listeners",
+      "followers": "Followers",
+      "albums": "Albums",
+      "singles": "Singles & EPs"
+    }
+  },
+
   "home": {
     "goodMorning": "Good morning",
     "goodAfternoon": "Good afternoon",
@@ -92,6 +121,72 @@
     "ep": "EP",
     "album": "Album",
     "compilation": "Compilation"
+  },
+
+  "search": {
+    "title": "Search Wavee",
+    "prompt": "Find songs, artists, albums and playlists.",
+    "topResult": "Top result",
+    "songs": "Songs",
+    "artists": "Artists",
+    "albums": "Albums",
+    "playlists": "Playlists",
+    "noResults": "No results found",
+    "noResultsSub": "Nothing matched \"{query}\". Try a different spelling or keyword.",
+    "all": "All",
+    "browseAll": "Browse all",
+    "typeSong": "Song",
+    "typeArtist": "Artist",
+    "typeAlbum": "Album",
+    "typePlaylist": "Playlist"
+  },
+
+  "podcast": {
+    "episodes": "Episodes",
+    "show": "Podcast",
+    "inProgress": "In progress",
+    "episodeCount": "{count, plural, one {# episode} other {# episodes}}",
+    "listenNext": "Listen next",
+    "continueListening": "CONTINUE LISTENING",
+    "resume": "Resume",
+    "noEpisodes": "No episodes match this filter",
+    "filter": {
+      "all": "All",
+      "unplayed": "Unplayed",
+      "inProgress": "In progress",
+      "played": "Played"
+    },
+    "sort": {
+      "newest": "Newest",
+      "oldest": "Oldest"
+    }
+  },
+
+  "library": {
+    "filter": "Filter",
+    "noMatch": "Nothing matches your filter",
+    "selectAlbum": "Select an album to see its tracks",
+    "selectArtist": "Select an artist to see their discography",
+    "selectShow": "Select a show to see its episodes",
+    "selectAlbumTracks": "Select a release",
+    "sortBy": "Sort by",
+    "viewAs": "View as",
+    "size": "Size",
+    "fullDiscography": "Discography",
+    "inLibrary": "In library",
+    "sort": {
+      "recents": "Recents",
+      "recentlyAdded": "Recently added",
+      "alphabetical": "Alphabetical",
+      "creator": "Creator",
+      "releaseDate": "Release date"
+    },
+    "view": {
+      "compactList": "Compact list",
+      "list": "List",
+      "compactGrid": "Compact grid",
+      "grid": "Grid"
+    }
   },
 
   "shell": {
@@ -196,7 +291,8 @@
     "dropToPin": "Drop items here to pin",
     "songCount": "{count, plural, one {# song} other {# songs}}",
     "createPlaylist": "Playlist",
-    "createFolder": "Folder"
+    "createFolder": "Folder",
+    "newPlaylist": "My Playlist"
   },
 
   "common": {

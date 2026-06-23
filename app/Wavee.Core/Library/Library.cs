@@ -8,7 +8,11 @@ public sealed record SearchResults(
     IReadOnlyList<Track> Tracks,
     IReadOnlyList<Album> Albums,
     IReadOnlyList<Artist> Artists,
-    IReadOnlyList<Playlist> Playlists);
+    IReadOnlyList<Playlist> Playlists)
+{
+    public static readonly SearchResults Empty = new(
+        System.Array.Empty<Track>(), System.Array.Empty<Album>(), System.Array.Empty<Artist>(), System.Array.Empty<Playlist>());
+}
 
 /// <summary>One page of a streamed track list (skeleton-then-stream — see docs/architecture.md §3/§6): the tracks
 /// resolved so far, the running loaded count, and the known total (so the UI can size a progress cue up front).</summary>
@@ -40,4 +44,8 @@ public interface IMusicLibrary
 
     // The condensed, grouped home feed (replaces the four-separate-collection-calls home). Merged across sources.
     Task<HomeFeed> GetHomeAsync(CancellationToken ct = default);
+
+    // Podcasts (federated to the Podcasts-capable sources): the library grid of shows + a single show's episodes.
+    Task<IReadOnlyList<Show>> GetShowsAsync(CancellationToken ct = default);
+    Task<Show?> GetShowAsync(string uri, CancellationToken ct = default);
 }
