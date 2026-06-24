@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -88,10 +89,22 @@ sealed partial class ArtistPage : Component
             ],
         };
 
+        // Parallax: the hero photo lags the page scroll (drifts up at ~half speed) for depth, while the overlay text +
+        // actions scroll at full speed. The wrapper carries ONLY a transform-Y bind (no paint-above), so the hero stays
+        // BEHIND the page content and its own bottom edge-fade — it dissolves into the content scrolling over it and is
+        // never pulled to the foreground. (Overscroll-stretch stays on `media`; the two transforms live on separate nodes
+        // so they compose instead of clobbering.)
+        var heroParallax = new BoxEl
+        {
+            Width = w, Height = h, ZStack = true,
+            ScrollBinds = [ new() { From = ScrollChannel.Offset, To = BindSink.TransY,
+                                    Range = ScrollRange.Px(0f, h), OutStart = 0f, OutEnd = h * 0.5f } ],
+            Children = [ media ],
+        };
         return new BoxEl
         {
             Width = w, Height = h, ZStack = true,
-            Children = [ media, overlay ],
+            Children = [ heroParallax, overlay ],
         };
     }
 
