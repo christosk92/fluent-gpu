@@ -1509,11 +1509,78 @@ public sealed class TreeReconciler
         };
     }
 
+    /// <summary>Compile an element's declarative <see cref="ScrollBindDsl"/> entries into POD
+    /// <see cref="FluentGpu.Animation.ScrollBind"/> rows on the scene's scroll-binding slab: resolve the enclosing scroller
+    /// once, bake literal-px anchors now (geometry anchors re-bake at ArrangeViewport), and link each into the scroller's
+    /// eval chain + the node's teardown chain. Re-bake is wholesale (free the node's old rows first) so a prop change
+    /// self-cleans. Subsumes the old StickyTop / OnPinned / ScrollStretchHeader wiring.</summary>
+    private void BakeScrollBinds(NodeHandle node, Element el)
+    {
+        var dsls = el.ScrollBinds;
+        int nodeIdx = (int)node.Raw.Index;
+        var table = _scene.ScrollBinds;
+        bool had = table.NodeHasBinds(nodeIdx);
+        if ((dsls is null || dsls.Length == 0) && !had) return;   // nothing now, nothing before → skip
+        table.ClearNode(nodeIdx);                                 // wholesale re-bake (slot reuse self-cleans)
+        if (dsls is null || dsls.Length == 0) return;
+
+        // Resolve the enclosing scroll viewport once (the per-frame eval is then pure index arithmetic).
+        NodeHandle scroller = NodeHandle.Null;
+        for (var p = _scene.Parent(node); !p.IsNull; p = _scene.Parent(p))
+            if ((_scene.Flags(p) & NodeFlags.Scrollable) != 0) { scroller = p; break; }
+
+        foreach (var d in dsls)
+        {
+            var row = new FluentGpu.Animation.ScrollBind { Target = node, OnFlag = d.OnFlag, FlagBit = d.FlagBit };
+            if (d.PinTop is { } inset)
+            {
+                row.PinKind = 1;
+                row.Inset = inset;
+                row.Source = FluentGpu.Animation.ScrollChannel.Offset;
+                row.Sink = FluentGpu.Animation.BindSink.TransY;
+                row.Flags |= FluentGpu.Animation.ScrollBind.FlagPaintAbove;
+            }
+            else if (d.StretchFromTop)
+            {
+                row.Source = FluentGpu.Animation.ScrollChannel.OverscrollBand;
+                row.Sink = FluentGpu.Animation.BindSink.ScaleUniform;
+                row.Flags |= FluentGpu.Animation.ScrollBind.FlagStretchClosedForm;
+            }
+            else
+            {
+                row.Source = d.From;
+                row.Sink = d.To;
+                row.OutLo = d.OutStart;
+                row.OutHi = d.OutEnd;
+                row.Ease = d.Ease;
+                if (d.Clamp) row.Flags |= FluentGpu.Animation.ScrollBind.FlagClampOut;
+                var r = d.Range;
+                if (!r.HasValue)
+                {
+                    row.AnchorA = FluentGpu.Animation.ScrollBindAnchor.OffsetFrac; row.AnchorAv = 0f;
+                    row.AnchorB = FluentGpu.Animation.ScrollBindAnchor.OffsetFrac; row.AnchorBv = 1f;
+                }
+                else { row.AnchorA = r.A; row.AnchorAv = r.Av; row.AnchorB = r.B; row.AnchorBv = r.Bv; }
+                if (IsGeometryAnchor(row.AnchorA) || IsGeometryAnchor(row.AnchorB))
+                    row.Flags |= FluentGpu.Animation.ScrollBind.FlagGeometryAnchor;   // (re)bake at ArrangeViewport
+                else { row.RangeA = row.AnchorAv; row.RangeB = row.AnchorBv; }          // literal-px ⇒ bake now
+            }
+            table.Add(nodeIdx, scroller, row);
+        }
+    }
+
+    private static bool IsGeometryAnchor(FluentGpu.Animation.ScrollBindAnchor a)
+        => a != FluentGpu.Animation.ScrollBindAnchor.OffsetPx;
+
     private void WriteColumns(NodeHandle node, Element el, bool isMount, Element? old = null)
     {
         // Shared-element (connected-animation) tag: a node carrying MorphId is a Hero participant — its laid-out rect +
         // art are tracked so they fly between routes. Runs for every element type (cover Image, skeleton/cover Box).
         if (el.MorphId is { Length: > 0 } morphKey) Connected?.NoteTagged(node, morphKey);
+
+        // Generic scroll-driven bindings (sticky / overscroll-stretch / parallax / fade / collapse / shy / pull-to-refresh):
+        // compiled to POD ScrollBind rows for every element type, replacing the old per-feature StickyTop/ScrollStretchHeader passes.
+        BakeScrollBinds(node, el);
 
         switch (el)
         {
@@ -1648,8 +1715,7 @@ public sealed class TreeReconciler
                 if (b.ZStack) _scene.Mark(node, NodeFlags.ZStack); else _scene.Unmark(node, NodeFlags.ZStack);
                 if (b.ClipToBounds) _scene.Mark(node, NodeFlags.ClipsToBounds); else _scene.Unmark(node, NodeFlags.ClipsToBounds);
                 if (b.CounterScale) _scene.Mark(node, NodeFlags.CounterScaled); else _scene.Unmark(node, NodeFlags.CounterScaled);
-                if (b.ScrollStretchHeader) _scene.Mark(node, NodeFlags.ScrollStretchHeader); else _scene.Unmark(node, NodeFlags.ScrollStretchHeader);
-                if (b.StickyTop is { } st) _scene.SetSticky(node, st, b.OnPinned); else _scene.ClearSticky(node);
+                // sticky + overscroll-stretch are now generic ScrollBinds (baked in WriteColumns' common section above).
                 _scene.SetBoundsChangedHandler(node, b.OnBoundsChanged);
                 if (b.Animate is { } at && Anim is { } anim)
                 {
@@ -1847,6 +1913,9 @@ public sealed class TreeReconciler
                 ss.Zoomable = s.Zoomable;
                 ss.MinZoom = s.MinZoom; ss.MaxZoom = s.MaxZoom;
                 ss.EdgeCueConfig = ResolveEdgeCues(s.EdgeCues);
+                // Change-only scroll-geometry observer (the escape hatch; pull-to-refresh / analytics).
+                if (s.OnScrollGeometryChanged is { } obs) _scene.SetScrollObserver(node, obs.Project, obs.Action);
+                else _scene.ClearScrollObserver(node);
                 if (s.EdgeFade is { } sef) _scene.SetEdgeFade(node, sef); else _scene.ClearEdgeFade(node);
                 ss.AutoEdgeFade = s.AutoEdgeFade; ss.AutoEdgeFadeBand = s.AutoEdgeFade ? 24f : 0f;
                 ss.AlwaysShowBar = s.AlwaysShowScrollbar;

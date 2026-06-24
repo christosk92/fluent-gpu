@@ -545,7 +545,13 @@ public sealed class FlexLayout
             if (sc.Overscrolling && band != sc.OverscrollPx) sc.OverscrollPx = band;
             OverscrollPhysics.WriteContentTransform(ref cp, in _scene.Bounds(content), horizontal, off, band,
                 sc.ZoomFactor);
-            OverscrollPhysics.ApplyStretchHeader(_scene, content, horizontal, band);   // stretchy hero
+        }
+        // (Re)bake geometry-dependent ranges (Content*/Bounds now known), then apply the generic scroll-driven bindings
+        // in the SAME ArrangeViewport invocation — a resize frame must not paint a one-frame-stale bound transform.
+        if (!content.IsNull && _scene.IsLive(content))
+        {
+            ScrollBindEval.BakeGeometry(_scene, node, in sc);
+            ScrollBindEval.ApplyContinuous(_scene, node, ref sc);
         }
 
         // D1 realize-after-layout: the realize window was computed BEFORE this arrange published the real viewport

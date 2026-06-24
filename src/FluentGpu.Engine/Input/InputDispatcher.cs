@@ -64,6 +64,10 @@ public sealed class InputDispatcher
     private float _tpPendingDelta;     // packet deltas accumulated since the last frame (folded into _tpDemandRaw each frame)
     private bool  _tpGotPacket;        // a packet arrived this frame → fold the demand; otherwise hold it (no duplicate inertia)
     private float _tpQuietMs;          // frame-driven quiet-time since the last packet — gates settle so a normal inter-burst gap can't end the gesture (symptom-A stutter fix). NOT wall-clock → replay-deterministic
+    private bool _tpEdgeRecoil;        // saturated edge consumed the OS momentum tail; spring owns the band while packets remain latched
+    private float _tpEdgeSign;         // sign of the edge band when recoil began (-top/left, +bottom/right)
+    private float _tpLastEdgePacketAbs;// previous small outward packet while saturated (tail-trend detector)
+    private byte _tpEdgeTailFrames;    // consecutive tapering outward packets at the cap
     // §7A drag-reorder-over-touch: the contact enrolled a DragReorder member (a CanDrag chain under the press) whose
     // axis-locked vote competes with Pan in the arena. The reorder's item axis (the source row's parent-container main
     // axis); when the arena resolves DragReorder, _touchReorder latches and the contact DRIVES Input.DragController
@@ -158,6 +162,11 @@ public sealed class InputDispatcher
     /// <summary>Touchpad-specific critically-damped release frequency. Indirect trackpad input should recoil more quickly
     /// than a finger-held direct-touch band, while sharing the same exact spring integrator and resistance curve.</summary>
     private const float TpReleaseOmegaRadPerS = 52f;
+    /// <summary>At a saturated edge, two tapering outward packets at or below this magnitude identify the driver's
+    /// post-lift momentum tail. Holding the band until that tail fully ends creates a visible plateau; consume the tail
+    /// while the spring recoils instead. A reverse packet immediately re-engages direct tracking.</summary>
+    private const float TpEdgeTailPacketDip = 8f;
+    private const byte TpEdgeTailFrames = 2;
     /// <summary>Fraction (0,1) of the generic 10%-viewport band cap available to a PRECISION TOUCHPAD. A finger directly
     /// manipulating glass keeps the full touch band; a trackpad is indirect and the captured 9% (~53 DIP at 590 DIP)
     /// displacement felt detached and visually excessive. 0.45 limits the trackpad to ~4.5% of the viewport while preserving
@@ -2430,6 +2439,10 @@ public sealed class InputDispatcher
         _tpPendingDelta = 0f;
         _tpGotPacket = false;
         _tpQuietMs = 0f;
+        _tpEdgeRecoil = false;
+        _tpEdgeSign = 0f;
+        _tpLastEdgePacketAbs = 0f;
+        _tpEdgeTailFrames = 0;
     }
 
     /// <summary>Precision-touchpad pan packet (Win32 routes hi-res WM_POINTERWHEEL here as <see cref="PointerKind.Touchpad"/>
@@ -2445,6 +2458,18 @@ public sealed class InputDispatcher
         float delta = horiz ? dx : dy;
         if (delta == 0f) return;
 
+        // A packet arriving after the edge-recoil inter-packet window is a new gesture, not the old OS momentum tail.
+        // Drop only touchpad ownership; the independent spring may still be finishing and the new stream seeds from its
+        // live band below, avoiding a visual snap.
+        if (_tpEdgeRecoil && _tpQuietMs > s_tpEdgeReleaseQuietMs)
+        {
+            _tpTarget = NodeHandle.Null;
+            _tpEdgeRecoil = false;
+            _tpEdgeSign = 0f;
+            _tpLastEdgePacketAbs = 0f;
+            _tpEdgeTailFrames = 0;
+        }
+
         // Continue the live gesture through short gaps unless there is none or the axis flipped —
         // the device bursts packets ~60ms apart mid-scroll, so we must NOT treat a gap as a new gesture (that was the
         // stutter). A genuinely new gesture starts only after TickTouchpad's quiet latch cleared _tpTarget.
@@ -2456,8 +2481,16 @@ public sealed class InputDispatcher
             ref ScrollState s0 = ref _scene.ScrollRef(vp);
             s0.ScrollMode = 0; s0.FlingVelocity = 0f;   // cancel any prior animator fling so this pan owns the offset
             float startOff = horiz ? s0.OffsetX : s0.OffsetY;
-            _tpDemandRaw = _tpAppliedRaw = startOff;    // demand AND applied start at the live offset (no first-frame catch-up jump)
+            float viewport = horiz ? s0.ViewportW : s0.ViewportH;
+            // If a new contact arrives during spring-back, reconstruct the raw elastic position from the live band.
+            // Starting from the hard-clamped offset alone would erase the band for one frame.
+            startOff += OverscrollPhysics.ExcessFromBand(s0.OverscrollPx, viewport);
+            _tpDemandRaw = _tpAppliedRaw = startOff;    // demand AND applied start at the live visual position
             _tpPendingDelta = 0f;
+            _tpEdgeRecoil = false;
+            _tpEdgeSign = 0f;
+            _tpLastEdgePacketAbs = 0f;
+            _tpEdgeTailFrames = 0;
         }
 
         _tpPendingDelta += delta;   // folded into _tpDemandRaw in TickTouchpad (coalesces the frame's bursts → de-jitter)
@@ -2490,18 +2523,54 @@ public sealed class InputDispatcher
     public void TickTouchpad(float dtMs)
     {
         if (_tpTarget.IsNull) return;
-        if (!_scene.IsLive(_tpTarget) || !_scene.HasScroll(_tpTarget)) { _tpTarget = NodeHandle.Null; return; }
+        if (!_scene.IsLive(_tpTarget) || !_scene.HasScroll(_tpTarget))
+        {
+            _tpTarget = NodeHandle.Null;
+            _tpEdgeRecoil = false;
+            _tpEdgeSign = 0f;
+            _tpLastEdgePacketAbs = 0f;
+            _tpEdgeTailFrames = 0;
+            return;
+        }
 
         ref ScrollState sc = ref _scene.ScrollRef(_tpTarget);
+        bool hadPacket = _tpGotPacket;
+        float packetDelta = 0f;
 
-        if (_tpGotPacket)
+        if (hadPacket)
         {
             // Fold the frame's coalesced packet delta straight into the DEMAND 1:1 (no maxStep clamp — the soft-knee in
             // Win32Platform + the progressive frame curve + low-pass tame an accelerated burst). The curve preserves
             // precise motion and gives the OS momentum tail a clearer non-linear ease-out without adding engine coast.
-            float packetDelta = OverscrollPhysics.ShapeTouchpadPacketDelta(_tpPendingDelta);
-            _tpDemandRaw = ClampTpRaw(in sc, _tpDemandRaw + packetDelta);
+            packetDelta = OverscrollPhysics.ShapeTouchpadPacketDelta(_tpPendingDelta);
             _tpPendingDelta = 0f; _tpGotPacket = false;
+
+            if (_tpEdgeRecoil)
+            {
+                // Consume the driver's continuing OUTWARD post-lift tail while the spring returns. An INWARD packet means
+                // the user reversed direction: reconstruct demand from the spring's live band and hand control back
+                // immediately, with no dead zone and no band snap.
+                if (packetDelta * _tpEdgeSign < -0.01f)
+                {
+                    bool horizontal = sc.Orientation == 1;
+                    float offset = horizontal ? sc.OffsetX : sc.OffsetY;
+                    float viewport = horizontal ? sc.ViewportW : sc.ViewportH;
+                    float liveRaw = offset + OverscrollPhysics.ExcessFromBand(sc.OverscrollPx, viewport);
+                    _tpDemandRaw = _tpAppliedRaw = liveRaw;
+                    _tpDemandRaw = ClampTpRaw(in sc, _tpDemandRaw + packetDelta);
+                    sc.OverscrollVel = 0f;
+                    sc.OverscrollReleaseOmega = 0f;
+                    _tpEdgeRecoil = false;
+                    _tpEdgeSign = 0f;
+                    _tpLastEdgePacketAbs = 0f;
+                    _tpEdgeTailFrames = 0;
+                    if (FluentGpu.Foundation.ScrollLog.On)
+                        FluentGpu.Foundation.ScrollLog.Line($"TPEDGE reverse delta={packetDelta:0.0} -> direct tracking");
+                }
+                // Same-direction packets are the already-rendered OS momentum tail. Do not hold/rebuild the band.
+            }
+            else
+                _tpDemandRaw = ClampTpRaw(in sc, _tpDemandRaw + packetDelta);
         }
         else
         {
@@ -2510,12 +2579,65 @@ public sealed class InputDispatcher
             _tpQuietMs += dtMs;
         }
 
+        if (_tpEdgeRecoil)
+        {
+            // The ScrollAnimator owns the spring now. Keep touchpad ownership latched only to consume the remainder of
+            // this OS momentum stream and to detect an immediate reverse; no second offset writer runs here.
+            OnScrollArmed?.Invoke(_tpTarget);
+            if (_tpQuietMs > s_tpSettleQuietMs)
+            {
+                _tpTarget = NodeHandle.Null;
+                _tpEdgeRecoil = false;
+                _tpEdgeSign = 0f;
+                _tpLastEdgePacketAbs = 0f;
+                _tpEdgeTailFrames = 0;
+            }
+            return;
+        }
+
         // One-pole low-pass: the APPLIED offset chases the DEMAND each frame (packet and quiet-latch frames), so a burst
         // is spread over a few frames into a continuous glide. kOff = 1 − e^(−dt/τ).
         float kOff = 1f - MathF.Exp(-dtMs / s_tpSmoothTau);
         _tpAppliedRaw += (_tpDemandRaw - _tpAppliedRaw) * kOff;
         ApplyTouchPan(_tpTarget, _tpAppliedRaw);
         OnScrollArmed?.Invoke(_tpTarget);
+
+        // Windows keeps emitting a long, tapering momentum tail after lift. Once the indirect touchpad band is already at
+        // its cap, those tiny outward packets cannot add useful travel; holding the cap until the final packet creates the
+        // bad "stuck, then bounce" plateau seen in hardware traces. Two monotonically tapering small packets identify that
+        // tail and release the spring while ownership remains latched. A deliberate reverse re-engages above.
+        if (hadPacket && sc.OverscrollPx != 0f)
+        {
+            float viewport = _tpHoriz ? sc.ViewportW : sc.ViewportH;
+            float cap = s_tpBandHeadroom * OverscrollPhysics.BandLimit(viewport);
+            float packetAbs = MathF.Abs(packetDelta);
+            bool outward = packetDelta * sc.OverscrollPx > 0f;
+            bool saturated = MathF.Abs(sc.OverscrollPx) >= cap - 0.5f;
+            bool tapering = _tpLastEdgePacketAbs <= 0f || packetAbs <= _tpLastEdgePacketAbs + 0.5f;
+            if (outward && saturated && packetAbs <= TpEdgeTailPacketDip && tapering)
+                _tpEdgeTailFrames++;
+            else
+                _tpEdgeTailFrames = 0;
+            _tpLastEdgePacketAbs = outward ? packetAbs : 0f;
+
+            if (_tpEdgeTailFrames >= TpEdgeTailFrames)
+            {
+                _tpEdgeRecoil = true;
+                _tpEdgeSign = MathF.CopySign(1f, sc.OverscrollPx);
+                sc.Overscrolling = false;
+                sc.OverscrollVel = 0f;
+                sc.OverscrollReleaseOmega = TpReleaseOmegaRadPerS;
+                OnScrollArmed?.Invoke(_tpTarget);
+                if (FluentGpu.Foundation.ScrollLog.On)
+                    FluentGpu.Foundation.ScrollLog.Line($"TPEDGE tail-release band={sc.OverscrollPx:0.0} delta={packetDelta:0.0} -> spring");
+                return;
+            }
+        }
+        else if (sc.OverscrollPx == 0f)
+        {
+            _tpLastEdgePacketAbs = 0f;
+            _tpEdgeTailFrames = 0;
+        }
 
         // In-range settle waits only for packet silence + filter convergence. An elastic edge releases after the quiet
         // guard; the spring starts with zero outward velocity for a crisp return instead of the captured 2,025 px/s kick.
@@ -2534,6 +2656,10 @@ public sealed class InputDispatcher
             }
             else if (FluentGpu.Foundation.ScrollLog.On) FluentGpu.Foundation.ScrollLog.Line($"TPEND settle off={_tpAppliedRaw:0}");
             _tpTarget = NodeHandle.Null;
+            _tpEdgeRecoil = false;
+            _tpEdgeSign = 0f;
+            _tpLastEdgePacketAbs = 0f;
+            _tpEdgeTailFrames = 0;
         }
     }
 
@@ -2757,8 +2883,8 @@ public sealed class InputDispatcher
             if (sc.Overscrolling && band != sc.OverscrollPx) sc.OverscrollPx = band;
             OverscrollPhysics.WriteContentTransform(ref cp, in _scene.Bounds(content), horizontal, next, band,
                 sc.ZoomFactor);
-            OverscrollPhysics.ApplyStretchHeader(_scene, content, horizontal, band);   // stretchy hero
             _scene.Mark(content, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+            ScrollBindEval.ApplyContinuous(_scene, n, ref sc);   // generic scroll-driven bindings (stretch/parallax/fade/…)
         }
 
         // Virtualization: keep transform-only scroll while the visible band remains inside the realized guard band. When

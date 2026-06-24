@@ -70,7 +70,8 @@ sealed partial class ArtistPage : Component
         {
             // Only the media stretches during top overscroll. Text/actions stay at their authored size while the image
             // expands from its center to cover the rubber-band reveal.
-            Width = w, Height = h, ZStack = true, ClipToBounds = true, ScrollStretchHeader = true,
+            Width = w, Height = h, ZStack = true, ClipToBounds = true,
+            ScrollBinds = [ new() { StretchFromTop = true } ],   // iOS/Spotify stretchy hero (generic scroll bind)
             TransformOriginX = 0.5f, TransformOriginY = 0f,
             EdgeFade = new EdgeFadeSpec(EdgeMask.Bottom, 200f),
             Children =

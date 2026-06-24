@@ -100,7 +100,7 @@ sealed partial class ArtistPage : Component
             Padding = new Edges4(32f, 40f, 32f, PlayerDock.Reserve + 40f),
             Children = sections.ToArray(),
         };
-        var sentinel = new BoxEl { Height = 0f, StickyTop = 12f, OnPinned = v => pinned.Value = v };
+        var sentinel = new BoxEl { Height = 0f, ScrollBinds = [ new() { PinTop = 12f, OnFlag = v => pinned.Value = v } ] };
         return new BoxEl
         {
             Direction = 1,

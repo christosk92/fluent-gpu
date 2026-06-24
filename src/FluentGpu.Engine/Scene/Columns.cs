@@ -250,6 +250,19 @@ public struct ScrollState
                                           // never PointerOver/ExpandT (a content pan is not a lane hover), so the bar idle-hides
                                           // naturally on the move stopping (the WinUI TouchIndicator shows through a manipulation).
 
+    // ── Predicate channel (generic scroll-binding model — design/plans/generic-hookable-scroll-engine-design.md §3.5/§7).
+    // A fixed bitfield recomputed AFTER the integrator settles, struct-compared to ScrollFlagsPrev so a managed OnFlag
+    // callback / flag-triggered time-animation fires only on an edge flip (CSS scroll-state container queries). Different
+    // update cadence from the continuous progress channel (every frame) is what keeps both paths zero-alloc.
+    public byte ScrollFlags;              // current frame's scroll-state vector
+    public byte ScrollFlagsPrev;          // last frame's vector — struct-compare gate
+    public const byte StuckTopBit = 1, StuckBottomBit = 2, SnappedBit = 4, ScrollableUpBit = 8,
+                      ScrollableDownBit = 16, ScrolledFwdBit = 32, MovingNowBit = 64, IdleExpiredBit = 128;
+    // Distance-latched scroll direction: OffsetPrev advances to Offset only when |Offset − OffsetPrev| crosses a px
+    // hysteresis, so ScrolledFwd is geometry-derived and dt-invariant (no raw per-frame delta that scales with dt).
+    public float OffsetPrev;              // last latched offset (direction reference)
+    public bool  DirLatched;              // OffsetPrev has been seeded (the first sample never spuriously flips the dir bit)
+
     // Virtualization (ItemCount == 0 ⇒ a plain ScrollView, non-virtual).
     public int   ItemCount;
     public IVirtualLayout? Layout;        // pluggable layout (stack/grid/custom; IMeasuredVirtualLayout ⇒ variable-extent

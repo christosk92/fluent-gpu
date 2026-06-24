@@ -202,8 +202,6 @@ public sealed class SceneStore : ISceneBackend
 
     /// <summary>SoA column length (the high-water spine allocation) — O(1) census of the slab size, not the live count.</summary>
     public int Capacity => _gen.Length;
-    /// <summary>Live sticky-position registrations (CSS position:sticky) — O(1) census of the <c>_sticky</c> side-table.</summary>
-    public int StickyCount => _sticky.Count;
     /// <summary>Live scroll/virtual-viewport rows — O(1) census of the <c>_scroll</c> side-table.</summary>
     public int ScrollStateCount => _scroll.Count;
     /// <summary>In-flight implicit brush transitions — O(1) census of the <c>_brushAnims</c> side-table.</summary>
@@ -791,28 +789,32 @@ public sealed class SceneStore : ISceneBackend
     public bool TryGetHitTestPassThrough(NodeHandle node, out NodeHandle target)
         => _hitPassThrough.TryGetValue((int)node.Raw.Index, out target);
 
-    // ── sticky registry (CSS position:sticky, top edge) ─────────────────────────────────────────
-    // Node index → (handle, top inset, pin-state observer). The reconciler Set/Clears it from BoxEl.StickyTop each
-    // reconcile (slot reuse self-cleans like the transition side-table); the host's phase-7 sticky pass iterates it
-    // and writes the pin offset as the node's LocalTransform — so HIT-TESTING follows the PINNED position
-    // (AbsoluteRect sums transforms) — and fires OnPinned on engage/release transitions (the CSS :stuck observable).
-    private readonly Dictionary<int, (NodeHandle Node, float Inset, Action<bool>? OnPinned)> _sticky = new();
-    /// <summary>All sticky-declared nodes, keyed by slot index — consumed by the host's per-frame sticky pass.</summary>
-    public Dictionary<int, (NodeHandle Node, float Inset, Action<bool>? OnPinned)> StickyNodes => _sticky;
-    public void SetSticky(NodeHandle h, float inset, Action<bool>? onPinned = null) => _sticky[(int)h.Raw.Index] = (h, inset, onPinned);
-    public void ClearSticky(NodeHandle h)
+    // The CSS position:sticky registry was removed — sticky is now a generic ScrollBind pin op
+    // (FluentGpu.Animation.ScrollBindTable + ScrollBindEval.ApplyPinAndFlagPass / NodeFlags.StickyPinned).
+
+    // ── generic scroll-binding slab (design/plans/generic-hookable-scroll-engine-design.md) ──────────────
+    // The reconciler-owned dense slab of ScrollBind rows. The host evaluates them at the offset-write chokepoint
+    // (offset/band/velocity/phase-sourced ops) and the phase-7 pin pass (PinKind ops). Sticky + overscroll-stretch are
+    // two configured rows here — not bespoke passes / private side-tables.
+    private readonly FluentGpu.Animation.ScrollBindTable _scrollBinds = new();
+    public FluentGpu.Animation.ScrollBindTable ScrollBinds => _scrollBinds;
+    /// <summary>O(1) census of live scroll-binding rows (subsumes the old StickyCount).</summary>
+    public int ScrollBindCount => _scrollBinds.Count;
+
+    // ── scroll-geometry observer registry (the change-only escape hatch; ScrollEl.OnScrollGeometryChanged) ──
+    // Node index → projection+action. The reconciler Set/Clears it; the host evaluates the projection after the
+    // integrator settles and fires the action only when the projected long key changes (SwiftUI onScrollGeometryChange).
+    private readonly Dictionary<int, FluentGpu.Animation.ScrollObserverRow> _scrollObs = new();
+    public Dictionary<int, FluentGpu.Animation.ScrollObserverRow> ScrollObservers => _scrollObs;
+    public int ScrollObserverCount => _scrollObs.Count;
+    public void SetScrollObserver(NodeHandle h, Func<FluentGpu.Animation.ScrollGeometry, long>? project, Action<FluentGpu.Animation.ScrollGeometry>? action)
     {
-        if (!_sticky.Remove((int)h.Raw.Index)) return;
-        if (!IsLive(h)) return;
-        // Un-declaring while pinned: release the pin transform and the paint-order boost.
-        ref NodePaint p = ref Paint(h);
-        if (p.LocalTransform.Dy != 0f || p.LocalTransform.Dx != 0f)
-        {
-            p.LocalTransform = Affine2D.Identity;
-            Mark(h, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
-        }
-        Unmark(h, NodeFlags.StickyPinned);
+        int idx = (int)h.Raw.Index;
+        if (project is null || action is null) { _scrollObs.Remove(idx); return; }
+        ref var row = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(_scrollObs, idx, out _);
+        row.Node = h; row.Project = project; row.Action = action;
     }
+    public void ClearScrollObserver(NodeHandle h) => _scrollObs.Remove((int)h.Raw.Index);
 
     /// <summary>Get-or-create the variable-height extent table for a viewport, (re)building it on item-count change.</summary>
     public ExtentTable ExtentTableFor(NodeHandle h, int itemCount, float estimate)

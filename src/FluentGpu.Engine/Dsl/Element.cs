@@ -14,6 +14,13 @@ public abstract record Element
     /// <c>ConnectedAnimation</c> registry. Null = not a participant (the default).</summary>
     public string? MorphId { get; init; }
 
+    /// <summary>Generic scroll-driven bindings (design/plans/generic-hookable-scroll-engine-design.md): each entry slaves
+    /// one of this node's compositor properties (transform / opacity / clip / presented-size) to a normalized scroll
+    /// progress of its enclosing <see cref="ScrollEl"/> — or pins it (sticky, <see cref="ScrollBindDsl.PinTop"/>) /
+    /// stretches it (overscroll hero, <see cref="ScrollBindDsl.StretchFromTop"/>). Evaluated allocation-free in the frame
+    /// loop. Empty = none. This is the one generic surface that subsumes the old StickyTop/OnPinned/ScrollStretchHeader.</summary>
+    public ScrollBindDsl[] ScrollBinds { get; init; } = [];
+
     /// <summary>Stable per-record-type id for integer type-dispatch in the reconciler (the source-gen'd ElementTypeId).</summary>
     public abstract ushort ElementTypeId { get; }
 
@@ -242,7 +249,7 @@ public sealed record BoxEl : Element
     // Width/Height bind layout and trigger a scoped relayout.
     /// <summary>The whole-matrix transform channel — bind-only in v1 (a thunk/signal producing the full Affine2D;
     /// the STATIC path composes from the decomposed OffsetX/Y/ScaleX/Y/Rotation floats above). When bound, the
-    /// decomposed statics are ignored: one transform owner per node — never combine with StickyTop or
+    /// decomposed statics are ignored: one transform owner per node — never combine with a sticky/stretch ScrollBind or
     /// transform-channel animations. An unbound Transform's Value is never read.</summary>
     public Prop<Affine2D> Transform { get; init; }
 
@@ -263,31 +270,10 @@ public sealed record BoxEl : Element
     public bool ZStack { get; init; }
     public bool ClipToBounds { get; init; }
 
-    /// <summary>iOS/Spotify "stretchy header" media: when this box lies on the leading-child chain of a vertical
-    /// <see cref="ScrollEl"/>'s content, top overscroll scales it uniformly from top-center <c>(0.5, 0)</c> to fill the revealed band.
-    /// Put this on the image/scrim layer, not the whole hero, so text and actions do not scale. The overscroll mechanism
-    /// owns this node's per-frame transform (compositor-only, no relayout); do not combine it with
-    /// <see cref="StickyTop"/> or a bound transform.</summary>
-    public bool ScrollStretchHeader { get; init; }
-
     /// <summary>Opt this box into general layout-change animation: the host diffs its presented rect vs its new
     /// laid-out rect each commit and drives the residual through the spec's channels/dynamics (no relayout, no
     /// per-frame re-render). Null ⇒ snap (the default). See <see cref="FluentGpu.Foundation.LayoutTransition"/>.</summary>
     public LayoutTransition? Animate { get; init; }
-
-    /// <summary>CSS <c>position: sticky; top: N</c> — the box scrolls normally until its top edge reaches N device-
-    /// independent pixels below its nearest scroll viewport's top, then PINS there while its PARENT (the containing
-    /// block) is in view; it never escapes the parent's bounds. The pin is a per-frame LocalTransform written by the
-    /// host (compositor-only, no relayout) and hit-testing follows the pinned position; while pinned the node paints
-    /// ABOVE its siblings so content scrolls underneath. One transform owner per node: do not combine with
-    /// <see cref="TransformBind"/> or transform-channel animations. Null = not sticky (the default).</summary>
-    public float? StickyTop { get; init; }
-
-    /// <summary>Observable pin state for a <see cref="StickyTop"/> box — the signals-native CSS <c>:stuck</c>: the
-    /// host invokes this whenever the box transitions pinned ↔ unpinned. Wire it to a signal and restyle ANYTHING off
-    /// it (an opaque fill so content can't show through, a shadow, a compact variant, different children) — strictly
-    /// more flexible than a fixed pinned style. Fired at most once per transition, never per frame.</summary>
-    public Action<bool>? OnPinned { get; init; }
 
     /// <summary>Opt this child OUT of a <see cref="FluentGpu.Foundation.SizeMode.ScaleCorrect"/> ancestor's scale: the
     /// recorder applies the inverse scale so the child stays undistorted (Framer-Motion projection correction).</summary>
@@ -626,4 +612,10 @@ public sealed record ScrollEl : Element
     /// auto-hide that only reveals on hover/scroll. Hover still expands the rail to the full draggable bar. For navigation
     /// surfaces (a sidebar) where a discoverable, always-present scroll affordance is wanted (WinUI 11 nav behavior).</summary>
     public bool AlwaysShowScrollbar { get; init; }
+
+    /// <summary>Change-only scroll-geometry observer (the escape hatch; SwiftUI <c>onScrollGeometryChange</c>). The host
+    /// projects the live geometry to a coarse <c>long</c> key after the integrator settles and fires the action only when
+    /// that key changes (never per-px, never per-frame) — for pull-to-refresh triggers, analytics, bespoke app logic.
+    /// UI-thread, pre-publish. Project a COARSE key (e.g. <c>g => g.Band &lt; -80 ? 1 : 0</c>), not raw px.</summary>
+    public (Func<FluentGpu.Animation.ScrollGeometry, long> Project, Action<FluentGpu.Animation.ScrollGeometry> Action)? OnScrollGeometryChanged { get; init; }
 }

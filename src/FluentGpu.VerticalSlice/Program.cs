@@ -3946,7 +3946,7 @@ static class Slice
             window.Show();
             var device = new HeadlessGpuDevice();
             var fonts = new HeadlessFontSystem(strings);
-            int pinEvents = 0; bool lastPin = false;
+            int pinEvents = 0; bool lastPin = false; NodeHandle headerN = NodeHandle.Null;
             var root = new W0fStaticProbe
             {
                 Build = () => ScrollView(new BoxEl
@@ -3960,7 +3960,7 @@ static class Slice
                             Direction = 1,
                             Children =
                             [
-                                new BoxEl { Height = 40f, StickyTop = 0f, OnPinned = p => { pinEvents++; lastPin = p; } },
+                                new BoxEl { Height = 40f, ScrollBinds = [ new() { PinTop = 0f, OnFlag = p => { pinEvents++; lastPin = p; } } ], OnRealized = h => headerN = h },
                                 new BoxEl { Height = 400f },                       // card content
                             ],
                         },
@@ -3984,8 +3984,7 @@ static class Slice
             }
             var vp = FindScrollable(s.Root);                       // the ScrollView viewport
             var content = s.ScrollRef(vp).ContentNode;
-            var headerN = NodeHandle.Null;                         // the sticky node, straight from the registry
-            foreach (var kv in s.StickyNodes) headerN = kv.Value.Node;
+            // headerN (the sticky node) is captured via OnRealized at mount (declared above).
             float vpTop = s.AbsoluteRect(vp).Y;
             float restY = s.AbsoluteRect(headerN).Y;
 
@@ -6304,24 +6303,28 @@ static class Slice
                 ok, $"worstRoundTripErr={worst:0.######}px");
         }
 
-        // gate.touchpad.progressive-packet-curve: precision remains exactly 1:1, the midrange lies below the linear chord
-        // (a visibly stronger ease-out), hard-flick magnitude is preserved, surplus is safely compressed, and the mapping
-        // stays odd + monotonic. This is packet shaping only — no synthetic travel exists between samples.
+        // gate.touchpad.progressive-packet-curve: precision remains exactly 1:1, then gain increases smoothly with packet
+        // magnitude so ordinary/fast scrolling is lighter without amplifying tiny adjustments. Large flicks pass through
+        // a soft output knee, and the mapping stays odd + monotonic. This is packet shaping only — no synthetic travel.
         {
             float p8 = OverscrollPhysics.ShapeTouchpadPacketDelta(8f);
             float p16 = OverscrollPhysics.ShapeTouchpadPacketDelta(16f);
+            float p18 = OverscrollPhysics.ShapeTouchpadPacketDelta(18f);
             float p30 = OverscrollPhysics.ShapeTouchpadPacketDelta(30f);
             float p60 = OverscrollPhysics.ShapeTouchpadPacketDelta(60f);
             float p100 = OverscrollPhysics.ShapeTouchpadPacketDelta(100f);
             float p140 = OverscrollPhysics.ShapeTouchpadPacketDelta(140f);
             float p200 = OverscrollPhysics.ShapeTouchpadPacketDelta(200f);
             float n60 = OverscrollPhysics.ShapeTouchpadPacketDelta(-60f);
-            bool monotonic = p16 < p30 && p30 < p60 && p60 < p100 && p100 < p140 && p140 < p200;
-            bool progressive = p30 < 30f && p60 < 60f && p100 < 100f;
-            Check("gate.touchpad.progressive-packet-curve touchpad packet gain is 1:1 in the precision zone, progressively eases the mid/late tail, preserves the hard-flick endpoint, and remains bounded/odd/monotonic",
-                p8 == 8f && p16 == 16f && progressive && p140 == 140f && p200 == 152f
+            bool monotonic = p18 < p30 && p30 < p60 && p60 < p100 && p100 < p140 && p140 < p200;
+            bool adaptive = p30 > 30f && p30 < 31f
+                            && p60 > 65f && p60 < 68f
+                            && Near(p100, 120f, 0.01f);
+            bool bounded = p140 > 150f && p140 < 160f && p200 < 180f;
+            Check("gate.touchpad.progressive-packet-curve touchpad transfer is exactly 1:1 for small adjustments, adds smoothly increasing gain to medium motion, soft-knees large flicks, and remains bounded/odd/monotonic",
+                p8 == 8f && p16 == 16f && p18 == 18f && adaptive && bounded
                 && n60 == -p60 && monotonic,
-                $"8={p8:0.###} 16={p16:0.###} 30={p30:0.###} 60={p60:0.###} 100={p100:0.###} 140={p140:0.###} 200={p200:0.###} -60={n60:0.###}");
+                $"8={p8:0.###} 16={p16:0.###} 18={p18:0.###} 30={p30:0.###} 60={p60:0.###} 100={p100:0.###} 140={p140:0.###} 200={p200:0.###} -60={n60:0.###}");
         }
 
         // gate.touchpad.settle-determinism: a scripted touchpad packet stream → filtered settle driven through AppHost (the real
@@ -6457,8 +6460,8 @@ static class Slice
 
         // gate.touchpad.edge-release-bounded: captured hardware traces held the touchpad band at ~9% viewport for
         // 0.8–1.3 seconds after packets stopped, then sometimes injected a 2,025 px/s OUTWARD spring velocity. At an edge
-        // there is no useful coast left: freeze the pull through the 120ms inter-burst guard, release promptly afterward,
-        // start the spring toward home with no outward kick, and use the touchpad-specific ~4.5%-viewport cap.
+        // there is no useful coast left: release promptly after the shorter edge quiet guard, start the spring toward home
+        // with no outward kick, and use the touchpad-specific ~4.5%-viewport cap.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("tp-edge-release", new Size2(360, 460), 1f)); window.Show();
@@ -6495,6 +6498,57 @@ static class Slice
             Check("gate.touchpad.edge-release-bounded touchpad overscroll is capped near 4.5% viewport, releases within ~80ms of packet silence, and uses the faster touchpad-specific spring toward home without an outward momentum kick",
                 pulled.OverscrollPx < -1f && bounded && prompt && springHome && touchpadOmega,
                 $"pulledBand={pulled.OverscrollPx:0.0} maxBand={maxBand:0.0}/cap~{viewport * 0.045f:0.0} activeFrames={activeFrames} released=(band {released.OverscrollPx:0.0},vel {released.OverscrollVel:0},omega {released.OverscrollReleaseOmega:0})");
+        }
+
+        // gate.touchpad.edge-tail-no-plateau: real Windows precision-touchpad streams continue sending a tapering
+        // post-lift momentum tail at a saturated edge. Waiting for packet silence holds the band visibly pinned even
+        // though no more useful movement is possible. Two small decreasing outward packets must hand the band to the
+        // spring WHILE touchpad ownership remains latched (so the remaining tail is consumed); an inward reverse packet
+        // must immediately cancel that recoil ownership and resume direct tracking without a dead zone.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("tp-edge-tail", new Size2(360, 460), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
+            host.RunFrame();
+            var vp = host.Scene.Root;
+            var pos = new Point2(150, 200);
+            uint t = 1000;
+
+            // Saturate the top band, then keep packets arriving: this is the OS momentum tail, not packet silence.
+            foreach (float d in new[] { -180f, -180f, -7f, -5f })
+            {
+                window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, ScrollDelta: d,
+                    Pointer: PointerKind.Touchpad, TimestampMs: t += 16));
+                host.RunFrame();
+            }
+            host.Scene.TryGetScroll(vp, out var releasedDuringTail);
+            float releasedBand = MathF.Abs(releasedDuringTail.OverscrollPx);
+            bool recoilWhileLatched = host.Input.TouchpadActive
+                                      && !releasedDuringTail.Overscrolling
+                                      && releasedDuringTail.OverscrollReleaseOmega == 52f;
+
+            // Keep sending outward tail packets. They must not rebuild/hold the band; the exact spring must move home.
+            foreach (float d in new[] { -4f, -3f, -2f })
+            {
+                window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, ScrollDelta: d,
+                    Pointer: PointerKind.Touchpad, TimestampMs: t += 16));
+                host.RunFrame();
+            }
+            host.Scene.TryGetScroll(vp, out var recoiling);
+            bool leftPlateau = MathF.Abs(recoiling.OverscrollPx) < releasedBand - 1f;
+
+            // Reverse direction before the latch expires: direct tracking owns the band again immediately.
+            window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, ScrollDelta: 12f,
+                Pointer: PointerKind.Touchpad, TimestampMs: t += 16));
+            host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var reversed);
+            bool reverseReengaged = host.Input.TouchpadActive
+                                     && reversed.OverscrollReleaseOmega == 0f
+                                     && (reversed.Overscrolling || reversed.OverscrollPx == 0f);
+
+            Check("gate.touchpad.edge-tail-no-plateau a tapering OS momentum tail releases a saturated band before packet silence, continues recoiling while ownership consumes outward packets, and an inward reverse immediately re-engages direct tracking",
+                recoilWhileLatched && leftPlateau && reverseReengaged,
+                $"released=(band {releasedDuringTail.OverscrollPx:0.0},over {releasedDuringTail.Overscrolling},omega {releasedDuringTail.OverscrollReleaseOmega:0},latched {host.Input.TouchpadActive}) recoilingBand={recoiling.OverscrollPx:0.0} reversed=(band {reversed.OverscrollPx:0.0},over {reversed.Overscrolling},omega {reversed.OverscrollReleaseOmega:0})");
         }
 
         // gate.touchpad.mouse-wheel-takeover: a touchpad stream can still own a TOP rubber-band when a

@@ -1128,7 +1128,8 @@ public sealed class AppHost : IDisposable
             _scene.AdvanceBrushAnims(dtMs);                    // 7 implicit BrushTransition (logical state flips)
             _dispatcher.TickTouchpad(dtMs);                    // 7 precision-touchpad pan: ease applied offset + lift→inertia (before the pump so the fling it seeds runs this frame)
             _scrollAnim.Tick(dtMs);                            // 7 smooth scroll + fling + overscroll spring + scrollbar fade (the engine-owned integrator)
-            ApplyStickyOffsets();                              // 7 CSS position:sticky pins (after every scroll write)
+            ScrollBindEval.ApplyPinAndFlagPass(_scene);       // 7 generic scroll-bind pins + the predicate-flag channel (sticky etc.)
+            ScrollBindEval.RunObservers(_scene);              // 7 change-only scroll-geometry observers (pull-to-refresh / analytics)
             _repeat.Tick(dtMs);                                // 7 RepeatButton auto-repeat (held → re-fire click)
             _caretBlinker.Tick(dtMs);                          // 7 focused-editor caret blink (toggles TextEditState)
             _dispatcher.DragDrop.Tick(dtMs);                   // 7 E5 edge auto-scroll (drag near an overflowing viewport edge)
@@ -1488,55 +1489,6 @@ public sealed class AppHost : IDisposable
         roots.Clear();
     }
 
-    /// <summary>CSS <c>position: sticky; top: inset</c> (phase 7, after every scroll write this frame): for each
-    /// sticky-declared node, compute its pure-LAYOUT position inside its nearest scroll viewport's content and pin it
-    /// with a LocalTransform once the scroll would carry it past the viewport top — clamped so it never escapes its
-    /// PARENT (the containing block). Compositor-only (no relayout); hit-testing follows because AbsoluteRect sums
-    /// LocalTransforms; the recorder paints pinned nodes after their siblings so content scrolls underneath. Writes
-    /// only on change, so idle frames stay zero-work.</summary>
-    private void ApplyStickyOffsets()
-    {
-        var reg = _scene.StickyNodes;
-        if (reg.Count == 0) return;
-        foreach (var kv in reg)
-        {
-            var n = kv.Value.Node;
-            if (!_scene.IsLive(n)) continue;
-            float shift = 0f;
-            var vp = _scene.Parent(n);
-            while (!vp.IsNull && (_scene.Flags(vp) & NodeFlags.Scrollable) == 0) vp = _scene.Parent(vp);
-            if (!vp.IsNull && _scene.TryGetScroll(vp, out var sc) && !sc.ContentNode.IsNull)
-            {
-                // The node's pure-layout Y within the scroll CONTENT (transforms excluded — the pin itself must not feed back).
-                float yN = 0f;
-                bool inContent = false;
-                for (var a = n; !a.IsNull && a != vp; a = _scene.Parent(a))
-                {
-                    if (a == sc.ContentNode) { inContent = true; break; }
-                    yN += _scene.Bounds(a).Y;
-                }
-                var par = _scene.Parent(n);
-                if (inContent && !par.IsNull)
-                {
-                    float yPar = yN - _scene.Bounds(n).Y;                       // parent's Y within the content
-                    float limit = MathF.Max(0f, (yPar + _scene.Bounds(par).H) - (yN + _scene.Bounds(n).H));
-                    shift = Math.Clamp(sc.OffsetY + kv.Value.Inset - yN, 0f, limit);
-                }
-            }
-            ref NodePaint p = ref _scene.Paint(n);
-            if (MathF.Abs(p.LocalTransform.Dy - shift) > 0.01f)
-            {
-                bool wasPinned = (_scene.Flags(n) & NodeFlags.StickyPinned) != 0;
-                bool pinned = shift > 0f;
-                p.LocalTransform = pinned ? Affine2D.Translation(0f, shift) : Affine2D.Identity;
-                _scene.Mark(n, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
-                if (pinned) _scene.Mark(n, NodeFlags.StickyPinned); else _scene.Unmark(n, NodeFlags.StickyPinned);
-                // The CSS :stuck observable — once per engage/release transition, never per frame. The callback
-                // typically writes a signal; the restyle lands next frame (signals-first, no synchronous re-render).
-                if (pinned != wasPinned) kv.Value.OnPinned?.Invoke(pinned);
-            }
-        }
-    }
 
     /// <summary>Settle timeout: a wedged exit track (one that never reaches its end) would keep its orphan LIVE,
     /// pinning OrphanCount &gt; 0 and so keeping the wake loop running forever. Reclaim every settled orphan (no tracks)
