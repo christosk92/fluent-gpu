@@ -263,6 +263,13 @@ public sealed record BoxEl : Element
     public bool ZStack { get; init; }
     public bool ClipToBounds { get; init; }
 
+    /// <summary>iOS/Spotify "stretchy header" media: when this box lies on the leading-child chain of a vertical
+    /// <see cref="ScrollEl"/>'s content, top overscroll scales it uniformly from top-center <c>(0.5, 0)</c> to fill the revealed band.
+    /// Put this on the image/scrim layer, not the whole hero, so text and actions do not scale. The overscroll mechanism
+    /// owns this node's per-frame transform (compositor-only, no relayout); do not combine it with
+    /// <see cref="StickyTop"/> or a bound transform.</summary>
+    public bool ScrollStretchHeader { get; init; }
+
     /// <summary>Opt this box into general layout-change animation: the host diffs its presented rect vs its new
     /// laid-out rect each commit and drives the residual through the spec's channels/dynamics (no relayout, no
     /// per-frame re-render). Null ⇒ snap (the default). See <see cref="FluentGpu.Foundation.LayoutTransition"/>.</summary>

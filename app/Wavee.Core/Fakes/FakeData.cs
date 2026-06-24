@@ -104,8 +104,135 @@ public static class FakeData
         long monthly = 850_000L + (h % 32) * 940_000L;          // ~0.85M – ~30M monthly listeners
         long followers = monthly / 2 + (h % 11) * 130_000L;
         bool verified = h % 5 != 0;
+        int rank = h % 7 == 0 ? 0 : 1 + h % 500;                // some artists have no world rank
+        // The full magazine facets, synthesized deterministically (each gated so artists differ). The real Spotify
+        // export overrides these for exported artists; here every fake artist still gets a rich page (square art).
         return new Artist($"ar{i % Seed.Length}", $"spotify:artist:ar{i % Seed.Length}", s.Artist, Cover(i, 300), albums,
-            monthly, followers, ArtistBio(s.Artist, monthly), verified);
+            monthly, followers, ArtistBio(s.Artist, monthly), verified,
+            WorldRank: rank, HeaderImage: Cover(i, 640), TopTracks: null,
+            AppearsOn: null, Pinned: SynthPinned(h, albums), Extras: SynthExtras(i, s.Artist, h, monthly, albums));
+    }
+
+    // ── synthesized "magazine" facets (fallback for artists with no real Spotify export) ─────────────────────────
+    /// <summary>The "On tour now" banner copy derived from a concert list (mirrors WaveeMusic's tour-banner formatter:
+    /// 1 date → a show, 2–3 → dates, ≥4 with the next within a week → on-tour-now, else an upcoming tour).</summary>
+    public static TourBanner? TourBannerFor(string name, IReadOnlyList<Concert>? concerts)
+    {
+        if (concerts is not { Count: > 0 }) return null;
+        int n = concerts.Count;
+        var next = concerts[0];
+        foreach (var c in concerts) if (c.Date < next.Date) next = c;
+        bool soon = (next.Date - DateTimeOffset.Now).TotalDays <= 7 && next.Date >= DateTimeOffset.Now;
+        string eyebrow = n == 1 ? "UPCOMING SHOW" : n <= 3 ? "UPCOMING DATES" : soon ? "ON TOUR NOW" : "UPCOMING TOUR";
+        string when = next.Date.ToString("MMM d", System.Globalization.CultureInfo.InvariantCulture).ToUpperInvariant();
+        return new TourBanner(eyebrow, $"{name} — on tour", $"Next: {when} · {next.Venue} · {next.City} · {n} dates total", soon);
+    }
+
+    static ArtistExtras SynthExtras(int i, string name, int h, long monthly, Album[] albums)
+    {
+        var concerts = h % 4 != 0 ? SynthConcerts(name, h) : null;
+        return new ArtistExtras(
+            Concerts: concerts,
+            Merch: h % 3 != 1 ? SynthMerch(i, h) : null,
+            Playlists: h % 2 == 0 ? SynthPlaylists(i, name) : null,
+            MusicVideos: h % 5 != 2 ? SynthVideos(albums) : null,
+            TopCities: h % 2 == 1 ? SynthCities(h, monthly) : null,
+            ExternalLinks: SynthLinks(name),
+            Gallery: h % 3 != 2 ? SynthGallery(i, h) : null,
+            Related: null,                                       // the page falls back to the cached artists pool
+            Tour: TourBannerFor(name, concerts));
+    }
+
+    static readonly (string City, string Venue)[] CityVenues =
+    [
+        ("Berlin", "Mercedes-Benz Arena"), ("London", "The O2"), ("Amsterdam", "Ziggo Dome"),
+        ("Paris", "Accor Arena"), ("Milano", "Mediolanum Forum"), ("Madrid", "WiZink Center"),
+        ("New York", "Madison Square Garden"), ("Tokyo", "Nippon Budokan"), ("São Paulo", "Allianz Parque"),
+        ("Sydney", "Qudos Bank Arena"),
+    ];
+
+    static IReadOnlyList<Concert> SynthConcerts(string name, int h)
+    {
+        int n = 3 + h % 8;
+        var now = DateTimeOffset.Now;
+        var list = new List<Concert>(n);
+        for (int k = 0; k < n; k++)
+        {
+            var (city, venue) = CityVenues[(h + k) % CityVenues.Length];
+            list.Add(new Concert($"wavee:concert:{h}:{k}", name, venue, city, now.AddDays(4 + k * 9 + h % 5), IsFestival: k == 2));
+        }
+        return list;
+    }
+
+    static readonly string[] MerchNames = ["Tour Tee", "Vinyl LP", "Hoodie", "Cap", "Poster", "Enamel Pin"];
+    static IReadOnlyList<MerchItem> SynthMerch(int i, int h)
+    {
+        int n = 3 + h % 4;
+        var list = new List<MerchItem>(n);
+        for (int k = 0; k < n; k++)
+            list.Add(new MerchItem(MerchNames[(h + k) % MerchNames.Length], "$" + (19 + k * 5) + ".00",
+                "Official merchandise.", Cover(i + k + 5, 300), null));
+        return list;
+    }
+
+    static IReadOnlyList<PlaylistRef> SynthPlaylists(int i, string name)
+    {
+        string[] names = [$"This Is {name}", $"{name} Radio", $"{name} Mix", "Top Pop"];
+        string[] subs = ["Spotify · official", "Spotify · featured", "Discovered on", "Made for you"];
+        var list = new List<PlaylistRef>(4);
+        for (int k = 0; k < 4; k++)
+            list.Add(new PlaylistRef($"spotify:playlist:pl{(i + k) % 8}", names[k], Cover(i + k + 100, 300), subs[k]));
+        return list;
+    }
+
+    static IReadOnlyList<MusicVideo> SynthVideos(Album[] albums)
+    {
+        var list = new List<MusicVideo>(4);
+        foreach (var al in albums)
+        {
+            if (al.Tracks is not { Count: > 0 } ts) continue;
+            var t = ts[0];
+            list.Add(new MusicVideo(t.Uri, t.Title, al.Cover, t.DurationMs, t.IsExplicit));
+            if (list.Count >= 4) break;
+        }
+        return list;
+    }
+
+    static readonly string[] Cities = ["São Paulo", "London", "Mexico City", "Sydney", "Quezon City", "Jakarta", "Istanbul"];
+    static IReadOnlyList<TopCity> SynthCities(int h, long monthly)
+    {
+        var list = new List<TopCity>(5);
+        for (int k = 0; k < 5; k++)
+            list.Add(new TopCity(Cities[(h + k) % Cities.Length], null, Math.Max(1L, monthly / 30 / (k + 1))));
+        return list;
+    }
+
+    static IReadOnlyList<ExternalLink> SynthLinks(string name)
+    {
+        string slug = new string(name.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
+        if (slug.Length == 0) slug = "artist";
+        return
+        [
+            new ExternalLink("Instagram", "https://instagram.com/" + slug, ExternalLinkKind.Instagram),
+            new ExternalLink("Twitter", "https://twitter.com/" + slug, ExternalLinkKind.Twitter),
+            new ExternalLink("Wikipedia", "https://en.wikipedia.org/wiki/" + slug, ExternalLinkKind.Wikipedia),
+        ];
+    }
+
+    static IReadOnlyList<Image> SynthGallery(int i, int h)
+    {
+        int n = 4 + h % 5;
+        var list = new List<Image>(n);
+        for (int k = 0; k < n; k++) list.Add(Cover(i + k + 3, 480));
+        return list;
+    }
+
+    static PinnedItem? SynthPinned(int h, Album[] albums)
+    {
+        if (h % 3 == 1 || albums.Length == 0) return null;
+        var al = albums[0];
+        string kind = al.Kind switch { AlbumKind.Single => "Single", AlbumKind.EP => "EP", AlbumKind.Compilation => "Compilation", _ => "Album" };
+        return new PinnedItem("Pinned", al.Name, $"{kind} · {al.Year}", "Out now — give it a listen.", al.Cover, al.Uri);
     }
 
     static string ArtistBio(string name, long monthly) =>

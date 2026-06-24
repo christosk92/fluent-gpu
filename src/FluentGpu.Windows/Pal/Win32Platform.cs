@@ -146,19 +146,23 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private const uint WM_POINTERUPDATE = 0x0245, WM_POINTERDOWN = 0x0246, WM_POINTERUP = 0x0247,
                        WM_POINTERLEAVE = 0x024A, WM_POINTERCAPTURECHANGED = 0x024C,
                        WM_POINTERWHEEL = 0x024E, WM_POINTERHWHEEL = 0x024F;
-    // Precision-touchpad pan distance: DIP of content travel per raw wheel-delta unit (HIWORD of WM_POINTERWHEEL). This
-    // device's promoted-wheel deltas are large/accelerated (−400…−1700 per packet), so a small factor keeps the felt speed
-    // sane; the engine then smooths + adds inertia. Env FG_TP_SCALE overrides for on-device tuning (a VALUE, never logic).
-    private static readonly float s_tpScale =
-        float.TryParse(Environment.GetEnvironmentVariable("FG_TP_SCALE"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float tps) && tps > 0f ? tps : 0.08f;
+    // ── precision-touchpad raw-delta shaping (FROZEN) ───────────────────────────────────────────────────────────────
+    // Empirically dialed in on real precision-touchpad hardware (the `WAS …` notes are the tuning trail) and now FIXED
+    // literals — the FG_TP_SCALE/KNEE/MAXRAW env overrides + their startup TryParse were removed once the feel settled.
+    // Change a value here and rebuild to retune.
+    //
+    // Pan distance: DIP of content travel per raw wheel-delta unit (HIWORD of WM_POINTERWHEEL). This device's
+    // promoted-wheel deltas are large/accelerated (−400…−1700 per packet), so a small factor keeps the felt speed sane.
+    // The driver also emits the momentum tail; the engine lightly smooths these packets but does not add another inertia.
+    private static readonly float s_tpScale = 0.08f;
     // Soft-knee that tames the device's accelerated raw notch BEFORE scaling: small deltas stay EXACTLY linear (precise
     // panning untouched), only the big accelerated packets are compressed toward a soft ceiling — |notch| below s_tpKnee
-    // is passed through 1:1, above it the curve asymptotes toward s_tpMaxRaw. Env FG_TP_KNEE / FG_TP_MAXRAW (values, not
-    // logic). Applies ONLY to the hi-res (precision-touchpad) branch; the detented mouse-wheel branch is untouched.
-    private static readonly float s_tpKnee =
-        float.TryParse(Environment.GetEnvironmentVariable("FG_TP_KNEE"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float tpk) && tpk > 0f ? tpk : 240f;
-    private static readonly float s_tpMaxRaw =
-        float.TryParse(Environment.GetEnvironmentVariable("FG_TP_MAXRAW"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float tpm) && tpm > 0f ? tpm : 1600f;
+    // is passed through 1:1, above it the curve asymptotes toward s_tpMaxRaw. Applies ONLY to the hi-res
+    // (precision-touchpad) branch; the detented mouse-wheel branch is untouched.
+    // WAS 240 — every real packet on this device sat above the old knee, so all scrolling was de-amplified (inverted gain); widened the linear region.
+    private static readonly float s_tpKnee = 600f;
+    // WAS 1600 — raised the compression ceiling so a hard flick (per-packet DIP cap 128→224) genuinely throws farther.
+    private static readonly float s_tpMaxRaw = 2800f;
     private const long ISC_SHOWUICOMPOSITIONWINDOW = 0x80000000L;
     private const int VK_SHIFT = 0x10, VK_CONTROL = 0x11, VK_MENU = 0x12, VK_LWIN = 0x5B, VK_RWIN = 0x5C;
     private const int HTCLIENT = 1;
@@ -908,7 +912,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 if (PointerKindOf(wheelPid) == PointerKind.Touchpad) _wheelHiRes = true;
 
                 // Precision-touchpad pan (hi-res): the engine owns it. The OS-promoted hi-res WM_POINTERWHEEL packet is
-                // soft-kneed and scaled here, then handed to the engine's PanTouchpad path (smooth coast + lift→inertia).
+                // soft-kneed and scaled here, then handed to the engine's packet-driven PanTouchpad path.
                 if (_wheelHiRes)
                 {
                     // Soft-knee on the raw notch BEFORE scaling: |notch| ≤ s_tpKnee stays exactly linear (precise panning

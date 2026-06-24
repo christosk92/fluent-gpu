@@ -13,6 +13,7 @@ public sealed class SpotifyExport
     readonly Dictionary<string, Playlist> _headers = new();        // uri → header (Tracks empty)
     readonly Dictionary<string, Playlist> _fullPlaylists = new();  // uri → header + REAL tracks (the Iced detail)
     readonly Dictionary<string, HomeCard> _cards = new();          // uri → card (for enriching opened album/artist/playlist)
+    readonly Dictionary<string, Artist> _artists = new();          // uri → full magazine artist (from artist-*.json)
 
     public IReadOnlyList<PlaylistSummary> LibraryPlaylists => _summaries;
     public int LikedCount { get; private set; }
@@ -21,6 +22,8 @@ public sealed class SpotifyExport
     public bool TryGetFullPlaylist(string uri, out Playlist p) => _fullPlaylists.TryGetValue(uri, out p!);
     public bool TryGetHeader(string uri, out Playlist p) => _headers.TryGetValue(uri, out p!);
     public bool TryGetCard(string uri, out HomeCard c) => _cards.TryGetValue(uri, out c!);
+    public bool TryGetArtist(string uri, out Artist a) => _artists.TryGetValue(uri, out a!);
+    public IReadOnlyCollection<Artist> Artists => _artists.Values;
 
     public static SpotifyExport Load(string? dir = null)
         => new(dir ?? Path.Combine(AppContext.BaseDirectory, "assets", "spotify"));
@@ -30,6 +33,25 @@ public sealed class SpotifyExport
         LoadLibrary(Path.Combine(dir, "playlists.json"));
         LoadIced(Path.Combine(dir, "icedamericano.json"));
         LoadHome(Path.Combine(dir, "home.json"));
+        LoadArtists(dir);
+    }
+
+    // Every artist-*.json holds a full `data.artistUnion` overview (the magazine page), keyed by the artist uri.
+    void LoadArtists(string dir)
+    {
+        if (!Directory.Exists(dir)) return;
+        foreach (var path in Directory.GetFiles(dir, "artist-*.json"))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(path));
+                var au = Dig(doc.RootElement, "data", "artistUnion");
+                if (au.ValueKind != JsonValueKind.Object) continue;
+                var artist = MapArtist(au);
+                if (artist.Uri.Length > 0) _artists[artist.Uri] = artist;
+            }
+            catch { /* malformed export → skip */ }
+        }
     }
 
     void LoadLibrary(string path)

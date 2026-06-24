@@ -67,11 +67,18 @@ internal static class SpotifyExportMapper
         {
             var url = StrAt(s, "url");
             if (url is null) continue;
-            int sw = s.TryGetProperty("width", out var wv) && wv.ValueKind == JsonValueKind.Number ? wv.GetInt32() : 0;
-            int sh = s.TryGetProperty("height", out var hv) && hv.ValueKind == JsonValueKind.Number ? hv.GetInt32() : 0;
+            int sw = Num(s, "width", "maxWidth");      // coverArt uses width/height; headerImage/visuals use maxWidth/maxHeight
+            int sh = Num(s, "height", "maxHeight");
             if (best is null || sw > bestW) { best = url; bestW = sw; w = sw; h = sh; }
         }
         return best is null ? null : new Image(best, w > 0 ? w : null, h > 0 ? h : null);
+    }
+
+    static int Num(JsonElement e, string a, string b)
+    {
+        if (e.TryGetProperty(a, out var v) && v.ValueKind == JsonValueKind.Number) return v.GetInt32();
+        if (e.TryGetProperty(b, out var v2) && v2.ValueKind == JsonValueKind.Number) return v2.GetInt32();
+        return 0;
     }
 
     /// <summary>`images.items[0].sources[]` → cover (playlist / show shape).</summary>
@@ -181,5 +188,209 @@ internal static class SpotifyExportMapper
         // Artists carry visuals.avatarImage.sources in this schema; fall back to images.items shape.
         var v = PickImage(Dig(artistData, "visuals", "avatarImage", "sources"));
         return v ?? ImagesCover(artistData);
+    }
+
+    // ── artist overview (data.artistUnion) → the full "magazine" Artist ───────────────────────────────────────
+    /// <summary>Map a Spotify <c>artistUnion</c> (the discography/overview GraphQL query) into a domain
+    /// <see cref="Artist"/> with all the magazine facets it carries (visuals, discography, top tracks, goods,
+    /// profile, related content). Facets absent from this query (monthly listeners / followers / world rank /
+    /// top cities / music videos) are left null/0 and backfilled by the source from <see cref="FakeData"/>.</summary>
+    public static Artist MapArtist(JsonElement au)
+    {
+        var uri = Str(au, "uri") ?? ("spotify:artist:" + (Str(au, "id") ?? ""));
+        var name = Str(au, "profile", "name") ?? "";
+        var avatar = PickImage(Dig(au, "visuals", "avatarImage", "sources"));
+        var header = PickImage(Dig(au, "headerImage", "data", "sources"));
+        bool verified = BoolAt(au, false, "onPlatformReputationTrait", "verification", "isVerified")
+                     || BoolAt(au, false, "onPlatformReputationTrait", "verification", "isRegistered");
+        string? bio = Str(au, "profile", "biography", "text");
+
+        // Discography: albums + compilations + singles all into TopAlbums (the page splits by Kind).
+        var topAlbums = new List<Album>();
+        AddReleases(Dig(au, "discography", "albums", "items"), topAlbums);
+        AddReleases(Dig(au, "discography", "compilations", "items"), topAlbums);
+        AddReleases(Dig(au, "discography", "singles", "items"), topAlbums);
+
+        var topTracks = new List<Track>();
+        var tt = Dig(au, "discography", "topTracks", "items");
+        if (tt.ValueKind == JsonValueKind.Array)
+            foreach (var it in tt.EnumerateArray())
+                if (MapArtistTrack(Dig(it, "track")) is { } t) topTracks.Add(t);
+
+        var appearsOn = new List<Album>();
+        AddReleases(Dig(au, "relatedContent", "appearsOn", "items"), appearsOn);
+
+        var pinned = MapPinned(Dig(au, "profile", "pinnedItem"));
+        var concerts = MapConcerts(Dig(au, "goods", "concerts", "items"));
+        var extras = new ArtistExtras(
+            Concerts: concerts,
+            Merch: MapMerch(Dig(au, "goods", "merch", "items")),
+            Playlists: MapPlaylistRefs(Dig(au, "profile", "playlistsV2", "items")),
+            MusicVideos: null,
+            TopCities: null,
+            ExternalLinks: MapLinks(Dig(au, "profile", "externalLinks", "items")),
+            Gallery: MapGallery(Dig(au, "visuals", "gallery", "items")),
+            Related: MapRelated(Dig(au, "relatedContent", "relatedArtists", "items")),
+            Tour: FakeData.TourBannerFor(name, concerts));
+
+        return new Artist(IdFromUri(uri), uri, name, avatar, topAlbums,
+            MonthlyListeners: 0, Followers: 0, Bio: bio, Verified: verified,
+            WorldRank: 0, HeaderImage: header, TopTracks: topTracks,
+            AppearsOn: appearsOn.Count > 0 ? appearsOn : null, Pinned: pinned, Extras: extras);
+    }
+
+    static void AddReleases(JsonElement groups, List<Album> into)
+    {
+        if (groups.ValueKind != JsonValueKind.Array) return;
+        foreach (var g in groups.EnumerateArray())
+        {
+            var rels = Dig(g, "releases", "items");
+            if (rels.ValueKind != JsonValueKind.Array || rels.GetArrayLength() == 0) continue;
+            if (MapRelease(rels[0]) is { } al) into.Add(al);
+        }
+    }
+
+    static Album? MapRelease(JsonElement r)
+    {
+        var uri = Str(r, "uri");
+        if (uri is null) return null;
+        int tracks = (int)Long(r, "tracks", "totalCount");
+        var kind = (Str(r, "type") ?? "ALBUM").ToUpperInvariant() switch
+        {
+            "SINGLE" => tracks >= 4 ? AlbumKind.EP : AlbumKind.Single,
+            "EP" => AlbumKind.EP,
+            "COMPILATION" => AlbumKind.Compilation,
+            _ => AlbumKind.Album,
+        };
+        return new Album(IdFromUri(uri), uri, Str(r, "name") ?? "", CoverArt(r),
+            System.Array.Empty<ArtistRef>(), (int)Long(r, "date", "year"), tracks, null, kind);
+    }
+
+    // topTracks[].track shape: { name, uri, playcount(string), duration.totalMilliseconds, albumOfTrack.{uri,coverArt}, artists.items[] }
+    static Track? MapArtistTrack(JsonElement t)
+    {
+        if (t.ValueKind != JsonValueKind.Object) return null;
+        var uri = Str(t, "uri");
+        if (uri is null) return null;
+        var artists = new List<ArtistRef>();
+        var ai = Dig(t, "artists", "items");
+        if (ai.ValueKind == JsonValueKind.Array)
+            foreach (var a in ai.EnumerateArray())
+            {
+                var auri = Str(a, "uri") ?? "";
+                var nm = Str(a, "profile", "name") ?? "";
+                if (nm.Length > 0) artists.Add(new ArtistRef(IdFromUri(auri), auri, nm));
+            }
+        var album = Dig(t, "albumOfTrack");
+        var albumUri = Str(album, "uri") ?? "";
+        bool explicitFlag = (Str(t, "contentRating", "label") ?? "NONE") != "NONE";
+        return new Track(IdFromUri(uri), uri, Str(t, "name") ?? "", artists,
+            new AlbumRef(IdFromUri(albumUri), albumUri, ""),
+            Long(t, "duration", "totalMilliseconds"), explicitFlag, CoverArt(album),
+            PlayCount: Long(t, "playcount"), Source: "spotify");
+    }
+
+    static PinnedItem? MapPinned(JsonElement p)
+    {
+        if (p.ValueKind != JsonValueKind.Object) return null;
+        var uri = Str(p, "uri");
+        if (uri is null) return null;
+        var cover = PickImage(Dig(p, "thumbnailImage", "data", "sources")) ?? CoverArt(Dig(p, "itemV2", "data"));
+        return new PinnedItem("Pinned", Str(p, "title") ?? "", Str(p, "subtitle") ?? "",
+            Str(p, "comment") ?? "", cover, uri);
+    }
+
+    static IReadOnlyList<Concert>? MapConcerts(JsonElement items)
+    {
+        if (items.ValueKind != JsonValueKind.Array) return null;
+        var list = new List<Concert>();
+        foreach (var it in items.EnumerateArray())
+        {
+            var d = Dig(it, "data");
+            var uri = Str(d, "uri");
+            if (uri is null) continue;
+            DateTimeOffset date = default;
+            var iso = Str(d, "startDateIsoString");
+            if (iso is not null) DateTimeOffset.TryParse(iso, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out date);
+            list.Add(new Concert(uri, Str(d, "title"), Str(d, "location", "name") ?? "",
+                Str(d, "location", "city") ?? "", date, BoolAt(d, false, "festival")));
+        }
+        return list.Count > 0 ? list : null;
+    }
+
+    static IReadOnlyList<MerchItem>? MapMerch(JsonElement items)
+    {
+        if (items.ValueKind != JsonValueKind.Array) return null;
+        var list = new List<MerchItem>();
+        foreach (var it in items.EnumerateArray())
+            list.Add(new MerchItem(Str(it, "nameV2") ?? Str(it, "name") ?? "", Str(it, "price") ?? "",
+                Str(it, "description"), PickImage(Dig(it, "image", "sources")), Str(it, "url")));
+        return list.Count > 0 ? list : null;
+    }
+
+    static IReadOnlyList<PlaylistRef>? MapPlaylistRefs(JsonElement items)
+    {
+        if (items.ValueKind != JsonValueKind.Array) return null;
+        var list = new List<PlaylistRef>();
+        foreach (var it in items.EnumerateArray())
+        {
+            var d = Dig(it, "data");
+            var uri = Str(d, "uri");
+            if (uri is null) continue;
+            list.Add(new PlaylistRef(uri, Str(d, "name") ?? "", ImagesCover(d),
+                Str(d, "ownerV2", "data", "name") ?? "Spotify"));
+        }
+        return list.Count > 0 ? list : null;
+    }
+
+    static IReadOnlyList<ExternalLink>? MapLinks(JsonElement items)
+    {
+        if (items.ValueKind != JsonValueKind.Array) return null;
+        var list = new List<ExternalLink>();
+        foreach (var it in items.EnumerateArray())
+        {
+            var url = Str(it, "url") ?? "";
+            if (url.Length == 0) continue;
+            var name = Str(it, "name") ?? "";
+            list.Add(new ExternalLink(TitleCase(name), url, ClassifyLink(name + " " + url)));
+        }
+        return list.Count > 0 ? list : null;
+    }
+
+    static ExternalLinkKind ClassifyLink(string s)
+    {
+        s = s.ToLowerInvariant();
+        if (s.Contains("instagram")) return ExternalLinkKind.Instagram;
+        if (s.Contains("twitter") || s.Contains("x.com")) return ExternalLinkKind.Twitter;
+        if (s.Contains("facebook")) return ExternalLinkKind.Facebook;
+        if (s.Contains("youtube")) return ExternalLinkKind.YouTube;
+        if (s.Contains("wikipedia")) return ExternalLinkKind.Wikipedia;
+        if (s.Contains("tiktok")) return ExternalLinkKind.TikTok;
+        return ExternalLinkKind.Generic;
+    }
+
+    static string TitleCase(string s) => s.Length == 0 ? s : char.ToUpperInvariant(s[0]) + s[1..].ToLowerInvariant();
+
+    static IReadOnlyList<Image>? MapGallery(JsonElement items)
+    {
+        if (items.ValueKind != JsonValueKind.Array) return null;
+        var list = new List<Image>();
+        foreach (var it in items.EnumerateArray())
+            if (PickImage(Dig(it, "sources")) is { } im) list.Add(im);
+        return list.Count > 0 ? list : null;
+    }
+
+    static IReadOnlyList<RelatedArtist>? MapRelated(JsonElement items)
+    {
+        if (items.ValueKind != JsonValueKind.Array) return null;
+        var list = new List<RelatedArtist>();
+        foreach (var it in items.EnumerateArray())
+        {
+            var uri = Str(it, "uri");
+            if (uri is null) continue;
+            list.Add(new RelatedArtist(IdFromUri(uri), uri, Str(it, "profile", "name") ?? "",
+                PickImage(Dig(it, "visuals", "avatarImage", "sources"))));
+        }
+        return list.Count > 0 ? list : null;
     }
 }

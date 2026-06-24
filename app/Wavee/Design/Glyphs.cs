@@ -34,4 +34,9 @@ internal static class Mdl
     public static readonly string ChevronDown = Of(0xE70D);    // sort direction descending
     public static readonly string FavoriteStarFill = Of(0xE735);   // album top-track star (the most-played row)
     public static readonly string CaretSolidUp = Of(0xF090);   // track-list sort-direction caret (rotated 180° for descending)
+    public static readonly string Calendar = Of(0xE787);       // upcoming concerts (date stub)
+    public static readonly string Link = Of(0xE71B);           // external/social link pill
+    public static readonly string Share = Of(0xE72D);          // hero share action
+    public static readonly string Play = Of(0xE768);           // play (hero/pinned/radio actions)
+    public static readonly string MapPin = Of(0xE707);         // concert location
 }

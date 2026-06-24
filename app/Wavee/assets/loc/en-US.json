@@ -85,6 +85,18 @@
     "appearsOn": "Appears on",
     "about": "About",
     "profileFacts": "Profile facts",
+    "topTracksReleases": "Top tracks & popular releases",
+    "musicVideos": "Music videos",
+    "playlistsDiscovery": "Playlists and discovery",
+    "upcomingConcerts": "Upcoming concerts",
+    "merch": "Merch",
+    "gallery": "Gallery",
+    "biography": "Biography",
+    "listenedMostIn": "Listened to most in",
+    "artistRadio": "Artist radio",
+    "seeAll": "See all",
+    "buy": "Buy",
+    "view": "View",
     "play": "Play",
     "shuffle": "Shuffle",
     "follow": "Follow",
@@ -98,7 +110,9 @@
       "monthly": "Monthly listeners",
       "followers": "Followers",
       "albums": "Albums",
-      "singles": "Singles & EPs"
+      "singles": "Singles & EPs",
+      "concerts": "Upcoming concerts",
+      "related": "Related artists"
     }
   },
 

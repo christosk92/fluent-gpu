@@ -75,7 +75,7 @@ public static class OverscrollPhysics
     /// where <c>k = −ln(decay)</c>. Using the closed form (not a <c>v·dt</c> Riemann step) makes the total coast distance
     /// FRAME-RATE-INDEPENDENT (the per-step integrals telescope to the same geometric sum at any dt). Mutates
     /// <paramref name="velPxPerS"/> in place and returns the offset displacement to apply this frame. The shared owner of
-    /// the touchpad-coast integrator (<c>InputDispatcher.TickTouchpad</c>); headless-gated for distance + dt-invariance.</summary>
+    /// a reusable exact exponential-decay integrator; headless-gated for distance + dt-invariance.</summary>
     public static float CoastStep(ref float velPxPerS, float dtMs, float decayPerS)
     {
         if (decayPerS <= 0f || decayPerS >= 1f || dtMs <= 0f) return 0f;
@@ -85,6 +85,34 @@ public static class OverscrollPhysics
         float dpos = velPxPerS * (1f - f) / k;      // exact ∫₀^dt v·decay^τ dτ
         velPxPerS *= f;
         return dpos;
+    }
+
+    /// <summary>Progressive precision-touchpad packet curve, applied once to the frame-coalesced DIP delta. Small motion
+    /// (≤16 DIP/frame) stays exactly 1:1 for precision. Between 16 and 140 DIP the exponent slightly suppresses the
+    /// mid/late tail while preserving the hard-flick endpoint, so acceleration and deceleration read as a curve instead
+    /// of a linear gain. Above 140 DIP, surplus is compressed toward a 160 DIP safety ceiling. This shapes only OS
+    /// packets; it creates no autonomous coast and therefore cannot double the driver's momentum tail.</summary>
+    public static float ShapeTouchpadPacketDelta(float deltaDip)
+    {
+        const float precision = 16f;
+        const float hardFlick = 140f;
+        const float maxFrame = 160f;
+        const float exponent = 1.25f;
+
+        float a = MathF.Abs(deltaDip);
+        if (a <= precision) return deltaDip;
+
+        float shaped;
+        if (a < hardFlick)
+        {
+            float x = (a - precision) / (hardFlick - precision);
+            shaped = precision + (hardFlick - precision) * MathF.Pow(x, exponent);
+        }
+        else
+        {
+            shaped = MathF.Min(maxFrame, hardFlick + (a - hardFlick) * 0.20f);
+        }
+        return MathF.CopySign(shaped, deltaDip);
     }
 
     /// <summary>Seed band + spring velocity when inertia hits a clamp (touch fling or touchpad glide). One code path for
@@ -99,7 +127,9 @@ public static class OverscrollPhysics
     }
 
     /// <summary>Advance a damped spring from <paramref name="posPx"/> toward <paramref name="targetPx"/> (default 0 = the
-    /// release spring-back). Returns true when settled at the target. Semi-implicit Euler, ≤16ms substeps. The continuous
+    /// release spring-back). Returns true when settled at the target. The shipping critically-damped path uses the exact
+    /// closed-form solution, avoiding the large first-frame displacement and long numerical tail of semi-implicit Euler.
+    /// Non-default damping ratios retain the bounded ≤16ms semi-implicit fallback. The continuous
     /// touchpad overscroll passes the live demanded band as the target each frame; velocity carries forward across
     /// re-targets, so a new pull redirects the SAME spring instead of restarting it (no double-bounce).</summary>
     public static bool StepSpring(ref float posPx, ref float velPxPerS, float dtMs, float omegaRadPerS = 0f, float targetPx = 0f)
@@ -107,13 +137,26 @@ public static class OverscrollPhysics
         if (posPx == targetPx && velPxPerS == 0f) return true;
         float w = omegaRadPerS > 0f ? omegaRadPerS : SpringOmegaRadPerS;
         float z = SpringDampingRatio;
-        float remaining = dtMs;
-        while (remaining > 0f)
+        if (dtMs > 0f && MathF.Abs(z - 1f) <= 0.0001f)
         {
-            float h = MathF.Min(remaining, 16f) / 1000f;
-            remaining -= 16f;
-            velPxPerS += (w * w * (targetPx - posPx) - 2f * z * w * velPxPerS) * h;
-            posPx += velPxPerS * h;
+            float t = dtMs * 0.001f;
+            float x = posPx - targetPx;
+            float c = velPxPerS + w * x;
+            float e = MathF.Exp(-w * t);
+            posPx = targetPx + (x + c * t) * e;
+            velPxPerS = (velPxPerS - w * c * t) * e;
+        }
+        else
+        {
+            float remaining = dtMs;
+            while (remaining > 0f)
+            {
+                float stepMs = MathF.Min(remaining, 16f);
+                float h = stepMs * 0.001f;
+                remaining -= stepMs;
+                velPxPerS += (w * w * (targetPx - posPx) - 2f * z * w * velPxPerS) * h;
+                posPx += velPxPerS * h;
+            }
         }
         // Snap home once the bounce is visually done (≤0.5 DIP, ≤8 px/s) instead of crawling sub-pixel for ~100ms more —
         // that invisible tail read as a slow/lingering settle. (Always lands exactly on 0, so gates that assert final==0 hold.)
@@ -144,6 +187,50 @@ public static class OverscrollPhysics
         float ox = w * cp.OriginX, oy = h * cp.OriginY;
         var map = new Affine2D(z, 0f, 0f, z, -offX, -offY);
         cp.LocalTransform = Affine2D.Translation(-ox, -oy).Multiply(map).Multiply(Affine2D.Translation(ox, oy));
+    }
+
+    /// <summary>iOS/Spotify stretchy header: find the flagged media node on the vertical scroll content's leading-child
+    /// chain and scale it uniformly from normalized origin <c>(0.5, 0)</c> (top-center) to cover a top overscroll band.
+    /// The content translation moves the authored header down by <c>pull</c>; the media transform cancels that translation
+    /// and grows downward from its top-center without scaling the overlaid text.
+    /// Resets to identity when not overscrolling. No-op for horizontal scrollers, bottom overscroll, or pages without a
+    /// flagged media node.</summary>
+    public static void ApplyStretchHeader(SceneStore scene, NodeHandle content, bool horizontal, float band)
+    {
+        if (horizontal || content.IsNull || !scene.IsLive(content)) return;
+        // Walk the leading-child chain to the flagged media (skips SkelRegion / Body / Responsive / hero wrappers).
+        // Bounded depth keeps the per-scroll-frame lookup constant and allocation-free.
+        NodeHandle header = default;
+        var n = scene.FirstChild(content);
+        for (int depth = 0; depth < 12 && !n.IsNull && scene.IsLive(n); depth++)
+        {
+            if ((scene.Flags(n) & NodeFlags.ScrollStretchHeader) != 0) { header = n; break; }
+            n = scene.FirstChild(n);
+        }
+        if (header.IsNull) return;
+
+        ref NodePaint hp = ref scene.Paint(header);
+        float pull = band < 0f ? -band : 0f;                 // top overscroll only (band<0)
+        var bounds = scene.Bounds(header);
+        float h = bounds.H;
+        Affine2D target;
+        if (h <= 1f)
+            target = Affine2D.Identity;
+        else if (pull > 0.5f)
+        {
+            // The recorder already conjugates LocalTransform around NodePaint.OriginX/Y. The flagged media authors
+            // (0.5, 0), so this matrix contains ONLY scale + the band-cancel translation — embedding pivot offsets here
+            // would apply the origin twice and make the image appear to scale from an edge.
+            float s = (h + pull) / h;
+            target = new Affine2D(s, 0f, 0f, s, 0f, -pull);
+        }
+        else
+            target = Affine2D.Identity;
+        if (hp.LocalTransform != target)
+        {
+            hp.LocalTransform = target;
+            scene.Mark(header, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+        }
     }
 
     /// <summary>Clamp band sign at clamped edges (prevents a 1-frame wrong-way flash during spring / relayout).</summary>

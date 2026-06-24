@@ -218,6 +218,8 @@ public struct ScrollState
     public float OverscrollPx;            // current visual displacement past the clamp (Animation springs it back to 0)
     public float OverscrollVel;           // spring velocity for the release spring-back (px/s)
     public bool  Overscrolling;           // TOUCH only: finger drives the band 1:1 (no spring-back yet); cleared on pointer-up
+    public float OverscrollReleaseOmega;  // optional per-release spring frequency; 0 = the active ScrollTuning default.
+                                          // Touchpad uses a faster recoil than direct touch without splitting the band model.
 
     public float FadeT;                   // scrollbar indicator opacity 0..1 (eased in on scroll/hover, auto-hides after idle)
     public float ExpandT;                 // WinUI conscious scrollbar expansion 0=thin indicator, 1=full gutter + buttons

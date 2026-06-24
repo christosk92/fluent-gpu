@@ -9,8 +9,8 @@ namespace FluentGpu.Animation;
 /// <para><b>Per-notch mouse-wheel distance.</b> A mouse/free-spin wheel notch (the <c>WheelNotch</c> field on an
 /// <c>InputEvent</c>, a signed fractional notch count = rawAmount/120) scrolls
 /// <c>max(<see cref="WheelPerNotchMinDip"/>, <see cref="WheelPerNotchViewportFrac"/>·viewport)</c> DIP — the WinUI
-/// content-relative mouse-wheel line height (ScrollViewer_Partial.h: <c>max(48, 15%·viewport)</c>), replacing the old
-/// flat 60-DIP/notch that under-scrolled tall lists and over-scrolled short ones. Synthetic/test wheel input that
+/// bounded content-relative mouse-wheel line height (<c>max(48, 10%·viewport)</c>). This keeps tall pages responsive
+/// without the previous 15% profile's oversized 88–120 DIP impulses. Synthetic/test wheel input that
 /// carries a DIP <c>ScrollDelta</c> (no notch) bypasses this scaling entirely (the headless harness path). (Precision
 /// touchpad pan rides the dedicated engine-owned <c>PanTouchpad</c>/<c>TickTouchpad</c> path, not this wheel notch path.)</para>
 ///
@@ -21,6 +21,7 @@ namespace FluentGpu.Animation;
 public readonly record struct ScrollTuning(
     float WheelPerNotchMinDip,        // WinUI mouse-wheel line-height floor (DIP per notch)
     float WheelPerNotchViewportFrac,  // content-relative wheel distance (fraction of the viewport extent per notch)
+    float WheelFlingMaxVelocityPxPerS, // maximum accumulated mouse-wheel momentum
     float WheelEaseTauMs,             // wheel/scrollbar TargetChase smoothing time constant (ms)
     float FlingDecayPerS,             // touch-fling per-second velocity SURVIVAL factor (k = −ln(decay); 0.05 ⇒ WinUI 0.95 feel)
     float FlingSettleVelocityPxPerS,  // below this fling speed the integrator reverts to TargetChase (settles)
@@ -31,7 +32,8 @@ public readonly record struct ScrollTuning(
     /// mouse-wheel behavior keeps the documented target chase.</summary>
     public static readonly ScrollTuning WinUiLike = new(
         WheelPerNotchMinDip: 48f,
-        WheelPerNotchViewportFrac: 0.15f,
+        WheelPerNotchViewportFrac: 0.10f,
+        WheelFlingMaxVelocityPxPerS: 4500f,
         WheelEaseTauMs: ScrollAnimator.WheelEaseTauMs,
         FlingDecayPerS: ScrollAnimator.FlingDecayPerS,
         FlingSettleVelocityPxPerS: ScrollAnimator.FlingMinVelocityPxPerS,

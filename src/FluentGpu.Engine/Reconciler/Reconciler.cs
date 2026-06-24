@@ -1648,6 +1648,7 @@ public sealed class TreeReconciler
                 if (b.ZStack) _scene.Mark(node, NodeFlags.ZStack); else _scene.Unmark(node, NodeFlags.ZStack);
                 if (b.ClipToBounds) _scene.Mark(node, NodeFlags.ClipsToBounds); else _scene.Unmark(node, NodeFlags.ClipsToBounds);
                 if (b.CounterScale) _scene.Mark(node, NodeFlags.CounterScaled); else _scene.Unmark(node, NodeFlags.CounterScaled);
+                if (b.ScrollStretchHeader) _scene.Mark(node, NodeFlags.ScrollStretchHeader); else _scene.Unmark(node, NodeFlags.ScrollStretchHeader);
                 if (b.StickyTop is { } st) _scene.SetSticky(node, st, b.OnPinned); else _scene.ClearSticky(node);
                 _scene.SetBoundsChangedHandler(node, b.OnBoundsChanged);
                 if (b.Animate is { } at && Anim is { } anim)

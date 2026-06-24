@@ -545,6 +545,7 @@ public sealed class FlexLayout
             if (sc.Overscrolling && band != sc.OverscrollPx) sc.OverscrollPx = band;
             OverscrollPhysics.WriteContentTransform(ref cp, in _scene.Bounds(content), horizontal, off, band,
                 sc.ZoomFactor);
+            OverscrollPhysics.ApplyStretchHeader(_scene, content, horizontal, band);   // stretchy hero
         }
 
         // D1 realize-after-layout: the realize window was computed BEFORE this arrange published the real viewport

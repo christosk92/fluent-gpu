@@ -127,8 +127,16 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         if (_byId.TryGetValue(id, out var t) && t.Live)
         {
             srv = t.Srv;
-            float inv = 1f / t.TexSize;
-            uv = new RectF((t.Ox + 0.5f) * inv, (t.Oy + 0.5f) * inv, MathF.Max(0f, t.W - 1) * inv, MathF.Max(0f, t.H - 1) * inv);
+            // Atlas pages and pooled textures are square, but >512px images use an exact-size standalone texture.
+            // Normalizing both axes by TexSize (= max(W,H)) on that rectangular path sampled only H/TexSize of the
+            // texture vertically (a wide hero showed its empty upper band and pushed the subject to the bottom).
+            float invX = 1f / (t.Atlas || t.Bucket != 0 ? t.TexSize : t.W);
+            float invY = 1f / (t.Atlas || t.Bucket != 0 ? t.TexSize : t.H);
+            uv = new RectF(
+                (t.Ox + 0.5f) * invX,
+                (t.Oy + 0.5f) * invY,
+                MathF.Max(0f, t.W - 1) * invX,
+                MathF.Max(0f, t.H - 1) * invY);
             return true;
         }
         srv = default; uv = default; return false;

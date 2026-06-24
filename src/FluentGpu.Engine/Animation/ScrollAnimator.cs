@@ -114,6 +114,7 @@ public sealed class ScrollAnimator
     private readonly float _wheelEaseTauMs;
     private readonly float _flingDecayPerS;
     private readonly float _flingSettleVelPxPerS;
+    private readonly float _overscrollSpringOmega;
 
     public ScrollAnimator(SceneStore scene, ScrollTuning? tuning = null)
     {
@@ -122,6 +123,7 @@ public sealed class ScrollAnimator
         _wheelEaseTauMs = t.WheelEaseTauMs;
         _flingDecayPerS = t.FlingDecayPerS;
         _flingSettleVelPxPerS = t.FlingSettleVelocityPxPerS;
+        _overscrollSpringOmega = t.OverscrollSpringOmega;
     }
     public Action RequestRerender { get; set; } = static () => { };
 
@@ -199,7 +201,11 @@ public sealed class ScrollAnimator
 
     public void Tick(float dtMs)
     {
-        if (_active.Count == 0) return;
+        // StopwatchFrameTimeSource deliberately emits one zero-delta frame after a cadence Resync. A zero-duration fling
+        // step cannot move; treating ScrollWrite(false) as a clamp on that frame killed newly-seeded mouse-wheel momentum.
+        // The next notch then repeated the same zero-step termination, producing a real multi-event wheel dead zone.
+        // No simulation time elapsed, so preserve every armed state unchanged and advance on the next positive tick.
+        if (_active.Count == 0 || !(dtMs > 0f)) return;
         for (int i = _active.Count - 1; i >= 0; i--)
         {
             NodeHandle n = _active[i];
@@ -296,6 +302,7 @@ public sealed class ScrollAnimator
                         {
                             float viewport = horizontal ? sc.ViewportW : sc.ViewportH;
                             float band = sc.OverscrollPx, bandVel = sc.OverscrollVel;
+                            sc.OverscrollReleaseOmega = 0f;   // touch fling uses the profile's direct-touch spring
                             OverscrollPhysics.SeedFromEdgeMomentum(ref band, ref bandVel, v, viewport, _flingDecayPerS);
                             sc.OverscrollPx = band;
                             sc.OverscrollVel = bandVel;
@@ -352,10 +359,12 @@ public sealed class ScrollAnimator
             if ((sc.OverscrollPx != 0f || sc.OverscrollVel != 0f) && !sc.Overscrolling)
             {
                 float p = sc.OverscrollPx, vsp = sc.OverscrollVel;   // TOUCH release spring-back to 0 (unchanged)
-                bool settled = OverscrollPhysics.StepSpring(ref p, ref vsp, dtMs, OverscrollPhysics.SpringOmegaRadPerS);
+                float omega = sc.OverscrollReleaseOmega > 0f ? sc.OverscrollReleaseOmega : _overscrollSpringOmega;
+                bool settled = OverscrollPhysics.StepSpring(ref p, ref vsp, dtMs, omega);
                 sc.OverscrollVel = vsp;
                 OverscrollWrite?.Invoke(n, p);
                 if (FluentGpu.Foundation.ScrollLog.On) FluentGpu.Foundation.ScrollLog.Line($"  spring band={p:0.00} v={vsp:0}");
+                if (settled) sc.OverscrollReleaseOmega = 0f;
                 bandActive = !settled;
             }
             else if (sc.Overscrolling && sc.OverscrollPx != 0f)

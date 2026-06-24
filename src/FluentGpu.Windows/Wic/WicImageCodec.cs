@@ -80,8 +80,18 @@ public sealed unsafe class WicImageCodec : IImageCodec, IDisposable
                     WICDecodeOptions.WICDecodeMetadataCacheOnDemand, &decoder).FAILED) return false;
             if (decoder->GetFrame(0, &frame).FAILED) return false;
 
+            // Fit WITHIN the target box preserving the source aspect ratio (CONTAIN-into-target), so the decoded texture
+            // keeps the true source proportions — ImageFit.Cover/Contain then crop/letterbox against the real ratio
+            // instead of a source pre-squished to the box. A square source into a square target is unchanged. The decode
+            // dims are returned (≤ target); DecodeScheduler already honours a smaller-than-target result.
+            uint srcW = 0, srcH = 0;
+            if (frame->GetSize(&srcW, &srcH).FAILED || srcW == 0 || srcH == 0) return false;
+            double scale = Math.Min((double)targetW / srcW, (double)targetH / srcH);
+            int outW = Math.Clamp((int)Math.Round(srcW * scale), 1, targetW);
+            int outH = Math.Clamp((int)Math.Round(srcH * scale), 1, targetH);
+
             if (factory->CreateBitmapScaler(&scaler).FAILED) return false;
-            if (scaler->Initialize((IWICBitmapSource*)frame, (uint)targetW, (uint)targetH,
+            if (scaler->Initialize((IWICBitmapSource*)frame, (uint)outW, (uint)outH,
                     WICBitmapInterpolationMode.WICBitmapInterpolationModeFant).FAILED) return false;
 
             if (factory->CreateFormatConverter(&conv).FAILED) return false;
@@ -89,12 +99,12 @@ public sealed unsafe class WicImageCodec : IImageCodec, IDisposable
             if (conv->Initialize((IWICBitmapSource*)scaler, &pf, WICBitmapDitherType.WICBitmapDitherTypeNone,
                     null, 0.0, WICBitmapPaletteType.WICBitmapPaletteTypeCustom).FAILED) return false;
 
-            uint stride = (uint)(targetW * 4);
-            uint bytes = (uint)size;
+            uint stride = (uint)(outW * 4);
+            uint bytes = (uint)(outW * outH * 4);
             fixed (byte* d = dstBgra8)
                 if (conv->CopyPixels(null, stride, bytes, d).FAILED) return false;
 
-            w = targetW; h = targetH;
+            w = outW; h = outH;
             return true;
         }
         finally
