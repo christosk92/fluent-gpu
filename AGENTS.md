@@ -59,6 +59,26 @@ computation; a property *binding* is a finer one. Three update paths, cheapest f
    closures in a bind thunk or hot effect. The harness asserts `FrameStats.HotPhaseAllocBytes == 0` on steady frames.
 10. High-frequency scalar? Bind it (`Slider.Bind(FloatSignal)`), don't `setState` per move.
 
+## Async loading & skeletons — DERIVE, never hand-author
+
+There is **one** mechanism for the Pending / Ready / Empty / Failed lifecycle: the engine's `Skel.Region`. It **derives**
+the shimmer from your real UI — **never author a separate skeleton tree** (the #1 mistake: a hand-built `Skeleton()` is a
+duplicate UI that silently drifts out of sync with the real one). The class doc says it outright: *"a DERIVED shimmer …
+never a hand-authored second tree."*
+
+- **A whole subtree** (card / hero / page): `Skel.Region(loadable, content, onFailed:…, isEmpty:…, onEmpty:…)` — the
+  engine derives the shimmer from **`content(seed)`**: your `content` func rendered against the loadable's *seed* value
+  (the placeholder you already gave `UseAsyncResource`). You don't pass a shimmer at all. Make the seed render a
+  representative shape (e.g. an empty `Artist` whose page still lays out hero + tracks via `FakeData`) — see
+  `ArtistPage`.
+- **A homogeneous list**: `Skel.Region(loadable, rowTemplate, count, content, onEmpty:…, onFailed:…)` — the engine
+  derives `count` shimmer rows from `rowTemplate(null)` (your real row, factored to accept null).
+- **One field arriving late**: `leaf.Pending(field)` shimmers just that cell in place.
+
+The engine owns all four states — pass the reusable Wavee `EmptyState` / `ErrorState` to `onEmpty` / `onFailed`. **Do
+NOT** write a `Skeleton()`/`SkeletonInline()` method, and do not reintroduce the removed `StatefulRegion` wrapper.
+Source: `src/FluentGpu.Engine/Hooks/{SkeletonRegion,SkeletonDeriver}.cs`; guide: `docs/guide/skeleton-loading.md`.
+
 ## Minimal example
 
 ```csharp

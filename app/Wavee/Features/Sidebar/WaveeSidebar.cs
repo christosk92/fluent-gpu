@@ -177,10 +177,10 @@ sealed class WaveeSidebar : Component
                     LocalRow(sel),
                 ],
             }),
-            Section(Loc.Get(Strings.Sidebar.Playlists), _plOpen, StatefulRegion.List(
-                playlists, _ => PlaylistSkeletonRow(), skeletonCount: 5,
+            Section(Loc.Get(Strings.Sidebar.Playlists), _plOpen, Skel.Region(
+                playlists, _ => PlaylistSkeletonRow(), count: 5,
                 content: arr => Flow.For(() => arr.Length, i => PlaylistRow(arr[i], sel, i), keyOf: i => arr[i].Uri),
-                empty: EmptyState.Default()),
+                onEmpty: () => EmptyState.Default(), onFailed: () => ErrorState.Build(playlists.Error)),
                 action: Embed.Comp(() => new SidebarCreateButton(CreatePlaylist, CreateFolder))),
         ],
     };

@@ -190,7 +190,7 @@ public static class MediaCard
         Children = [ Icon(glyph, size * 0.42f, Tok.TextOnAccentPrimary) ],
     };
 
-    // ── Skeletons (matched layout for StatefulRegion's shimmer → reveal) ─────────────────────────────────
+    // ── Skeletons (matched layout for Skel.Region's derived shimmer → reveal) ────────────────────────────
     public static Element ShelfSkeleton(float cardW, bool circular = false)
     {
         float inner = MathF.Max(48f, cardW - 2f * Pad);

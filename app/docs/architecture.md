@@ -226,8 +226,9 @@ provider, so geo/tier/region checks are baked in rather than re-derived in the U
 
 ## 6. Async / reactive model
 
-- `Loadable<T>` (Pending/Ready/Failed) + `UseAsyncResource` load once at mount; `Skel.Region`/`StatefulRegion`
-  branch shimmer/content/error at the reconcile edge.
+- `Loadable<T>` (Pending/Ready/Failed) + `UseAsyncResource` load once at mount; `Skel.Region` **derives** the shimmer
+  from the real content (`content(seed)` or a `rowTemplate`) and branches shimmer/content/empty/error at the reconcile
+  edge — no hand-built skeletons, no `StatefulRegion` wrapper (see AGENTS.md "Async loading & skeletons").
 - **Streamed tracks**: detail header renders immediately; the track list is a `Loadable<Track[]>` filled
   page-by-page from `ICatalogSource.StreamTracksAsync` (skeleton-then-stream).
 - **Core → engine bridge**: framework-neutral sources expose `IObservable<T>`; `PlaybackBridge` subscribes and
@@ -316,7 +317,7 @@ provider, so geo/tier/region checks are baked in rather than re-derived in the U
   (the magazine layout, the one exception); `Features/Search/SearchPage.cs` (filter chips + unified results +
   browse-all); `Features/Library/LibraryPage.cs` (the Albums / Artists / Podcasts **master–detail**, right pane reuses
   the shared detail surface); `Components/{NavPreview, SaveButton}.cs`. Reuse: `Loadable<T>`, `LibraryStore`,
-  `Skel.Region`/`StatefulRegion`, `Surfaces.Artwork`, `PagedShelf`/`AutoGrid`/`SelectorBar`, `PlaybackBridge`, `LibraryBridge`.
+  `Skel.Region`, `Surfaces.Artwork`, `PagedShelf`/`AutoGrid`/`SelectorBar`, `PlaybackBridge`, `LibraryBridge`.
 
 ---
 

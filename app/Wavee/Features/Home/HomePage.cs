@@ -17,7 +17,7 @@ namespace Wavee;
 // catalog seam groups a real Spotify home — dozens of sections — into a small, finite set of typed groups so it never
 // reads as an endless stack of rails; see docs/architecture.md §2). Each group renders by KIND with the existing
 // reusable cards: QuickGrid / Hero spotlight / horizontally-paged Shelf / a CollapsedGrid that folds the many
-// single-item recommendations into one grid. Async skeleton pattern throughout (UseAsyncResource + StatefulRegion).
+// single-item recommendations into one grid. Async skeleton pattern throughout (UseAsyncResource + Skel.Region).
 sealed class HomePage : Component
 {
     public override Element Render()
@@ -87,12 +87,14 @@ sealed class HomePage : Component
             _ => new BoxEl(),
         };
 
-        Element groups = StatefulRegion.Single(
+        Element groups = Skel.Region(
             home,
-            shimmer: HomeSkeleton,
+            shimmerSource: HomeSkeleton,
+            isEmpty: feed => feed.Groups.Count == 0,
+            onEmpty: () => EmptyState.Default(),
+            onFailed: () => ErrorState.Build(home.Error),
             content: feed =>
             {
-                if (feed.Groups.Count == 0) return EmptyState.Default();
                 // Warm below-the-fold cover art at the kind-matched decode size the moment the feed lands, so a first
                 // scroll reveals resident textures instead of decoding+uploading on the UI thread mid-scroll (the
                 // first-pass jank). Prefetch priority → background workers, so the visible cards still decode first;

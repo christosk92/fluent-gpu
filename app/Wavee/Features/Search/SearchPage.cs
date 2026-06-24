@@ -46,7 +46,7 @@ sealed class SearchPage : Component
         {
             Direction = 1, Gap = WaveeSpace.L,
             Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, PlayerDock.Reserve + WaveeSpace.XXL),
-            Children = [ChipBar(chip), StatefulRegion.Single(results, SkeletonInline, r => ResultsFor(r, chip, q, svc, go))],
+            Children = [ChipBar(chip), Skel.Region(results, SkeletonInline, r => ResultsFor(r, chip, q, svc, go), onFailed: () => ErrorState.Build(results.Error))],
         }) with { Grow = 1f };
     }
 

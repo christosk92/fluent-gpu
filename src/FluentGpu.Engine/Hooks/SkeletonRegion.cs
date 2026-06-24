@@ -61,35 +61,60 @@ public static class Skel
 {
     /// <summary>A list/region skeleton: while <paramref name="loadable"/> is Pending, derive a shimmer from
     /// <paramref name="count"/> copies of <paramref name="rowTemplate"/>(null) (the SAME row shape as the real row —
-    /// single source); on Ready mount <paramref name="content"/>(value) and blur-reveal it (<paramref name="reveal"/>);
-    /// on Failed mount <paramref name="onFailed"/>. <paramref name="group"/> coordinates the reveal with sibling regions
-    /// sharing the token (one settle window). Reads State (subscribes) but Value via Peek (no re-fire on value change).</summary>
+    /// single source); on Ready mount <paramref name="content"/>(value) — or <paramref name="onEmpty"/> when the loaded
+    /// array is empty — and blur-reveal it (<paramref name="reveal"/>); on Failed mount <paramref name="onFailed"/>.
+    /// The engine owns all four states (Pending / Ready / Empty / Failed) so callers never branch on them by hand.
+    /// <paramref name="group"/> coordinates the reveal with sibling regions sharing the token (one settle window). Reads
+    /// State (subscribes) but Value via Peek (no re-fire on value change).</summary>
     public static SkelRegionEl Region<T>(
         Loadable<T[]> loadable, Func<T?, Element> rowTemplate, int count, Func<T[], Element> content,
-        SkelReveal reveal = SkelReveal.StaggerRows, Func<Element>? onFailed = null, object? group = null,
-        SkeletonStyle? style = null, bool smoothResize = true)
+        SkelReveal reveal = SkelReveal.StaggerRows, Func<Element>? onFailed = null, Func<Element>? onEmpty = null,
+        object? group = null, SkeletonStyle? style = null, bool smoothResize = true)
     {
         var st = style ?? SkeletonStyle.Default;
         return new SkelRegionEl(
             Pending: () => loadable.State.Value == (byte)LoadState.Pending,
             Failed: () => loadable.State.Value == (byte)LoadState.Failed,
-            Content: () => content(loadable.Value.Peek()),
+            Content: () => { var v = loadable.Value.Peek(); return onEmpty is not null && (v is null || v.Length == 0) ? onEmpty() : content(v); },
             ShimmerSource: () => RowStack(count, rowTemplate, st.RowGap),
             OnFailed: onFailed,
             Reveal: reveal, Style: st, Group: group, SmoothResize: smoothResize);
     }
 
     /// <summary>A single-subtree skeleton: while Pending derive the shimmer from <paramref name="shimmerSource"/> (your
-    /// one real subtree, built with placeholder/empty fields), on Ready mount <paramref name="content"/>(value).</summary>
+    /// one real subtree, built with placeholder/empty fields — never a hand-authored second tree), on Ready mount
+    /// <paramref name="content"/>(value) — or <paramref name="onEmpty"/> when <paramref name="isEmpty"/>(value) is true,
+    /// so the engine owns the Empty branch too — on Failed mount <paramref name="onFailed"/>.</summary>
     public static SkelRegionEl Region<T>(
         Loadable<T> loadable, Func<Element> shimmerSource, Func<T, Element> content,
-        SkelReveal reveal = SkelReveal.Soft, Func<Element>? onFailed = null, object? group = null,
-        SkeletonStyle? style = null, bool smoothResize = true)
+        SkelReveal reveal = SkelReveal.Soft, Func<Element>? onFailed = null,
+        Func<T, bool>? isEmpty = null, Func<Element>? onEmpty = null,
+        object? group = null, SkeletonStyle? style = null, bool smoothResize = true)
         => new(
             Pending: () => loadable.State.Value == (byte)LoadState.Pending,
             Failed: () => loadable.State.Value == (byte)LoadState.Failed,
-            Content: () => content(loadable.Value.Peek()),
+            Content: () => { var v = loadable.Value.Peek(); return onEmpty is not null && isEmpty is not null && isEmpty(v) ? onEmpty() : content(v); },
             ShimmerSource: shimmerSource,
+            OnFailed: onFailed,
+            Reveal: reveal, Style: style ?? SkeletonStyle.Default, Group: group, SmoothResize: smoothResize);
+
+    /// <summary>The simplest single-subtree skeleton — pass ONLY your real <paramref name="content"/>: the engine derives
+    /// the shimmer from <c>content(seed)</c>, i.e. the SAME content rendered against the loadable's seed value (the
+    /// placeholder you already gave <c>UseAsyncResource</c>), so there is no second tree to author and no shimmer arg.
+    /// Make the seed render a representative shape (e.g. an empty artist whose page still lays out hero + tracks via fake
+    /// data). On Ready mount content(value) — or <paramref name="onEmpty"/> when <paramref name="isEmpty"/>(value) — on
+    /// Failed <paramref name="onFailed"/>. (Reach for the explicit-<c>shimmerSource</c> overload only when the seed can't
+    /// render a representative shape — e.g. a list, where <c>Flow.For</c> yields zero rows: use the <c>rowTemplate</c> overload.)</summary>
+    public static SkelRegionEl Region<T>(
+        Loadable<T> loadable, Func<T, Element> content,
+        SkelReveal reveal = SkelReveal.Soft, Func<Element>? onFailed = null,
+        Func<T, bool>? isEmpty = null, Func<Element>? onEmpty = null,
+        object? group = null, SkeletonStyle? style = null, bool smoothResize = true)
+        => new(
+            Pending: () => loadable.State.Value == (byte)LoadState.Pending,
+            Failed: () => loadable.State.Value == (byte)LoadState.Failed,
+            Content: () => { var v = loadable.Value.Peek(); return onEmpty is not null && isEmpty is not null && isEmpty(v) ? onEmpty() : content(v); },
+            ShimmerSource: () => content(loadable.Value.Peek()),   // derive the shimmer from content(seed) — the SAME UI, no second tree
             OnFailed: onFailed,
             Reveal: reveal, Style: style ?? SkeletonStyle.Default, Group: group, SmoothResize: smoothResize);
 

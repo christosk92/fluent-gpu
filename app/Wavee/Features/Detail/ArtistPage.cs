@@ -35,14 +35,18 @@ sealed partial class ArtistPage : Component
         this.UseSoftReveal(dy: 0f, blur: 0f);
 
         // Keep one stable loadable and re-key it by URI. ContentHost retains one ArtistPage across artist navigation,
-        // so replacing the Loadable instance would leave StatefulRegion's mounted thunks subscribed to the old artist.
+        // so replacing the Loadable instance would leave the skeleton region's mounted thunks subscribed to the old artist.
         var artist = UseAsyncResource(ct => svc.Library.GetArtistAsync(uri, ct), EmptyArtist(uri), uri);
         store.EnsureArtists();
         var fansList = store.Artists.Value.Value;
 
         var pinned = UseSignal(false);
-        var scroll = ScrollView(StatefulRegion.Single(artist, Skeleton,
-            a => Body(a, fansList, svc, go, bridge, pinned))) with { Grow = 1f };
+        // ONE skeleton mechanism, and no second tree: pass ONLY the real content. The engine derives the shimmer from
+        // content(seed) — i.e. Body rendered against the loadable's empty seed artist (which still lays out hero +
+        // top-tracks + bio via FakeData). No shimmer arg. The engine owns Pending/Ready/Failed; a single artist is never empty.
+        var scroll = ScrollView(Skel.Region(artist,
+            content: a => Body(a, fansList, svc, go, bridge, pinned),
+            onFailed: () => ErrorState.Build(artist.Error))) with { Grow = 1f };
 
         return new BoxEl
         {
