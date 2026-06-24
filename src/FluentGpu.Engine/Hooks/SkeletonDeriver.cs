@@ -31,14 +31,21 @@ internal static class SkeletonDeriver
         {
             case BoxEl b when b.Children is { Length: > 0 }:
             {
-                // Container: keep layout + chrome, gate interactivity, neutralize effects/state/transform, recurse.
+                // Container: keep LAYOUT, gate interactivity, neutralize effects/state/transform, recurse.
                 var kids = new Element[b.Children.Length];
                 for (int i = 0; i < kids.Length; i++) kids[i] = Derive(b.Children[i], s);
+                // Neutralize CHROME so the skeleton reads as clean gray placeholders, not a colored ghost of the real UI:
+                // drop gradients (a hero's dark gradient would otherwise bury the photo bar), and flatten a colored/opaque
+                // Fill (an accent button, a tinted card) to a SUBTLE tone so the inner shimmer bars still read. Transparent
+                // layout boxes stay transparent (so rows/cards keep their inner structure).
+                ColorF declaredFill = b.Fill.ValueOr(ColorF.Transparent);
+                ColorF neutralFill = declaredFill.A > 0.02f ? (s.BarColor with { A = 0.4f }) : ColorF.Transparent;
                 return b with
                 {
                     Children = kids,
                     IsEnabled = false, HitTestVisible = false, Focusable = false, TabStop = false,
                     Animate = default, Blur = 0f, Arc = null, Acrylic = null, Shadow = null,
+                    Fill = neutralFill, Gradient = null, HoverGradient = null, PressedGradient = null, BorderBrush = null,
                     OnClick = null, OnPointerWheel = null, OnHoverMove = null, OnPointerExit = null, Cursor = null, CanDrag = false,
                     HoverFill = default, PressedFill = default, HoverOpacity = float.NaN, PressedOpacity = float.NaN,
                     OffsetX = 0f, OffsetY = 0f, ScaleX = 1f, ScaleY = 1f, Rotation = 0f,
