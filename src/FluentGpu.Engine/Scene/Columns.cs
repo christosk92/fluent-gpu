@@ -263,6 +263,11 @@ public struct ScrollState
     public float OffsetPrev;              // last latched offset (direction reference)
     public bool  DirLatched;              // OffsetPrev has been seeded (the first sample never spuriously flips the dir bit)
 
+    // Nested-scroll chaining (the overscroll-behavior analog; design §10). 0 = Auto (an inner pan at its edge hands the
+    // residual to the nearest same-axis ancestor scroller, Compose-style), 1 = Contain (the inner rubber-bands; no
+    // hand-off), 2 = None (no band, no hand-off). Wheel already bubbles via ScrollAxis; this governs the TOUCH pan path.
+    public byte  Chaining;                // 0 = Auto, 1 = Contain, 2 = None
+
     // Virtualization (ItemCount == 0 ⇒ a plain ScrollView, non-virtual).
     public int   ItemCount;
     public IVirtualLayout? Layout;        // pluggable layout (stack/grid/custom; IMeasuredVirtualLayout ⇒ variable-extent

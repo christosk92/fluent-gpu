@@ -69,8 +69,11 @@ new Expander
     {
         [Expander.PartHeader] = b => b with
         {
-            StickyTop = 8f,                                    // CSS position:sticky, top: 8px
-            OnPinned  = p => stuck.Value = p,                  // the :stuck observable (engine fires per transition)
+            ScrollBinds =                                      // CSS position:sticky — pin at top: 8px (one generic scroll bind)
+            [
+                new() { PinTop = 8f,                           //   clamp-to-top at an 8px inset
+                        OnFlag = p => stuck.Value = p }        //   the :stuck observable — a PinTop bind's OnFlag fires per pin↔unpin flip
+            ],
             Fill = stuck.Value ? Tok.FillSolidBase : b.Fill,   // restyle ANYTHING off the signal — reading subscribes
             BrushTransitionMs = Motion.ControlFast,            // …and the swap cross-fades (implicit brush transition)
         },
@@ -85,7 +88,8 @@ for per-frame-hot values; (3) type-preserving — a modifier that changes the re
 content **slots** like `Content`/`HeaderContent` *restructure*); (4) don't reshape `Children`; (5) the control
 re-asserts its mechanics-critical props AFTER your modifier (toggle clicks, reflow specs, ref captures — chained, see
 each part const's doc for the owned list), so you can restyle everything but break nothing; (6) one transform owner —
-don't put `StickyTop`/a bound `Transform` on a transform-owned part (e.g. the Expander clip mid-reflow). **New per-control
+don't put a transform-owning `ScrollBinds` entry (a `PinTop` sticky / `StretchFromTop` hero bind) or a bound `Transform`
+on a transform-owned part (e.g. the Expander clip mid-reflow). **New per-control
 styling knobs are banned**: if a prop's only job is to restyle one template part, it must be a Parts modifier instead.
 
 ## Layout

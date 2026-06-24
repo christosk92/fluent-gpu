@@ -239,7 +239,7 @@ Customization of a control's internals goes through `TemplateParts` (`src/Fluent
   an equivalent exists (Expander: `Root`/`Header`/`Chevron`/`Clip`/`Content`) — plus `public TemplateParts? Parts;`.
 - **Route every named part** through `Parts.Apply(PartXxx, el)` after building it, then **re-assert the part's
   mechanics-critical props** with one trailing `with` (click/toggle handlers, reflow `Animate` specs, `*Bind`
-  closures, `Key`, `Role`) and **chain** ref-capture handlers (`OnRealized`/`OnPinned`) via `TemplateParts.Chain` —
+  closures, `Key`, `Role`) and **chain** ref-capture handlers (`OnRealized`/`OnKeyDown`) via `TemplateParts.Chain` —
   a modifier can restyle everything but break nothing. Document each part's OWNED props on its const.
 - **New styling knobs are banned.** The review question for any proposed public field: *could the caller write
   `Parts[PartX] = el => el with { … }` instead?* Then they must. Keep: content **slots** (Element-typed), state

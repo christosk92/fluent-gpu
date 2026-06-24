@@ -3937,9 +3937,9 @@ static class Slice
                 $"mid=({mid.R:0.00},{mid.G:0.00},{mid.B:0.00},{mid.A:0.00}) sameAlpha={sameAlphaIdentical}");
         }
 
-        // 23u — CSS position:sticky (BoxEl.StickyTop): the header scrolls normally, PINS at the viewport top while
+        // 23u — CSS position:sticky (a ScrollBinds PinTop op): the header scrolls normally, PINS at the viewport top while
         // its parent card is in view (hit-test follows — AbsoluteRect includes the pin transform), CLAMPS at the
-        // card's end (never escapes its containing block), releases on scroll-back, and fires OnPinned per transition.
+        // card's end (never escapes its containing block), releases on scroll-back, and fires OnFlag per transition.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("sticky", new Size2(320, 200), 1f));
@@ -6489,15 +6489,26 @@ static class Slice
                 maxBand = MathF.Max(maxBand, MathF.Abs(s.OverscrollPx));
             }
             host.Scene.TryGetScroll(vp, out var released);
-            bool bounded = maxBand <= viewport * 0.046f;
             bool prompt = activeFrames <= 5;   // ~4 frames at fixed 16ms for the 56ms edge latch, with small tolerance
-            bool springHome = !released.Overscrolling
-                              && (released.OverscrollPx == 0f
-                                  || released.OverscrollPx * released.OverscrollVel <= 0f);
-            bool touchpadOmega = released.OverscrollPx == 0f || released.OverscrollReleaseOmega == 52f;
-            Check("gate.touchpad.edge-release-bounded touchpad overscroll is capped near 4.5% viewport, releases within ~80ms of packet silence, and uses the faster touchpad-specific spring toward home without an outward momentum kick",
-                pulled.OverscrollPx < -1f && bounded && prompt && springHome && touchpadOmega,
-                $"pulledBand={pulled.OverscrollPx:0.0} maxBand={maxBand:0.0}/cap~{viewport * 0.045f:0.0} activeFrames={activeFrames} released=(band {released.OverscrollPx:0.0},vel {released.OverscrollVel:0},omega {released.OverscrollReleaseOmega:0})");
+            // Released to the touchpad spring (not finger-held). A fling that carried momentum into the edge seeds an
+            // OUTWARD kick that overshoots the static cap — the bounce is sized by MOMENTUM, not the viewport — while a
+            // clean push-then-lift (this scenario) seeds little/none. Either way the band is handed to the 40rad/s spring.
+            bool releasedToSpring = !released.Overscrolling
+                                    && (released.OverscrollPx == 0f || released.OverscrollReleaseOmega == 40f);
+            // The bounce — overshoot and all — must spring fully home, and stay bounded (a momentum overshoot may pass the
+            // 10% hard band transiently, but must never run away).
+            bool returnedHome = false;
+            for (int i = 0; i < 200; i++)
+            {
+                host.RunFrame();
+                host.Scene.TryGetScroll(vp, out var s2);
+                maxBand = MathF.Max(maxBand, MathF.Abs(s2.OverscrollPx));
+                if (MathF.Abs(s2.OverscrollPx) < 0.5f) { returnedHome = true; break; }
+            }
+            bool bounded = maxBand <= viewport * 0.12f;
+            Check("gate.touchpad.edge-release-bounded a touchpad over-pull releases to the touchpad spring within ~80ms of packet silence and springs fully home; a momentum bounce may overshoot the static cap but stays bounded and returns",
+                pulled.OverscrollPx < -1f && bounded && prompt && releasedToSpring && returnedHome,
+                $"pulledBand={pulled.OverscrollPx:0.0} maxBand={maxBand:0.0}/vp={viewport:0.0} activeFrames={activeFrames} released=(band {released.OverscrollPx:0.0},vel {released.OverscrollVel:0},omega {released.OverscrollReleaseOmega:0}) returnedHome={returnedHome}");
         }
 
         // gate.touchpad.edge-tail-no-plateau: real Windows precision-touchpad streams continue sending a tapering
@@ -6525,9 +6536,10 @@ static class Slice
             float releasedBand = MathF.Abs(releasedDuringTail.OverscrollPx);
             bool recoilWhileLatched = host.Input.TouchpadActive
                                       && !releasedDuringTail.Overscrolling
-                                      && releasedDuringTail.OverscrollReleaseOmega == 52f;
+                                      && releasedDuringTail.OverscrollReleaseOmega == 40f
+                                      && releasedDuringTail.OverscrollVel < 0f;   // momentum-seeded OUTWARD kick, not a from-rest release
 
-            // Keep sending outward tail packets. They must not rebuild/hold the band; the exact spring must move home.
+            // Keep sending outward tail packets. They must not rebuild/hold the band at the cap; the spring owns it now.
             foreach (float d in new[] { -4f, -3f, -2f })
             {
                 window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, ScrollDelta: d,
@@ -6535,7 +6547,9 @@ static class Slice
                 host.RunFrame();
             }
             host.Scene.TryGetScroll(vp, out var recoiling);
-            bool leftPlateau = MathF.Abs(recoiling.OverscrollPx) < releasedBand - 1f;
+            // Not plateaued: the spring drives the band (a momentum bounce may OVERSHOOT the cap first, so "off the plateau"
+            // is "the spring is moving it", not "already below the cap"). A pinned-cap regression would show vel==0 at the cap.
+            bool leftPlateau = recoiling.OverscrollVel != 0f || MathF.Abs(recoiling.OverscrollPx) < 0.5f;
 
             // Reverse direction before the latch expires: direct tracking owns the band again immediately.
             window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, ScrollDelta: 12f,
@@ -6548,7 +6562,41 @@ static class Slice
 
             Check("gate.touchpad.edge-tail-no-plateau a tapering OS momentum tail releases a saturated band before packet silence, continues recoiling while ownership consumes outward packets, and an inward reverse immediately re-engages direct tracking",
                 recoilWhileLatched && leftPlateau && reverseReengaged,
-                $"released=(band {releasedDuringTail.OverscrollPx:0.0},over {releasedDuringTail.Overscrolling},omega {releasedDuringTail.OverscrollReleaseOmega:0},latched {host.Input.TouchpadActive}) recoilingBand={recoiling.OverscrollPx:0.0} reversed=(band {reversed.OverscrollPx:0.0},over {reversed.Overscrolling},omega {reversed.OverscrollReleaseOmega:0})");
+                $"released=(band {releasedDuringTail.OverscrollPx:0.0},vel {releasedDuringTail.OverscrollVel:0},over {releasedDuringTail.Overscrolling},omega {releasedDuringTail.OverscrollReleaseOmega:0},latched {host.Input.TouchpadActive}) recoiling=(band {recoiling.OverscrollPx:0.0},vel {recoiling.OverscrollVel:0}) reversed=(band {reversed.OverscrollPx:0.0},over {reversed.Overscrolling},omega {reversed.OverscrollReleaseOmega:0})");
+        }
+
+        // gate.touchpad.edge-tail-early-release: a strong fling's OS momentum tail keeps sending LARGE outward packets
+        // (well above the small-packet threshold) for ~0.5–1s after lift. The band must hand off to the spring as soon as
+        // that tail starts SHRINKING — not stay pinned at the cap until the tail dies — otherwise the band visibly "sits
+        // there" after the fingers leave the touchpad. The shrinking-trend detector drives this, not the tiny-packet gate.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("tp-edge-tail-long", new Size2(360, 460), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
+            host.RunFrame();
+            var vp = host.Scene.Root;
+            var pos = new Point2(150, 200);
+            uint t = 1000;
+
+            // Slam the top edge, then a LONG tail of large but steadily DECREASING outward packets (all ≫ 8 DIP). Stop the
+            // moment the band is handed to the spring; record how deep into the tail that took.
+            bool releasedEarly = false;
+            int framesIntoTail = 0;
+            float seedVel = 0f;
+            foreach (float d in new[] { -200f, -200f, -90f, -78f, -67f, -57f, -48f, -40f, -33f, -27f, -22f, -18f })
+            {
+                window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, ScrollDelta: d,
+                    Pointer: PointerKind.Touchpad, TimestampMs: t += 16));
+                host.RunFrame();
+                host.Scene.TryGetScroll(vp, out var s);
+                if (!s.Overscrolling && s.OverscrollReleaseOmega == 40f) { releasedEarly = true; seedVel = s.OverscrollVel; break; }
+                framesIntoTail++;
+            }
+            // Must release while LARGE tail packets are still arriving (not after the whole 12-packet / ~0.2s tail), and the
+            // bounce must carry the fling's momentum (an outward seed), not start from rest.
+            Check("gate.touchpad.edge-tail-early-release a long decaying momentum tail of large (≫8 DIP) packets hands the band to the momentum-seeded spring within a few taper frames, instead of pinning the cap for the whole tail",
+                releasedEarly && framesIntoTail <= 6 && seedVel < 0f,
+                $"releasedEarly={releasedEarly} framesIntoTail={framesIntoTail} seedVel={seedVel:0}");
         }
 
         // gate.touchpad.mouse-wheel-takeover: a touchpad stream can still own a TOP rubber-band when a

@@ -31,7 +31,7 @@ public readonly record struct ExpanderTemplateSettings(float ChevronRotationDeg,
 ///
 /// CUSTOMIZATION goes through <see cref="Parts"/> (the one generic door — no per-feature knobs): every named template
 /// part accepts arbitrary element props, e.g. a sticky pinned header
-/// (<c>[PartHeader] = b => b with { StickyTop = 8f, OnPinned = …, Fill = stuck.Value ? … : b.Fill }</c>) or an
+/// (<c>[PartHeader] = b => b with { ScrollBinds = [new(){ PinTop = 8f, OnFlag = … }], Fill = stuck.Value ? … : b.Fill }</c>) or an
 /// edge-to-edge content panel (<c>[PartContent] = c => c with { Padding = Edges4.All(0) }</c>). Mechanics-critical
 /// props are re-asserted after the modifier, so customization can restyle everything but break nothing.
 /// </summary>
@@ -48,7 +48,7 @@ public sealed class Expander : Component
     public const string PartChevron = "Chevron";
     /// <summary>The always-mounted reveal wrapper (WinUI ExpanderContentClip) — the SizeMode.Reflow host. Owned:
     /// ClipToBounds, Height (the open/closed toggle), Animate (the reflow spec), Children, OnRealized (chained).
-    /// NOTE: also transform-owned mid-motion (Trailing anchor) — do not add StickyTop/TransformBind here.</summary>
+    /// NOTE: also transform-owned mid-motion (Trailing anchor) — do not add a transform-owning ScrollBinds entry (a PinTop / StretchFromTop bind) or a bound Transform here.</summary>
     public const string PartClip = "Clip";
     /// <summary>The padded content panel (WinUI ExpanderContent). Owned: Children (the <see cref="Content"/> slot —
     /// restructure via the slot, restyle via this part: padding, fill, border, corners…).</summary>

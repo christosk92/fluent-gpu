@@ -93,6 +93,7 @@ All engine subsystems now live under the single `src/FluentGpu.Engine` project (
 | Frame loop / scheduling | `src/FluentGpu.Engine/Hosting/AppHost.cs` (`RunFrame`/`Paint`; flush = phase 3) |
 | Layout / scoped relayout | `src/FluentGpu.Engine/Layout/FlexLayout.cs`, `LayoutInvalidator.cs` |
 | Retained scene (SoA, dirty flags) | `src/FluentGpu.Engine/Scene/{SceneStore,Columns}.cs` |
+| Scroll-driven effects (sticky / overscroll-stretch / parallax / fade / collapse / shy header / pull-to-refresh / scrollbar flags / nested scroll) | author via `Element.ScrollBinds` (a `ScrollBindDsl[]`: `PinTop`/`StretchFromTop`/`{From,To,Range,OutStart,OutEnd}`, `OnFlag`, `OnScrollGeometryChanged`, `Chaining`); engine = the generic zero-alloc binding evaluator `src/FluentGpu.Engine/Animation/{ScrollBind,ScrollBindEval}.cs` + `ScrollState` predicate flags. Design: `docs/plans/generic-hookable-scroll-engine-design.md` |
 | Record → DrawList | `src/FluentGpu.Engine/Render/SceneRecorder.cs` |
 | Theming tokens + LIVE theme switching (animated, in-place; gotchas) | `src/FluentGpu.Engine/Dsl/Tokens.cs` (`Tok`), `Theme.cs` — **read `theming.md` before any theme work** |
 | Tests | `src/FluentGpu.VerticalSlice/Program.cs` |

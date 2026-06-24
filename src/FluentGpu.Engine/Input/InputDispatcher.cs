@@ -50,6 +50,8 @@ public sealed class InputDispatcher
     private Point2 _panAnchorPx;       // window-space press point — pan delta measures from here
     private float _panAnchorOffset;    // the scroll offset captured at the press (drives SetScrollOffset(anchor − delta))
     private bool _panAxisX;            // the scroll axis of _panTarget (Orientation == 1) — pan tracks this axis only
+    private NodeHandle _chainOuter;    // nested-scroll (§10): the outer same-axis scroller a pan-at-edge is handing residual to
+    private float _chainOuterAnchor;   // the outer's offset when the hand-off began (absolute-mapped: outer = anchor + excess)
     private TouchVelocity _panVel;     // per-contact windowed-regression velocity sampler for the touch fling hand-off
 
     // ── precision-touchpad pan (engine-owned — the Win32 backend soft-knees + scales hi-res WM_POINTERWHEEL deltas and
@@ -68,6 +70,8 @@ public sealed class InputDispatcher
     private float _tpEdgeSign;         // sign of the edge band when recoil began (-top/left, +bottom/right)
     private float _tpLastEdgePacketAbs;// previous small outward packet while saturated (tail-trend detector)
     private byte _tpEdgeTailFrames;    // consecutive tapering outward packets at the cap
+    private float _tpVelPxPerS;        // EMA of the incoming packet velocity (px/s) — the momentum the content is carrying toward an edge
+    private float _tpEdgeImpactVel;    // peak |_tpVelPxPerS| captured while the band was saturated — seeds the release spring so a STRONG fling bounces harder than a gentle drift-into-edge (0 = none captured)
     // §7A drag-reorder-over-touch: the contact enrolled a DragReorder member (a CanDrag chain under the press) whose
     // axis-locked vote competes with Pan in the arena. The reorder's item axis (the source row's parent-container main
     // axis); when the arena resolves DragReorder, _touchReorder latches and the contact DRIVES Input.DragController
@@ -159,18 +163,37 @@ public sealed class InputDispatcher
     /// 56ms preserves one continuous pull while removing the former 120ms pause at maximum displacement before recoil.
     /// In-range ownership keeps the more conservative <see cref="s_tpSettleQuietMs"/> latch.</summary>
     private static readonly float s_tpEdgeReleaseQuietMs = 56f;
-    /// <summary>Touchpad-specific critically-damped release frequency. Indirect trackpad input should recoil more quickly
-    /// than a finger-held direct-touch band, while sharing the same exact spring integrator and resistance curve.</summary>
-    private const float TpReleaseOmegaRadPerS = 52f;
-    /// <summary>At a saturated edge, two tapering outward packets at or below this magnitude identify the driver's
-    /// post-lift momentum tail. Holding the band until that tail fully ends creates a visible plateau; consume the tail
-    /// while the spring recoils instead. A reverse packet immediately re-engages direct tracking.</summary>
+    /// <summary>Touchpad critically-damped release frequency (rad/s). LOWER = a slower, more visible, more "elastic"
+    /// bounce; HIGHER = a faster/snappier (past ~50, abrupt) return. WAS 52 — a strong fling's bounce "slowed down /
+    /// ended too early": 52 returned in ~60ms, too quick to read as a spring. 40 (≈ the direct-touch 42) lets the recoil
+    /// arc breathe while still settling crisply. Shares the same exact spring integrator + resistance curve as touch.</summary>
+    private const float TpReleaseOmegaRadPerS = 40f;
+    /// <summary>EMA window (ms, ~2 frames) for the running packet-velocity estimate (<see cref="_tpVelPxPerS"/>) that
+    /// seeds an edge bounce. Short enough to track a flick's true speed, long enough to reject single-packet jitter.</summary>
+    private static readonly float s_tpVelTauMs = 30f;
+    /// <summary>px/s ceiling on the momentum handed to an edge bounce. The bounce is sized by FLING MOMENTUM, not by the
+    /// viewport — the spring-back is free to overshoot the 4.5% static cap (and even the 10% hard band) transiently, which
+    /// is what makes a hard fling "bounce" instead of stopping at a viewport-bounded wall. This only stops a single absurd
+    /// coalesced packet (180 DIP/frame ⇒ &gt;10,000 px/s) from seeding a runaway overshoot; real flicks sit under it and
+    /// scale through unclamped. RAISE for a bigger hard-fling bounce; LOWER to keep the overshoot tighter.</summary>
+    private static readonly float s_tpEdgeBounceVelCap = 5000f;
+    /// <summary>At a saturated edge, the driver's post-lift momentum tail is identified EITHER by packets already this
+    /// small (the tail end) OR by a clear shrinking trend (<see cref="s_tpEdgeTaperMarginDip"/>). Holding the band until
+    /// the tail fully ends creates a visible 0.5–1s plateau on a strong fling; consume the tail while the spring recoils
+    /// instead. A reverse packet immediately re-engages direct tracking.</summary>
     private const float TpEdgeTailPacketDip = 8f;
     private const byte TpEdgeTailFrames = 2;
+    /// <summary>Minimum frame-over-frame DROP (DIP) in outward packet magnitude that marks a saturated edge's decaying
+    /// momentum tail (vs a deliberate steady push, which doesn't shrink). Large enough to ignore a steady push's hand
+    /// jitter, small enough to catch a real inertia tail within a frame or two of lift. Releases the band promptly so it
+    /// can't sit pinned at the cap for the length of the OS tail.</summary>
+    private const float s_tpEdgeTaperMarginDip = 3f;
     /// <summary>Fraction (0,1) of the generic 10%-viewport band cap available to a PRECISION TOUCHPAD. A finger directly
     /// manipulating glass keeps the full touch band; a trackpad is indirect and the captured 9% (~53 DIP at 590 DIP)
     /// displacement felt detached and visually excessive. 0.45 limits the trackpad to ~4.5% of the viewport while preserving
-    /// a clear elastic edge cue. Computed through the gate-pinned <see cref="OverscrollPhysics.ExcessFromBand"/> inverse.</summary>
+    /// a clear elastic edge cue. Computed through the gate-pinned <see cref="OverscrollPhysics.ExcessFromBand"/> inverse.
+    /// (The STATIC pull cap stays ~4.5%; a strong fling's extra "strength" comes from the momentum-seeded release spring —
+    /// <see cref="TpEdgeBounceVel"/> — overshooting this cap transiently, NOT from a larger held displacement.)</summary>
     private static readonly float s_tpBandHeadroom = 0.45f;
 
     /// <summary>Rubber-band overscroll cap as a fraction of the viewport extent: WinUI lets a ScrollViewer over/underpan
@@ -1170,7 +1193,8 @@ public sealed class InputDispatcher
         _panTarget = NodeHandle.Null; _panClaimed = false; _panAnchorPx = default; _panAnchorOffset = 0f;
         _panAxisX = false; _panVel = default;
         _tpTarget = NodeHandle.Null; _tpPendingDelta = 0f; _tpGotPacket = false; _tpAppliedRaw = 0f; _tpDemandRaw = 0f;
-        _tpQuietMs = 0f;
+        _tpQuietMs = 0f; _tpEdgeRecoil = false; _tpEdgeSign = 0f; _tpLastEdgePacketAbs = 0f; _tpEdgeTailFrames = 0;
+        _tpVelPxPerS = 0f; _tpEdgeImpactVel = 0f;
         _reorderTarget = NodeHandle.Null; _touchReorder = false; _reorderAxisX = false;
         _swipeDrag = NodeHandle.Null; _swipeAxisX = false;
         _gesturePanNode = NodeHandle.Null;
@@ -1342,6 +1366,7 @@ public sealed class InputDispatcher
                 sc.FlingSnapTarget = float.NaN;
                 _panTarget = scrollable;
                 _panClaimed = false;
+                _chainOuter = NodeHandle.Null;   // fresh pan → no nested-scroll hand-off yet
                 _panAxisX = sc.Orientation == 1;
                 _panAnchorOffset = _panAxisX ? sc.OffsetX : sc.OffsetY;
                 _panAnchorPx = e.PositionPx;
@@ -1685,7 +1710,7 @@ public sealed class InputDispatcher
         else if (MathF.Abs(v) >= FlingMinVelocityPxPerS)       // a fast flick the moves under-sampled → seed the friction fling
         {
             if (FluentGpu.Foundation.ScrollLog.On) FluentGpu.Foundation.ScrollLog.Line($"UP  under-sampled flick complete v={-v:0} travel={axisTravel:0}");
-            OnFlingStarted?.Invoke(_panTarget, -v);
+            OnFlingStarted?.Invoke(ChainFlingTarget(), -v);
         }
         return true;
     }
@@ -2239,7 +2264,7 @@ public sealed class InputDispatcher
                 else if (MathF.Abs(v) >= FlingMinVelocityPxPerS)
                 {
                     if (FluentGpu.Foundation.ScrollLog.On) FluentGpu.Foundation.ScrollLog.Line($"UP  fling seed v={-v:0} (panVel={v:0})");
-                    OnFlingStarted?.Invoke(_panTarget, -v);
+                    OnFlingStarted?.Invoke(ChainFlingTarget(), -v);
                 }
                 else if (FluentGpu.Foundation.ScrollLog.On) FluentGpu.Foundation.ScrollLog.Line($"UP  no fling (|v|={MathF.Abs(v):0} < {FlingMinVelocityPxPerS:0})");
             }
@@ -2443,6 +2468,8 @@ public sealed class InputDispatcher
         _tpEdgeSign = 0f;
         _tpLastEdgePacketAbs = 0f;
         _tpEdgeTailFrames = 0;
+        _tpVelPxPerS = 0f;
+        _tpEdgeImpactVel = 0f;
     }
 
     /// <summary>Precision-touchpad pan packet (Win32 routes hi-res WM_POINTERWHEEL here as <see cref="PointerKind.Touchpad"/>
@@ -2491,6 +2518,8 @@ public sealed class InputDispatcher
             _tpEdgeSign = 0f;
             _tpLastEdgePacketAbs = 0f;
             _tpEdgeTailFrames = 0;
+            _tpVelPxPerS = 0f;          // a fresh gesture must not inherit the prior fling's momentum estimate
+            _tpEdgeImpactVel = 0f;
         }
 
         _tpPendingDelta += delta;   // folded into _tpDemandRaw in TickTouchpad (coalesces the frame's bursts → de-jitter)
@@ -2512,6 +2541,17 @@ public sealed class InputDispatcher
         // cap (a flat bandLimit saturated the band at only ~6.7% viewport). The gate-pinned inverse keeps the round-trip exact.
         float excessMax = OverscrollPhysics.ExcessFromBand(s_tpBandHeadroom * bandLimit, vpExtent);
         return Math.Clamp(raw, -excessMax, maxOff + excessMax);
+    }
+
+    /// <summary>Outward spring velocity (px/s) seeding an edge bounce from the captured edge-impact momentum, in the band's
+    /// own direction (<paramref name="bandSign"/> = sign of <see cref="ScrollState.OverscrollPx"/>). The impact speed is
+    /// capped at <see cref="s_tpEdgeBounceVelCap"/> and scaled by the shared <see cref="OverscrollPhysics.MomentumSpringCoupling"/>
+    /// (the same fraction the touch-fling edge bounce uses), so the touchpad recoil reads with the same energy as a finger
+    /// flick. Zero when no momentum was captured (a static over-pull) ⇒ a quiet from-rest settle, unchanged.</summary>
+    private float TpEdgeBounceVel(float bandSign)
+    {
+        float impact = MathF.Min(_tpEdgeImpactVel, s_tpEdgeBounceVelCap);
+        return bandSign * impact * OverscrollPhysics.MomentumSpringCoupling;
     }
 
     /// <summary>Phase-7 advance of an active precision-touchpad stream. The applied offset is a one-pole low-pass
@@ -2544,6 +2584,17 @@ public sealed class InputDispatcher
             // precise motion and gives the OS momentum tail a clearer non-linear ease-out without adding engine coast.
             packetDelta = OverscrollPhysics.ShapeTouchpadPacketDelta(_tpPendingDelta);
             _tpPendingDelta = 0f; _tpGotPacket = false;
+
+            // Observe the content's momentum (px/s) as a short EMA of the packet velocity — the speed a fling is carrying
+            // when it reaches an edge. It seeds the release spring so the bounce reflects how hard the user flicked (a
+            // strong fling overshoots and recoils with energy; a gentle drift barely springs). Demand/offset are untouched
+            // — this only observes — so it adds no synthetic coast.
+            if (dtMs > 0f)
+            {
+                float instVelPxPerS = packetDelta / dtMs * 1000f;
+                float kv = 1f - MathF.Exp(-dtMs / s_tpVelTauMs);
+                _tpVelPxPerS += (instVelPxPerS - _tpVelPxPerS) * kv;
+            }
 
             if (_tpEdgeRecoil)
             {
@@ -2613,8 +2664,18 @@ public sealed class InputDispatcher
             float packetAbs = MathF.Abs(packetDelta);
             bool outward = packetDelta * sc.OverscrollPx > 0f;
             bool saturated = MathF.Abs(sc.OverscrollPx) >= cap - 0.5f;
-            bool tapering = _tpLastEdgePacketAbs <= 0f || packetAbs <= _tpLastEdgePacketAbs + 0.5f;
-            if (outward && saturated && packetAbs <= TpEdgeTailPacketDip && tapering)
+            // Latch the strongest momentum seen while pinned at the cap — that, not the now-decayed tail packet, is the
+            // energy the bounce should carry. A hard fling pins the cap with a large _tpVelPxPerS; a gentle drift barely.
+            if (saturated) _tpEdgeImpactVel = MathF.Max(_tpEdgeImpactVel, MathF.Abs(_tpVelPxPerS));
+            // The post-lift OS momentum tail DECAYS; a deliberate sustained push at the edge does NOT. Detect the tail by a
+            // shrinking outward-packet trend (or packets already tiny) while pinned at the cap. The OLD test required the
+            // packet to already be ≤8 DIP, so a long fling's tail — large packets shrinking over ~0.5–1s — held the band
+            // visibly stuck the whole time. A clear frame-over-frame DROP releases it within a couple of frames of lift;
+            // steady/growing packets are a real push, so the band stays pinned.
+            bool decaying = _tpLastEdgePacketAbs > 0f
+                            && (packetAbs <= _tpLastEdgePacketAbs - s_tpEdgeTaperMarginDip   // clearly shrinking tail
+                                || packetAbs <= TpEdgeTailPacketDip);                         // or already tiny (tail end)
+            if (outward && saturated && decaying)
                 _tpEdgeTailFrames++;
             else
                 _tpEdgeTailFrames = 0;
@@ -2625,11 +2686,12 @@ public sealed class InputDispatcher
                 _tpEdgeRecoil = true;
                 _tpEdgeSign = MathF.CopySign(1f, sc.OverscrollPx);
                 sc.Overscrolling = false;
-                sc.OverscrollVel = 0f;
+                sc.OverscrollVel = TpEdgeBounceVel(_tpEdgeSign);   // momentum-seeded recoil (not a dead, from-rest release)
                 sc.OverscrollReleaseOmega = TpReleaseOmegaRadPerS;
+                _tpEdgeImpactVel = 0f;
                 OnScrollArmed?.Invoke(_tpTarget);
                 if (FluentGpu.Foundation.ScrollLog.On)
-                    FluentGpu.Foundation.ScrollLog.Line($"TPEDGE tail-release band={sc.OverscrollPx:0.0} delta={packetDelta:0.0} -> spring");
+                    FluentGpu.Foundation.ScrollLog.Line($"TPEDGE tail-release band={sc.OverscrollPx:0.0} delta={packetDelta:0.0} seedV={sc.OverscrollVel:0} -> spring");
                 return;
             }
         }
@@ -2637,10 +2699,12 @@ public sealed class InputDispatcher
         {
             _tpLastEdgePacketAbs = 0f;
             _tpEdgeTailFrames = 0;
+            _tpEdgeImpactVel = 0f;
         }
 
         // In-range settle waits only for packet silence + filter convergence. An elastic edge releases after the quiet
-        // guard; the spring starts with zero outward velocity for a crisp return instead of the captured 2,025 px/s kick.
+        // guard; the spring is seeded with the captured edge-impact momentum (NOT the OS's raw end-of-stream kick), so a
+        // fling that ran silent into the edge still bounces in proportion to how hard it was thrown.
         bool releaseBand = !_tpGotPacket && _tpQuietMs > s_tpEdgeReleaseQuietMs && sc.OverscrollPx != 0f;
         bool settleInRange = !_tpGotPacket && _tpQuietMs > s_tpSettleQuietMs
                              && MathF.Abs(_tpDemandRaw - _tpAppliedRaw) < 0.5f;
@@ -2649,10 +2713,11 @@ public sealed class InputDispatcher
             if (sc.OverscrollPx != 0f)
             {
                 sc.Overscrolling = false;
-                sc.OverscrollVel = 0f;
+                sc.OverscrollVel = TpEdgeBounceVel(MathF.CopySign(1f, sc.OverscrollPx));
                 sc.OverscrollReleaseOmega = TpReleaseOmegaRadPerS;
+                _tpEdgeImpactVel = 0f;
                 OnScrollArmed?.Invoke(_tpTarget);
-                if (FluentGpu.Foundation.ScrollLog.On) FluentGpu.Foundation.ScrollLog.Line($"TPEND band={sc.OverscrollPx:0.0} quiet={_tpQuietMs:0} -> spring v=0");
+                if (FluentGpu.Foundation.ScrollLog.On) FluentGpu.Foundation.ScrollLog.Line($"TPEND band={sc.OverscrollPx:0.0} quiet={_tpQuietMs:0} seedV={sc.OverscrollVel:0} -> spring");
             }
             else if (FluentGpu.Foundation.ScrollLog.On) FluentGpu.Foundation.ScrollLog.Line($"TPEND settle off={_tpAppliedRaw:0}");
             _tpTarget = NodeHandle.Null;
@@ -2841,6 +2906,34 @@ public sealed class InputDispatcher
 
         // Past-the-edge excess (signed in offset space): negative past the top/left, positive past the bottom/right.
         float excess = rawOffset < 0f ? rawOffset : rawOffset > max ? rawOffset - max : 0f;
+
+        // Nested-scroll hand-off (§10, Compose onPostScroll): when this scroller is at its edge (excess≠0) and chaining is
+        // Auto, route the residual to the nearest same-axis ancestor scroller — absolute-anchored, so the outer tracks the
+        // finger 1:1 and returns home when the finger pulls back — and suppress this scroller's rubber-band. A scene with no
+        // outer same-axis scroller falls straight through to the band exactly as before (byte-identical, gates unchanged).
+        if (excess != 0f && sc.Chaining == 0)
+        {
+            if (_chainOuter.IsNull || !_scene.IsLive(_chainOuter))
+            {
+                var outer = OuterScroller(n, horizontal, excess);
+                if (!outer.IsNull && _scene.TryGetScroll(outer, out var os))
+                {
+                    _chainOuter = outer;
+                    _chainOuterAnchor = os.Orientation == 1 ? os.OffsetX : os.OffsetY;
+                }
+            }
+            if (!_chainOuter.IsNull && _scene.IsLive(_chainOuter))
+            {
+                SetScrollOffset(_chainOuter, _chainOuterAnchor + excess);   // the outer absorbs the residual…
+                excess = 0f;                                               // …so the inner does not band
+            }
+        }
+        else if (excess == 0f && !_chainOuter.IsNull && _scene.IsLive(_chainOuter))
+        {
+            SetScrollOffset(_chainOuter, _chainOuterAnchor);   // finger pulled back inside range → the outer returns home
+            _chainOuter = NodeHandle.Null;
+        }
+
         float band = OverscrollPhysics.BandFromExcess(excess, viewport);
         if (FluentGpu.Foundation.ScrollLog.On)
             FluentGpu.Foundation.ScrollLog.Line($"  touchPan {(horizontal ? "x" : "y")} raw={rawOffset:0} max={max:0} excess={excess:0} band={band:0.0} vp={viewport:0}");
@@ -2864,6 +2957,36 @@ public sealed class InputDispatcher
             OnScrollArmed?.Invoke(n);
         }
         return offsetMoved || band != oldBand;
+    }
+
+    /// <summary>Nested-scroll (§10): the nearest same-axis ancestor scroller of <paramref name="inner"/> with room to move
+    /// in the <paramref name="excess"/> direction (negative = toward its top/left, positive = toward its bottom/right).
+    /// An ancestor with chaining None stops the search. Null = nobody can take the residual (the inner rubber-bands).
+    /// Allocation-free parent walk.</summary>
+    private NodeHandle OuterScroller(NodeHandle inner, bool horizontal, float excess)
+    {
+        for (var p = _scene.Parent(inner); !p.IsNull; p = _scene.Parent(p))
+        {
+            if ((_scene.Flags(p) & NodeFlags.Scrollable) == 0) continue;
+            if (!_scene.TryGetScroll(p, out var psc)) continue;
+            if ((psc.Orientation == 1) != horizontal) continue;      // same axis only
+            if (psc.Chaining == 2) return NodeHandle.Null;           // an ancestor with chaining None stops the chain
+            float z = psc.ZoomFactor > 0f ? psc.ZoomFactor : 1f;
+            float pmax = horizontal ? MathF.Max(0f, psc.ContentW * z - psc.ViewportW) : MathF.Max(0f, psc.ContentH * z - psc.ViewportH);
+            float poff = horizontal ? psc.OffsetX : psc.OffsetY;
+            if (excess < 0f && poff > 0.5f) return p;                // room toward the top/left
+            if (excess > 0f && poff < pmax - 0.5f) return p;         // room toward the bottom/right
+        }
+        return NodeHandle.Null;
+    }
+
+    /// <summary>Nested-scroll fling hand-off (§10): if the pan was chaining to an outer scroller at lift, the flick throws
+    /// the OUTER (the inner is parked at its edge), Compose-style. Consumes (clears) the chain latch.</summary>
+    private NodeHandle ChainFlingTarget()
+    {
+        var t = (!_chainOuter.IsNull && _scene.IsLive(_chainOuter)) ? _chainOuter : _panTarget;
+        _chainOuter = NodeHandle.Null;
+        return t;
     }
 
     // Overscroll resistance + spring: OverscrollPhysics (WinUI DM + IT parity).

@@ -99,7 +99,11 @@ public static class ScrollBindEval
         if (anyStuckTop) f |= ScrollState.StuckTopBit;
         if (offset > 0.5f) f |= ScrollState.ScrollableUpBit;
         if (offset < maxOff - 0.5f) f |= ScrollState.ScrollableDownBit;
-        if (sc.ScrollMode != 0 || MathF.Abs(sc.FlingVelocity) > 1f || sc.Overscrolling) f |= ScrollState.MovingNowBit;
+        // MovingNow folds the conscious-scrollbar's "is the scroller in motion" trigger into the generic flag channel:
+        // a fling/wheel (ScrollMode≠0), a held overscroll band, OR a smooth target-chase (programmatic / scrollbar-track).
+        float tgt = horiz ? sc.TargetX : sc.TargetY;
+        if (sc.ScrollMode != 0 || MathF.Abs(sc.FlingVelocity) > 1f || sc.Overscrolling || MathF.Abs(tgt - offset) > 0.5f)
+            f |= ScrollState.MovingNowBit;
         if (sc.HasSnap && !float.IsNaN(sc.FlingSnapTarget) && MathF.Abs(offset - sc.FlingSnapTarget) <= 0.5f) f |= ScrollState.SnappedBit;
         if (sc.IdleMs >= IdleExpireMs) f |= ScrollState.IdleExpiredBit;
 

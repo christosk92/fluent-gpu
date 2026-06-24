@@ -613,6 +613,12 @@ public sealed record ScrollEl : Element
     /// surfaces (a sidebar) where a discoverable, always-present scroll affordance is wanted (WinUI 11 nav behavior).</summary>
     public bool AlwaysShowScrollbar { get; init; }
 
+    /// <summary>Nested-scroll chaining policy (the CSS <c>overscroll-behavior</c> analog). Default <see cref="ScrollChainingMode.Auto"/>:
+    /// a touch pan that reaches this scroller's edge hands the residual to the nearest same-axis ancestor scroller
+    /// (Compose nested-scroll), and a flick at the edge throws into it. <see cref="ScrollChainingMode.Contain"/> rubber-bands
+    /// instead. (Wheel scrolling already bubbles to an outer scroller regardless.)</summary>
+    public ScrollChainingMode Chaining { get; init; } = ScrollChainingMode.Auto;
+
     /// <summary>Change-only scroll-geometry observer (the escape hatch; SwiftUI <c>onScrollGeometryChange</c>). The host
     /// projects the live geometry to a coarse <c>long</c> key after the integrator settles and fires the action only when
     /// that key changes (never per-px, never per-frame) — for pull-to-refresh triggers, analytics, bespoke app logic.

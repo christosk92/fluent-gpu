@@ -13,8 +13,7 @@ namespace FluentGpu.Dsl;
 /// {
 ///     [Expander.PartHeader] = b => b with
 ///     {
-///         StickyTop = 8f,                                    // CSS position:sticky, top: 8px
-///         OnPinned  = p => stuck.Value = p,                  // the :stuck observable
+///         ScrollBinds = [ new() { PinTop = 8f, OnFlag = p => stuck.Value = p } ],  // CSS position:sticky + the :stuck observable
 ///         Fill = stuck.Value ? Tok.FillSolidBase : b.Fill,   // restyle ANYTHING off the signal
 ///         BrushTransitionMs = Motion.ControlFast,            // …and the swap cross-fades
 ///     },
@@ -84,7 +83,7 @@ public sealed class TemplateParts
         return true;
     }
 
-    /// <summary>Compose a control-internal handler with a modifier-supplied one (<c>OnRealized</c>/<c>OnPinned</c>):
+    /// <summary>Compose a control-internal handler with a modifier-supplied one (<c>OnRealized</c>/<c>OnKeyDown</c>):
     /// the control's runs first, the user's after. Collapses when the modifier left the control's own handler in
     /// place (the <c>with</c>-copy default) or supplied none.</summary>
     public static Action<T>? Chain<T>(Action<T>? control, Action<T>? user)

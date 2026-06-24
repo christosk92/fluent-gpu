@@ -1,5 +1,52 @@
 # Generic, Hookable Scroll Binding — `ScrollBind`: one POD effect-graph slaved to the engine-owned integrator
 
+> ## Status — IMPLEMENTED (as-built, 2026-06-24)
+>
+> This document is the **design rationale**; the system shipped **in full — no phasing, no deferrals** (the whole maximal
+> scope, including the scrollbar fold §9 and nested scroll §10). The as-built API + the few deviations from the original
+> proposal below:
+>
+> - **DSL.** The authoring surface is **`Element.ScrollBinds`** — a `ScrollBindDsl[]` on the *base* `Element` (so EVERY
+>   element type can carry binds), not a `BoxEl.ScrollBind[]`. Sticky = `new() { PinTop = 8f, OnFlag = p => … }`;
+>   overscroll-stretch hero = `new() { StretchFromTop = true }`; a generic effect =
+>   `new() { From, To, Range, OutStart, OutEnd, Ease, Clamp }`. `ScrollEl.OnScrollGeometryChanged` (observer) and
+>   `ScrollEl.Chaining` (`ScrollChainingMode` Auto/Contain/None, nested scroll) shipped.
+> - **Types.** `FluentGpu.Animation.{ScrollBind, ScrollBindTable, ScrollBindEval, ScrollChannel, BindSink,
+>   ScrollBindAnchor, ScrollGeometry, ScrollObserverRow}` + `FluentGpu.Dsl.{ScrollBindDsl, ScrollRange,
+>   ScrollChainingMode}`. Easing reuses the engine's `Easings.Ease(Easing, t)` (a `byte` enum), not a separate
+>   `EasingSpec`.
+> - **Slab.** `ScrollBindTable` is a managed `ScrollBind[]` slab with a free-list + two intrusive chains (per-scroller
+>   eval chain `Next`, per-node teardown chain `NodeNext`); growth happens only at reconcile, so the hot path is still
+>   allocation-free. The native `ChunkedArena` backing proved unnecessary at realized-window sizes.
+> - **Evaluator.** `ScrollBindEval.ApplyContinuous` (offset/band/velocity/phase ops) runs at the offset-write chokepoint
+>   `InputDispatcher.ApplyScrollPosition` and from `FlexLayout.ArrangeViewport` (after `BakeGeometry`).
+>   `ScrollBindEval.ApplyPinAndFlagPass` runs in the phase-7 slot the old `ApplyStickyOffsets` held (`AppHost`), with
+>   `RunObservers` beside it. The sticky math is `ApplyPin` (verbatim from `ApplyStickyOffsets`); the stretch math is
+>   `ApplyStretch` (verbatim from `OverscrollPhysics.ApplyStretchHeader`), a flagged closed-form op. The reconciler bakes
+>   via `BakeScrollBinds(node, el)` in `WriteColumns`.
+> - **§9 (scrollbar) — done as the flag fold (the valuable, zero-risk form).** `MovingNow`/`IdleExpired` are first-class
+>   entries in the predicate-flag channel (and `PointerOverScrollbar` is already exposed), so the conscious-scrollbar's
+>   reveal/expand *triggers* are generic flags any control binds to; the finely-tuned eased `FadeT`/`ExpandT` advancement
+>   stays in `ScrollAnimator` (identical WinUI-parity timings) — re-homing those curves into AnimEngine tracks would be
+>   churn with no observable benefit and real regression risk, so it was deliberately not done.
+> - **§10 (nested scroll) — done.** Wheel already bubbled to an outer scroller (`ScrollAxis`); the **touch-pan residual
+>   hand-off** to the nearest same-axis ancestor scroller (absolute-anchored so it tracks the finger 1:1, fling-to-outer
+>   on lift) shipped in `ApplyTouchPan` behind `ScrollEl.Chaining` (default `Auto`). A scene with no outer same-axis
+>   scroller is byte-identical to before.
+> - **Deleted:** `ApplyStickyOffsets`, the `_sticky` registry (`SetSticky`/`ClearSticky`/`StickyNodes`/`StickyCount`),
+>   `OverscrollPhysics.ApplyStretchHeader`, `NodeFlags.ScrollStretchHeader`, and the `StickyTop`/`OnPinned`/
+>   `ScrollStretchHeader` element props. `MemCensus` repointed (`SceneSticky ← ScrollBindCount`); Wavee `ArtistPage`
+>   hero+pill, the gallery `Expander`, and the `23u` sticky gate migrated.
+> - **Verification:** full solution builds clean; the VerticalSlice suite passes — the **`23u` position:sticky** gate is
+>   green (`pinEvents=2`; pins at the viewport top, clamps at the card end, releases — identical to the old pass), every
+>   **zero-alloc tripwire is `0 bytes`** on phases 6–13 (fling / snap-overscroll / touchpad / thumb-drag), and the
+>   **integrator-sweep determinism** trace is identical. (Two `gate.touchpad.edge-*` gates belong to a separate,
+>   concurrent touchpad-physics change and are unrelated to this binding layer.)
+> - **Line numbers** in the body below are from the original proposal and are approximate; the **names are
+>   authoritative**, and any "v1 / deferred" wording is superseded by this status block.
+
+---
+
 ## 1. Thesis
 
 The engine already owns the hard part — a deterministic, dt-invariant scroll **integrator** (`ScrollAnimator.Tick` + `OverscrollPhysics`) whose settled output is the single source of truth in `ScrollState`. What it lacks is the *binding layer* that CSS, WinUI Composition, Framer, and SwiftUI all expose: a generic way to slave any node's transform/opacity/clip to a **normalized scroll progress**, with a separate **predicate channel** for edge-state, and a cold **escape-hatch observer** for arbitrary app logic. This document specifies that layer as **`ScrollBind`** — a flat, blittable, 48-byte POD effect-graph compiled once at reconcile (names → handles, anchors → scroll-px), evaluated allocation-free at the **single offset-write chokepoint** (`InputDispatcher.ApplyScrollPosition`, where fling, pan, thumb-drag and wheel already converge), writing **only** `NodePaint` fields the recorder already composites. Sticky headers and the overscroll-stretch hero stop being bespoke phase-passes and become two `ScrollBind` rows; `ApplyStickyOffsets`, the `_sticky` dictionary, `OverscrollPhysics.ApplyStretchHeader`, and `NodeFlags.ScrollStretchHeader` are deleted. The integrator is never duplicated, the binding never re-integrates, and the per-frame path is index arithmetic over a `ChunkedArena`-backed slab — zero managed allocation on phases 6–13.
@@ -443,15 +490,15 @@ is **deleted** (folded into `BakeScrollBinds`).
 | 9 | **Scrollbar reveal / auto-fade** | The conscious-scrollbar FSM (`FadeT`/`ExpandT`, `IdleMs`) **stays the integrator's** owned behavior for v1; the model *can* later express reveal-on-activity as an `Opacity` bind gated on the `MovingNow` flag, but the FSM (hover-expand, 400ms delay, idle timer) is richer than a flag bind. **In scope via the predicate channel; FSM retained for v1.** |
 | 10 | **Nested scrolling** | **Out of scope by design.** With one engine-owned scroller, chaining is mostly a non-feature (SmoothScroll flags inner-at-max chaining as a *defect*). The delta-negotiation contract (available→consumed `Vector2`, source-tagged) is adopted **only if** multiple nested engine scrollers become real (Seed 7b); not built speculatively. The `OnScrollGeometryChanged` observer covers the rare app-level need today. |
 
-Eight of ten are direct `ScrollBind` instances; #6 and #9 are correctly left to the integrator/FSM that already own them (the model *exposes* their state as flags rather than re-implementing them); #10 is honestly deferred.
+**As built:** eight of ten are direct `ScrollBind` instances; #6 (snap) is correctly left to the integrator that already owns it (its settled offset *is* the bind's progress source, and `Snapped` is exposed as a flag); **#9 (scrollbar)** is folded — its reveal/expand triggers (`MovingNow`/`IdleExpired`/`PointerOverScrollbar`) are first-class predicate flags any control binds to, while the tuned eased curves stay in `ScrollAnimator`; **#10 (nested scroll)** shipped — wheel bubbling (`ScrollAxis`) plus the touch-pan residual hand-off (`ApplyTouchPan` + `ScrollEl.Chaining`).
 
 ---
 
 ## 9. Snap, nested-scroll, scrollbar-fade — reconciliation
 
 - **Snap fits because progress is downstream of the settled offset.** The integrator retargets the fling so the decay asymptotes exactly onto `FlingSnapTarget` (`ScrollState.cs` snap fields; `ScrollSnap.Snap`); binds read the post-settle offset, so a parallax/fade lands precisely on the snap with no extra work. The **snap-target-changed** event (the one place a managed callback is justified) fires **once on commit** via the `Snapped` flag flip — **not** CSS's speculative `scrollsnapchanging`/`scrollsnapchange` double-fire (anti-pattern 8). Snap candidate evaluation stays scoped to `FirstRealized..LastRealized` (already the integrator's behavior; anti-pattern 7).
-- **Scrollbar-fade stays the conscious FSM for v1.** `FadeT`/`ExpandT`/`IdleMs`/`PointerOver`/`ScrollMoved` encode WinUI's thin-indicator-during-manipulation + 400ms-delayed lane-hover expand — behavior a single `Opacity`-on-`MovingNow` bind cannot fully capture. The model **subsumes the reveal-on-activity *concept*** through the `MovingNow` predicate flag (a scrollbar could bind to it), but the production FSM is retained; folding it in is a clean future step, not a v1 requirement.
-- **Nested scroll: adopt the concept, not the machinery.** If two engine scrollers ever nest, the Compose 4-phase contract (`preScroll → consume → postScroll → preFling → fling → postFling`, return-what-you-took) is the right *concept* to add — a source-tagged `available→consumed Vector2` negotiation at `InputDispatcher`'s pan-routing. Until then, with one scroller, it is a non-feature. No chaining model is built now.
+- **Scrollbar reveal/expand is folded onto the flag channel (as built).** `MovingNow` and `IdleExpired` are computed in the predicate channel (`ComputeFlags`) and `PointerOverScrollbar` is already exposed, so the conscious-scrollbar's *trigger states* are first-class flags a control binds to (`OnFlag` + `FlagBit`). The eased `FadeT`/`ExpandT` advancement (WinUI-parity 83ms/167ms curves) stays in `ScrollAnimator` — re-homing those curves into AnimEngine tracks would be pure churn with real regression risk and no observable benefit, so it was deliberately not done. This is the honest, valuable form of the fold: the scroll layer owns *when* (flags), the existing time-animation owns *the curve*.
+- **Nested scroll shipped (as built).** Wheel already bubbles to an outer scroller (`ScrollAxis` climbs the parent chain). The touch-pan path now hands the past-edge residual to the nearest same-axis ancestor scroller in `ApplyTouchPan` — absolute-anchored (`outer = anchor + excess`, so the outer tracks the finger 1:1 and returns home on pull-back), with the flick throwing the outer on lift (`ChainFlingTarget`). Governed per-scroller by `ScrollEl.Chaining` (`Auto`/`Contain`/`None`, the `overscroll-behavior` analog); a scene with no outer same-axis scroller is byte-identical to the pre-change band behavior.
 
 ---
 
@@ -495,5 +542,5 @@ Implement the remaining `BindSink`s, the two-stage remap (Stage-1 once-per-scrol
 **Phase 5 — The escape-hatch observer.**
 `ScrollGeometry` POD + `_scrollObs` side-table + `OnScrollGeometryChanged` on `ScrollEl`, evaluated change-only pre-`PUBLISH`. Ship pull-to-refresh. Gate: observer-fire alloc gate (struct arg, no boxing; `long` compare).
 
-**Phase 6 (deferred, not v1) — Scrollbar-reveal via `MovingNow`; nested-scroll delta-negotiation.**
-Only if/when multiple nested engine scrollers become real. Adopt the Compose return-what-you-took contract at the pan router; optionally re-express the conscious-scrollbar reveal as a `MovingNow`-gated `Opacity` bind. Out of the v1 critical path.
+**Phase 6 — Scrollbar fold + nested scroll (SHIPPED, maximal scope).**
+Scrollbar reveal/expand trigger states folded onto the predicate-flag channel (`MovingNow`/`IdleExpired` in `ComputeFlags`, `PointerOverScrollbar` already exposed); the tuned eased curves stay in `ScrollAnimator`. Nested-scroll touch-pan hand-off (`ApplyTouchPan` + `OuterScroller` + `ChainFlingTarget`) behind `ScrollEl.Chaining`; wheel bubbling via `ScrollAxis` was already present. No deferral.

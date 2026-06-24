@@ -220,7 +220,7 @@ per-control feature props. Every new control obeys these rules:
   **OWNED** props on its const (the props the control re-asserts and a modifier therefore cannot win).
 - **Route every named part** through `parts.Apply(PartXxx, el)` after building it, then **re-assert the part's
   mechanics-critical props** with one trailing `with` — click/toggle handlers, reflow `Animate` specs, value-position
-  binds, `Key`, `Role`, `TabStop` — and **chain** ref-capture handlers (`OnRealized`/`OnPinned`) via
+  binds, `Key`, `Role`, `TabStop` — and **chain** the ref-capture handler (`OnRealized`) via
   `TemplateParts.Chain`. A modifier can restyle everything but break nothing.
 - **`parts.Apply` is type-preserving and null-safe**: it is a no-op (no allocation) when `parts` is null or the part
   has no modifier, and it keeps the *original* element if a modifier changed the record type (parts **style**; content
@@ -256,10 +256,11 @@ text):
   banned hazard; a CI shape-hash + `HotPhaseAllocBytes == 0` check enforce it). List-*uniform* part modifiers are legal
   again via the apply-once prototype cache (`TemplateParts.TryApplyCached`).
 
-> **One transform owner.** Don't put `StickyTop` or a bound `Transform` on a transform-owned part (e.g. the Expander
-> clip mid-reflow, whose const explicitly says *"do not add StickyTop/TransformBind here"*). <!-- canon-allow: quotes the source comment verbatim --> A bound prop is a `Prop<T>`
-> taking a value, a `Func<T>` (`Prop.Of` for inline lambdas), or a concrete signal — for the bound-prop mental model
-> see [Signals internals](./signals-and-reactivity-internals.md) and the app-author
+> **One transform owner.** Don't put a `ScrollBinds` entry (or a bound `Transform`) on a transform-owned part (e.g. the
+> Expander clip mid-reflow, whose const explicitly warns against adding a scroll-driven transform bind there) — a
+> scroll bind writes the node's `LocalTransform`, which a reflow already owns, so the two would clobber. A bound prop is
+> a `Prop<T>` taking a value, a `Func<T>` (`Prop.Of` for inline lambdas), or a concrete signal — for the bound-prop
+> mental model see [Signals internals](./signals-and-reactivity-internals.md) and the app-author
 > [bindings page](../app-authors/signals-components-and-bindings.md).
 
 ## Step 6 — verify empirically: logs and pixels, not vibes

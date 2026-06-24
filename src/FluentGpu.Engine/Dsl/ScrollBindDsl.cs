@@ -3,6 +3,11 @@ using FluentGpu.Foundation;
 
 namespace FluentGpu.Dsl;
 
+/// <summary>Nested-scroll chaining policy (the CSS <c>overscroll-behavior</c> analog). <see cref="Auto"/>: an inner
+/// scroller panned to its edge hands the residual to the nearest same-axis ancestor scroller (Compose nested-scroll).
+/// <see cref="Contain"/>: the inner rubber-bands instead (no hand-off). <see cref="None"/>: no band, no hand-off.</summary>
+public enum ScrollChainingMode : byte { Auto = 0, Contain = 1, None = 2 }
+
 /// <summary>A two-anchor active scroll interval — the authoring form of <see cref="FluentGpu.Animation.ScrollBind"/>'s
 /// range. The reconciler bakes the anchors to two scroll-px bounds <c>(a,b)</c> (literal-px at reconcile; geometry
 /// anchors at <c>ArrangeViewport</c>), from which the per-frame eval derives <c>t = clamp01((sample − a)/(b − a))</c>.

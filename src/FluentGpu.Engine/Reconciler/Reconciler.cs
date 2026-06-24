@@ -1913,6 +1913,7 @@ public sealed class TreeReconciler
                 ss.Zoomable = s.Zoomable;
                 ss.MinZoom = s.MinZoom; ss.MaxZoom = s.MaxZoom;
                 ss.EdgeCueConfig = ResolveEdgeCues(s.EdgeCues);
+                ss.Chaining = (byte)s.Chaining;                  // nested-scroll hand-off policy (touch pan)
                 // Change-only scroll-geometry observer (the escape hatch; pull-to-refresh / analytics).
                 if (s.OnScrollGeometryChanged is { } obs) _scene.SetScrollObserver(node, obs.Project, obs.Action);
                 else _scene.ClearScrollObserver(node);
