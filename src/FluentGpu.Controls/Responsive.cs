@@ -21,7 +21,10 @@ public static class Responsive
     /// changes. <paramref name="fallback"/> is the width passed for the one frame before the first measure;
     /// <paramref name="grow"/> &gt; 0 makes it fill a ROW parent (a column parent cross-stretches it at grow 0).</summary>
     public static Element Of(Func<float, Element> build, float fallback = 0f, float grow = 0f)
-        => Embed.Comp(() => new ResponsiveBox(build, fallback, grow));
+        // SkeletonProxy: the deriver can't see into this component, so hand it the real child built at the fallback width
+        // to derive — the size-reactive section shimmers as its real shape instead of collapsing to one default bar.
+        => Embed.Comp(() => new ResponsiveBox(build, fallback, grow))
+           with { SkeletonProxy = () => build(fallback > 0.5f ? fallback : 900f) };
 }
 
 /// <summary>The <see cref="Responsive.Of"/> component (see that summary). Reading <c>_w.Value</c> in <c>Render</c>

@@ -105,6 +105,39 @@ sealed class ArtistPopular : Component
         };
     }
 
+    // The skeleton shape the deriver walks (wired as the SkeletonProxy at the Embed.Comp site, since the deriver can't
+    // run this component's Render): the real header + the real CompactTrack grid built from the (fake-data) tracks with
+    // no-op handlers — so the shimmer matches the live top-tracks list instead of collapsing to one bar.
+    public static Element SkeletonShape(IReadOnlyList<Track> tracks, string title)
+    {
+        int total = Math.Min(tracks.Count, MaxTracks);
+        int cols = total > Rows ? 2 : 1;
+        var rowEls = new Element[Rows];
+        for (int r = 0; r < Rows; r++)
+        {
+            var cells = new Element[cols];
+            for (int c = 0; c < cols; c++)
+            {
+                int gi = c * Rows + r;
+                cells[c] = gi < total
+                    ? CompactTrack(tracks[gi], new TrackRow.State(false, false, false, IsTop: false, Saved: false),
+                                   static (_, _) => { }, static () => { }, null, static _ => { }, static _ => { })
+                    : new BoxEl { Grow = 1f, Basis = 0f };
+            }
+            rowEls[r] = new BoxEl { Direction = 0, Gap = ColumnGap, Children = cells };
+        }
+        return new BoxEl
+        {
+            Direction = 1, Gap = 20f,
+            Children =
+            [
+                new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
+                            Children = [ ArtistPage.AccentHeader(title) with { Grow = 1f, Basis = 0f } ] },
+                new BoxEl { Direction = 1, Gap = RowGap, Children = rowEls },
+            ],
+        };
+    }
+
     // Source-matched WinUI TrackItem Compact cell: transparent at rest, one-cell hover plate, 48px artwork,
     // title + explicit/video/artists + full play count, then heart and duration. Swipe input belongs to each cell,
     // rather than the shared band, so hovering one track cannot light every track at once.

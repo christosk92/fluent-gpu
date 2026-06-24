@@ -62,4 +62,14 @@ sealed class FollowButton : Component
                 { Size = 13f, Weight = 700, Color = following ? Tok.AccentTextPrimary : Tok.TextSecondary }],
         };
     }
+
+    // The skeleton shape the deriver walks (SkeletonProxy at the Embed.Comp site): the real pill so it shimmers as a
+    // bordered pill, not a full-width default bar that would stretch across the actions row.
+    public static Element SkeletonShape() => new BoxEl
+    {
+        Direction = 0, Height = 36f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Padding = new Edges4(WaveeSpace.L, 0f, WaveeSpace.L, 0f), Corners = CornerRadius4.All(18f),
+        BorderWidth = 1.5f, BorderColor = Tok.StrokeControlDefault,
+        Children = [new TextEl(Loc.Get(Strings.Artist.Follow)) { Size = 13f, Weight = 700, Color = Tok.TextSecondary }],
+    };
 }

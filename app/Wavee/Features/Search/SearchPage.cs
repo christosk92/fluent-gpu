@@ -73,7 +73,8 @@ sealed class SearchPage : Component
 
         return chip switch
         {
-            1 => Embed.Comp(() => new SearchSongs(r.Tracks, PlayTrack, go)),   // tracks → the SHARED track cell (hover transport + now-playing + heart), not the generic ResultRow
+            1 => Embed.Comp(() => new SearchSongs(r.Tracks, PlayTrack, go))
+                 with { SkeletonProxy = () => SearchSongs.SkeletonShape(r.Tracks, int.MaxValue) },   // SHARED track cell (hover transport + now-playing + heart)
             2 => FlatList(r.Artists.Select(a => ResultRow(a.Image, a.Id.GetHashCode(), a.Name, Loc.Get(Strings.Search.TypeArtist), Loc.Get(Strings.Search.TypeArtist), true, () => go("artist:" + a.Uri, a.Name)))),
             3 => FlatList(r.Albums.Select(a => ResultRow(a.Cover, a.Id.GetHashCode(), a.Name, a.Artists.Count > 0 ? a.Artists[0].Name : "", Loc.Get(Strings.Search.TypeAlbum), false, () => go("album:" + a.Uri, a.Name)))),
             4 => FlatList(r.Playlists.Select(p => ResultRow(p.Cover, p.Id.GetHashCode(), p.Name, p.OwnerName, Loc.Get(Strings.Search.TypePlaylist), false, () => go("pl:" + p.Uri, p.Name)))),
@@ -226,7 +227,7 @@ sealed class SearchPage : Component
     static Element SongsSection(IReadOnlyList<Track> tracks, Action<string> playTrack, Action<string, string?> go) => new BoxEl
     {
         Direction = 1, Gap = WaveeSpace.S,
-        Children = [WaveeType.RailHeader(Loc.Get(Strings.Search.Songs)), Embed.Comp(() => new SearchSongs(tracks, playTrack, go, 4))],
+        Children = [WaveeType.RailHeader(Loc.Get(Strings.Search.Songs)), Embed.Comp(() => new SearchSongs(tracks, playTrack, go, 4)) with { SkeletonProxy = () => SearchSongs.SkeletonShape(tracks, 4) }],
     };
 
     // ── shelves & states ─────────────────────────────────────────────────────────────────────────────────
@@ -298,5 +299,18 @@ sealed class SearchSongs : Component
             return;
         }
         _playTrack(t.Uri);
+    }
+
+    // The skeleton shape the deriver walks (SkeletonProxy at the Embed.Comp site): a few real TrackRow rows with no-op
+    // handlers so the search-songs list shimmers as rows instead of one bar.
+    public static Element SkeletonShape(IReadOnlyList<Track> tracks, int max)
+    {
+        int n = Math.Min(Math.Min(max, tracks.Count), 6);
+        var rows = new Element[n];
+        for (int i = 0; i < n; i++)
+            rows[i] = TrackRow.Row(tracks[i], i, new TrackRow.State(false, false, false, IsTop: false, Saved: false),
+                                   Cols, Columns, 56f, showTrackArtist: true, static (_, _) => { },
+                                   onPlay: static () => { }, onLike: null);
+        return new BoxEl { Direction = 1, Children = rows };
     }
 }

@@ -75,6 +75,11 @@ internal static class SkeletonDeriver
             case SpanTextEl span:
                 return Bar(s, span.Width, BarHeight(span.Size <= 0f ? 14f : span.Size, s), span.Grow, default, span.Margin, span.AlignSelf);
 
+            case ComponentEl { SkeletonProxy: { } proxy }:
+                // A size-reactive boundary that exposed its real shape: derive THAT (recursing into any nested boundaries
+                // too) instead of one default bar — so a hero / shelf / band shimmers as its real layout, not a thin line.
+                return Derive(proxy(), s);
+
             default:
                 // Unknown / dynamic boundary (ComponentEl/Show/For/nested region): a single default bar placeholder.
                 return Bar(s, float.NaN, BarHeight(14f, s), 1f, default, default, FlexAlign.Auto);

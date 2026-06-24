@@ -11,6 +11,12 @@ namespace FluentGpu.Hooks;
 public sealed record ComponentEl(Func<Component> Factory, Type ComponentType) : Element
 {
     public override ushort ElementTypeId => 3;
+
+    /// <summary>A representative real-content builder the <c>SkeletonDeriver</c> DERIVES in place of the single default
+    /// bar it would otherwise emit for this opaque component (it cannot run the component's Render at derive time). Set
+    /// by size-reactive primitives that hold a pure build function (Responsive / PagedShelf), so the section shimmers as
+    /// its real shape. Null ⇒ the component still maps to one default bar (a true dynamic boundary).</summary>
+    public Func<Element>? SkeletonProxy { get; init; }
 }
 
 /// <summary>Fluent helper: <c>Embed.Comp(() =&gt; new MyComponent())</c> embeds a stateful child component.</summary>

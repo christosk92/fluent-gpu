@@ -44,7 +44,7 @@ sealed partial class ArtistPage : Component
                 {
                     Direction = 0, Gap = WaveeSpace.M, AlignItems = FlexAlign.Center,
                     Padding = new Edges4(0f, WaveeSpace.S, 0f, 0f),
-                    Children = [ PlayPill(play), Fab(Icons.Shuffle, shuffle), Embed.Comp(() => new FollowButton(uri)), ArtistRadioPill(radio) ],
+                    Children = [ PlayPill(play), Fab(Icons.Shuffle, shuffle), Embed.Comp(() => new FollowButton(uri)) with { SkeletonProxy = FollowButton.SkeletonShape }, ArtistRadioPill(radio) ],
                 },
             ],
         };

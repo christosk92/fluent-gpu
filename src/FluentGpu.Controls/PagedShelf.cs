@@ -84,7 +84,23 @@ public static class PagedShelf
         bool measured = false)
         => Embed.Comp(() => new PagedShelfCore(count, cardAt, cardHeight, title, header, pager, customPager,
                                                minCardW, maxCardW, gap, rows, perPageOverride, fixedCardW,
-                                               headerGap, edgeFade, prevGlyph, nextGlyph, parts, keyOf, overscan, measured));
+                                               headerGap, edgeFade, prevGlyph, nextGlyph, parts, keyOf, overscan, measured))
+           // SkeletonProxy: the deriver can't see into this component, so hand it the header + a few real cards (at a
+           // representative width) to derive — the shelf shimmers as real cards instead of one default bar.
+           with { SkeletonProxy = () => ShelfProxy(count, cardAt, header, title, maxCardW, gap, headerGap) };
+
+    static Element ShelfProxy(int count, Func<int, float, Element> cardAt, Element? header, string? title, float cardW, float gap, float headerGap)
+    {
+        int n = Math.Clamp(count, 0, 6);
+        var cards = new Element[n];
+        for (int i = 0; i < n; i++) cards[i] = cardAt(i, cardW);
+        Element head = header ?? (title is { Length: > 0 } t ? new TextEl(t) { Size = 20f, Weight = 700 } : new BoxEl());
+        return new BoxEl
+        {
+            Direction = 1, Gap = headerGap,
+            Children = [head, new BoxEl { Direction = 0, Gap = gap, ClipToBounds = true, Children = cards }],
+        };
+    }
 }
 
 /// <summary>The stateful core (self-measure → fit → virtualized strip + animated pager). See <see cref="PagedShelf"/>.</summary>
