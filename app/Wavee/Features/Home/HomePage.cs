@@ -29,7 +29,7 @@ sealed class HomePage : Component
         var preview = UseContext(NavPreviewStore.Slot);    // pre-load: stash the card's known cover/title for the detail page
         if (svc is null) return new BoxEl { Grow = 1f };
 
-        var home = UseAsyncResource(ct => svc.Library.GetHomeAsync(ct), HomeFeed.Empty);
+        var home = UseAsyncResource(ct => svc.Library.GetHomeAsync(ct), FakeData.HomeSeed);   // seed renders the loading shape; Skel.Region derives the shimmer from it
         string? name = bridge?.User.Value?.DisplayName;     // subscribe → greeting refreshes on login
 
         void Play(string uri) => _ = svc.Player.PlayAsync(uri, 0);
@@ -89,7 +89,6 @@ sealed class HomePage : Component
 
         Element groups = Skel.Region(
             home,
-            shimmerSource: HomeSkeleton,
             isEmpty: feed => feed.Groups.Count == 0,
             onEmpty: () => EmptyState.Default(),
             onFailed: () => ErrorState.Build(home.Error),
@@ -185,27 +184,4 @@ sealed class HomePage : Component
     // ── helpers ────────────────────────────────────────────────────────────────────────────────────────
     static Element QuickGrid(IEnumerable<Element> tiles) =>
         AutoGrid(320f, WaveeSpace.M, MediaCard.QuickH, tiles.ToArray());
-
-    static Element HomeSkeleton() => new BoxEl
-    {
-        Direction = 1, Gap = WaveeSpace.XL,
-        Children = [ QuickGrid(Enumerable.Range(0, 4).Select(_ => MediaCard.QuickPickSkeleton())), ShelfShimmer(false), ShelfShimmer(true) ],
-    };
-
-    static Element ShelfShimmer(bool circular) => new BoxEl
-    {
-        Direction = 1, Gap = WaveeSpace.M,
-        Children =
-        [
-            SkelBar(180f, 22f),
-            new BoxEl
-            {
-                Direction = 0, Gap = WaveeSpace.M, ClipToBounds = true,
-                Children = Enumerable.Range(0, 6).Select(_ => MediaCard.ShelfSkeleton(168f, circular)).ToArray(),
-            },
-        ],
-    };
-
-    static Element SkelBar(float w, float h) =>
-        new BoxEl { Width = w, Height = h, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault };
 }

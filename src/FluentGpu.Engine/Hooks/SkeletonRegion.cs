@@ -35,8 +35,9 @@ public readonly record struct SkeletonStyle(
 /// <summary>
 /// The native skeleton-loading boundary (the ONE author surface). A layout-transparent container, modelled on the
 /// reactive <c>Show</c> boundary: a reconciler effect reads the <see cref="Loadable{T}"/> state via <see cref="Pending"/>
-/// / <see cref="Failed"/> and mounts one of three branches — a DERIVED shimmer (from <see cref="ShimmerSource"/>, never a
-/// hand-authored second tree), the real <see cref="Content"/>, or the <see cref="OnFailed"/> error UI — swapping with the
+/// / <see cref="Failed"/> and mounts one of three branches — a DERIVED shimmer (from <see cref="ShimmerSource"/>, or — when
+/// it is null — from <see cref="Content"/> itself rendered against the seed; never a hand-authored second tree), the real
+/// <see cref="Content"/>, or the <see cref="OnFailed"/> error UI — swapping with the
 /// blur reveal on Ready. Build it with <see cref="Skel"/>. The shimmer is derived once per pending→loaded edge (a
 /// reconcile-edge event, not a paint phase), so it adds zero per-frame cost.
 /// </summary>
@@ -44,7 +45,7 @@ public sealed record SkelRegionEl(
     Func<bool> Pending,
     Func<bool> Failed,
     Func<Element> Content,
-    Func<Element> ShimmerSource,
+    Func<Element>? ShimmerSource,   // null ⇒ the reconciler derives Content itself (= content(seed) while Pending); set only when the shimmer is a DIFFERENT tree
     Func<Element>? OnFailed,
     SkelReveal Reveal,
     SkeletonStyle Style,
@@ -98,13 +99,18 @@ public static class Skel
             OnFailed: onFailed,
             Reveal: reveal, Style: style ?? SkeletonStyle.Default, Group: group, SmoothResize: smoothResize);
 
-    /// <summary>The simplest single-subtree skeleton — pass ONLY your real <paramref name="content"/>: the engine derives
-    /// the shimmer from <c>content(seed)</c>, i.e. the SAME content rendered against the loadable's seed value (the
-    /// placeholder you already gave <c>UseAsyncResource</c>), so there is no second tree to author and no shimmer arg.
-    /// Make the seed render a representative shape (e.g. an empty artist whose page still lays out hero + tracks via fake
-    /// data). On Ready mount content(value) — or <paramref name="onEmpty"/> when <paramref name="isEmpty"/>(value) — on
-    /// Failed <paramref name="onFailed"/>. (Reach for the explicit-<c>shimmerSource</c> overload only when the seed can't
-    /// render a representative shape — e.g. a list, where <c>Flow.For</c> yields zero rows: use the <c>rowTemplate</c> overload.)</summary>
+    /// <summary>The single-subtree skeleton — pass ONLY your real <paramref name="content"/>, nothing about skeletons:
+    /// the engine renders <c>content(seed)</c> (your SAME content rendered against the loadable's own pending seed value —
+    /// the placeholder you gave <c>UseAsyncResource</c>) and DERIVES the shimmer from it, then fills in the real data on
+    /// load. There is no second tree and no shimmer arg. The author's ONLY responsibility is that the resource's seed
+    /// renders a representative shape (e.g. an empty artist whose page still lays out hero + tracks via a fake-data
+    /// fallback; a home/search seed with a few blank items) — a DATA concern declared at the resource, not skeleton code.
+    /// On Ready mount content(value) — or <paramref name="onEmpty"/> when <paramref name="isEmpty"/>(value) — on Failed
+    /// <paramref name="onFailed"/>.
+    /// (The explicit-<c>shimmerSource</c> overload exists ONLY for the two cases where <c>content(seed)</c> can't BE the
+    /// shimmer: a streaming LIST where <c>Flow.For</c> over the seed yields zero rows, and content that must reserve a slot
+    /// a derived shimmer can't carry — e.g. a connected-animation morph cover — or is a stateful component you must not
+    /// mount during load. Everything else uses THIS overload.)</summary>
     public static SkelRegionEl Region<T>(
         Loadable<T> loadable, Func<T, Element> content,
         SkelReveal reveal = SkelReveal.Soft, Func<Element>? onFailed = null,
@@ -114,7 +120,7 @@ public static class Skel
             Pending: () => loadable.State.Value == (byte)LoadState.Pending,
             Failed: () => loadable.State.Value == (byte)LoadState.Failed,
             Content: () => { var v = loadable.Value.Peek(); return onEmpty is not null && isEmpty is not null && isEmpty(v) ? onEmpty() : content(v); },
-            ShimmerSource: () => content(loadable.Value.Peek()),   // derive the shimmer from content(seed) — the SAME UI, no second tree
+            ShimmerSource: null,   // the shimmer IS Content(seed) — the reconciler derives Content itself, no separate field
             OnFailed: onFailed,
             Reveal: reveal, Style: style ?? SkeletonStyle.Default, Group: group, SmoothResize: smoothResize);
 
@@ -127,7 +133,7 @@ public static class Skel
             Pending: () => field.State.Value == (byte)LoadState.Pending,
             Failed: () => field.State.Value == (byte)LoadState.Failed,
             Content: () => leaf,
-            ShimmerSource: () => leaf,
+            ShimmerSource: null,   // the shimmer IS the leaf — the reconciler derives Content itself
             OnFailed: null,
             Reveal: SkelReveal.Soft, Style: style ?? SkeletonStyle.Default, Group: null);
 

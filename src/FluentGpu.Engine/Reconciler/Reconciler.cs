@@ -583,8 +583,8 @@ public sealed class TreeReconciler
                 // up). Floor the exit at the standard content-reveal duration so apps get the cross-dissolve for free —
                 // no hand-tuned ExitMs to match the list's row-add timing.
                 1 => Motion.ReducedMotion
-                        ? SkeletonDeriver.Derive(se.ShimmerSource(), se.Style)
-                        : StampShimmerExit(SkeletonDeriver.Derive(se.ShimmerSource(), se.Style),
+                        ? SkeletonDeriver.Derive((se.ShimmerSource ?? se.Content)(), se.Style)
+                        : StampShimmerExit(SkeletonDeriver.Derive((se.ShimmerSource ?? se.Content)(), se.Style),
                             se.Reveal == SkelReveal.None ? Math.Max(se.Style.ExitMs, Expressive.Slow) : se.Style.ExitMs),
                 3 => se.OnFailed?.Invoke(),
                 _ => se.Content(),

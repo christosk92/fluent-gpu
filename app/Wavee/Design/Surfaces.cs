@@ -83,7 +83,7 @@ public static class Surfaces
 // its own opacity breathe accordingly: the UseKeyframes layout-effect is keyed by `loading`, so when the art becomes
 // ready the looping pulse is replaced by a finite flat track (opacity → 1) and the frame loop can quiesce (the engine's
 // "no forever-loop" rule). The breathe mirrors the engine SkeletonPulse (1.0↔0.5 over 1s) and the fill matches the app's
-// skeleton blocks (DetailSkeleton's reserved cover slot, MediaCard.ShelfSkeleton) so every placeholder reads identically.
+// skeleton blocks (DetailSkeleton's reserved cover slot, Skel.Region's derived shimmer bars) so every placeholder reads identically.
 sealed class CoverShimmer : Component
 {
     static readonly Keyframe[] Breathe = [new(0f, 1f), new(0.5f, 0.5f), new(1f, 1f)];

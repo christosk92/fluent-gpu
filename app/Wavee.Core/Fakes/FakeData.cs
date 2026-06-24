@@ -508,4 +508,22 @@ public static class FakeData
         for (int i = 4; i <= 11; i++) q.Add(new QueueEntry("q" + i, Track(i), QueueBucket.NextUp, i > 8));
         return q.ToArray();
     }
+
+    // Representative PENDING seeds for the skeleton-loading boundary: Skel.Region renders content(seed) and DERIVES the
+    // shimmer from it, so these give the home/search resources a real-shaped (blank) value to lay out WHILE loading — the
+    // page itself says nothing about skeletons. Content is blank; the deriver turns each title/cover into a shimmer bar.
+    public static readonly HomeFeed HomeSeed = new("", new HomeGroup[]
+    {
+        new(HomeGroupKind.CollapsedGrid, " ", BlankCards(6, HomeCardKind.Playlist)),
+        new(HomeGroupKind.Shelf, " ", BlankCards(6, HomeCardKind.Album)),
+        new(HomeGroupKind.Shelf, " ", BlankCards(6, HomeCardKind.Artist)),
+    });
+    public static readonly SearchResults SearchSeed = Search("skeleton");
+
+    static HomeCard[] BlankCards(int n, HomeCardKind kind)
+    {
+        var cards = new HomeCard[n];
+        for (int i = 0; i < n; i++) cards[i] = new HomeCard("", "", "", null, kind);
+        return cards;
+    }
 }

@@ -190,36 +190,6 @@ public static class MediaCard
         Children = [ Icon(glyph, size * 0.42f, Tok.TextOnAccentPrimary) ],
     };
 
-    // ── Skeletons (matched layout for Skel.Region's derived shimmer → reveal) ────────────────────────────
-    public static Element ShelfSkeleton(float cardW, bool circular = false)
-    {
-        float inner = MathF.Max(48f, cardW - 2f * Pad);
-        return new BoxEl
-        {
-            Direction = 1, Width = cardW, Gap = Pad,
-            Padding = new Edges4(Pad, Pad, Pad, WaveeSpace.M),
-            Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
-            Children =
-            [
-                new BoxEl { Width = inner, Height = inner, Fill = Tok.FillCardDefault,
-                            Corners = CornerRadius4.All(circular ? inner / 2f : WaveeRadius.Card) },
-                new BoxEl { Width = inner * 0.85f, Height = 13f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault },
-                new BoxEl { Width = inner * 0.55f, Height = 11f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault },
-            ],
-        };
-    }
-
-    public static Element QuickPickSkeleton() => new BoxEl
-    {
-        Direction = 0, Height = QuickH, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-        Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary, ClipToBounds = true,
-        Children =
-        [
-            new BoxEl { Width = QuickW, Height = QuickH, Fill = Tok.FillCardDefault },
-            new BoxEl { Grow = 1f, Basis = 0f, Height = 13f, Margin = new Edges4(0f, 0f, WaveeSpace.M, 0f),
-                        Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault },
-        ],
-    };
 }
 
 // The reactive now-playing / play affordance on a content card (mirrors WaveeMusic's ContentCard state model):

@@ -36,7 +36,7 @@ sealed class SearchPage : Component
         this.UseSoftReveal(dy: 0f, blur: 0f);
 
         string q = (querySig?.Value ?? "").Trim();          // subscribe → re-render + re-search as the user types
-        var results = UseAsyncResource(ct => svc.Library.SearchAsync(q, ct), SearchResults.Empty, q);
+        var results = UseAsyncResource(ct => svc.Library.SearchAsync(q, ct), FakeData.SearchSeed, q);   // seed renders the loading shape; Skel.Region derives the shimmer from it
         int chip = _chip.Value;                             // subscribe
 
         if (q.Length == 0)
@@ -46,7 +46,7 @@ sealed class SearchPage : Component
         {
             Direction = 1, Gap = WaveeSpace.L,
             Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, PlayerDock.Reserve + WaveeSpace.XXL),
-            Children = [ChipBar(chip), Skel.Region(results, SkeletonInline, r => ResultsFor(r, chip, q, svc, go), onFailed: () => ErrorState.Build(results.Error))],
+            Children = [ChipBar(chip), Skel.Region(results, r => ResultsFor(r, chip, q, svc, go), onFailed: () => ErrorState.Build(results.Error))],
         }) with { Grow = 1f };
     }
 
@@ -247,36 +247,6 @@ sealed class SearchPage : Component
             new TextEl(sub) { Size = 14f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis, MaxWidth = 440f },
         ],
     };
-
-    static Element SkeletonInline() => new BoxEl
-    {
-        Direction = 1, Gap = WaveeSpace.XL,
-        Children =
-        [
-            new BoxEl { Direction = 0, Gap = WaveeSpace.XL, Children = [SkelBox(360f, 196f), new BoxEl { Direction = 1, Grow = 1f, Gap = WaveeSpace.S, Children = SkelRows(4) }] },
-            SkelBox(180f, 22f),
-            new BoxEl { Direction = 0, Gap = WaveeSpace.M, ClipToBounds = true, Children = SkelCards(5) },
-        ],
-    };
-
-    static Element SkelBox(float w, float h) => new BoxEl { Width = w, Height = h, Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardDefault };
-
-    static Element[] SkelRows(int n)
-    {
-        var rows = new Element[n];
-        for (int i = 0; i < n; i++)
-            rows[i] = new BoxEl { Direction = 0, Height = 56f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-                Children = [SkelBox(40f, 40f), new BoxEl { Grow = 1f, Height = 14f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault }, SkelBox(40f, 12f)] };
-        return rows;
-    }
-
-    static Element[] SkelCards(int n)
-    {
-        var cards = new Element[n];
-        for (int i = 0; i < n; i++)
-            cards[i] = new BoxEl { Direction = 1, Gap = WaveeSpace.S, Shrink = 0f, Children = [SkelBox(160f, 160f), SkelBox(120f, 12f), SkelBox(80f, 10f)] };
-        return cards;
-    }
 }
 
 // Search track rows — the All-view "Songs" preview (capped) and the dedicated "Songs" tab (full). A Component so the rows
