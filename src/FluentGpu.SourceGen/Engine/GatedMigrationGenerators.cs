@@ -120,10 +120,13 @@ namespace FluentGpu.Scene
         private int[] _free = global::System.Array.Empty<int>();   // reclaimed slab slots (0-based), LIFO
         private int _freeCount;
         private int _hi;                                           // high-water of allocated slab slots
-        public ref T GetOrAdd(int node)
+        public int Count => _hi - _freeCount;   // live entries (mirrors Dictionary.Count)
+        public ref T GetOrAdd(int node) => ref GetOrAdd(node, out _);
+        public ref T GetOrAdd(int node, out bool existed)
         {
             EnsureColumn(node);
             int slot = _column[node];
+            existed = slot != 0;
             if (slot == 0)
             {
                 int s = _freeCount > 0 ? _free[--_freeCount] : _hi++;

@@ -92,13 +92,13 @@ public sealed class SceneStore : ISceneBackend
     private Action?[] _dragCanceled;                       // Escape / capture loss / window blur aborted the drag
 
     // Sparse side-table for scroll/virtual viewports (O(viewports), not one-per-node). Keyed by node index.
-    private readonly Dictionary<int, ScrollState> _scroll = new();
+    private readonly ColdSlab<ScrollState> _scroll = new();   // GEN-17 (wired)
     // Per-variable-list extent tables (Fenwick); persist across frames. Keyed by viewport node index.
     private readonly Dictionary<int, ExtentTable> _extents = new();
     // Grid specs for grid-container nodes (O(grids)). Keyed by node index.
-    private readonly Dictionary<int, GridSpec> _grids = new();
+    private readonly ColdSlab<GridSpec> _grids = new();   // GEN-17 (wired)
     // Optional rich-paint side-tables (O(decorated nodes), keyed by node index): eased interaction, shadow, gradient, acrylic.
-    private readonly Dictionary<int, InteractionAnim> _interact = new();
+    private readonly ColdSlab<InteractionAnim> _interact = new();   // GEN-17 (wired)
     private readonly ColdSlab<ShadowSpec> _shadows = new();   // GEN-17 (wired): dense slab, not Dictionary
     private readonly ColdSlab<ArcSpec> _arcs = new();
     private readonly ColdSlab<PolylineStrokeSpec> _polylines = new();   // GEN-17 (wired)
@@ -117,7 +117,7 @@ public sealed class SceneStore : ISceneBackend
     // Per-text-node measure cache (pure-function: (text,style,availW) → size); self-invalidating, freed on FreeSubtree.
     private readonly Dictionary<int, TextMeasureCache> _measureCache = new();
     // Implicit brush transitions (WinUI BrushTransition): sparse, O(transitioning nodes), advanced at phase 7.
-    private readonly Dictionary<int, BrushAnim> _brushAnims = new();
+    private readonly ColdSlab<BrushAnim> _brushAnims = new();   // GEN-17 (wired)
     private readonly List<int> _brushScratch = new();
     // Text-edit decoration state (sparse, O(editors)): caret/IME/focus PODs + per-node POOLED decoration-rect slots
     // (grow-only RectF[] reused across frames — a selection drag updates at pointer rate with ZERO steady alloc).
@@ -129,7 +129,7 @@ public sealed class SceneStore : ISceneBackend
     // TextStyle.SpanRunId); the dispatcher-owned read-only selection range; the per-control selection highlight color.
     private readonly Dictionary<int, TextSpan[]> _spanText = new();
     private readonly Dictionary<int, (int Start, int End)> _textSelection = new();
-    private readonly Dictionary<int, ColorF> _selectionHighlight = new();
+    private readonly ColdSlab<ColorF> _selectionHighlight = new();   // GEN-17 (wired)
     // E5-L2 drag-drop side-tables (sparse, O(sources)/O(targets), keyed by node index): the reconciler writes them
     // from BoxEl.Draggable / BoxEl.DropTarget; Input.DragDropContext reads them at promotion / per pointer move.
     private readonly Dictionary<int, DragSource> _dragSources = new();
@@ -508,20 +508,20 @@ public sealed class SceneStore : ISceneBackend
 
     // ── implicit brush transitions (WinUI BrushTransition; phase-7 advanced) ──────────────────────
     public bool HasBrushAnims => _brushAnims.Count > 0;
-    public void SetBrushAnim(NodeHandle h, in BrushAnim ba) => _brushAnims[(int)h.Raw.Index] = ba;
-    public bool TryGetBrushAnim(NodeHandle h, out BrushAnim ba) => _brushAnims.TryGetValue((int)h.Raw.Index, out ba);
+    public void SetBrushAnim(NodeHandle h, in BrushAnim ba) => _brushAnims.GetOrAdd((int)h.Raw.Index) = ba;
+    public bool TryGetBrushAnim(NodeHandle h, out BrushAnim ba) => _brushAnims.TryGet((int)h.Raw.Index, out ba);
 
     /// <summary>Set the brush cross-fade progress, driven by the unified engine's <c>AnimChannel.BrushFade</c> track
     /// (the separate per-frame AdvanceBrushAnims ticker is deleted). Marks PaintDirty; drops the row at T≥1 so the
     /// recorder snaps to the live color. The engine's BrushFade track keeps the loop awake while a fade runs.</summary>
     public void SetBrushAnimT(int idx, float t)
     {
-        if (!_brushAnims.TryGetValue(idx, out var ba)) return;
+        if (!_brushAnims.TryGet(idx, out var ba)) return;
         if (_gen[idx] == 0) { _brushAnims.Remove(idx); return; }
         ba.T = t < 0f ? 0f : (t > 1f ? 1f : t);
         _flags[idx] |= NodeFlags.PaintDirty;
         if (ba.T >= 1f) _brushAnims.Remove(idx);
-        else _brushAnims[idx] = ba;
+        else _brushAnims.GetOrAdd(idx) = ba;
     }
 
     // ── text-edit decoration side-table (sparse; only editor TEXT nodes have an entry) ───────────────
@@ -623,11 +623,11 @@ public sealed class SceneStore : ISceneBackend
     {
         int idx = (int)node.Raw.Index;
         if (color.A <= 0f) _selectionHighlight.Remove(idx);
-        else _selectionHighlight[idx] = color;
+        else _selectionHighlight.GetOrAdd(idx) = color;
     }
 
     public bool TryGetSelectionHighlight(NodeHandle h, out ColorF color)
-        => _selectionHighlight.TryGetValue((int)h.Raw.Index, out color);
+        => _selectionHighlight.TryGet((int)h.Raw.Index, out color);
 
     private static void StoreRects(Dictionary<int, (RectF[]? Arr, int Count)> table, int idx, ReadOnlySpan<RectF> rects)
     {
@@ -760,29 +760,29 @@ public sealed class SceneStore : ISceneBackend
     public ref ScrollState ScrollRef(NodeHandle h)
     {
         int idx = (int)h.Raw.Index;
-        ref ScrollState s = ref CollectionsMarshal.GetValueRefOrAddDefault(_scroll, idx, out bool existed);
+        ref ScrollState s = ref _scroll.GetOrAdd(idx, out bool existed);
         if (!existed) { s = ScrollState.Default; _flags[idx] |= NodeFlags.Scrollable; }
         return ref s;
     }
-    public bool HasScroll(NodeHandle h) => _scroll.ContainsKey((int)h.Raw.Index);
+    public bool HasScroll(NodeHandle h) => _scroll.Contains((int)h.Raw.Index);
     /// <summary>Read the scroll row by value (default if the node is not a viewport).</summary>
-    public bool TryGetScroll(NodeHandle h, out ScrollState s) => _scroll.TryGetValue((int)h.Raw.Index, out s);
+    public bool TryGetScroll(NodeHandle h, out ScrollState s) => _scroll.TryGet((int)h.Raw.Index, out s);
 
     // ── hit-test pass-through (WinUI FlyoutBase.OverlayInputPassThroughElement) ──────────────────
     // A light-dismiss scrim registers ONE target subtree whose rendered bounds it yields to: pointer input there
     // bypasses the scrim and reaches the content beneath (the MenuBar hover-switches titles with a menu open,
     // FlyoutBase_Partial.cpp:3922-3938). Sparse — O(open scrims), cleared on free.
-    private readonly Dictionary<int, NodeHandle> _hitPassThrough = new();
+    private readonly ColdSlab<NodeHandle> _hitPassThrough = new();   // GEN-17 (wired)
 
     public void SetHitTestPassThrough(NodeHandle node, NodeHandle target)
     {
         if (!IsLive(node)) return;
         if (target.IsNull) _hitPassThrough.Remove((int)node.Raw.Index);
-        else _hitPassThrough[(int)node.Raw.Index] = target;
+        else _hitPassThrough.GetOrAdd((int)node.Raw.Index) = target;
     }
 
     public bool TryGetHitTestPassThrough(NodeHandle node, out NodeHandle target)
-        => _hitPassThrough.TryGetValue((int)node.Raw.Index, out target);
+        => _hitPassThrough.TryGet((int)node.Raw.Index, out target);
 
     // The CSS position:sticky registry was removed — sticky is now a generic ScrollBind pin op
     // (FluentGpu.Animation.ScrollBindTable + ScrollBindEval.ApplyPinAndFlagPass / NodeFlags.StickyPinned).
@@ -821,19 +821,19 @@ public sealed class SceneStore : ISceneBackend
     }
     public bool TryGetExtents(NodeHandle h, out ExtentTable? t) => _extents.TryGetValue((int)h.Raw.Index, out t);
 
-    public void SetGrid(NodeHandle h, in GridSpec spec) => _grids[(int)h.Raw.Index] = spec;
-    public bool HasGrid(NodeHandle h) => _grids.ContainsKey((int)h.Raw.Index);
-    public bool TryGetGrid(NodeHandle h, out GridSpec spec) => _grids.TryGetValue((int)h.Raw.Index, out spec);
+    public void SetGrid(NodeHandle h, in GridSpec spec) => _grids.GetOrAdd((int)h.Raw.Index) = spec;
+    public bool HasGrid(NodeHandle h) => _grids.Contains((int)h.Raw.Index);
+    public bool TryGetGrid(NodeHandle h, out GridSpec spec) => _grids.TryGet((int)h.Raw.Index, out spec);
 
     // ── rich-paint side-tables ──
     /// <summary>Get-or-create the eased-interaction row for a node (hover/press progress).</summary>
     public ref InteractionAnim InteractRef(NodeHandle h)
     {
-        ref InteractionAnim s = ref CollectionsMarshal.GetValueRefOrAddDefault(_interact, (int)h.Raw.Index, out bool existed);
+        ref InteractionAnim s = ref _interact.GetOrAdd((int)h.Raw.Index, out bool existed);
         if (!existed) s = InteractionAnim.Default;
         return ref s;
     }
-    public bool TryGetInteract(NodeHandle h, out InteractionAnim s) => _interact.TryGetValue((int)h.Raw.Index, out s);
+    public bool TryGetInteract(NodeHandle h, out InteractionAnim s) => _interact.TryGet((int)h.Raw.Index, out s);
 
     /// <summary>Write the eased hover (or press) progress for a node — driven by the engine's HoverFade/PressFade track
     /// (the deleted InteractionAnimator.Tick's job). The row exists (the fade was seeded through InteractRef); marks
