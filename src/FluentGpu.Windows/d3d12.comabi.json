@@ -17,6 +17,13 @@
         { "name": "ExecuteCommandLists", "slot": 10, "ret": "void", "params": ["uint", "void**"] },
         { "name": "Signal", "slot": 14, "ret": "int", "params": ["void*", "ulong"] }
       ]
+    },
+    {
+      "name": "IDXGISwapChain",
+      "iid": "310d36a0-d2e7-4c0a-aa04-6a9d23b8886a",
+      "methods": [
+        { "name": "Present", "slot": 8, "ret": "int", "params": ["uint", "uint"] }
+      ]
     }
   ]
 }

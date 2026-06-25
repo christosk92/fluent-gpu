@@ -1056,7 +1056,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
         // composition path _tearingSupported is false so the modal-tick present is interval 0 with flags 0 (valid + tear-free).
         uint interval = (_vsync && !noVsync) ? 1u : 0u;
         uint flags = (interval == 0 && _tearingSupported) ? DXGI.DXGI_PRESENT_ALLOW_TEARING : 0u;
-        HRESULT pr = _swapChain->Present(interval, flags);
+        HRESULT pr = (HRESULT)global::FluentGpu.Interop.Generated.IDXGISwapChainVtbl.Present(_swapChain, interval, flags);   // GEN-COM (wired)
         if ((int)pr < 0)
         {
             // Surface GetDeviceRemovedReason on a device-removed/reset so a GPU fault names its cause instead of a bare
