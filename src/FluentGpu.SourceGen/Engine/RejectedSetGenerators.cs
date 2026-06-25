@@ -34,6 +34,7 @@ namespace FluentGpu.CodeGen
     [global::System.AttributeUsage(global::System.AttributeTargets.Class)] internal sealed class FastMeasureAttribute : global::System.Attribute { }
     [global::System.AttributeUsage(global::System.AttributeTargets.Class)] internal sealed class ReactiveGraphAttribute : global::System.Attribute { }
     [global::System.AttributeUsage(global::System.AttributeTargets.Method)] internal sealed class SpanFormatAttribute : global::System.Attribute { }
+    [global::System.AttributeUsage(global::System.AttributeTargets.Method)] internal sealed class HandlerThunkAttribute : global::System.Attribute { }
 }
 ";
     }
@@ -207,6 +208,78 @@ namespace FluentGpu.CodeGen
         }
     }
 
+    /// <summary>
+    /// <b>GEN-14 — ModifierFusionGenerator (REJECTED).</b> Collapse a chain of <c>[Modifier]</c> <c>with</c>-copy
+    /// extension methods into one record clone. Verdict: a grep finds ZERO ≥2-method modifier chains in the real app
+    /// code — there is no "modifier storm" to fuse. Dormant (no <c>[Modifier]</c> methods).
+    /// </summary>
+    [Generator(LanguageNames.CSharp)]
+    public sealed class ModifierFusionGenerator : IIncrementalGenerator
+    {
+        public void Initialize(IncrementalGeneratorInitializationContext context)
+        {
+            var models = context.SyntaxProvider.ForAttributeWithMetadataName(
+                    "FluentGpu.CodeGen.ModifierAttribute", static (_, _) => true, static (ctx, _) => Gen.Member(ctx))
+                .Where(static m => m.Owner is not null);
+            context.RegisterSourceOutput(models, static (spc, m) => spc.AddSource(
+                m.Owner + "_" + m.Member + ".ModifierFusion.g.cs",
+                SourceText.From(Gen.Wrap(m.Ns, m.Owner!,
+                    "    // GEN-14: fused modifier-chain clone. (Dormant; rejected — no >=2-method modifier chains exist.)\n" +
+                    "    internal static partial class " + m.Owner + "Fusion_" + m.Member + " { }\n"),
+                    Encoding.UTF8)));
+        }
+    }
+
+    /// <summary>
+    /// <b>GEN-18 — SpanFormatGenerator (REJECTED + canon conflict).</b> Span-based number/string formatting for a
+    /// <c>[SpanFormat]</c> method to kill incidental reconcile-edge formatting allocs. Verdict: duplicates the existing
+    /// <c>DynamicTextKind</c>/<c>RefreshDynText</c> edge formatter (AppHost.cs:1657-1669) — a parallel owner. Dormant.
+    /// </summary>
+    [Generator(LanguageNames.CSharp)]
+    public sealed class SpanFormatGenerator : IIncrementalGenerator
+    {
+        public void Initialize(IncrementalGeneratorInitializationContext context)
+        {
+            var models = context.SyntaxProvider.ForAttributeWithMetadataName(
+                    "FluentGpu.CodeGen.SpanFormatAttribute", static (_, _) => true, static (ctx, _) => Gen.Member(ctx))
+                .Where(static m => m.Owner is not null);
+            context.RegisterSourceOutput(models, static (spc, m) => spc.AddSource(
+                m.Owner + "_" + m.Member + ".SpanFormat.g.cs",
+                SourceText.From(Gen.Wrap(m.Ns, m.Owner!,
+                    "    // GEN-18: span-based formatter. (Dormant; rejected — duplicates the DynamicTextKind edge formatter.)\n" +
+                    "    internal static partial class " + m.Owner + "SpanFormat_" + m.Member + " { }\n"),
+                    Encoding.UTF8)));
+        }
+    }
+
+    /// <summary>
+    /// <b>GEN-06 — HandlerThunkGenerator (REJECTED).</b> Cache a parameterized event closure for a <c>[HandlerThunk]</c>
+    /// method to kill per-render display-class allocations. Verdict: the scaling/virtualized list path already runs each
+    /// item template ONCE per slot (recycled, never rebuilt), so the per-render closure churn this targets is not on the
+    /// hot path. Dormant (no <c>[HandlerThunk]</c>).
+    /// </summary>
+    [Generator(LanguageNames.CSharp)]
+    public sealed class HandlerThunkGenerator : IIncrementalGenerator
+    {
+        public void Initialize(IncrementalGeneratorInitializationContext context)
+        {
+            var models = context.SyntaxProvider.ForAttributeWithMetadataName(
+                    "FluentGpu.CodeGen.HandlerThunkAttribute", static (_, _) => true, static (ctx, _) => Gen.Member(ctx))
+                .Where(static m => m.Owner is not null);
+            context.RegisterSourceOutput(models, static (spc, m) => spc.AddSource(
+                m.Owner + "_" + m.Member + ".HandlerThunk.g.cs",
+                SourceText.From(Gen.Wrap(m.Ns, m.Owner!,
+                    "    // GEN-06: cached event-handler thunk. (Dormant; rejected — recycled list templates run once per slot.)\n" +
+                    "    internal static partial class " + m.Owner + "Thunk_" + m.Member + " { }\n"),
+                    Encoding.UTF8)));
+        }
+    }
+
+    // GEN-16 (Unified engine-generator attribute/manifest convention) is REJECTED as a separate generator (canon
+    // conflict: a parallel marker family) and is instead SUBSUMED by what this assembly already does — the single
+    // FluentGpu.CodeGen attribute namespace (emitted internal, post-init) + the shared Gen.Wrap/Type/Member toolkit
+    // below. There is one trigger family and one equatable-model discipline, so no separate generator is warranted.
+
     /// <summary>Shared helpers for the rejected-set generators.</summary>
     internal static class Gen
     {
@@ -216,6 +289,15 @@ namespace FluentGpu.CodeGen
             if (ctx.TargetSymbol is not INamedTypeSymbol t) return (null, null, "");
             string? ns = t.ContainingNamespace.IsGlobalNamespace ? null : t.ContainingNamespace.ToDisplayString();
             return (ns, t.Name, t.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat));
+        }
+
+        /// <summary>Extract (namespace, owner type name, member name) from an attributed member (method) target.</summary>
+        public static (string? Ns, string? Owner, string Member) Member(GeneratorAttributeSyntaxContext ctx)
+        {
+            INamedTypeSymbol? owner = ctx.TargetSymbol.ContainingType;
+            if (owner is null) return (null, null, "");
+            string? ns = owner.ContainingNamespace.IsGlobalNamespace ? null : owner.ContainingNamespace.ToDisplayString();
+            return (ns, owner.Name, ctx.TargetSymbol.Name);
         }
 
         public static string Wrap(string? ns, string typeName, string body)
