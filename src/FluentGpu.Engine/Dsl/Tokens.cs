@@ -8,6 +8,7 @@ public enum ThemeKind : byte { Light = 0, Dark = 1 }   // HighContrast reserved 
 /// An immutable, baked palette of every semantic Fluent brush for one theme (mirrors WinUI's *_themeresources). Built
 /// once per theme; never mutated. Read through <see cref="Tok"/>, which swaps the active set with a single pointer write.
 /// </summary>
+[FluentGpu.CodeGen.ThemeTokens] // enables GEN-08 ThemeBlobGenerator (TokenId/Resolve over the ColorF tokens) + GEN-13
 public sealed record TokenSet
 {
     // Fill hierarchy (control backgrounds, layered translucency over the window base)

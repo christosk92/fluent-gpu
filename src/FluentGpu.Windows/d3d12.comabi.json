@@ -1,0 +1,22 @@
+{
+  "$comment": "Sample comabi manifest harvested for the render-thread hot path (com-interop.md §2.2). A real one is produced by FluentGpu.AbiHarvest (winmd x ClangSharp) + runtime self-checked; this representative file drives GEN-COM (ComInteropGenerator) so the hand-vtable bindings emit. Slots are absolute, reconciled from the base chain.",
+  "interfaces": [
+    {
+      "name": "ID3D12Fence",
+      "iid": "0a753dcf-c4d8-4b91-adf6-be5a60d95a76",
+      "methods": [
+        { "name": "GetCompletedValue", "slot": 8, "blittable": true },
+        { "name": "SetEventOnCompletion", "slot": 9, "blittable": true },
+        { "name": "Signal", "slot": 10, "blittable": true }
+      ]
+    },
+    {
+      "name": "ID3D12CommandQueue",
+      "iid": "0ec870a6-5d7e-4c22-8cfc-5baae07616ed",
+      "methods": [
+        { "name": "ExecuteCommandLists", "slot": 10, "blittable": true },
+        { "name": "Signal", "slot": 14, "blittable": true }
+      ]
+    }
+  ]
+}

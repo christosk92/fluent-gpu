@@ -239,3 +239,27 @@ State plainly where a generator's benefit is marginal and **why** — the engine
 6. **A data-structure migration is not a precompute.** GEN-17 is the most valuable *idea* but it is a semantics-preserving migration (get-or-add, free-list, `FreeSubtree` ordering, `NodeFlags` first-insert side-effects) — categorically riskier than the pure-precompute generators, and its memory win is partly eaten by per-node ref columns. It earns its slot on **CPU/cache**, behind a green gate, after the cheaper wins.
 
 7. **AOT/trim safety is necessary but not sufficient.** Every proposal emits plain ahead-of-time C# (incremental generators / interceptors over equatable models; data-section spans; `calli` thunks) with no reflection, no runtime IL/codegen, no dynamic loading — consistent with the two shipping generators. **But AOT-clean does not rescue a candidate with no runtime win** (GEN-16, GEN-09) or a canon conflict (GEN-16's parallel markers, GEN-18's duplicate of `DynamicTextKind`/`RefreshDynText` at `AppHost.cs:1657-1669`). Trim-safety was the floor, not the bar.
+
+---
+
+## Implementation status (landed)
+
+Built on `feat/touchpad-scroll` per an explicit "full toolkit now, gated" directive (the user opted to build the complete set despite the verdicts above). The governing rule: **nothing is allowed to regress the 528 VerticalSlice gates** — so every generator that touches verified-green code is built **dormant** (triggers on a marker/manifest applied nowhere) or behind a **default-off opt-in marker**, and the one net-positive runtime change (GEN-05) is a hand-edit verified against the gates. Final state: full solution **0 errors**, VerticalSlice **ALL CHECKS PASSED (528)** with phases 6–13 zero-alloc, `check-canon.ps1` **exit 0**.
+
+> **Update — all generators ENABLED (follow-up directive: "oneshot enable all… no customers, fine to just do it").** `DiffPropsGenerator` (GEN-01/10) is now **opt-out** — it fires on every `Element` record automatically (exclude one with `[FluentGpu.CodeGen.NoCodegen]`); `TokenSet` carries `[ThemeTokens]` (GEN-08/13); and `src/FluentGpu.Engine/_GeneratorEnablement.cs` applies the remaining marker triggers (GEN-02/03/04/06/07/09/11/12/14/15/17) once each so they all emit. `EmitCompilerGeneratedFiles=true` (in `src/Directory.Build.props`) writes the output to disk: **33 `.g.cs` files** under `FluentGpu.Engine/obj/<cfg>/<tfm>/generated/FluentGpu.SourceGen/…`. The emitted code is **additive** (new types in their own namespaces, not wired into the live reconciler/scene/hook paths), so the engine's runtime behavior is unchanged: full solution **0 errors**, VerticalSlice still **528 / zero-alloc green**. Wiring the generated `Diff`/`GcDepTable`/`ColdSlab`/etc. into the live paths remains the separate, risky migration the verdicts describe. Delete `_GeneratorEnablement.cs` (and the `[ThemeTokens]`/opt-out markers) to turn the inert ones back off.
+
+| Item | Form landed | Active? | File |
+|------|-------------|---------|------|
+| Foundation | analyzer wired into `FluentGpu.Engine` + `[Element]`/`[Prop]`/`[Modifier]`/`[ThemeTokens]`/`[Factory]`/`[FastPath]` markers (internal, post-init) | yes | `SourceGen/Engine/ElementGenerator.cs` |
+| **WGPU0003** | duplicate-`ElementTypeId` hard error — **verified firing** on a probe; silent on the 14 distinct ids | **yes (live)** | `ElementGenerator.cs` |
+| **GEN-05** | 3 elevation-border gradients memoized per `Tok.Epoch` (the report's recommended hand-edit) | **yes (live)** | `Engine/Dsl/Tokens.cs` |
+| GEN-02 step 1 | DepKey canon reconciled vs the shipped narrow v1 (fork decided; no code rewrite) | n/a (doc) | `design/subsystems/reconciler-hooks.md` |
+| GEN-01 + GEN-10 | `DiffProps` bitmask differ + `RefEquals` per `[Element]` type — verified on a probe | dormant (no record annotated) | `Engine/DiffPropsGenerator.cs` |
+| GEN-08 | `ThemeBlobGenerator`: `TokenId` enum + `Resolve(id,theme)` from `[ThemeTokens]` — verified on a probe | dormant | `Engine/ThemeBlobGenerator.cs` |
+| GEN-COM | `ComInteropGenerator`: hand-vtable bindings from `*.comabi.json` AdditionalFiles | dormant (no manifest) | `Interop/ComInteropGenerator.cs` |
+| GEN-03/06/07/09/11/12/13/14/15/18 | the rejected set, each a real generator on a marker; verdict + evidence inline | dormant | `Engine/RejectedSetGenerators.cs` |
+| GEN-16 | subsumed by the single `FluentGpu.CodeGen` marker namespace + shared `Gen` toolkit | n/a | `RejectedSetGenerators.cs` |
+| GEN-02 / GEN-17 / GEN-04 | gated migrations — emit `GcDepTable`/`DepInline4`/`DepDeps`, `ColdSlab<T>`, `StaticSubtreeCache` only under an `[Enable…]` opt-in marker (applied nowhere); both emission + dormancy **verified on a probe** | default-off | `Engine/GatedMigrationGenerators.cs` |
+| WGPU/FGCOM family | `WGPU0003` implemented; the rest (`WGPU0001/0005/0006/0009/0010/0012…`, `FGCOM0001-0008`) are **designed-but-deferred** — the dataflow-heavy rules (rules-of-hooks, ref-struct capture, ComPtr lifetime) need interprocedural analysis and would false-positive on existing code; activating them is follow-up. | partial | — |
+
+**Net effect on the shipping engine:** one verified perf hand-edit (GEN-05) + one live build-time safety guard (WGPU0003). Everything else is present-but-inert infrastructure that can be activated (annotate a record / check in a manifest / flip an `[Enable…]` marker) when its consumer exists or its risky live migration is undertaken — exactly the deferral the verdicts above recommend, now with the machinery in place.
