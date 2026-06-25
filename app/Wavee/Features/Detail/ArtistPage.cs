@@ -190,13 +190,15 @@ sealed partial class ArtistPage : Component
             Padding = new Edges4(32f, 40f, 32f, PlayerDock.Reserve + 40f),
             Children = sections.ToArray(),
         };
-        var sentinel = new BoxEl { Height = 0f, ScrollBinds = [ new() { PinTop = 12f, OnFlag = v => pinned.Value = v } ] };
+        // Arm the shy pill as the hero finishes collapsing (≈offset 380, near full collapse) so the compact bar takes over
+        // exactly as the hero's presented height reaches zero — no dead beat, no overlap.
+        var sentinel = new BoxEl { Height = 0f, ScrollBinds = [ new() { PinTop = 40f, OnFlag = v => pinned.Value = v } ] };
         return new BoxEl
         {
             Direction = 1,
             Children =
             [
-                Responsive.Of(w => Banner(a, w, uri, Play, Shuffle, Play, go), fallback: 900f),
+                Banner(a, uri, Play, Shuffle, Play, go),
                 sentinel,
                 inner,
             ],
