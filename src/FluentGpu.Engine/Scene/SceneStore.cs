@@ -115,7 +115,7 @@ public sealed class SceneStore : ISceneBackend
     // time → PushLayer{EdgeFade}. Freed on FreeSubtree.
     private readonly ColdSlab<EdgeFadeSpec> _edgeFades = new();   // GEN-17 (wired)
     // Per-text-node measure cache (pure-function: (text,style,availW) → size); self-invalidating, freed on FreeSubtree.
-    private readonly Dictionary<int, TextMeasureCache> _measureCache = new();
+    private readonly ColdSlab<TextMeasureCache> _measureCache = new();   // GEN-17 (wired) — hot: per-layout text measure
     // Implicit brush transitions (WinUI BrushTransition): sparse, O(transitioning nodes), advanced at phase 7.
     private readonly ColdSlab<BrushAnim> _brushAnims = new();   // GEN-17 (wired)
     private readonly List<int> _brushScratch = new();
@@ -957,7 +957,7 @@ public sealed class SceneStore : ISceneBackend
 
     /// <summary>Get-or-create the per-node text measure cache row (layout.md §2.3).</summary>
     public ref TextMeasureCache MeasureCacheRef(NodeHandle h)
-        => ref CollectionsMarshal.GetValueRefOrAddDefault(_measureCache, (int)h.Raw.Index, out _);
+        => ref _measureCache.GetOrAdd((int)h.Raw.Index);
 
     public NodeHandle FirstChild(NodeHandle h) => Wrap(_firstChild[h.Raw.Index]);
     public NodeHandle NextSibling(NodeHandle h) => Wrap(_nextSib[h.Raw.Index]);
