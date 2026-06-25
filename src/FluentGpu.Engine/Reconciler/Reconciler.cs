@@ -443,9 +443,29 @@ public sealed class TreeReconciler
             return;
         }
 
-        WriteColumns(node, newEl, isMount: false, oldEl);
+        // GEN-01 DiffProps fast-path (WIRED): skip the redundant column rewrite when every diffable prop — incl. the
+        // inherited Element animation/declarative fields — is identical to last render. The generated AnyChanged covers
+        // the WHOLE prop set, so any change to Fill/Layout/Animate/Transition/WhileHover/… forces the full WriteColumns
+        // (keeping the BoundsAnimated/FLIP/reflow side-effects correct). Children are EXCLUDED from the diff, so they
+        // are ALWAYS reconciled. The FLIP "First" capture runs in the host commit loop over the BoundsAnimated flag
+        // (AppHost), independent of this call, so a truly-unchanged node still rides a sibling reflow.
+        if (RecordChanged(newEl, oldEl)) WriteColumns(node, newEl, isMount: false, oldEl);
         ReconcileChildren(node, ChildrenOf(newEl), ChildrenOf(oldEl));
     }
+
+    /// <summary>GEN-01 (wired): true unless <paramref name="a"/> and <paramref name="b"/> are the same leaf element
+    /// type with EVERY diffable prop unchanged (the generated <c>{T}Diff.AnyChanged</c> — inherited fields included,
+    /// Children excluded). A different type / unlisted kind conservatively returns true (always re-write).</summary>
+    private static bool RecordChanged(Element a, Element b) => a switch
+    {
+        BoxEl x => b is not BoxEl y || BoxElDiff.AnyChanged(x, y),
+        TextEl x => b is not TextEl y || TextElDiff.AnyChanged(x, y),
+        GridEl x => b is not GridEl y || GridElDiff.AnyChanged(x, y),
+        ImageEl x => b is not ImageEl y || ImageElDiff.AnyChanged(x, y),
+        SpanTextEl x => b is not SpanTextEl y || SpanTextElDiff.AnyChanged(x, y),
+        PolylineStrokeEl x => b is not PolylineStrokeEl y || PolylineStrokeElDiff.AnyChanged(x, y),
+        _ => true,
+    };
 
     /// <summary>Mount/update/replace a single optional child under <paramref name="parent"/> (component output, provider, Show).</summary>
     private void ReconcileSingleChild(NodeHandle parent, Element? newChild, Element? oldChild)
