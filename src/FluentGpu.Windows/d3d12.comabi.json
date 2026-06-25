@@ -9,6 +9,14 @@
         { "name": "SetEventOnCompletion", "slot": 9, "ret": "int", "params": ["ulong", "void*"] },
         { "name": "Signal", "slot": 10, "ret": "int", "params": ["ulong"] }
       ]
+    },
+    {
+      "name": "ID3D12CommandQueue",
+      "iid": "0ec870a6-5d7e-4c22-8cfc-5baae07616ed",
+      "methods": [
+        { "name": "ExecuteCommandLists", "slot": 10, "ret": "void", "params": ["uint", "void**"] },
+        { "name": "Signal", "slot": 14, "ret": "int", "params": ["void*", "ulong"] }
+      ]
     }
   ]
 }

@@ -469,7 +469,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
         Check(_cmdList->Close(), "cmdList.Close");
 
         ID3D12CommandList* execList = (ID3D12CommandList*)_cmdList;
-        _queue->ExecuteCommandLists(1, &execList);
+        global::FluentGpu.Interop.Generated.ID3D12CommandQueueVtbl.ExecuteCommandLists(_queue, 1, (void**)&execList);   // GEN-COM (wired)
         SignalFrame(_frameIndex);
         StoreActive();
     }
@@ -899,8 +899,8 @@ public sealed unsafe class D3D12Device : IGpuDevice
     private void SubmitWithLayers(ReadOnlySpan<byte> drawList, in FrameInfo ctx, float lw, float lh, D3D12_CPU_DESCRIPTOR_HANDLE backRtv)
     {
         // completed fence gates pool retire/drain; (frameIndex & 1) selects this frame's parity-banked SRV slots.
-        _acrylic!.BeginCanvas(_cmdList, ctx.Clear, _fence->GetCompletedValue(), (int)(_frameIndex & 1));
-        _opacity!.BeginFrame(_fence->GetCompletedValue(), (int)(_frameIndex & 1));
+        _acrylic!.BeginCanvas(_cmdList, ctx.Clear, global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence), (int)(_frameIndex & 1));
+        _opacity!.BeginFrame(global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence), (int)(_frameIndex & 1));
         ClearInsts();
         _clipStack.Clear();
         _roundedClipStack.Clear();
@@ -1070,15 +1070,15 @@ public sealed unsafe class D3D12Device : IGpuDevice
     private void SignalFrame(uint frameIndex)
     {
         ulong v = ++_fenceValue;
-        Check(_queue->Signal(_fence, v), "queue.Signal");
+        Check((HRESULT)global::FluentGpu.Interop.Generated.ID3D12CommandQueueVtbl.Signal(_queue, _fence, v), "queue.Signal");   // GEN-COM (wired)
         _frameFenceValues[frameIndex] = v;
     }
 
     private void WaitForFrame(uint frameIndex)
     {
         ulong v = _frameFenceValues[frameIndex];
-        if (v == 0 || _fence->GetCompletedValue() >= v) return;
-        Check(_fence->SetEventOnCompletion(v, _fenceEvent), "SetEventOnCompletion");
+        if (v == 0 || global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence) >= v) return;
+        Check((HRESULT)global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.SetEventOnCompletion(_fence, v, (void*)_fenceEvent), "SetEventOnCompletion");   // GEN-COM (wired)
         WaitForSingleObject(_fenceEvent, INFINITE);
     }
 
@@ -1117,10 +1117,10 @@ public sealed unsafe class D3D12Device : IGpuDevice
     internal void WaitForGpu()
     {
         ulong v = ++_fenceValue;
-        Check(_queue->Signal(_fence, v), "queue.Signal");
-        if (_fence->GetCompletedValue() < v)
+        Check((HRESULT)global::FluentGpu.Interop.Generated.ID3D12CommandQueueVtbl.Signal(_queue, _fence, v), "queue.Signal");   // GEN-COM (wired)
+        if (global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence) < v)
         {
-            Check(_fence->SetEventOnCompletion(v, _fenceEvent), "SetEventOnCompletion");
+            Check((HRESULT)global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.SetEventOnCompletion(_fence, v, (void*)_fenceEvent), "SetEventOnCompletion");   // GEN-COM (wired)
             WaitForSingleObject(_fenceEvent, INFINITE);
         }
     }
@@ -1177,7 +1177,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
         Barrier(back, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT);
         Check(_cmdList->Close(), "capture.cmd.Close");
         ID3D12CommandList* execList = (ID3D12CommandList*)_cmdList;
-        _queue->ExecuteCommandLists(1, &execList);
+        global::FluentGpu.Interop.Generated.ID3D12CommandQueueVtbl.ExecuteCommandLists(_queue, 1, (void**)&execList);   // GEN-COM (wired)
         WaitForGpu();
 
         byte[] outp = new byte[(long)width * height * 4];
