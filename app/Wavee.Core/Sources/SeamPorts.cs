@@ -45,10 +45,26 @@ public interface ILyricsSource : ISource
     Task<LyricsDocument?> GetLyricsAsync(string trackId, CancellationToken ct = default);
 }
 
-/// <summary>The Mutations facet: save/follow + playlist edits + folders (optimistic + outbox). Gated by the playlist's
-/// <see cref="PlaylistCapabilities"/> and this source's <see cref="SourceCapabilities.Mutations"/> flag.</summary>
+/// <summary>The Podcasts facet: shows + their episodes (docs/architecture.md §2). A capability-segregated read port kept
+/// OFF <see cref="ICatalogSource"/> so music-only sources don't carry empty podcast reads; the aggregate routes to it via
+/// <c>OfCapability(Podcasts)</c>. (The export has no podcast data, so the in-process source synthesizes it.)</summary>
+public interface IPodcastSource : ISource
+{
+    Task<IReadOnlyList<Show>> GetShowsAsync(CancellationToken ct = default);
+    Task<Show?> GetShowAsync(string uri, CancellationToken ct = default);
+}
+
+/// <summary>The Mutations facet: save / like / follow (saved-state) — optimistic local writes the UI gates on
+/// <see cref="SourceCapabilities.Mutations"/> (and, for playlist item edits, the playlist's <see cref="PlaylistCapabilities"/>).
+/// The set spans tracks (like), albums (save) and artists + playlists (follow); a real source reconciles via an outbox +
+/// revision conflicts (docs/architecture.md §3). Playlist item edits + folders are the next Mutations increment (§9 seam).</summary>
 public interface IMutationSource : ISource
 {
-    Task SaveAsync(string uri, CancellationToken ct = default);
-    Task RemoveAsync(string uri, CancellationToken ct = default);
+    /// <summary>Snapshot of the currently saved / liked / followed uris.</summary>
+    IReadOnlySet<string> Saved { get; }
+    bool IsSaved(string uri);
+    /// <summary>Emits the full saved-set on every change, so a bridge can mirror it into an engine Signal (§6).</summary>
+    IObservable<IReadOnlySet<string>> SavedChanged { get; }
+    /// <summary>Set the saved/followed state of a uri (idempotent) — optimistic + persisted in the in-process source.</summary>
+    Task SetSavedAsync(string uri, bool saved, CancellationToken ct = default);
 }

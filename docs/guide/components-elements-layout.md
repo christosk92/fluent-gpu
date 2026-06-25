@@ -1,5 +1,7 @@
 # Elements, layout, controls & theming
 
+> **✅ Animation engine — signals-first rework landed + verified.** The declarative surface (`Transition`/`WhileHover`/`WhilePressed`/`WhileFocus`/`Enter`/`Exit`/`Stagger`/`Layout` + `UseSpringValue`/`UseAnimatedValue(DepKey)`) is now live, all over the unified `AnimValue` slab + analytical spring. The `Element` animation fields and `UseSpring`/`UseTransition`/`UseKeyframes`/`UseDrivenAnimation` hooks documented below still work (they seed the same slab; `AnimEngine` is its scheduler). Design, now implemented: [`../plans/animation-engine-rework-design.md`](../plans/animation-engine-rework-design.md).
+
 [← Guide index](./README.md) · prerequisite: **[reactivity.md](./reactivity.md)**
 
 ## The element zoo
@@ -69,8 +71,11 @@ new Expander
     {
         [Expander.PartHeader] = b => b with
         {
-            StickyTop = 8f,                                    // CSS position:sticky, top: 8px
-            OnPinned  = p => stuck.Value = p,                  // the :stuck observable (engine fires per transition)
+            ScrollBinds =                                      // CSS position:sticky — pin at top: 8px (one generic scroll bind)
+            [
+                new() { PinTop = 8f,                           //   clamp-to-top at an 8px inset
+                        OnFlag = p => stuck.Value = p }        //   the :stuck observable — a PinTop bind's OnFlag fires per pin↔unpin flip
+            ],
             Fill = stuck.Value ? Tok.FillSolidBase : b.Fill,   // restyle ANYTHING off the signal — reading subscribes
             BrushTransitionMs = Motion.ControlFast,            // …and the swap cross-fades (implicit brush transition)
         },
@@ -85,7 +90,8 @@ for per-frame-hot values; (3) type-preserving — a modifier that changes the re
 content **slots** like `Content`/`HeaderContent` *restructure*); (4) don't reshape `Children`; (5) the control
 re-asserts its mechanics-critical props AFTER your modifier (toggle clicks, reflow specs, ref captures — chained, see
 each part const's doc for the owned list), so you can restyle everything but break nothing; (6) one transform owner —
-don't put `StickyTop`/a bound `Transform` on a transform-owned part (e.g. the Expander clip mid-reflow). **New per-control
+don't put a transform-owning `ScrollBinds` entry (a `PinTop` sticky / `StretchFromTop` hero bind) or a bound `Transform`
+on a transform-owned part (e.g. the Expander clip mid-reflow). **New per-control
 styling knobs are banned**: if a prop's only job is to restyle one template part, it must be a Parts modifier instead.
 
 ## Layout
@@ -129,9 +135,10 @@ UseDrivenAnimation(AnimChannel ch, Keyframe[] keys, Func<float> source, float mi
 this.UseEntrance(float offsetPx = 24, object? key = null)   // Fluent show transition (TranslateY 24→0 + fade)
 this.UseHoverScale(bool hovered, float to = 1.02f)          // card/button lift
 ```
-These seed engine tracks on the component's node and animate by re-recording transform/opacity — **never re-render,
-never relayout.** Prefer these (or a signal bound to a transform) for motion. `UseAnimatedValue(target, ms, easing)`
-exists but steps only when the component re-renders for other reasons — avoid it for real motion.
+These seed `AnimValue` slab channels on the component's node and animate by re-recording transform/opacity — **never
+re-render, never relayout.** Prefer these (or a signal bound to a transform) for motion. `UseAnimatedValue(target, ms,
+easing)` returns an eased scalar (lerp a color with it) and `UseSpringValue` its spring-backed sibling; under the
+landed slab both advance on the compositor frame, so they are fine for continuous motion too.
 
 ### Images
 ```csharp

@@ -1,5 +1,7 @@
 # Skeleton loading — one UI, derived shimmer, blur-reveal swap
 
+> **✅ Animation engine — signals-first rework landed + verified.** The reveal/swap and shimmer here ride the unified slab: the blur-reveal is an `Enter` `EnterExit.Blur` terminal and the shimmer pulse an ambient `Hz` cadence row (so a backgrounded tab's shimmer stops for free); `SkeletonDeriver`/`Skel.Region` are unchanged. Design, now implemented: [`../plans/animation-engine-rework-design.md`](../plans/animation-engine-rework-design.md).
+
 Showing a shimmer while a UI loads usually means building **two UIs** — the skeleton and the real one — and hand-keeping
 them in sync. FluentGpu makes it one source: you author the real UI, wrap the async region in `Skel.Region(...)`, and the
 framework **derives the shimmer from that same UI**, keeps the parts you already have real, and swaps to the real content

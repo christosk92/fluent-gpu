@@ -95,12 +95,193 @@ public static class FakeData
         return new Album($"al{i}", $"spotify:album:al{i}", s.Title, Cover(i, 300), [artist], 2014 + (i % 11), tracks.Length, tracks, kind);
     }
 
+    // A LARGE synthetic discography per artist so the artist-page grid genuinely virtualizes (hundreds of singles like the
+    // real Spotify shape). Deterministic per (artist, kind, index); returns the window [offset, offset+limit) + facet total.
+    public static DiscographyPage Discography(string artistUri, DiscographyKind kind, int offset, int limit)
+    {
+        int seed = ((IndexFromUri(artistUri) % Seed.Length) + Seed.Length) % Seed.Length;
+        int total = kind switch
+        {
+            DiscographyKind.Albums => 60 + (seed * 7) % 40,
+            DiscographyKind.Singles => 380 + (seed * 53) % 320,
+            _ => 110 + (seed * 17) % 120,
+        };
+        offset = Math.Clamp(offset, 0, total);
+        int n = Math.Clamp(limit, 0, total - offset);
+        var items = new Album[n];
+        for (int i = 0; i < n; i++) items[i] = DiscographyAlbum(seed, kind, offset + i);
+        return new DiscographyPage(items, total);
+    }
+
+    static Album DiscographyAlbum(int artistSeed, DiscographyKind kind, int idx)
+    {
+        int g = (artistSeed * 131 + idx * 31) & 0x7fffffff;
+        var s = Seed[g % Seed.Length];
+        var artist = ArtistRef(artistSeed);
+        var k = kind switch { DiscographyKind.Singles => AlbumKind.Single, DiscographyKind.Compilations => AlbumKind.Compilation, _ => AlbumKind.Album };
+        int trackCount = kind == DiscographyKind.Singles ? 1 + g % 3 : 6 + g % 18;
+        var tracks = AlbumTracks(trackCount, idx * 10, artist, k == AlbumKind.Compilation);
+        string id = $"disc{artistSeed}_{(int)kind}_{idx}";
+        return new Album(id, $"spotify:album:{id}", s.Title, Cover(g, 300), [artist], 2000 + g % 26, tracks.Length, tracks, k);
+    }
+
     public static Artist Artist(int i)
     {
         var s = Seed[i % Seed.Length];
         var albums = new Album[6];
         for (int k = 0; k < albums.Length; k++) albums[k] = Album(i * 6 + k);
-        return new Artist($"ar{i % Seed.Length}", $"spotify:artist:ar{i % Seed.Length}", s.Artist, Cover(i, 300), albums);
+        int h = Math.Abs(s.Artist.GetHashCode());
+        long monthly = 850_000L + (h % 32) * 940_000L;          // ~0.85M – ~30M monthly listeners
+        long followers = monthly / 2 + (h % 11) * 130_000L;
+        bool verified = h % 5 != 0;
+        int rank = h % 7 == 0 ? 0 : 1 + h % 500;                // some artists have no world rank
+        // The full magazine facets, synthesized deterministically (each gated so artists differ). The real Spotify
+        // export overrides these for exported artists; here every fake artist still gets a rich page (square art).
+        return new Artist($"ar{i % Seed.Length}", $"spotify:artist:ar{i % Seed.Length}", s.Artist, Cover(i, 300), albums,
+            monthly, followers, ArtistBio(s.Artist, monthly), verified,
+            WorldRank: rank, HeaderImage: Cover(i, 640), TopTracks: null,
+            AppearsOn: null, Pinned: SynthPinned(h, albums), Extras: SynthExtras(i, s.Artist, h, monthly, albums));
+    }
+
+    // ── synthesized "magazine" facets (fallback for artists with no real Spotify export) ─────────────────────────
+    /// <summary>The "On tour now" banner copy derived from a concert list (mirrors WaveeMusic's tour-banner formatter:
+    /// 1 date → a show, 2–3 → dates, ≥4 with the next within a week → on-tour-now, else an upcoming tour).</summary>
+    public static TourBanner? TourBannerFor(string name, IReadOnlyList<Concert>? concerts)
+    {
+        if (concerts is not { Count: > 0 }) return null;
+        int n = concerts.Count;
+        var next = concerts[0];
+        foreach (var c in concerts) if (c.Date < next.Date) next = c;
+        bool soon = (next.Date - DateTimeOffset.Now).TotalDays <= 7 && next.Date >= DateTimeOffset.Now;
+        string eyebrow = n == 1 ? "UPCOMING SHOW" : n <= 3 ? "UPCOMING DATES" : soon ? "ON TOUR NOW" : "UPCOMING TOUR";
+        string when = next.Date.ToString("MMM d", System.Globalization.CultureInfo.InvariantCulture).ToUpperInvariant();
+        return new TourBanner(eyebrow, $"{name} — on tour", $"Next: {when} · {next.Venue} · {next.City} · {n} dates total", soon);
+    }
+
+    static ArtistExtras SynthExtras(int i, string name, int h, long monthly, Album[] albums)
+    {
+        var concerts = h % 4 != 0 ? SynthConcerts(name, h) : null;
+        return new ArtistExtras(
+            Concerts: concerts,
+            Merch: h % 3 != 1 ? SynthMerch(i, h) : null,
+            Playlists: h % 2 == 0 ? SynthPlaylists(i, name) : null,
+            MusicVideos: h % 5 != 2 ? SynthVideos(albums) : null,
+            TopCities: h % 2 == 1 ? SynthCities(h, monthly) : null,
+            ExternalLinks: SynthLinks(name),
+            Gallery: h % 3 != 2 ? SynthGallery(i, h) : null,
+            Related: null,                                       // the page falls back to the cached artists pool
+            Tour: TourBannerFor(name, concerts));
+    }
+
+    static readonly (string City, string Venue)[] CityVenues =
+    [
+        ("Berlin", "Mercedes-Benz Arena"), ("London", "The O2"), ("Amsterdam", "Ziggo Dome"),
+        ("Paris", "Accor Arena"), ("Milano", "Mediolanum Forum"), ("Madrid", "WiZink Center"),
+        ("New York", "Madison Square Garden"), ("Tokyo", "Nippon Budokan"), ("São Paulo", "Allianz Parque"),
+        ("Sydney", "Qudos Bank Arena"),
+    ];
+
+    static IReadOnlyList<Concert> SynthConcerts(string name, int h)
+    {
+        int n = 3 + h % 8;
+        var now = DateTimeOffset.Now;
+        var list = new List<Concert>(n);
+        for (int k = 0; k < n; k++)
+        {
+            var (city, venue) = CityVenues[(h + k) % CityVenues.Length];
+            list.Add(new Concert($"wavee:concert:{h}:{k}", name, venue, city, now.AddDays(4 + k * 9 + h % 5), IsFestival: k == 2));
+        }
+        return list;
+    }
+
+    static readonly string[] MerchNames = ["Tour Tee", "Vinyl LP", "Hoodie", "Cap", "Poster", "Enamel Pin"];
+    static IReadOnlyList<MerchItem> SynthMerch(int i, int h)
+    {
+        int n = 3 + h % 4;
+        var list = new List<MerchItem>(n);
+        for (int k = 0; k < n; k++)
+            list.Add(new MerchItem(MerchNames[(h + k) % MerchNames.Length], "$" + (19 + k * 5) + ".00",
+                "Official merchandise.", Cover(i + k + 5, 300), null));
+        return list;
+    }
+
+    static IReadOnlyList<PlaylistRef> SynthPlaylists(int i, string name)
+    {
+        string[] names = [$"This Is {name}", $"{name} Radio", $"{name} Mix", "Top Pop"];
+        string[] subs = ["Spotify · official", "Spotify · featured", "Discovered on", "Made for you"];
+        var list = new List<PlaylistRef>(4);
+        for (int k = 0; k < 4; k++)
+            list.Add(new PlaylistRef($"spotify:playlist:pl{(i + k) % 8}", names[k], Cover(i + k + 100, 300), subs[k]));
+        return list;
+    }
+
+    static IReadOnlyList<MusicVideo> SynthVideos(Album[] albums)
+    {
+        var list = new List<MusicVideo>(4);
+        foreach (var al in albums)
+        {
+            if (al.Tracks is not { Count: > 0 } ts) continue;
+            var t = ts[0];
+            list.Add(new MusicVideo(t.Uri, t.Title, al.Cover, t.DurationMs, t.IsExplicit));
+            if (list.Count >= 4) break;
+        }
+        return list;
+    }
+
+    static readonly string[] Cities = ["São Paulo", "London", "Mexico City", "Sydney", "Quezon City", "Jakarta", "Istanbul"];
+    static IReadOnlyList<TopCity> SynthCities(int h, long monthly)
+    {
+        var list = new List<TopCity>(5);
+        for (int k = 0; k < 5; k++)
+            list.Add(new TopCity(Cities[(h + k) % Cities.Length], null, Math.Max(1L, monthly / 30 / (k + 1))));
+        return list;
+    }
+
+    static IReadOnlyList<ExternalLink> SynthLinks(string name)
+    {
+        string slug = new string(name.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
+        if (slug.Length == 0) slug = "artist";
+        return
+        [
+            new ExternalLink("Instagram", "https://instagram.com/" + slug, ExternalLinkKind.Instagram),
+            new ExternalLink("Twitter", "https://twitter.com/" + slug, ExternalLinkKind.Twitter),
+            new ExternalLink("Wikipedia", "https://en.wikipedia.org/wiki/" + slug, ExternalLinkKind.Wikipedia),
+        ];
+    }
+
+    static IReadOnlyList<Image> SynthGallery(int i, int h)
+    {
+        int n = 4 + h % 5;
+        var list = new List<Image>(n);
+        for (int k = 0; k < n; k++) list.Add(Cover(i + k + 3, 480));
+        return list;
+    }
+
+    static PinnedItem? SynthPinned(int h, Album[] albums)
+    {
+        if (h % 3 == 1 || albums.Length == 0) return null;
+        var al = albums[0];
+        string kind = al.Kind switch { AlbumKind.Single => "Single", AlbumKind.EP => "EP", AlbumKind.Compilation => "Compilation", _ => "Album" };
+        return new PinnedItem("Pinned", al.Name, $"{kind} · {al.Year}", "Out now — give it a listen.", al.Cover, al.Uri);
+    }
+
+    static string ArtistBio(string name, long monthly) =>
+        $"{name} is an artist whose sound moves between intimate, late-night textures and wide, festival-scale moments. " +
+        $"With {monthly:N0} monthly listeners, the catalogue spans early EPs, breakout singles and the records that " +
+        $"defined the run — built for headphones at 2am and crowds at midnight alike.";
+
+    /// <summary>An artist's "Popular" list: the highest-played, title-deduped tracks across their discography — the SAME
+    /// ordered set the artist context plays (see <see cref="ContextTracks"/>), so the artist page and playback agree.</summary>
+    public static IReadOnlyList<Track> TopTracksOf(Artist a, int count = 5)
+    {
+        if (a.TopAlbums is not { Count: > 0 } albums) return Array.Empty<Track>();
+        var all = new List<Track>();
+        foreach (var al in albums) if (al.Tracks is { } ts) all.AddRange(ts);
+        all.Sort((x, y) => y.PlayCount.CompareTo(x.PlayCount));
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var top = new List<Track>(count);
+        foreach (var t in all) { if (seen.Add(t.Title)) { top.Add(t); if (top.Count >= count) break; } }
+        return top;
     }
 
     public static Playlist Playlist(int i, int trackCount = 40)
@@ -136,6 +317,98 @@ public static class FakeData
     /// <summary>The big list (Liked Songs) — generated on demand so 50k stays cheap.</summary>
     public static Track[] LikedSongs(int count = 5000) => Tracks(count, 1000);
 
+    // ── local files (the peer source: docs/architecture.md "Local files") ────────────────────────────────────────────
+    // Synthetic "imported" tracks — distinct names from the streamed catalog, TrackOrigin.Local, Source="local", and
+    // wavee:local:* uris. The LocalSource serves these; ContextTracks resolves a local context so they actually play.
+    static readonly (string Title, string Artist)[] LocalSeed =
+    [
+        ("Sunset Boulevard", "Marble Sounds"), ("Paper Planes", "Hollow Coves"), ("Northern Lights", "Aurora Fields"),
+        ("Coastline", "Sea Glass"), ("Old Cassette", "Lo-Fi Attic"), ("Rainy Window", "Kettle & Keys"),
+        ("First Snow", "Pinecone"), ("Long Drive Home", "Headlights"), ("Attic Tapes", "Dust & Vinyl"),
+        ("Quiet Hours", "Night Shift"), ("Garden Path", "Greenhouse"), ("Backroads", "Gravel & Pine"),
+        ("Harbor Lights", "Lantern"), ("Morning Pages", "Inkwell"),
+    ];
+
+    static Track[]? _localCache;
+    public static IReadOnlyList<Track> LocalTracks()
+    {
+        if (_localCache is not null) return _localCache;
+        var list = new Track[LocalSeed.Length];
+        for (int i = 0; i < LocalSeed.Length; i++)
+        {
+            var (title, artist) = LocalSeed[i];
+            var ar = new ArtistRef("localar" + i, "wavee:local:artist:" + i, artist);
+            var al = new AlbumRef("localal" + i, "wavee:local:album:" + i, title);
+            long dur = 150_000 + (i * 41 % 140) * 1000L;
+            list[i] = new Track("localtr" + i, "wavee:local:track:" + i, title, new[] { ar }, al, dur, false,
+                Cover(700 + i, 64), Origin: TrackOrigin.Local, Source: "local");
+        }
+        return _localCache = list;
+    }
+
+    // ── podcasts (the Podcasts facet: synthesized, since the export has none — docs/architecture.md §9) ──────────────
+    static readonly (string Name, string Publisher)[] ShowSeed =
+    [
+        ("Signals & Noise", "Wavee Studios"), ("The Long Take", "Reel Talk Media"), ("Night Coding", "Indie Dev FM"),
+        ("Coffee & Code", "Brewed Bytes"), ("Synth History", "Analog Archives"), ("Field Notes", "Wander Audio"),
+        ("Deep Focus Talks", "Mindful Media"), ("Release Notes", "Shipping It"),
+    ];
+    static readonly string[] EpTitles =
+    [
+        "The Build Trap", "Latency, Honestly", "On Craft", "Tape Loops", "The Quiet Release", "Edge Cases",
+        "First Principles", "After Hours", "The Long Game", "Cold Start", "Postmortem", "Signal Lost",
+    ];
+
+    public static IReadOnlyList<Show> Shows()
+    {
+        var list = new Show[ShowSeed.Length];
+        for (int i = 0; i < ShowSeed.Length; i++)
+        {
+            var (name, pub) = ShowSeed[i];
+            list[i] = new Show("show" + i, "wavee:show:" + i, name, pub, Cover(800 + i, 300), ShowBlurb(name, pub));
+        }
+        return list;
+    }
+
+    public static Show? Show(string uri)
+    {
+        int idx = ((IndexFromUri(uri) % ShowSeed.Length) + ShowSeed.Length) % ShowSeed.Length;
+        var (name, pub) = ShowSeed[idx];
+        return new Show("show" + idx, uri, name, pub, Cover(800 + idx, 300), ShowBlurb(name, pub), ShowEpisodes(idx, name));
+    }
+
+    static string ShowBlurb(string name, string pub) => $"{name} — conversations, deep dives and field recordings from {pub}. New episodes weekly.";
+
+    static IReadOnlyList<Episode> ShowEpisodes(int showIdx, string showName)
+    {
+        int n = 8 + showIdx % 5;
+        var eps = new Episode[n];
+        var now = DateTimeOffset.Now;
+        for (int i = 0; i < n; i++)
+        {
+            long dur = (22 + (showIdx * 7 + i * 13) % 50) * 60_000L;     // 22–72 min
+            long prog = i == 1 ? dur / 3 : 0;                            // one "continue listening" episode
+            string title = $"#{n - i} · {EpTitles[(showIdx * 5 + i) % EpTitles.Length]}";
+            eps[i] = new Episode("ep" + showIdx + "_" + i, $"wavee:episode:{showIdx}:{i}", title, showName,
+                Cover(800 + showIdx, 300), dur, now.AddDays(-(i * 7L + showIdx)),
+                $"In this episode of {showName}: notes, tangents and a few hard-won lessons.", prog);
+        }
+        return eps;
+    }
+
+    static IReadOnlyList<Track> EpisodesAsTracks(IReadOnlyList<Episode> eps)
+    {
+        var list = new Track[eps.Count];
+        for (int i = 0; i < eps.Count; i++)
+        {
+            var e = eps[i];
+            var ar = new ArtistRef("show", "wavee:show", e.ShowName);
+            list[i] = new Track(e.Id, e.Uri, e.Title, new[] { ar }, new AlbumRef("show", "wavee:show", e.ShowName),
+                e.DurationMs, false, e.Image, Source: "podcast");
+        }
+        return list;
+    }
+
     /// <summary>The trailing numeric id of a <c>spotify:kind:xx{n}</c> uri (the same parse <see cref="FakeSource"/>
     /// uses to resolve a synthetic detail page) — so a context resolves to the IDENTICAL deterministic track list.</summary>
     public static int IndexFromUri(string uri)
@@ -147,6 +420,19 @@ public static class FakeData
         return i;
     }
 
+    /// <summary>Resolve a <c>spotify:track:*</c> uri back to its synthetic track (the inverse of <see cref="Track"/>), so
+    /// playing a single track (search, a row) loads the SAME track its card showed. Null for a non-track uri.</summary>
+    public static Track? TrackByUri(string uri)
+    {
+        if (uri.StartsWith("spotify:track:", StringComparison.Ordinal)) return Track(IndexFromUri(uri));
+        if (uri.StartsWith("wavee:local:track:", StringComparison.Ordinal))
+        {
+            var lt = LocalTracks(); int i = IndexFromUri(uri);
+            return (uint)i < (uint)lt.Count ? lt[i] : null;
+        }
+        return null;
+    }
+
     /// <summary>Resolve a context uri (album / playlist / liked-songs) to ITS ordered track list — the same catalog the
     /// detail page loads, so playing a context at a start index plays the ACTUAL track that row shows. Empty for an
     /// unknown context.</summary>
@@ -156,6 +442,9 @@ public static class FakeData
         if (contextUri == "spotify:collection:tracks") return LikedSongs(161);
         if (contextUri.StartsWith("spotify:album:", StringComparison.Ordinal)) return Album(IndexFromUri(contextUri)).Tracks ?? Array.Empty<Track>();
         if (contextUri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) return Playlist(IndexFromUri(contextUri)).Tracks ?? Array.Empty<Track>();
+        if (contextUri.StartsWith("spotify:artist:", StringComparison.Ordinal)) return TopTracksOf(Artist(IndexFromUri(contextUri)));
+        if (contextUri.StartsWith("wavee:local:", StringComparison.Ordinal) || contextUri.StartsWith("local:", StringComparison.Ordinal)) return LocalTracks();
+        if (contextUri.StartsWith("wavee:show:", StringComparison.Ordinal) && Show(contextUri) is { Episodes: { } eps }) return EpisodesAsTracks(eps);
         return Array.Empty<Track>();
     }
 
@@ -248,5 +537,23 @@ public static class FakeData
         for (int i = 1; i <= 3; i++) q.Add(new QueueEntry("q" + i, Track(i), QueueBucket.UserQueue, false));
         for (int i = 4; i <= 11; i++) q.Add(new QueueEntry("q" + i, Track(i), QueueBucket.NextUp, i > 8));
         return q.ToArray();
+    }
+
+    // Representative PENDING seeds for the skeleton-loading boundary: Skel.Region renders content(seed) and DERIVES the
+    // shimmer from it, so these give the home/search resources a real-shaped (blank) value to lay out WHILE loading — the
+    // page itself says nothing about skeletons. Content is blank; the deriver turns each title/cover into a shimmer bar.
+    public static readonly HomeFeed HomeSeed = new("", new HomeGroup[]
+    {
+        new(HomeGroupKind.CollapsedGrid, " ", BlankCards(6, HomeCardKind.Playlist)),
+        new(HomeGroupKind.Shelf, " ", BlankCards(6, HomeCardKind.Album)),
+        new(HomeGroupKind.Shelf, " ", BlankCards(6, HomeCardKind.Artist)),
+    });
+    public static readonly SearchResults SearchSeed = Search("skeleton");
+
+    static HomeCard[] BlankCards(int n, HomeCardKind kind)
+    {
+        var cards = new HomeCard[n];
+        for (int i = 0; i < n; i++) cards[i] = new HomeCard("", "", "", null, kind);
+        return cards;
     }
 }

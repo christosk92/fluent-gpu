@@ -284,6 +284,20 @@ cheaper than Reactor's `DepsEqual`.
 > *Float note:* `F64` deps compared bitwise ⇒ `NaN != NaN` re-runs (matches "deps changed ⇒ re-run" intent;
 > documented).
 
+> **IMPLEMENTATION STATUS (v1 — shipped, `Hooks/DepKey.cs`).** The realized engine ships a deliberately NARROWER
+> `DepKey` (in `FluentGpu.Hooks`, not `Foundation`): a Kind-less, pure-scalar 16-byte key (two `long`s) that packs up
+> to four 4-byte scalars *by value* — `From(int)/From(int,int)/From(int,int,int,int)/From(long)/From(float)/From(bool)/
+> From(NodeHandle)/From(float,int)` — compared by content. It is wired into the `UseEffect/UseLayoutEffect/UseMemo`
+> overloads + the retained-motion hooks (`UseSpring/UseTransition/UseKeyframes/UseDrivenAnimation`), giving those their
+> no-per-render-`object[]`, no-box fast path. NOT YET built: the `DepKind` tag, `FromStr`/`FromRef`, the `GcDepTable`
+> (§3.3), the `[InlineArray(4)]` `DepDeps` overflow (§3.4), and the source-generated span lowering (§3.4) — so v1 keys
+> *scalar* deps only; reference / string / delegate deps are not yet expressible as a `DepKey`. Growing to the
+> tagged-span model above (the general `params object[]` killer) is a deliberate `DepKey` migration — the `DepKind`
+> tag does not coexist with the current 4-scalar packing — and is tracked as **GEN-02** in
+> `docs/plans/source-generators-opportunity-investigation.md` (verdict: build-later, unblock this first). The
+> pure-scalar / no-GC-ref-inside-`DepKey` canon (SPEC-INDEX §2) holds in BOTH shapes; the narrow v1 is a subset that
+> does not yet handle ref deps, not a violation.
+
 ### 3.3 `GcDepTable` — the side-buffer for reference & delegate deps
 
 `UseEffect(..., someObject)` / `UseCallback(cb, dep)` cannot put a GC ref in a `DepKey`. The dep-span lowering
@@ -317,6 +331,11 @@ component actually re-renders). This side-buffer is the single legal home for th
 union tried to smuggle into `DepKey`.
 
 ### 3.4 Source-generated dep spans (the AOT win, no `params object[]`)
+
+> **STATUS:** this lowering is **GEN-02** (pending — gated on the §3.2 `DepKey` migration). The shipped v1 keys
+> scalar deps by value through the narrow `Hooks/DepKey.cs` (see the §3.2 status note); the `stackalloc`-span
+> generator + `GcDepTable` parking below is the not-yet-built extension. See
+> `docs/plans/source-generators-opportunity-investigation.md`.
 
 A Roslyn source generator (`FluentGpu.SourceGen`) rewrites hook call sites so the dependency list is built into a
 **stackalloc'd span**, never a heap array:

@@ -71,7 +71,7 @@ sealed class WaveeShell : Component
         _sidebarCompact = new(settings.Get(WaveeSettings.SidebarCollapsed));
         _sidebarWidth = new(settings.Get(WaveeSettings.SidebarWidth));
 
-        if (Diag.EnvFlag("WAVEE_NAV_PROBE") || Diag.EnvFlag("WAVEE_CONN_STRESS"))
+        if (Diag.EnvFlag("WAVEE_NAV_PROBE") || Diag.EnvFlag("WAVEE_CONN_STRESS") || Diag.EnvFlag("WAVEE_TRACKLIST_SHOT") || Diag.EnvFlag("WAVEE_HERO_SHOT"))
         {
             ProbeNav = GoNav; ProbeBack = Back; ProbeForward = Forward; ProbeTheme = ToggleTheme; ProbeOpenTab = OpenNewTab;
             // Exactly the Home-card path: stash a preview (→ DetailShell mounts the PREVIEW path, not the skeleton path the
@@ -224,6 +224,10 @@ sealed class WaveeShell : Component
                                         // host's live re-theme (RethemeAll) re-fires it → FillCardDefault follows the theme.
                                         Fill = Prop.Of(() => WaveeColors.FileArea), Corners = CornerRadius4.All(WaveeRadius.Card),
                                         Shadow = Elevation.Card, ClipToBounds = true,
+                                        // Layout firewall (#5): this card is Grow=1 (its size is the shell's content region,
+                                        // parent-determined) and clips — so a re-render deep inside a page re-solves only this
+                                        // subtree (RunSubtree) instead of a full-tree layout from the root on every nav.
+                                        IsolateLayout = true,
                                         Children = [ Embed.Comp(() => new ContentHost(_route, ActiveTabId)) ],
                                     },
                                 ],
@@ -252,7 +256,16 @@ sealed class WaveeShell : Component
                 // "player bar disappears then slides back" glitch). The chrome rows (TitleBar, ShellToolbar) and the
                 // PlayerBar host keep the default Shrink=0, so the player bar stays a fixed 72px slot docked at the
                 // window bottom and only the middle gives — its bounded height then lets the sidebar ScrollView scroll.
-                ) with { Grow = 1f, Shrink = 1f, MinHeight = 0f },
+                //
+                // ClipToBounds: this region's OWN box is clamped to the dock every frame (Shrink=1 yields → the player bar
+                // never moves), but it is a ZStack and a ZStack deliberately lets children OVERFLOW (a popup must escape the
+                // window). So while a page's content settles, the content-sized child chain can extend past this box down
+                // into the docked player-bar band, where the translucent bar reveals it. Clip the region to its own box so
+                // its bottom edge IS the player bar's top — content can never paint into the reserved dock slot. (The engine
+                // RunSubtree fix keeps the IsolateLayout card's own box flush at rest; this clip covers the settle window
+                // and is correct composition regardless. The Hero fly draws in a separate top band; popups live in the
+                // OUTER OverlayHost ZStack — neither is affected.)
+                ) with { Grow = 1f, Shrink = 1f, MinHeight = 0f, ClipToBounds = true },
                 Embed.Comp(() => new PlayerBar()),
             ],
         };
@@ -271,7 +284,8 @@ sealed class WaveeShell : Component
                Ctx.Provide(HistoryStore.NavCtx, (Action<string, string?>)GoNav,
                Ctx.Provide(HistoryStore.Slot, _historyStore,
                Ctx.Provide(NavPreviewStore.Slot, _navPreview,
-               Embed.Comp(() => new OverlayHost { Child = tinted })))));
+               Ctx.Provide(SearchQuery.Slot, _searchText,
+               Embed.Comp(() => new OverlayHost { Child = tinted }))))));
     }
 
     TabStrip BuildTabStrip() => new TabStrip
@@ -353,6 +367,9 @@ sealed class WaveeShell : Component
     // History always opens in its own tab (global view — same as browser convention).
     void GoNav(string key, string? arg)
     {
+        // A search route carries the query in Arg → sync the omnibar text so the box + the SearchPage (which reads
+        // SearchQuery.Slot live, as-you-type) agree, whether the nav came from the box, a history entry, or a suggestion.
+        if (key == "search" && arg is { Length: > 0 }) _searchText.Value = arg;
         if (key == "history") OpenNewTab(key);
         else Go(key, arg);
     }

@@ -1,5 +1,7 @@
 # Frame pipeline and verification harness
 
+> **✅ Animation engine — signals-first rework landed + verified.** The phase-7 animation tick is one `AnimScheduler` (`min(next-due)` wake, per-source `CadenceClass`) over a unified POD `AnimValue` slab — the former N independent tickers (interaction, brush, …) are folded in. The new gates are live and green: spring/gesture dt-determinism replay, the scheduler-tick alloc tripwire, the ambient-cadence idle check (521 VerticalSlice gates pass overall). Design, now implemented + the per-phase gate list: [`../../plans/animation-engine-rework-design.md`](../../plans/animation-engine-rework-design.md) §11.
+
 This page is for people **changing engine internals** — the frame loop, a seam, the recorder, the reconciler — and
 who then need to *prove* the change didn't regress a cross-seam contract. If you are building an app, read
 [Performance rules and zero-alloc boundaries](../app-authors/performance-rules-and-zero-alloc-boundaries.md) and the
@@ -54,7 +56,7 @@ would re-enter the pump).
                      + ReRealizeVirtuals()          — re-realize virtual windows that crossed a scroll boundary
 6    layout          full Run() on first-frame/resize/DPI/root-change; else invalidator.RunDirty() (scoped)
 6.5  layout effects  DrainLayoutEffects()           — UseLayoutEffect bodies (Bounds are valid; seed animations)
-7    animation       anim.Tick(dt) + interact/scroll/repeat/caret/dragdrop ticks; FLIP projections; sticky pins
+7    animation       anim.Tick(dt) — the one AnimScheduler over the slab (hover/press/brush are slab channels) + scroll/repeat/caret/dragdrop ticks; FLIP projections; sticky pins
 8    record          SceneRecorder.Record(scene → DrawList)  — clips, world transforms, glyphs, images
 10   submit          device.SubmitDrawList(bytes, sortKeys, FrameInfo)
 11   present         swapchain.Present()
@@ -86,7 +88,7 @@ public FrameStats Paint(int clicks = 0)
         _scene.ClearLayoutDirty();
     }
     DrainLayoutEffects();                                      // 6.5
-    _anim.Tick(dtMs);                                          // 7 (+ interact/scroll/sticky/… ticks)
+    _anim.Tick(dtMs);                                          // 7 the AnimScheduler over the slab (+ scroll/sticky/… ticks)
 
     var recordStats = SceneRecorder.Record(_scene, _drawList, _images, /* … */);     // 8 record
     _device.SubmitDrawList(_drawList.Bytes, _drawList.SortKeys, new FrameInfo(/* … */)); // 10 submit
@@ -209,11 +211,12 @@ verifiable here even though they're `needs-pixels` on D3D12 (see the `PopupWindo
 
 ## The check categories
 
-As of this writing the harness runs **362 assertions**: **9 inline core-slice checks** in `Main` (numbered 1–9, the
-minimum-vertical-slice acceptance: window→clear→present, two rounded-rect buttons, three text runs, flex bounds,
-reconcile+`UseState`, a clickable button round-trip, the steady idle frame, and the zero-alloc paint half), plus
-**353 checks spread across 99 group methods** (one `…Checks(StringTable)` method per feature area, each called once from
-`Main`). The groups walk every seam end-to-end — a non-exhaustive sample of the shape:
+As of this writing the harness runs **521 assertions** (all green, including the animation-rework dt-determinism and
+scheduler-tick alloc gates): **9 inline core-slice checks** in `Main` (numbered 1–9, the minimum-vertical-slice
+acceptance: window→clear→present, two rounded-rect buttons, three text runs, flex bounds, reconcile+`UseState`, a
+clickable button round-trip, the steady idle frame, and the zero-alloc paint half), plus the rest spread across the
+`…Checks(StringTable)` group methods (one per feature area, each called once from `Main`). The groups walk every seam
+end-to-end — a non-exhaustive sample of the shape:
 
 - **Reactivity & granularity** — `GranularityChecks` (a leaf `setState` re-renders *only* its owner: `ComponentsRendered == 1`),
   `SliderSignalChecks` (the compositor bypass: a bound slider value moves the thumb transform with `Rendered == false`),
@@ -230,7 +233,7 @@ reconcile+`UseState`, a clickable button round-trip, the steady idle frame, and 
   `WaveCTextPipelineChecks`, the `D1…`/`D5…` defect-fix groups, `E11VirtChecks` for the virtualization substrate).
 - **Navigation** — `NavigationChecks`, `NavigationViewChecks`, `NavHierarchyChecks`, `PipsPagerOutputChecks`.
 
-> Keeping the counts honest: the numbers above (362 / 9 / 99) are exact at the time of writing but **will drift** as
+> Keeping the counts honest: the numbers above (521 total, 9 inline) are exact at the time of writing but **will drift** as
 > checks are added — that's expected and good. Don't hard-code a count anywhere that has to match; the verdict line and
 > the exit code are the contract, not the total. If you want the live number, `grep -c 'Check(' src/FluentGpu.VerticalSlice/Program.cs`
 > (subtract the one definition line).

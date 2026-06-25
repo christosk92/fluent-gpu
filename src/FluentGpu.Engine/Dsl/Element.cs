@@ -14,6 +14,13 @@ public abstract record Element
     /// <c>ConnectedAnimation</c> registry. Null = not a participant (the default).</summary>
     public string? MorphId { get; init; }
 
+    /// <summary>Generic scroll-driven bindings (design/plans/generic-hookable-scroll-engine-design.md): each entry slaves
+    /// one of this node's compositor properties (transform / opacity / clip / presented-size) to a normalized scroll
+    /// progress of its enclosing <see cref="ScrollEl"/> — or pins it (sticky, <see cref="ScrollBindDsl.PinTop"/>) /
+    /// stretches it (overscroll hero, <see cref="ScrollBindDsl.StretchFromTop"/>). Evaluated allocation-free in the frame
+    /// loop. Empty = none. This is the one generic surface that subsumes the old StickyTop/OnPinned/ScrollStretchHeader.</summary>
+    public ScrollBindDsl[] ScrollBinds { get; init; } = [];
+
     /// <summary>Stable per-record-type id for integer type-dispatch in the reconciler (the source-gen'd ElementTypeId).</summary>
     public abstract ushort ElementTypeId { get; }
 
@@ -25,6 +32,38 @@ public abstract record Element
     /// <summary>A bespoke shimmer subtree the deriver substitutes for this node (overrides the auto-map). Set with
     /// <c>el.Skel(customShimmer)</c>.</summary>
     public Element? SkeletonOverride { get; init; }
+
+    // ── Declarative motion (the rework's authoring surface; on the BASE element so EVERY element shares ONE motion
+    //    vocabulary — fixing the per-record HoverScale/BrushTransitionMs duplication). ADDITIVE + inert until the
+    //    AnimScheduler switch-over wires the reconciler bake (Reconciler/AnimBake) + the InteractionState resolver.
+    /// <summary>Implicit on-change transition (the CSS/SwiftUI primitive): when a bound channel's realized value
+    /// changes, interpolate FROM the current value over this motion token instead of snapping — for ANY channel,
+    /// incl. Fill/Color (the engine-owned generalization of the per-element <c>BrushTransitionMs</c>). Null = snap.</summary>
+    public FluentGpu.Animation.MotionTokenDef? Transition { get; init; }
+    /// <summary>Gesture-state targets (Framer <c>whileHover</c>/<c>whileTap</c>): the node springs to these while
+    /// hovered/pressed/focused and back to rest on release, via the InteractionState priority resolver (generalizing
+    /// the discrete <c>HoverScale</c>/<c>HoverOpacity</c> spellings).</summary>
+    public FluentGpu.Animation.MotionTarget? WhileHover { get; init; }
+    public FluentGpu.Animation.MotionTarget? WhilePressed { get; init; }
+    public FluentGpu.Animation.MotionTarget? WhileFocus { get; init; }
+    /// <summary>Declarative enter terminal (Framer <c>initial</c>; CSS <c>@starting-style</c>): the node animates FROM
+    /// this to identity on mount, seeded under a Presence boundary.</summary>
+    public EnterExit? Enter { get; init; }
+    /// <summary>Declarative exit terminal (Framer <c>exit</c>; CSS <c>allow-discrete</c>): a removed node animates TO
+    /// this before its structural removal (deferred via the DetachedAnimSlab / Presence completion gate).</summary>
+    public EnterExit? Exit { get; init; }
+    /// <summary>Per-child entrance stagger (seconds): under a Presence/list boundary, child <c>i</c>'s Enter delay is
+    /// <c>index * Stagger</c>, BAKED at reconcile (no runtime closure, no O(n²) sort).</summary>
+    public float Stagger { get; init; }
+    /// <summary>Declarative auto-FLIP on layout change (the first-class spelling of the per-box <c>Animate</c> opt-in).
+    /// Any layout move/resize of this node animates via transform only.</summary>
+    public LayoutTransition? Layout { get; init; }
+
+    /// <summary>FLIP coherence (Framer <c>layout</c> relativeTarget): compute this node's FLIP relative to the frame of
+    /// the node carrying this <see cref="MorphId"/> (a shared-layout GROUP anchor) instead of its layout parent — so a
+    /// reordered/moved item animates coherently WITH the anchor rather than double-counting the anchor's own motion.
+    /// Null = the default parent-relative coherence. Resolved to the target node at FLIP-capture time.</summary>
+    public string? RelativeTo { get; init; }
 }
 
 /// <summary>Per-node skeleton-derivation policy (see <see cref="Element.SkeletonMode"/>).</summary>
@@ -242,7 +281,7 @@ public sealed record BoxEl : Element
     // Width/Height bind layout and trigger a scoped relayout.
     /// <summary>The whole-matrix transform channel — bind-only in v1 (a thunk/signal producing the full Affine2D;
     /// the STATIC path composes from the decomposed OffsetX/Y/ScaleX/Y/Rotation floats above). When bound, the
-    /// decomposed statics are ignored: one transform owner per node — never combine with StickyTop or
+    /// decomposed statics are ignored: one transform owner per node — never combine with a sticky/stretch ScrollBind or
     /// transform-channel animations. An unbound Transform's Value is never read.</summary>
     public Prop<Affine2D> Transform { get; init; }
 
@@ -263,24 +302,17 @@ public sealed record BoxEl : Element
     public bool ZStack { get; init; }
     public bool ClipToBounds { get; init; }
 
+    /// <summary>Layout firewall (opt-in): declare that this box's size is PARENT-determined (it fills/clips and is never
+    /// content-sized), so a re-render or state change deep inside its subtree re-solves ONLY this subtree (scoped layout)
+    /// instead of falling back to a full-tree layout from the root. Use on a page/content host that fills the shell content
+    /// region. Contract: only set this where the box truly cannot need to change its own outer size from a descendant — the
+    /// scoped relayout reuses its current bounds. A window resize still triggers a full layout, so resize stays correct.</summary>
+    public bool IsolateLayout { get; init; }
+
     /// <summary>Opt this box into general layout-change animation: the host diffs its presented rect vs its new
     /// laid-out rect each commit and drives the residual through the spec's channels/dynamics (no relayout, no
     /// per-frame re-render). Null ⇒ snap (the default). See <see cref="FluentGpu.Foundation.LayoutTransition"/>.</summary>
     public LayoutTransition? Animate { get; init; }
-
-    /// <summary>CSS <c>position: sticky; top: N</c> — the box scrolls normally until its top edge reaches N device-
-    /// independent pixels below its nearest scroll viewport's top, then PINS there while its PARENT (the containing
-    /// block) is in view; it never escapes the parent's bounds. The pin is a per-frame LocalTransform written by the
-    /// host (compositor-only, no relayout) and hit-testing follows the pinned position; while pinned the node paints
-    /// ABOVE its siblings so content scrolls underneath. One transform owner per node: do not combine with
-    /// <see cref="TransformBind"/> or transform-channel animations. Null = not sticky (the default).</summary>
-    public float? StickyTop { get; init; }
-
-    /// <summary>Observable pin state for a <see cref="StickyTop"/> box — the signals-native CSS <c>:stuck</c>: the
-    /// host invokes this whenever the box transitions pinned ↔ unpinned. Wire it to a signal and restyle ANYTHING off
-    /// it (an opaque fill so content can't show through, a shadow, a compact variant, different children) — strictly
-    /// more flexible than a fixed pinned style. Fired at most once per transition, never per frame.</summary>
-    public Action<bool>? OnPinned { get; init; }
 
     /// <summary>Opt this child OUT of a <see cref="FluentGpu.Foundation.SizeMode.ScaleCorrect"/> ancestor's scale: the
     /// recorder applies the inverse scale so the child stays undistorted (Framer-Motion projection correction).</summary>
@@ -619,4 +651,26 @@ public sealed record ScrollEl : Element
     /// auto-hide that only reveals on hover/scroll. Hover still expands the rail to the full draggable bar. For navigation
     /// surfaces (a sidebar) where a discoverable, always-present scroll affordance is wanted (WinUI 11 nav behavior).</summary>
     public bool AlwaysShowScrollbar { get; init; }
+
+    /// <summary>Nested-scroll chaining policy (the CSS <c>overscroll-behavior</c> analog). Default <see cref="ScrollChainingMode.Auto"/>:
+    /// a touch pan that reaches this scroller's edge hands the residual to the nearest same-axis ancestor scroller
+    /// (Compose nested-scroll), and a flick at the edge throws into it. <see cref="ScrollChainingMode.Contain"/> rubber-bands
+    /// instead. (Wheel scrolling already bubbles to an outer scroller regardless.)</summary>
+    public ScrollChainingMode Chaining { get; init; } = ScrollChainingMode.Auto;
+
+    /// <summary>Change-only scroll-geometry observer (the escape hatch; SwiftUI <c>onScrollGeometryChange</c>). The host
+    /// projects the live geometry to a coarse <c>long</c> key after the integrator settles and fires the action only when
+    /// that key changes (never per-px, never per-frame) — for pull-to-refresh triggers, analytics, bespoke app logic.
+    /// UI-thread, pre-publish. Project a COARSE key (e.g. <c>g => g.Band &lt; -80 ? 1 : 0</c>), not raw px.</summary>
+    public (Func<FluentGpu.Animation.ScrollGeometry, long> Project, Action<FluentGpu.Animation.ScrollGeometry> Action)? OnScrollGeometryChanged { get; init; }
+
+    /// <summary>Scroll-position restoration key: a STABLE per-content identity (e.g. a route key like <c>"artist:&lt;uri&gt;"</c>).
+    /// When set, the engine saves this viewport's offset under it and restores it when the same content is shown again —
+    /// even after the page was evicted from KeepAlive (cold remount), seeded BEFORE the first layout so there is no
+    /// scroll-to-top flash. Distinct content (a different key) starts at the top; the same content open in two tabs is
+    /// kept separate automatically (the engine namespaces by the enclosing KeepAlive slot). Null ⇒ no restoration.</summary>
+    public string? ScrollKey { get; init; }
+    /// <summary>Never draw the conscious scrollbar for this viewport (parity with <see cref="VirtualListEl"/>); the offset
+    /// is still programmatically scrollable. Used to hide the rail while a region is loading its skeleton.</summary>
+    public bool SuppressScrollBar { get; init; }
 }

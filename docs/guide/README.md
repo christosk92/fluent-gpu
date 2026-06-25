@@ -1,5 +1,7 @@
 # FluentGpu — Developer & Agent Guide
 
+> **✅ Animation engine — signals-first rework landed + verified.** The animation engine is one signals-first model: one POD `AnimValue` slab + one `AnimScheduler`/`CadenceClass` + an analytical closed-form spring + a declarative orchestration layer (`Transition`/`While*`/`Enter`/`Exit`/`Stagger`/`Layout` + `UseSpringValue`/`UseAnimatedValue`; reduced-motion-as-a-value). The scheduler class is still named `AnimEngine`, so `AnimEngine` references in this guide stay valid; the old `AnimTrack`/sub-stepped-Euler engine is gone. Verified: 521 VerticalSlice gates green (zero-alloc on phases 6–13 + dt-determinism) and the gallery renders end-to-end. Design, now implemented: [`../plans/animation-engine-rework-design.md`](../plans/animation-engine-rework-design.md) (research: [`../plans/animation-engine-research-dossier.md`](../plans/animation-engine-research-dossier.md)).
+
 A from-scratch, near-zero-allocation, NativeAOT, GPU-rendered UI framework for .NET 10. React/Reactor
 programming model (immutable `Element` records + `Component` + hooks) on a **signals-first** reactive core, over a
 custom Direct3D 12 + DirectWrite renderer behind a swappable seam (headless backends for tests/CI).
@@ -108,8 +110,8 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
 | Element shapes / props / bindings | `src/FluentGpu.Engine/Dsl/Element.cs`, `ControlFlow.cs`, `Context.cs`, `ComponentEl.cs` | add a free `ElementTypeId`; wire in reconciler `Mount`/`Update` |
 | DSL helpers (`Ui.*`) / modifiers | `src/FluentGpu.Engine/Dsl/Factories.cs`, `Modifiers.cs` | pure element builders |
 | Controls (Button/Slider/Nav/Virtual…) | `src/FluentGpu.Controls/*.cs` | composition only — no new opcodes/columns. WinUI fidelity: **[control-fidelity.md](./control-fidelity.md)** |
-| Control visual state / interaction motion | `StateBrush` ramps + `InteractionAnimator`; `BoxEl.{Hover,Pressed}{Fill,BorderColor,Opacity}` + `{Hover,Press}Scale` + `{Hover,Press}DurationMs/Easing` | model logical state x interaction state, NOT a 12-state matrix; child parts can inherit the clickable ancestor's progress |
-| Explicit control timelines | `AnimEngine` keyframes/channels (`Opacity`, transform, stroke trim, FLIP/reveal) + enter/exit presets in `ControlMotion` | use for authored WinUI timelines, draw-on paths, and true insert/remove parts; not for ordinary hover/press |
+| Control visual state / interaction motion | `StateBrush` ramps + the `HoverFade`/`PressFade` side-table channels (the unified slab; no separate `InteractionAnimator`); `BoxEl.{Hover,Pressed}{Fill,BorderColor,Opacity}` + `{Hover,Press}Scale` + `{Hover,Press}DurationMs/Easing` | model logical state x interaction state, NOT a 12-state matrix; child parts can inherit the clickable ancestor's progress |
+| Explicit control timelines | `AnimEngine` (the slab scheduler) keyframes/channels (`Opacity`, transform, stroke trim, FLIP/reveal) + enter/exit presets in `ControlMotion` | use for authored WinUI timelines, draw-on paths, and true insert/remove parts; not for ordinary hover/press |
 | Rounded-rect / border rendering | `src/FluentGpu.Engine/Render/SceneRecorder.cs` + `src/FluentGpu.Windows/D3D12/{RoundRect,Gradient}Pipeline.cs` | hollow SDF ring (no donut); `InsetCorners`; quad inflation for stroke band + AA |
 | Frame loop, scheduling, compositor frame | `src/FluentGpu.Engine/Hosting/AppHost.cs` | `RunFrame`/`Paint`; `_runtime.Flush()` is phase 3 |
 | Layout (flex/grid/measure) | `src/FluentGpu.Engine/Layout/FlexLayout.cs` | `Run` (full) vs `RunSubtree` (scoped) |
@@ -135,9 +137,9 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
    scoped relayout + the boundary firewall, the compositor bypass, zero-alloc, an optimization decision guide.
 5. **[pitfalls.md](./pitfalls.md)** — common mistakes as **symptom → cause → fix** (read before debugging).
 6. **[control-fidelity.md](./control-fidelity.md)** — building WinUI-faithful controls: where to find the exact WinUI
-   templates/storyboards/timing tokens, the logical-state x interaction-state graph, `StateBrush`/`InteractionAnimator`
-   visual states, `AnimEngine` authored timelines, and the empirical verify workflow (golden checks + `--shot` +
-   slow-motion proof). *Read before the control parity sweep.*
+   templates/storyboards/timing tokens, the logical-state x interaction-state graph, `StateBrush` visual states (the
+   `HoverFade`/`PressFade` slab channels), `AnimEngine` authored timelines, and the empirical verify workflow (golden
+   checks + `--shot` + slow-motion proof). *Read before the control parity sweep.*
 7. **[winui-control-parity-audit.md](./winui-control-parity-audit.md)** - source-backed diff of every FluentGpu
    control against `C:\WAVEE\microsoft-ui-xaml`, including XAML templates, C++ behavior, generated properties, and
    engine blockers.

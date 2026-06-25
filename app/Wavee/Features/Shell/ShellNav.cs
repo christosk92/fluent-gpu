@@ -17,7 +17,7 @@ static class ShellNav
         return key switch
         {
             "home"     => (Loc.Get(Strings.Nav.Home), Icons.Home),
-            "search"   => (Loc.Get(Strings.Nav.Search), Icons.Search),
+            "search"   => (arg is { Length: > 0 } ? arg : Loc.Get(Strings.Nav.Search), Icons.Search),
             "albums"   => (Loc.Get(Strings.Nav.Albums), Mdl.Album),
             "artists"  => (Loc.Get(Strings.Nav.Artists), Mdl.Contact),
             "liked"    => (Loc.Get(Strings.Nav.LikedSongs), Icons.Heart),

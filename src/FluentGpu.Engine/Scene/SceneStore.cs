@@ -28,6 +28,7 @@ public interface ISceneBackend
 }
 
 /// <summary>Struct-of-arrays retained RenderNode tree. One spine (gen + free-list) indexes all parallel columns.</summary>
+[FluentGpu.CodeGen.EnableColdSlab] // GEN-17 (wired): generates the ColdSlab<T> the cold paint side-tables below use
 public sealed class SceneStore : ISceneBackend
 {
     // spine
@@ -91,32 +92,32 @@ public sealed class SceneStore : ISceneBackend
     private Action?[] _dragCanceled;                       // Escape / capture loss / window blur aborted the drag
 
     // Sparse side-table for scroll/virtual viewports (O(viewports), not one-per-node). Keyed by node index.
-    private readonly Dictionary<int, ScrollState> _scroll = new();
+    private readonly ColdSlab<ScrollState> _scroll = new();   // GEN-17 (wired)
     // Per-variable-list extent tables (Fenwick); persist across frames. Keyed by viewport node index.
     private readonly Dictionary<int, ExtentTable> _extents = new();
     // Grid specs for grid-container nodes (O(grids)). Keyed by node index.
-    private readonly Dictionary<int, GridSpec> _grids = new();
+    private readonly ColdSlab<GridSpec> _grids = new();   // GEN-17 (wired)
     // Optional rich-paint side-tables (O(decorated nodes), keyed by node index): eased interaction, shadow, gradient, acrylic.
-    private readonly Dictionary<int, InteractionAnim> _interact = new();
-    private readonly Dictionary<int, ShadowSpec> _shadows = new();
-    private readonly Dictionary<int, ArcSpec> _arcs = new();
-    private readonly Dictionary<int, PolylineStrokeSpec> _polylines = new();
-    private readonly Dictionary<int, GradientSpec> _gradients = new();
-    private readonly Dictionary<int, GradientSpec> _borderBrushes = new();   // gradient border stroke (elevation edge)
+    private readonly ColdSlab<InteractionAnim> _interact = new();   // GEN-17 (wired)
+    private readonly ColdSlab<ShadowSpec> _shadows = new();   // GEN-17 (wired): dense slab, not Dictionary
+    private readonly ColdSlab<ArcSpec> _arcs = new();
+    private readonly ColdSlab<PolylineStrokeSpec> _polylines = new();   // GEN-17 (wired)
+    private readonly ColdSlab<GradientSpec> _gradients = new();   // GEN-17 (wired)
+    private readonly ColdSlab<GradientSpec> _borderBrushes = new();   // GEN-17 (wired) — gradient border stroke (elevation edge)
     // Stateful gradient variants (P4b): the recorder per-frame interpolates resting→state stops by the eased hover/press
     // progress. Sparse (O(state-gradient nodes)). Stop arrays are mount-allocated + stable — never rebuilt per frame.
-    private readonly Dictionary<int, GradientSpec> _hoverGradients = new();
-    private readonly Dictionary<int, GradientSpec> _pressedGradients = new();
-    private readonly Dictionary<int, GradientSpec> _hoverBorderBrushes = new();
-    private readonly Dictionary<int, GradientSpec> _pressedBorderBrushes = new();
-    private readonly Dictionary<int, AcrylicSpec> _acrylics = new();
+    private readonly ColdSlab<GradientSpec> _hoverGradients = new();   // GEN-17 (wired)
+    private readonly ColdSlab<GradientSpec> _pressedGradients = new();   // GEN-17 (wired)
+    private readonly ColdSlab<GradientSpec> _hoverBorderBrushes = new();   // GEN-17 (wired)
+    private readonly ColdSlab<GradientSpec> _pressedBorderBrushes = new();   // GEN-17 (wired)
+    private readonly ColdSlab<AcrylicSpec> _acrylics = new();   // GEN-17 (wired)
     // Per-element edge fade (sparse): feather the subtree's alpha (+ optional blur) near chosen edges; read at record
     // time → PushLayer{EdgeFade}. Freed on FreeSubtree.
-    private readonly Dictionary<int, EdgeFadeSpec> _edgeFades = new();
+    private readonly ColdSlab<EdgeFadeSpec> _edgeFades = new();   // GEN-17 (wired)
     // Per-text-node measure cache (pure-function: (text,style,availW) → size); self-invalidating, freed on FreeSubtree.
-    private readonly Dictionary<int, TextMeasureCache> _measureCache = new();
+    private readonly ColdSlab<TextMeasureCache> _measureCache = new();   // GEN-17 (wired) — hot: per-layout text measure
     // Implicit brush transitions (WinUI BrushTransition): sparse, O(transitioning nodes), advanced at phase 7.
-    private readonly Dictionary<int, BrushAnim> _brushAnims = new();
+    private readonly ColdSlab<BrushAnim> _brushAnims = new();   // GEN-17 (wired)
     private readonly List<int> _brushScratch = new();
     // Text-edit decoration state (sparse, O(editors)): caret/IME/focus PODs + per-node POOLED decoration-rect slots
     // (grow-only RectF[] reused across frames — a selection drag updates at pointer rate with ZERO steady alloc).
@@ -128,7 +129,7 @@ public sealed class SceneStore : ISceneBackend
     // TextStyle.SpanRunId); the dispatcher-owned read-only selection range; the per-control selection highlight color.
     private readonly Dictionary<int, TextSpan[]> _spanText = new();
     private readonly Dictionary<int, (int Start, int End)> _textSelection = new();
-    private readonly Dictionary<int, ColorF> _selectionHighlight = new();
+    private readonly ColdSlab<ColorF> _selectionHighlight = new();   // GEN-17 (wired)
     // E5-L2 drag-drop side-tables (sparse, O(sources)/O(targets), keyed by node index): the reconciler writes them
     // from BoxEl.Draggable / BoxEl.DropTarget; Input.DragDropContext reads them at promotion / per pointer move.
     private readonly Dictionary<int, DragSource> _dragSources = new();
@@ -202,8 +203,6 @@ public sealed class SceneStore : ISceneBackend
 
     /// <summary>SoA column length (the high-water spine allocation) — O(1) census of the slab size, not the live count.</summary>
     public int Capacity => _gen.Length;
-    /// <summary>Live sticky-position registrations (CSS position:sticky) — O(1) census of the <c>_sticky</c> side-table.</summary>
-    public int StickyCount => _sticky.Count;
     /// <summary>Live scroll/virtual-viewport rows — O(1) census of the <c>_scroll</c> side-table.</summary>
     public int ScrollStateCount => _scroll.Count;
     /// <summary>In-flight implicit brush transitions — O(1) census of the <c>_brushAnims</c> side-table.</summary>
@@ -509,26 +508,20 @@ public sealed class SceneStore : ISceneBackend
 
     // ── implicit brush transitions (WinUI BrushTransition; phase-7 advanced) ──────────────────────
     public bool HasBrushAnims => _brushAnims.Count > 0;
-    public void SetBrushAnim(NodeHandle h, in BrushAnim ba) => _brushAnims[(int)h.Raw.Index] = ba;
-    public bool TryGetBrushAnim(NodeHandle h, out BrushAnim ba) => _brushAnims.TryGetValue((int)h.Raw.Index, out ba);
+    public void SetBrushAnim(NodeHandle h, in BrushAnim ba) => _brushAnims.GetOrAdd((int)h.Raw.Index) = ba;
+    public bool TryGetBrushAnim(NodeHandle h, out BrushAnim ba) => _brushAnims.TryGet((int)h.Raw.Index, out ba);
 
-    /// <summary>Advance every active brush transition by <paramref name="dtMs"/>, mark the nodes PaintDirty, and drop
-    /// settled rows. Called by the host at phase 7 (next to the interaction animator). 0-alloc (reused scratch).</summary>
-    public void AdvanceBrushAnims(float dtMs)
+    /// <summary>Set the brush cross-fade progress, driven by the unified engine's <c>AnimChannel.BrushFade</c> track
+    /// (the separate per-frame AdvanceBrushAnims ticker is deleted). Marks PaintDirty; drops the row at T≥1 so the
+    /// recorder snaps to the live color. The engine's BrushFade track keeps the loop awake while a fade runs.</summary>
+    public void SetBrushAnimT(int idx, float t)
     {
-        if (_brushAnims.Count == 0) return;
-        _brushScratch.Clear();
-        foreach (var kv in _brushAnims) _brushScratch.Add(kv.Key);
-        for (int i = 0; i < _brushScratch.Count; i++)
-        {
-            int idx = _brushScratch[i];
-            if (_gen[idx] == 0) { _brushAnims.Remove(idx); continue; }
-            var ba = _brushAnims[idx];
-            ba.T = ba.DurationMs <= 0f ? 1f : MathF.Min(1f, ba.T + dtMs / ba.DurationMs);
-            _flags[idx] |= NodeFlags.PaintDirty;
-            if (ba.T >= 1f) _brushAnims.Remove(idx);
-            else _brushAnims[idx] = ba;
-        }
+        if (!_brushAnims.TryGet(idx, out var ba)) return;
+        if (_gen[idx] == 0) { _brushAnims.Remove(idx); return; }
+        ba.T = t < 0f ? 0f : (t > 1f ? 1f : t);
+        _flags[idx] |= NodeFlags.PaintDirty;
+        if (ba.T >= 1f) _brushAnims.Remove(idx);
+        else _brushAnims.GetOrAdd(idx) = ba;
     }
 
     // ── text-edit decoration side-table (sparse; only editor TEXT nodes have an entry) ───────────────
@@ -630,11 +623,11 @@ public sealed class SceneStore : ISceneBackend
     {
         int idx = (int)node.Raw.Index;
         if (color.A <= 0f) _selectionHighlight.Remove(idx);
-        else _selectionHighlight[idx] = color;
+        else _selectionHighlight.GetOrAdd(idx) = color;
     }
 
     public bool TryGetSelectionHighlight(NodeHandle h, out ColorF color)
-        => _selectionHighlight.TryGetValue((int)h.Raw.Index, out color);
+        => _selectionHighlight.TryGet((int)h.Raw.Index, out color);
 
     private static void StoreRects(Dictionary<int, (RectF[]? Arr, int Count)> table, int idx, ReadOnlySpan<RectF> rects)
     {
@@ -767,52 +760,56 @@ public sealed class SceneStore : ISceneBackend
     public ref ScrollState ScrollRef(NodeHandle h)
     {
         int idx = (int)h.Raw.Index;
-        ref ScrollState s = ref CollectionsMarshal.GetValueRefOrAddDefault(_scroll, idx, out bool existed);
+        ref ScrollState s = ref _scroll.GetOrAdd(idx, out bool existed);
         if (!existed) { s = ScrollState.Default; _flags[idx] |= NodeFlags.Scrollable; }
         return ref s;
     }
-    public bool HasScroll(NodeHandle h) => _scroll.ContainsKey((int)h.Raw.Index);
+    public bool HasScroll(NodeHandle h) => _scroll.Contains((int)h.Raw.Index);
     /// <summary>Read the scroll row by value (default if the node is not a viewport).</summary>
-    public bool TryGetScroll(NodeHandle h, out ScrollState s) => _scroll.TryGetValue((int)h.Raw.Index, out s);
+    public bool TryGetScroll(NodeHandle h, out ScrollState s) => _scroll.TryGet((int)h.Raw.Index, out s);
 
     // ── hit-test pass-through (WinUI FlyoutBase.OverlayInputPassThroughElement) ──────────────────
     // A light-dismiss scrim registers ONE target subtree whose rendered bounds it yields to: pointer input there
     // bypasses the scrim and reaches the content beneath (the MenuBar hover-switches titles with a menu open,
     // FlyoutBase_Partial.cpp:3922-3938). Sparse — O(open scrims), cleared on free.
-    private readonly Dictionary<int, NodeHandle> _hitPassThrough = new();
+    private readonly ColdSlab<NodeHandle> _hitPassThrough = new();   // GEN-17 (wired)
 
     public void SetHitTestPassThrough(NodeHandle node, NodeHandle target)
     {
         if (!IsLive(node)) return;
         if (target.IsNull) _hitPassThrough.Remove((int)node.Raw.Index);
-        else _hitPassThrough[(int)node.Raw.Index] = target;
+        else _hitPassThrough.GetOrAdd((int)node.Raw.Index) = target;
     }
 
     public bool TryGetHitTestPassThrough(NodeHandle node, out NodeHandle target)
-        => _hitPassThrough.TryGetValue((int)node.Raw.Index, out target);
+        => _hitPassThrough.TryGet((int)node.Raw.Index, out target);
 
-    // ── sticky registry (CSS position:sticky, top edge) ─────────────────────────────────────────
-    // Node index → (handle, top inset, pin-state observer). The reconciler Set/Clears it from BoxEl.StickyTop each
-    // reconcile (slot reuse self-cleans like the transition side-table); the host's phase-7 sticky pass iterates it
-    // and writes the pin offset as the node's LocalTransform — so HIT-TESTING follows the PINNED position
-    // (AbsoluteRect sums transforms) — and fires OnPinned on engage/release transitions (the CSS :stuck observable).
-    private readonly Dictionary<int, (NodeHandle Node, float Inset, Action<bool>? OnPinned)> _sticky = new();
-    /// <summary>All sticky-declared nodes, keyed by slot index — consumed by the host's per-frame sticky pass.</summary>
-    public Dictionary<int, (NodeHandle Node, float Inset, Action<bool>? OnPinned)> StickyNodes => _sticky;
-    public void SetSticky(NodeHandle h, float inset, Action<bool>? onPinned = null) => _sticky[(int)h.Raw.Index] = (h, inset, onPinned);
-    public void ClearSticky(NodeHandle h)
+    // The CSS position:sticky registry was removed — sticky is now a generic ScrollBind pin op
+    // (FluentGpu.Animation.ScrollBindTable + ScrollBindEval.ApplyPinAndFlagPass / NodeFlags.StickyPinned).
+
+    // ── generic scroll-binding slab (design/plans/generic-hookable-scroll-engine-design.md) ──────────────
+    // The reconciler-owned dense slab of ScrollBind rows. The host evaluates them at the offset-write chokepoint
+    // (offset/band/velocity/phase-sourced ops) and the phase-7 pin pass (PinKind ops). Sticky + overscroll-stretch are
+    // two configured rows here — not bespoke passes / private side-tables.
+    private readonly FluentGpu.Animation.ScrollBindTable _scrollBinds = new();
+    public FluentGpu.Animation.ScrollBindTable ScrollBinds => _scrollBinds;
+    /// <summary>O(1) census of live scroll-binding rows (subsumes the old StickyCount).</summary>
+    public int ScrollBindCount => _scrollBinds.Count;
+
+    // ── scroll-geometry observer registry (the change-only escape hatch; ScrollEl.OnScrollGeometryChanged) ──
+    // Node index → projection+action. The reconciler Set/Clears it; the host evaluates the projection after the
+    // integrator settles and fires the action only when the projected long key changes (SwiftUI onScrollGeometryChange).
+    private readonly Dictionary<int, FluentGpu.Animation.ScrollObserverRow> _scrollObs = new();
+    public Dictionary<int, FluentGpu.Animation.ScrollObserverRow> ScrollObservers => _scrollObs;
+    public int ScrollObserverCount => _scrollObs.Count;
+    public void SetScrollObserver(NodeHandle h, Func<FluentGpu.Animation.ScrollGeometry, long>? project, Action<FluentGpu.Animation.ScrollGeometry>? action)
     {
-        if (!_sticky.Remove((int)h.Raw.Index)) return;
-        if (!IsLive(h)) return;
-        // Un-declaring while pinned: release the pin transform and the paint-order boost.
-        ref NodePaint p = ref Paint(h);
-        if (p.LocalTransform.Dy != 0f || p.LocalTransform.Dx != 0f)
-        {
-            p.LocalTransform = Affine2D.Identity;
-            Mark(h, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
-        }
-        Unmark(h, NodeFlags.StickyPinned);
+        int idx = (int)h.Raw.Index;
+        if (project is null || action is null) { _scrollObs.Remove(idx); return; }
+        ref var row = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(_scrollObs, idx, out _);
+        row.Node = h; row.Project = project; row.Action = action;
     }
+    public void ClearScrollObserver(NodeHandle h) => _scrollObs.Remove((int)h.Raw.Index);
 
     /// <summary>Get-or-create the variable-height extent table for a viewport, (re)building it on item-count change.</summary>
     public ExtentTable ExtentTableFor(NodeHandle h, int itemCount, float estimate)
@@ -824,62 +821,73 @@ public sealed class SceneStore : ISceneBackend
     }
     public bool TryGetExtents(NodeHandle h, out ExtentTable? t) => _extents.TryGetValue((int)h.Raw.Index, out t);
 
-    public void SetGrid(NodeHandle h, in GridSpec spec) => _grids[(int)h.Raw.Index] = spec;
-    public bool HasGrid(NodeHandle h) => _grids.ContainsKey((int)h.Raw.Index);
-    public bool TryGetGrid(NodeHandle h, out GridSpec spec) => _grids.TryGetValue((int)h.Raw.Index, out spec);
+    public void SetGrid(NodeHandle h, in GridSpec spec) => _grids.GetOrAdd((int)h.Raw.Index) = spec;
+    public bool HasGrid(NodeHandle h) => _grids.Contains((int)h.Raw.Index);
+    public bool TryGetGrid(NodeHandle h, out GridSpec spec) => _grids.TryGet((int)h.Raw.Index, out spec);
 
     // ── rich-paint side-tables ──
     /// <summary>Get-or-create the eased-interaction row for a node (hover/press progress).</summary>
     public ref InteractionAnim InteractRef(NodeHandle h)
     {
-        ref InteractionAnim s = ref CollectionsMarshal.GetValueRefOrAddDefault(_interact, (int)h.Raw.Index, out bool existed);
+        ref InteractionAnim s = ref _interact.GetOrAdd((int)h.Raw.Index, out bool existed);
         if (!existed) s = InteractionAnim.Default;
         return ref s;
     }
-    public bool TryGetInteract(NodeHandle h, out InteractionAnim s) => _interact.TryGetValue((int)h.Raw.Index, out s);
+    public bool TryGetInteract(NodeHandle h, out InteractionAnim s) => _interact.TryGet((int)h.Raw.Index, out s);
 
-    public void SetShadow(NodeHandle h, in ShadowSpec s) => _shadows[(int)h.Raw.Index] = s;
-    public bool TryGetShadow(NodeHandle h, out ShadowSpec s) => _shadows.TryGetValue((int)h.Raw.Index, out s);
+    /// <summary>Write the eased hover (or press) progress for a node — driven by the engine's HoverFade/PressFade track
+    /// (the deleted InteractionAnimator.Tick's job). The row exists (the fade was seeded through InteractRef); marks
+    /// PaintDirty so the recorder re-composites the hover/press cross-fade + scale.</summary>
+    public void SetInteractT(NodeHandle node, bool press, float t)
+    {
+        if (!IsLive(node)) return;
+        ref InteractionAnim ia = ref InteractRef(node);
+        if (press) ia.PressT = t; else ia.HoverT = t;
+        Mark(node, NodeFlags.PaintDirty);
+    }
+
+    public void SetShadow(NodeHandle h, in ShadowSpec s) => _shadows.GetOrAdd((int)h.Raw.Index) = s;
+    public bool TryGetShadow(NodeHandle h, out ShadowSpec s) => _shadows.TryGet((int)h.Raw.Index, out s);
     public void ClearShadow(NodeHandle h) => _shadows.Remove((int)h.Raw.Index);
 
-    public void SetArc(NodeHandle h, in ArcSpec a) => _arcs[(int)h.Raw.Index] = a;
-    public bool TryGetArc(NodeHandle h, out ArcSpec a) => _arcs.TryGetValue((int)h.Raw.Index, out a);
+    public void SetArc(NodeHandle h, in ArcSpec a) => _arcs.GetOrAdd((int)h.Raw.Index) = a;
+    public bool TryGetArc(NodeHandle h, out ArcSpec a) => _arcs.TryGet((int)h.Raw.Index, out a);
     public void ClearArc(NodeHandle h) => _arcs.Remove((int)h.Raw.Index);
 
-    public void SetPolylineStroke(NodeHandle h, in PolylineStrokeSpec p) => _polylines[(int)h.Raw.Index] = p;
-    public bool TryGetPolylineStroke(NodeHandle h, out PolylineStrokeSpec p) => _polylines.TryGetValue((int)h.Raw.Index, out p);
+    public void SetPolylineStroke(NodeHandle h, in PolylineStrokeSpec p) => _polylines.GetOrAdd((int)h.Raw.Index) = p;
+    public bool TryGetPolylineStroke(NodeHandle h, out PolylineStrokeSpec p) => _polylines.TryGet((int)h.Raw.Index, out p);
     public void ClearPolylineStroke(NodeHandle h) => _polylines.Remove((int)h.Raw.Index);
 
-    public void SetGradient(NodeHandle h, in GradientSpec g) => _gradients[(int)h.Raw.Index] = g;
-    public bool TryGetGradient(NodeHandle h, out GradientSpec g) => _gradients.TryGetValue((int)h.Raw.Index, out g);
+    public void SetGradient(NodeHandle h, in GradientSpec g) => _gradients.GetOrAdd((int)h.Raw.Index) = g;
+    public bool TryGetGradient(NodeHandle h, out GradientSpec g) => _gradients.TryGet((int)h.Raw.Index, out g);
     public void ClearGradient(NodeHandle h) => _gradients.Remove((int)h.Raw.Index);
 
-    public void SetBorderBrush(NodeHandle h, in GradientSpec g) => _borderBrushes[(int)h.Raw.Index] = g;
-    public bool TryGetBorderBrush(NodeHandle h, out GradientSpec g) => _borderBrushes.TryGetValue((int)h.Raw.Index, out g);
+    public void SetBorderBrush(NodeHandle h, in GradientSpec g) => _borderBrushes.GetOrAdd((int)h.Raw.Index) = g;
+    public bool TryGetBorderBrush(NodeHandle h, out GradientSpec g) => _borderBrushes.TryGet((int)h.Raw.Index, out g);
     public void ClearBorderBrush(NodeHandle h) => _borderBrushes.Remove((int)h.Raw.Index);
 
-    public void SetHoverGradient(NodeHandle h, in GradientSpec g) => _hoverGradients[(int)h.Raw.Index] = g;
-    public bool TryGetHoverGradient(NodeHandle h, out GradientSpec g) => _hoverGradients.TryGetValue((int)h.Raw.Index, out g);
+    public void SetHoverGradient(NodeHandle h, in GradientSpec g) => _hoverGradients.GetOrAdd((int)h.Raw.Index) = g;
+    public bool TryGetHoverGradient(NodeHandle h, out GradientSpec g) => _hoverGradients.TryGet((int)h.Raw.Index, out g);
     public void ClearHoverGradient(NodeHandle h) => _hoverGradients.Remove((int)h.Raw.Index);
 
-    public void SetPressedGradient(NodeHandle h, in GradientSpec g) => _pressedGradients[(int)h.Raw.Index] = g;
-    public bool TryGetPressedGradient(NodeHandle h, out GradientSpec g) => _pressedGradients.TryGetValue((int)h.Raw.Index, out g);
+    public void SetPressedGradient(NodeHandle h, in GradientSpec g) => _pressedGradients.GetOrAdd((int)h.Raw.Index) = g;
+    public bool TryGetPressedGradient(NodeHandle h, out GradientSpec g) => _pressedGradients.TryGet((int)h.Raw.Index, out g);
     public void ClearPressedGradient(NodeHandle h) => _pressedGradients.Remove((int)h.Raw.Index);
 
-    public void SetHoverBorderBrush(NodeHandle h, in GradientSpec g) => _hoverBorderBrushes[(int)h.Raw.Index] = g;
-    public bool TryGetHoverBorderBrush(NodeHandle h, out GradientSpec g) => _hoverBorderBrushes.TryGetValue((int)h.Raw.Index, out g);
+    public void SetHoverBorderBrush(NodeHandle h, in GradientSpec g) => _hoverBorderBrushes.GetOrAdd((int)h.Raw.Index) = g;
+    public bool TryGetHoverBorderBrush(NodeHandle h, out GradientSpec g) => _hoverBorderBrushes.TryGet((int)h.Raw.Index, out g);
     public void ClearHoverBorderBrush(NodeHandle h) => _hoverBorderBrushes.Remove((int)h.Raw.Index);
 
-    public void SetPressedBorderBrush(NodeHandle h, in GradientSpec g) => _pressedBorderBrushes[(int)h.Raw.Index] = g;
-    public bool TryGetPressedBorderBrush(NodeHandle h, out GradientSpec g) => _pressedBorderBrushes.TryGetValue((int)h.Raw.Index, out g);
+    public void SetPressedBorderBrush(NodeHandle h, in GradientSpec g) => _pressedBorderBrushes.GetOrAdd((int)h.Raw.Index) = g;
+    public bool TryGetPressedBorderBrush(NodeHandle h, out GradientSpec g) => _pressedBorderBrushes.TryGet((int)h.Raw.Index, out g);
     public void ClearPressedBorderBrush(NodeHandle h) => _pressedBorderBrushes.Remove((int)h.Raw.Index);
 
-    public void SetAcrylic(NodeHandle h, in AcrylicSpec a) => _acrylics[(int)h.Raw.Index] = a;
-    public bool TryGetAcrylic(NodeHandle h, out AcrylicSpec a) => _acrylics.TryGetValue((int)h.Raw.Index, out a);
+    public void SetAcrylic(NodeHandle h, in AcrylicSpec a) => _acrylics.GetOrAdd((int)h.Raw.Index) = a;
+    public bool TryGetAcrylic(NodeHandle h, out AcrylicSpec a) => _acrylics.TryGet((int)h.Raw.Index, out a);
     public void ClearAcrylic(NodeHandle h) => _acrylics.Remove((int)h.Raw.Index);
 
-    public void SetEdgeFade(NodeHandle h, in EdgeFadeSpec e) => _edgeFades[(int)h.Raw.Index] = e;
-    public bool TryGetEdgeFade(NodeHandle h, out EdgeFadeSpec e) => _edgeFades.TryGetValue((int)h.Raw.Index, out e);
+    public void SetEdgeFade(NodeHandle h, in EdgeFadeSpec e) => _edgeFades.GetOrAdd((int)h.Raw.Index) = e;
+    public bool TryGetEdgeFade(NodeHandle h, out EdgeFadeSpec e) => _edgeFades.TryGet((int)h.Raw.Index, out e);
     public void ClearEdgeFade(NodeHandle h) => _edgeFades.Remove((int)h.Raw.Index);
 
     // ── E5-L2 drag-drop columns (BoxEl.Draggable / BoxEl.DropTarget → Input.DragDropContext) ──────
@@ -949,7 +957,7 @@ public sealed class SceneStore : ISceneBackend
 
     /// <summary>Get-or-create the per-node text measure cache row (layout.md §2.3).</summary>
     public ref TextMeasureCache MeasureCacheRef(NodeHandle h)
-        => ref CollectionsMarshal.GetValueRefOrAddDefault(_measureCache, (int)h.Raw.Index, out _);
+        => ref _measureCache.GetOrAdd((int)h.Raw.Index);
 
     public NodeHandle FirstChild(NodeHandle h) => Wrap(_firstChild[h.Raw.Index]);
     public NodeHandle NextSibling(NodeHandle h) => Wrap(_nextSib[h.Raw.Index]);
@@ -965,6 +973,12 @@ public sealed class SceneStore : ISceneBackend
         {
             x += _bounds[n.Raw.Index].X + _paint[n.Raw.Index].LocalTransform.Dx;   // include scroll / composited translation
             y += _bounds[n.Raw.Index].Y + _paint[n.Raw.Index].LocalTransform.Dy;
+            var parent = Parent(n);
+            if (!parent.IsNull)
+            {
+                x += _paint[parent.Raw.Index].ChildShiftX;
+                y += _paint[parent.Raw.Index].ChildShiftY;
+            }
         }
         return new RectF(x, y, _bounds[h.Raw.Index].W, _bounds[h.Raw.Index].H);
     }

@@ -9,6 +9,8 @@ FluentGpu is a near-zero-alloc, NativeAOT, D3D12-rendered .NET 10 UI engine. Rea
 (`Element` records + `Component` + hooks) on a **signals-first (Solid-style) reactive core**. Full guide:
 `docs/guide/` (start at `docs/guide/README.md`). This skill is the fast path + the rules that prevent most bugs.
 
+> **✅ Animation engine — REWORKED (landed + verified, 521 VerticalSlice gates green).** Motion is a **signals-first** model: one POD `AnimValue` slab keyed `(node, channel)` driven by the slab scheduler (the class is still named `AnimEngine`) + the analytical closed-form spring (sampled at absolute `t` — dt-deterministic, replaced the sub-stepped Euler) + the complete declarative surface (`Transition`/`WhileHover`/`WhilePressed`/`WhileFocus`/`Enter`/`Exit`/`Stagger`/`Layout`), with **brush/color as just another channel** (the `BrushFade` channel; `BrushTransitionMs` still triggers it) and **reduced-motion as a value, never a `Use*` early-return**. `InteractionAnimator` and the `AdvanceBrushAnims` ticker are **deleted** (subsumed as `HoverFade`/`PressFade`/`BrushFade` side-table channels); `ConnectedAnimation` → `DetachedAnimSlab`/`RecordDetached` rebuild rides `FG_DETACHED_FLY` (default-off = the proven live-overlay path). Implemented design: `docs/plans/animation-engine-rework-design.md`. **Prefer the declarative surface for new motion;** `BrushTransitionMs`/`MotionRecipes.*`/the `Use*` motion hooks still work (repointed at the new engine), so existing controls are unchanged.
+
 ## The one mental model
 
 A change reaches pixels through **one mechanism: a signal**. Reading a signal subscribes the current reactive
@@ -93,6 +95,7 @@ All engine subsystems now live under the single `src/FluentGpu.Engine` project (
 | Frame loop / scheduling | `src/FluentGpu.Engine/Hosting/AppHost.cs` (`RunFrame`/`Paint`; flush = phase 3) |
 | Layout / scoped relayout | `src/FluentGpu.Engine/Layout/FlexLayout.cs`, `LayoutInvalidator.cs` |
 | Retained scene (SoA, dirty flags) | `src/FluentGpu.Engine/Scene/{SceneStore,Columns}.cs` |
+| Scroll-driven effects (sticky / overscroll-stretch / parallax / fade / collapse / shy header / pull-to-refresh / scrollbar flags / nested scroll) | author via `Element.ScrollBinds` (a `ScrollBindDsl[]`: `PinTop`/`StretchFromTop`/`{From,To,Range,OutStart,OutEnd}`, `OnFlag`, `OnScrollGeometryChanged`, `Chaining`); engine = the generic zero-alloc binding evaluator `src/FluentGpu.Engine/Animation/{ScrollBind,ScrollBindEval}.cs` + `ScrollState` predicate flags. Design: `docs/plans/generic-hookable-scroll-engine-design.md` |
 | Record → DrawList | `src/FluentGpu.Engine/Render/SceneRecorder.cs` |
 | Theming tokens + LIVE theme switching (animated, in-place; gotchas) | `src/FluentGpu.Engine/Dsl/Tokens.cs` (`Tok`), `Theme.cs` — **read `theming.md` before any theme work** |
 | Tests | `src/FluentGpu.VerticalSlice/Program.cs` |

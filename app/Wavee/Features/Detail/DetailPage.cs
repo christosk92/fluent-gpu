@@ -16,7 +16,7 @@ namespace Wavee;
 
 // The shared detail page (playlist / album / single / liked). A Component keyed per route in ContentHost, so the
 // existing KeepAlive boundary caches it. It loads the matching IMusicLibrary slice through UseAsyncResource (which
-// cancels on unmount — a fast nav-away aborts in flight), shows a matched skeleton via StatefulRegion, then reveals the
+// cancels on unmount — a fast nav-away aborts in flight), shows a matched skeleton via Skel.Region, then reveals the
 // two-column shell. The per-context config is resolved POST-load (an album with ≤2 tracks becomes a "single").
 sealed class DetailPage : Component
 {
@@ -27,6 +27,8 @@ sealed class DetailPage : Component
     internal static (DetailKind Kind, string? Id) ParseDetail(Route r) =>
         r.Name.StartsWith("album:", StringComparison.Ordinal) ? (DetailKind.Album, r.Name["album:".Length..])
         : r.Name.StartsWith("pl:", StringComparison.Ordinal) ? (DetailKind.Playlist, r.Name["pl:".Length..])
+        : r.Name == "local" ? (DetailKind.Playlist, "wavee:local:all")   // the Local Files collection (LocalSource owns it)
+        : r.Name.StartsWith("show:", StringComparison.Ordinal) ? (DetailKind.Show, r.Name["show:".Length..])
         : (DetailKind.Liked, null);
 
     public override Element Render()
@@ -46,6 +48,9 @@ sealed class DetailPage : Component
         var preview = UseMemo(() => morphKey is null ? null : navPreview?.Take(morphKey), morphKey ?? "");
         // Dep-keyed on the route: when navigation swaps the detail route on a REUSED instance, cancel the prior load and
         // refetch for the new id (resetting to the new preview/skeleton). Fires once at mount when nothing is reused.
+        // Stable per-instance loadable, re-driven by the route dep key — DetailShell freezes the model at construction,
+        // so the loadable INSTANCE must be stable across route swaps (a fresh store-cache instance per route would leave
+        // the reused shell pinned to the first item — the master-detail reactivity bug). KeepAlive caches the parked page.
         var model = UseAsyncResource(ct => LoadAsync(svc, kind, id, ct), preview ?? DetailModel.Empty, route.Name);
 
         // Pre-loaded: render the shell straight away from the preview (header live), tracks stream in via Skel.Region.
@@ -58,9 +63,10 @@ sealed class DetailPage : Component
         // child's layout participation, and a plain BoxEl's Grow is written synchronously (WriteColumns) — a bare component's
         // Grow is mirrored from ITS output only after its async render effect runs, so the boundary would mirror a stale Grow=0
         // and the single-column page (a virtualized list whose only intrinsic height is its chrome) would collapse to 0 rows.
-        return StatefulRegion.Single(
+        return Skel.Region(
             model,
-            shimmer: () => DetailSkeleton.Build(SkeletonConfig(kind), morphKey),
+            shimmerSource: () => DetailSkeleton.Build(SkeletonConfig(kind), morphKey),
+            onFailed: () => ErrorState.Build(model.Error),
             // Pass the SHARED loadable (Ready when content runs), not a fresh Loadable.Ready(m): the shell is REUSED
             // across detail routes, so it must read the one re-driven loadable — a per-render wrapper would leave the
             // reused shell pinned to the first album's value.
@@ -72,6 +78,7 @@ sealed class DetailPage : Component
     {
         DetailKind.Playlist => DetailConfig.Playlist,
         DetailKind.Liked => DetailConfig.Liked,
+        DetailKind.Show => DetailConfig.Show,
         _ => m.ReleaseKind switch
         {
             AlbumKind.Single => DetailConfig.Single,
@@ -85,15 +92,32 @@ sealed class DetailPage : Component
     {
         DetailKind.Playlist => DetailConfig.Playlist,
         DetailKind.Liked => DetailConfig.Liked,
+        DetailKind.Show => DetailConfig.Show,
         _ => DetailConfig.Album,
     };
 
-    static async Task<DetailModel> LoadAsync(Services svc, DetailKind kind, string? id, CancellationToken ct) => kind switch
+    internal static async Task<DetailModel> LoadAsync(Services svc, DetailKind kind, string? id, CancellationToken ct) => kind switch
     {
         DetailKind.Playlist => MapPlaylist(await svc.Library.GetPlaylistAsync(id ?? "", ct)),
         DetailKind.Liked => MapLiked(await svc.Library.GetLikedSongsAsync(ct)),
+        DetailKind.Show => MapShow(await svc.Library.GetShowAsync(id ?? "", ct)),
         _ => await MapAlbumAsync(svc, await svc.Library.GetAlbumAsync(id ?? "", ct), ct),
     };
+
+    // A podcast show folds onto the shared detail surface: rail = cover + PODCAST pill + publisher/episode-count meta +
+    // description + Play/Follow; the right column renders Episodes (DetailConfig.Show.Content == Episodes → EpisodeList).
+    static DetailModel MapShow(Show? s)
+    {
+        if (s is null) return DetailModel.Empty;
+        var eps = s.Episodes ?? Array.Empty<Episode>();
+        string meta = s.Publisher + " · " + Strings.Podcast.EpisodeCount(eps.Count);
+        return new DetailModel(
+            Title: s.Name, Cover: s.Cover, ContextUri: s.Uri,
+            BadgeType: Loc.Get(Strings.Podcast.Show), Year: null, OwnerName: null, OwnerImage: null,
+            Artists: Array.Empty<ArtistRef>(), Description: s.Description, MetaLine: meta,
+            Tracks: Array.Empty<Track>(), AboutArtist: null, Palette: null,
+            Episodes: eps, Publisher: s.Publisher);
+    }
 
     static DetailModel MapPlaylist(Playlist p)
     {

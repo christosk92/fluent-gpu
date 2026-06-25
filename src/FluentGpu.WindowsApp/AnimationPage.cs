@@ -191,8 +191,7 @@ sealed class AnimationPage : Component
                     {
                         [Expander.PartHeader] = b => b with
                         {
-                            StickyTop = 8f,                                    // CSS top: 8px — engages early, keeps a gap
-                            OnPinned = p => stuck.Value = p,                   // engine fires per engage/release
+                            ScrollBinds = [ new() { PinTop = 8f, OnFlag = p => stuck.Value = p } ],   // generic sticky bind (engages early, keeps a gap)
                             Fill = stuck.Value ? Tok.FillSolidBase : b.Fill,   // opaque while stuck (reading subscribes)
                             BrushTransitionMs = Motion.ControlFast,            // …and the swap cross-fades
                         },

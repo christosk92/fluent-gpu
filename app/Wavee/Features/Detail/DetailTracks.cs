@@ -23,12 +23,15 @@ namespace Wavee;
 // Rows are PLAIN/recyclable (no binds, no Components) → a steady scroll is zero-alloc.
 sealed class TrackList : Component
 {
-    const float RowHeight = 48f;            // density M
-    const float HeaderHeight = 36f;
-    const float ColGap = WaveeSpace.M;      // shared by header + rows (alignment invariant)
-    const float PadX = WaveeSpace.L;        // shared horizontal inset (header chrome padding == row grid padding)
-    const float RowInset = WaveeSpace.S;    // rounded row-highlight inset (rows pad PadX−RowInset so columns stay header-aligned)
-    const float ThumbSize = 36f;
+    // Row geometry + the cell builders themselves now live in the shared TrackRow (Components/TrackRow.cs) so the detail
+    // list, the library pane, artist "Popular" and search all render ONE identical cell. These re-export the shared
+    // constants by name so the chrome/header code below is unchanged (the header must stay aligned to the row columns).
+    const float RowHeight = TrackRow.RowHeight;     // density M
+    const float HeaderHeight = TrackRow.HeaderHeight;
+    const float ColGap = TrackRow.ColGap;           // shared by header + rows (alignment invariant)
+    const float PadX = TrackRow.PadX;               // shared horizontal inset (header chrome padding == row grid padding)
+    const float RowInset = TrackRow.RowInset;       // rounded row-highlight inset (rows pad PadX−RowInset so columns stay header-aligned)
+    const float ThumbSize = TrackRow.ThumbSize;
 
     // The detail model is a Loadable: the HEADER bits (HasVideo, columns) read reactively from its current value
     // (preview → full), and the TRACK ROWS stream in via Skel.Region — which derives the shimmer from the REAL Row
@@ -41,6 +44,9 @@ sealed class TrackList : Component
     readonly PlaybackBridge? _bridge;
     readonly DetailHandlers _h;                                // carries the per-context sort signal + SetSort (set by DetailShell)
     readonly bool _showToolbar;                                // false in the vertical layout (the header owns the toolbar)
+    readonly bool _embedded;                                   // true when hosted inside a compact pane (Library master-detail): the
+                                                               // SAME virtualized list + cell, but no album trailing (About/Fans/More-by)
+                                                               // so the rows ARE the scroller — the tier system still drops columns to fit.
     bool _hasDate;                                             // any track carries an AddedAt → the Date-added column exists
     bool _hasBy;                                               // collaborative (≥2 contributors) → the Added-by column exists
     readonly Signal<int> _tier = new(0);                       // width tier (0 = widest/full), written by OnBoundsChanged
@@ -53,9 +59,10 @@ sealed class TrackList : Component
     string? _topTrackId;                                       // album surfaces: the most-played track's id (gets a star); null with no play data
     AsyncCommandSet<string>? _play;                            // per-track-id play command in flight → the row's #-cell buffering spinner
     string? _lastCtxUri;                                       // last loaded context uri → detect a reused-slot album swap (invalidate view/columns/selection)
+    LibraryBridge? _lib;                                       // Mutations bridge → per-row heart saved-state + toggle (null when no Mutations source)
 
-    public TrackList(Signal<Route> route, Loadable<DetailModel> full, PlaybackBridge? bridge, DetailHandlers h, bool showToolbar = true)
-    { _route = route; _full = full; _bridge = bridge; _h = h; _showToolbar = showToolbar; }
+    public TrackList(Signal<Route> route, Loadable<DetailModel> full, PlaybackBridge? bridge, DetailHandlers h, bool showToolbar = true, bool embedded = false)
+    { _route = route; _full = full; _bridge = bridge; _h = h; _showToolbar = showToolbar; _embedded = embedded; }
 
     // The placeholder row the engine derives the shimmer from — the REAL Row(...) with an empty track, so the skeleton
     // rows always match the real rows (the single-source-of-truth the skeleton kit is built on).
@@ -108,11 +115,6 @@ sealed class TrackList : Component
         || DetailFormat.ArtistNames(t.Artists).Contains(q, StringComparison.OrdinalIgnoreCase)
         || t.Album.Name.Contains(q, StringComparison.OrdinalIgnoreCase);
 
-    // Track row height by density (0 Compact · 1 Default · 2 Cozy · 3 Comfortable).
-    static float RowHeightFor(int density) => density switch { 0 => 40f, 2 => 56f, 3 => 64f, _ => RowHeight };
-
-    const string TopStar = "";   // FavoriteStarFill - the album top-track star
-
     // The most-played track's id (gets the star), or null when there's no play data — so the star stays album-only.
     static string? TopTrack(IReadOnlyList<Track> tracks)
     {
@@ -122,10 +124,6 @@ sealed class TrackList : Component
         return best >= 0 ? tracks[best].Id : null;
     }
 
-    // Stream count → "11.8M" / "654.8K".
-    static string PlaysLabel(long n) =>
-        n >= 1_000_000 ? $"{n / 1_000_000f:0.#}M" : n >= 1_000 ? $"{n / 1_000f:0.#}K" : n.ToString("N0");
-
     // Shown in place of the list when there's nothing to show — an empty playlist, or a filter that matched nothing.
     static Element FilterEmpty(bool noTracks) => new BoxEl
     {
@@ -134,10 +132,9 @@ sealed class TrackList : Component
         Children = [new TextEl(noTracks ? Loc.Get(Strings.Detail.Empty.NoTracks) : Loc.Get(Strings.Detail.Empty.NoMatch)) { Size = 14f, Color = Tok.TextTertiary }],
     };
 
-    // Which optional columns are present at a tier. #, Title and Duration are always present. Cell build order (and the
-    // matching track widths) is: # · ♥ · (thumb) · Title · Album · AddedBy · DateAdded · Video · Plays · Duration.
-    readonly record struct ColumnSet(bool Album, bool By, bool Date, bool Video, bool Plays, bool Heart, bool Thumb);
-
+    // (ColumnSet — which optional columns are present at a tier — is the shared TrackRow.ColumnSet, so the header here and
+    // every shared cell agree on the build order: # · ♥ · (thumb) · Title · Album · AddedBy · DateAdded · Video · Plays · Duration.)
+    //
     // Drop order as the area narrows (most expendable first): Added-by (≥1) / Video (≥2) → Album (≥2) → Plays/Date (≥3)
     // → ♥ (≥4) → art-thumb (≥5). Video/Plays exist only on album surfaces (ShowPlays); Album/By/Date only on playlists.
     ColumnSet SetFor(int tier) => new(
@@ -178,9 +175,13 @@ sealed class TrackList : Component
     public override Element Render()
     {
         _play = UseAsyncCommands<string>();      // keyed by track id; a row's #-cell shows the buffer spinner while its PlayAsync runs (same instance each render)
+        _lib = UseContext(LibraryBridge.Slot);   // Mutations bridge for the per-row heart (saved-state + toggle)
         var model = _full.Value.Value;           // subscribe → re-render preview→full (chrome columns + trailing update on load)
         _model = model; _tracks = model.Tracks; _hasDate = model.HasDateAdded; _hasBy = model.HasAddedBy; _topTrackId = TopTrack(model.Tracks);
         _cfg = DetailPage.ResolveConfig(DetailPage.ParseDetail(_route.Value).Kind, model);   // route kind + loaded ReleaseKind (reused slot re-derives)
+        // Embedded in a compact pane (Library): drop the album trailing so the rows are the scroller (the pane owns the
+        // hero + actions above). Everything else — the cell, hover transport, now-playing, heart, tier columns — is identical.
+        if (_embedded) _cfg = _cfg with { HasTrailing = false };
         // Reused slot: a detail-route swap changes the track set under a stable (sort,query,flags) view key, so the cached
         // view map + per-tier column sets + selection would be STALE (wrong / out-of-range indices). Invalidate them on a
         // context change so the new page recomputes cleanly.
@@ -205,7 +206,7 @@ sealed class TrackList : Component
         int density = _h.Density.Value;          // subscribe → remount with the new row height on density change
         string query = _h.Query.Value;           // subscribe → remount with the filtered set on query change
         var flags = _h.Flags.Value;              // subscribe → remount on a quick-filter toggle
-        float rowH = RowHeightFor(density);
+        float rowH = TrackRow.RowHeightFor(density);
 
         // Now-playing / sort / column re-skin is per-row now: each bound row subscribes to the bridge + _h.Sort inside
         // its own binds (BoundRowContent / BoundTitle), so a track change recolours and a sort change reorders the
@@ -241,7 +242,11 @@ sealed class TrackList : Component
                 // Cold-mount stagger: the track list is the heaviest part of a detail-page mount (the nav cold-mount
                 // spike). Realize its initial window a few rows/frame so no single frame mounts the whole window — the
                 // skeleton/reveal masks the brief fill-in, and the scroll extent stays correct (driven by the full count).
-                staggerColdRealize: true);
+                staggerColdRealize: true,
+                // Scroll-position restoration keyed by the detail content (route): navigate away from a 10k-track
+                // playlist and back and the viewport seeds the saved row BEFORE its first realize — no scroll-to-top
+                // flash, no jump (the engine scopes this per tab via the KeepAlive slot). A different album starts at top.
+                scrollKey: _route.Value.Name);
 
         // The tracks stream in via the engine's skeleton boundary: while the model is Pending it shows shimmer rows the
         // engine DERIVES from the real Row(EmptyTrack) template (ONE definition — no hand-written shimmer, no drift); on
@@ -357,7 +362,7 @@ sealed class TrackList : Component
     }
 
     // The sort-direction caret (Segoe Fluent CaretSolid — chosen over the chevrons).
-    internal const string CaretGlyph = "";   // CaretSolidUp; SortCaret rotates it 180° for the descending state
+    internal static readonly string CaretGlyph = Mdl.CaretSolidUp;   // track-list sort-direction caret (SortCaret rotates it 180° for descending)
 
     // Does this header own the active sort? The Title header also owns Artist (the title subline has no column of its
     // own), so it stays lit — and reads "Artist" — while the list is sorted by artist.
@@ -496,10 +501,12 @@ sealed class TrackList : Component
             // spinner appears/clears as the command starts/finishes.
             bool isBuffering = (_o._play?.IsRunning(t.Id) ?? false) || (isNow && br is not null && br.IsBuffering.Value);
             bool isTop = _o._cfg.ShowPlays && _o._topTrackId is not null && t.Id == _o._topTrackId;
+            bool saved = t.Uri.Length > 0 && (_o._lib?.IsSaved(t.Uri) ?? false);   // subscribe → heart re-skins on a like toggle
             // Marquee only for the now-playing row; every other row is a cheap plain ellipsis title (see BoundTitlePlain).
             Element title = isNow ? _o.BoundTitle(_scope.Index) : _o.BoundTitlePlain(_scope.Index);
             return _o.RowGrid(t, i, isNow, isPlaying, isBuffering, isTop, title, _set, _tracks, _rowH,
-                              onPlay: () => _o.PlayRow(i));
+                              onPlay: () => _o.PlayRow(i),
+                              saved: saved, onLike: t.Uri.Length > 0 ? (Action)(() => _o._lib?.ToggleSaved(t.Uri)) : null);
         }
     }
 
@@ -529,119 +536,14 @@ sealed class TrackList : Component
     }
 
     // ── row grid ─────────────────────────────────────────────────────────────────────────────────────────
-    // Builds the row GRID — ONE source for the live bound rows AND the skeleton shimmer. The per-track values arrive
-    // resolved (t + now-playing flags + the title element), so the caller decides static (shimmer) vs index-signal-bound
-    // (BoundRowContent) title. Plain/diffable — no Animate — so a BoundRowContent re-render patches cells in place.
+    // The row cell is the shared TrackRow.Grid (Components/TrackRow.cs) — ONE definition rendered identically by the
+    // detail list, the library pane, artist "Popular" and search. This threads the detail list's per-row state + the
+    // column set + the navigation handler through; the bound title element (plain vs marquee) is decided by the caller
+    // (BoundRowContent), and the skeleton passes a static title. Plain/diffable → a BoundRowContent re-render patches in place.
     Element RowGrid(Track t, int displayIndex, bool isNow, bool isPlaying, bool isBuffering, bool isTop, Element title,
-                    ColumnSet set, TrackSize[] tracks, float rowH, Action? onPlay = null)
-    {
-        float thumb = ThumbSize;   // fixed art size → a stable dedicated art column (see TracksFor)
-
-        var cells = new List<Element>(tracks.Length);
-
-        // # cell: number / live equalizer / fetch spinner at rest; reveals a SINGLE-CLICK play (or pause) button on ROW hover.
-        cells.Add(NumberCell(displayIndex, isNow, isPlaying, isBuffering, isTop, onPlay));
-
-        // ♥ — moved into the left cluster (between # and the art thumb).
-        if (set.Heart) cells.Add(CenterCell(Heart(_cfg)));
-
-        // Art thumb (playlist/liked) gets its OWN column before Title — so the "Title" header aligns over the title TEXT,
-        // not the artwork (the WaveeMusic RowArtColDef pattern). Then the title + artist subline (subline hidden on
-        // single-artist albums/singles/EPs).
-        if (set.Thumb)
-            cells.Add(CenterCell(Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, thumb, thumb, WaveeRadius.Control)));
-        var titleCol = new BoxEl
-        {
-            Direction = 1, Grow = 1f, Basis = 0f, Gap = 1f,
-            Children = _cfg.ShowTrackArtist
-                ? [title, ArtistLinks(t.Artists)]
-                : [title],
-        };
-        cells.Add(new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Children = [titleCol] });
-
-        if (set.Album)
-            cells.Add(LeftCell(AlbumLink(t.Album)));
-        if (set.By)
-            cells.Add(AddedByCell(t.AddedBy));
-        if (set.Date)
-            cells.Add(LeftCell(new TextEl(DetailFormat.DateAddedLabel(t.AddedAt)) { Size = 13f, Color = Tok.TextSecondary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }));
-        if (set.Video)
-            cells.Add(CenterCell(t.HasVideo ? Icon(Icons.Movie, 13f, Tok.TextTertiary) : new BoxEl()));
-        if (set.Plays)
-            cells.Add(EndCell(new TextEl(PlaysLabel(t.PlayCount)) { Size = 13f, Color = Tok.TextTertiary }));
-        cells.Add(EndCell(new TextEl(DetailFormat.TrackTime(t.DurationMs)) { Size = 13f, Color = Tok.TextSecondary }));
-
-        return new GridEl
-        {
-            Columns = tracks, ColGap = ColGap, RowHeight = rowH, Grow = 1f,   // fill the BoundRowSkin lane (ZStack content layer)
-            // Pad PadX − RowInset: with the skin's RowInset margin, columns still start at PadX (header-aligned).
-            Padding = new Edges4(PadX - RowInset, 0f, PadX - RowInset, 0f),
-            Children = cells.ToArray(),
-        };
-    }
-
-    // The artist subline as inline HYPERLINK spans — one clickable link per artist (each navigates on its own), joined by
-    // ", ". The engine resolves the Hand cursor over each link rect and fires its OnClick on release; the press lands on
-    // this text leaf (no PressedBit) so clicking an artist navigates WITHOUT playing/selecting the row. (Hovering a name
-    // shows the hand cursor; the row-hover highlight yields to the link there — the WinUI inline-Hyperlink trade-off.)
-    Element ArtistLinks(IReadOnlyList<ArtistRef> artists)
-    {
-        if (artists.Count == 0) return new BoxEl();
-        var spans = new TextSpan[artists.Count * 2 - 1];
-        int n = 0;
-        for (int i = 0; i < artists.Count; i++)
-        {
-            if (i > 0) spans[n++] = new TextSpan(", ");
-            var a = artists[i];   // fresh per-iteration capture → each link navigates to its OWN artist
-            spans[n++] = new TextSpan(a.Name, OnClick: () => _h.Go("artist:" + a.Uri, a.Name));
-        }
-        return new SpanTextEl(spans)
-        {
-            Size = 12f, Color = Tok.TextSecondary, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MaxLines = 1,
-            MinWidth = 0f,   // the NoWrap names must not inflate the flexible title column (the row "stretch" the user hit)
-        };
-    }
-
-    // The album cell as a single clickable hyperlink (navigates to the album page).
-    Element AlbumLink(AlbumRef album) =>
-        new SpanTextEl([new TextSpan(album.Name, OnClick: () => _h.Go("album:" + album.Uri, album.Name))])
-        {
-            Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MaxLines = 1,
-            Grow = 1f, Basis = 0f,
-        };
-
-    // The Added-by cell: a small initial-avatar (we carry no avatar URL in the model yet) + the contributor name.
-    static Element AddedByCell(string? by)
-    {
-        if (string.IsNullOrEmpty(by)) return new BoxEl();
-        string initial = by.Substring(0, 1).ToUpperInvariant();
-        return new BoxEl
-        {
-            Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start, Gap = WaveeSpace.S,
-            Children =
-            [
-                new BoxEl
-                {
-                    Width = 22f, Height = 22f, Shrink = 0f, Corners = CornerRadius4.All(11f), Fill = Tok.FillSubtleSecondary,
-                    AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                    Children = [new TextEl(initial) { Size = 11f, Weight = 600, Color = Tok.TextSecondary }],
-                },
-                new TextEl(by) { Size = 13f, Color = Tok.TextSecondary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-            ],
-        };
-    }
-
-    static Element Heart(DetailConfig cfg)
-    {
-        bool liked = cfg.Heart == HeartMode.None;   // the Liked-Songs context: every row is already liked
-        return new BoxEl
-        {
-            Width = 28f, Height = 28f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = CornerRadius4.All(14f), HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
-            OnClick = () => { /* TODO: ILibraryMutations like/save (no Core command yet) */ },
-            Children = [Icon(Icons.Heart, 14f, liked ? Tok.AccentTextPrimary : Tok.TextTertiary)],
-        };
-    }
+                    ColumnSet set, TrackSize[] tracks, float rowH, Action? onPlay = null, bool saved = false, Action? onLike = null)
+        => TrackRow.Grid(t, displayIndex, new TrackRow.State(isNow, isPlaying, isBuffering, isTop, saved),
+                         set, tracks, rowH, title, _cfg.ShowTrackArtist, _h.Go, onPlay, onLike);
 
     // The custom row container, BOUND + shape-stable so it recycles without remounting: the zebra REST fill is bound to
     // the slot index (recycle-correct + theme-reactive via RethemeAll re-firing binds), and the left accent pill is an
@@ -714,60 +616,8 @@ sealed class TrackList : Component
         };
     }
 
-    // The # cell — a small state machine over the playback of THIS track, with the transport button revealed on row hover:
-    //   • fetching/buffering → a spinner (shown whether or not you're hovering);
-    //   • now-playing + playing → a LIVE animated equalizer at rest, the PAUSE button on hover;
-    //   • now-playing + paused  → a settled equalizer at rest, the PLAY button on hover;
-    //   • album top track       → the star at rest, the PLAY button on hover;
-    //   • otherwise             → the track number at rest, the PLAY button on hover.
-    // The number/equalizer layer fades OUT on row hover and the transport layer fades IN — the recorder drives both off
-    // the nearest interactive ancestor (the row, so the reveal follows ROW hover; InteractionAnimator honours HoverWithin
-    // so it survives the pointer crossing onto the button). The transport layer is itself the SINGLE-CLICK target (its
-    // OnClick fills the #-cell + shows the hand cursor); the inner glyph PressScale-pushes on press for a real button feel.
-    static Element NumberCell(int index, bool isNow, bool isPlaying, bool isBuffering, bool isTop, Action? onPlay = null)
-    {
-        ColorF accent = Tok.AccentTextPrimary;
-        Element rest =
-            isBuffering ? Spinner()
-            : isNow     ? WaveeEqualizer.Of(isPlaying, accent)
-            : isTop     ? Icon(TopStar, 11f, accent)
-            :             new TextEl((index + 1).ToString()) { Size = 13f, Color = Tok.TextTertiary };
-        Element transport = isBuffering
-            ? Spinner()
-            : new BoxEl
-            {
-                Width = 24f, Height = 24f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                PressScale = 0.86f,   // a real button press-push (the row-driven reveal is the hover cue)
-                Children = [Icon(isNow && isPlaying ? Icons.Pause : Icons.Play, 12f, isNow ? accent : Tok.TextPrimary)],
-            };
-        return new BoxEl
-        {
-            ZStack = true,
-            Children =
-            [
-                new BoxEl { Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, HoverOpacity = 0f, Children = [rest] },
-                new BoxEl
-                {
-                    Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Opacity = 0f, HoverOpacity = 1f,
-                    OnClick = onPlay, Cursor = onPlay is null ? (CursorId?)null : CursorId.Hand,
-                    Children = [transport],
-                },
-            ],
-        };
-    }
-
-    // The indeterminate fetch/buffer spinner (WinUI ProgressRing).
-    static Element Spinner() => ProgressRing.Indeterminate(size: 16f, foreground: Tok.AccentTextPrimary);
-
-    // The now-playing equalizer is the shared WaveeEqualizer (Components/Equalizer.cs) — same bars on the rows + cards.
-
-    // ── cell wrappers (the cell fills its grid rect; these vertical-center + horizontally place the content) ──
-    static Element CenterCell(Element content) =>
-        new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Children = [content] };
-    static Element LeftCell(Element content) =>
-        new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start, Children = [content] };
-    static Element EndCell(Element content) =>
-        new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.End, Children = [content] };
+    // (The # cell's number↔play/pause transport, the now-playing equalizer, the buffer spinner, the per-row heart, the
+    // artist/album links and the cell wrappers all live in the shared TrackRow now — see Components/TrackRow.cs.)
 }
 
 
@@ -783,6 +633,8 @@ sealed class SelectionBar : Component
 
     public override Element Render()
     {
+        var svc = UseContext(Services.Slot);
+        var lib = UseContext(LibraryBridge.Slot);
         _ = _sel.Version.Value;          // subscribe → re-render on every selection change
         int count = _sel.SelectedCount;
         this.UseSoftReveal(key: count >= 2, dy: 14f, blur: 2f);   // slide + fade when the bar appears/dismisses
@@ -806,14 +658,22 @@ sealed class SelectionBar : Component
                 new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Children = thumbs.ToArray() },
                 new TextEl(Strings.Detail.SelectedCount(count)) { Size = 13f, Weight = 600, Color = Tok.TextPrimary },
                 Divider(),
-                ActionBtn(Icons.Play, Loc.Get(Strings.Detail.Play), () => { /* TODO: play the selection */ }),
-                ActionBtn(Icons.List, Loc.Get(Strings.Detail.AddToQueue), () => { /* TODO: queue API */ }),
-                ActionBtn(Icons.Add, Loc.Get(Strings.Detail.AddToPlaylist), () => { /* TODO: ILibraryMutations (no Core command yet) */ }),
+                ActionBtn(Icons.Play, Loc.Get(Strings.Detail.Play), () => { var s = Sel(); if (svc is not null && s.Count > 0) { _ = svc.Player.PlayTrackAsync(s[0].Uri); for (int i = 1; i < s.Count; i++) _ = svc.Player.EnqueueAsync(s[i].Uri); _sel.DeselectAll(); } }),
+                ActionBtn(Icons.List, Loc.Get(Strings.Detail.AddToQueue), () => { var s = Sel(); if (svc is not null && s.Count > 0) { foreach (var t in s) _ = svc.Player.EnqueueAsync(t.Uri); Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(s.Count)), ToastSeverity.Success); _sel.DeselectAll(); } }),
+                ActionBtn(Icons.Add, Loc.Get(Strings.Detail.AddToPlaylist), () => { var s = Sel(); if (lib is not null && s.Count > 0) { var (uri, name) = lib.AddToDefaultPlaylist(s); Toasts.Show(Strings.Detail.AddedToPlaylist(name), ToastSeverity.Success); _sel.DeselectAll(); } }),
                 Divider(),
                 ActionBtn(Icons.Accept, Loc.Get(Strings.Detail.SelectAll), () => _sel.SelectAll()),
                 RoundBtn(Icons.Cancel, () => _sel.DeselectAll()),   // Clear selection
             ],
         };
+    }
+
+    // The currently-selected tracks (display order), resolved through the row→track map — for the batch actions.
+    List<Track> Sel()
+    {
+        var list = new List<Track>();
+        for (int i = 0; i < _sel.ItemCount; i++) if (_sel.IsSelected(i) && _trackAt(i) is { } t) list.Add(t);
+        return list;
     }
 
     static Element Thumb(Track t, int i) => new BoxEl

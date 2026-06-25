@@ -28,6 +28,19 @@ public interface IGpuDevice : IDisposable
     /// <summary>Record + batch + submit the per-frame DrawList. <paramref name="drawList"/> is the POD command stream.</summary>
     void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx);
 
+    /// <summary>Diagnostic: wall-time (ms) spent BLOCKED on GPU fences — the frame fence (<c>WaitForFrame</c>) plus the
+    /// present-latency waitable — inside the most recent <see cref="SubmitDrawList(ReadOnlySpan{byte}, ReadOnlySpan{ulong}, in FrameInfo)"/>.
+    /// This UI-thread stall is what dominates measured "submit" time today (the render-thread seam will move it off the UI
+    /// thread). The host folds it into <c>FrameStats.FenceWaitMs</c>. Default 0 for backends that don't block on a GPU fence
+    /// (headless), so it reads as "no stall" rather than missing.</summary>
+    double LastFenceWaitMs => 0;
+
+    /// <summary>True when decoded image pixels are staged but not yet copied to their resident GPU texture (the copy is
+    /// recorded at the top of the next <see cref="SubmitDrawList(ReadOnlySpan{byte}, ReadOnlySpan{ulong}, in FrameInfo)"/>).
+    /// The host must NOT elide that submit (its scene-unchanged skip gate), or the texture stays empty and the image
+    /// renders white. Default false (a headless/synchronous backend has nothing pending).</summary>
+    bool HasPendingUploads => false;
+
     /// <summary>Record + batch + submit to a specific swapchain target (windowed popup HWNDs). Backends without
     /// secondary-swapchain support fall back to the primary target via the legacy overload.</summary>
     void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx, ISwapchain target)

@@ -1,5 +1,7 @@
 # Media and animation
 
+> **✅ Animation engine — signals-first rework landed + verified.** The signals-first model is live: set a value/signal + a `Transition` and it interpolates from current; `UseSpringValue`/`UseAnimatedValue` for springs; `WhileHover`/`WhilePressed` for gestures; `Enter`/`Exit`/`Stagger` + a `Presence` boundary for entrance/exit; `Layout`/`MorphId` for shared-element. It all runs over one POD `AnimValue` slab + an analytical closed-form spring. The hooks/fields on this page still work (they seed the same slab; `AnimEngine` is its scheduler). Design, now implemented: [`../../plans/animation-engine-rework-design.md`](../../plans/animation-engine-rework-design.md).
+
 Two things on this page have the same secret: **they reach pixels without re-rendering your component.** An
 async image swaps its texture in place when the decode lands; an animation hook writes a transform every frame on
 the compositor. Neither re-runs `Render()`, neither relayouts. That is the whole reason media and motion live
@@ -283,26 +285,24 @@ sealed class FadeInCard : Component
 }
 ```
 
-**The `UseAnimatedValue` caveat.** There is also a scalar hook that returns an eased `0..1`-ish value you can lerp
+**`UseAnimatedValue` for a lerped scalar.** There is also a scalar hook that returns an eased value you can lerp
 anything with (`src/FluentGpu.Engine/Hooks/RenderContext.cs`):
 
 ```csharp
 public float UseAnimatedValue(float target, float durationMs = 180f, Easing easing = Easing.EaseInOut);
 ```
 
-The gallery uses it to drive a **color** lerp (something the transform channels can't express), re-rendering on
-each step:
+The gallery uses it to drive a **color** lerp (something the transform channels can't express):
 
 ```csharp
 float t = UseAnimatedValue(on ? 1f : 0f, 300f);
-var fill = ColorF.Lerp(ColorF.FromRgba(80, 80, 88), Tok.AccentDefault, t);   // animate a fill via a re-render
+var fill = ColorF.Lerp(ColorF.FromRgba(80, 80, 88), Tok.AccentDefault, t);   // animate a fill off the slab value
 ```
 
-But `UseAnimatedValue` **steps only when the component re-renders for some other reason** — it is not driven by the
-compositor frame. So it is fine for a one-shot color transition tied to a state flip, but **do not reach for it for
-continuous motion** (a spinner, a pulse, anything that must advance every frame). For real motion use
-`UseSpring`/`UseTransition`/`UseKeyframes`, which ride the compositor without a re-render. The reference docs flag
-the same caveat in the [hooks section](../../guide/components-elements-layout.md#animation-composited--no-re-render-rides-the-compositor-frame).
+Under the landed slab engine `UseAnimatedValue` is just another `AnimValue` channel — it advances on the compositor
+frame like `UseSpring`/`UseTransition`/`UseKeyframes`, so it is fine for continuous motion (a color pulse, a spinner
+tint) as well as a one-shot transition tied to a state flip. `UseSpringValue` is its spring-backed sibling. The
+reference docs cover the same hooks in the [hooks section](../../guide/components-elements-layout.md#animation-composited--no-re-render-rides-the-compositor-frame).
 
 ---
 
@@ -557,8 +557,9 @@ You do not need any of this to build apps — but when you want to know how the 
   frame-start eviction), the GPU texture pool and `CopyBufferToTexture` upload, the small-image atlas, and the
   placeholder→cross-fade record path.
 - **[Backdrop, effects & animation subsystem](../../../design/subsystems/backdrop-effects-animation.md)** — the
-  phase-7 `AnimTrack` engine (the eased and spring integrators, the velocity-carrying retarget, the driven clock),
-  the detached-animation slab that keeps an exit animation alive past unmount, connected/shared-element
+  phase-7 animation engine: the unified POD `AnimValue` slab (value+velocity+target+generator, interpolate-from-current
+  + auto-retarget on signal change), the analytical closed-form spring (sampled at absolute `t`, dt-deterministic), the
+  driven clock, the `DetachedAnimSlab` that keeps an exit animation alive past unmount, connected/shared-element
   transitions, and the three kinds of backdrop.
 - **[SPEC-INDEX](../../../design/SPEC-INDEX.md)** is the precedence authority for every cross-cutting contract;
   **[subsystems/README](../../../design/subsystems/README.md)** is the ownership map.

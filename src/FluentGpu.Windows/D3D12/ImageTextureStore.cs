@@ -88,6 +88,11 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     public int DroppedThisRun { get; private set; }
     public int AtlasImages => _atlasCount;
     public int PoolImages => _poolCount;
+    /// <summary>True when decoded pixels are staged but not yet copied to their resident texture (drained by
+    /// <see cref="FlushUploads"/> at the top of the next submit). The host must NOT skip that submit, or the texture
+    /// stays empty and the image renders white — uploads are throttled, so a deferred one can land on an otherwise
+    /// idle frame whose DrawList is unchanged.</summary>
+    public bool HasPendingUploads => _pendingCopies.Count > 0;
 
     // ── MemCensus accessors (O(1), or a tiny fixed-bucket sum at census cadence — never per-frame) ──
     /// <summary>Images currently packed into atlas pages — O(1) census (alias of <see cref="AtlasImages"/>).</summary>
@@ -127,8 +132,16 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         if (_byId.TryGetValue(id, out var t) && t.Live)
         {
             srv = t.Srv;
-            float inv = 1f / t.TexSize;
-            uv = new RectF((t.Ox + 0.5f) * inv, (t.Oy + 0.5f) * inv, MathF.Max(0f, t.W - 1) * inv, MathF.Max(0f, t.H - 1) * inv);
+            // Atlas pages and pooled textures are square, but >512px images use an exact-size standalone texture.
+            // Normalizing both axes by TexSize (= max(W,H)) on that rectangular path sampled only H/TexSize of the
+            // texture vertically (a wide hero showed its empty upper band and pushed the subject to the bottom).
+            float invX = 1f / (t.Atlas || t.Bucket != 0 ? t.TexSize : t.W);
+            float invY = 1f / (t.Atlas || t.Bucket != 0 ? t.TexSize : t.H);
+            uv = new RectF(
+                (t.Ox + 0.5f) * invX,
+                (t.Oy + 0.5f) * invY,
+                MathF.Max(0f, t.W - 1) * invX,
+                MathF.Max(0f, t.H - 1) * invY);
             return true;
         }
         srv = default; uv = default; return false;

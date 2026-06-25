@@ -206,6 +206,9 @@ public sealed class ItemsView : Component
     /// <summary>Never draw the conscious scrollbar for the virtualized viewport (a paged surface navigates by its
     /// pager, not a draggable bar). Forwarded onto the built VirtualListEl. Default false.</summary>
     public bool SuppressScrollBar;
+    /// <summary>Scroll-position restoration key (see <see cref="VirtualListEl.ScrollKey"/>): a stable per-content identity
+    /// so a revisit lands at the saved row on the first realized window. Forwarded onto the built VirtualListEl.</summary>
+    public string? ScrollKey;
 
     /// <summary>Legacy demo factory (compat): a single-selectable grid of labeled tiles, now riding the full
     /// L0–L3 substrate (virtualized grid + ItemContainer chrome + keyboard nav). Natural-sized (Grow 0): the demo
@@ -234,7 +237,8 @@ public sealed class ItemsView : Component
                                  IReadSignal<int>? draggedSlot = null,
                                  Func<int, ItemChromeState, PartDelta>? partDelta = null,
                                  bool suppressScrollBar = false,
-                                 bool autoEdgeFade = false)
+                                 bool autoEdgeFade = false,
+                                 string? scrollKey = null)
         => Embed.Comp(() => new ItemsView
         {
             ItemCount = itemCount,
@@ -254,6 +258,7 @@ public sealed class ItemsView : Component
             KeyOf = keyOf,
             Grow = grow,
             SuppressScrollBar = suppressScrollBar,
+            ScrollKey = scrollKey,
             AutoEdgeFade = autoEdgeFade,
             Transition = transition,
             Selector = selector,
@@ -287,7 +292,8 @@ public sealed class ItemsView : Component
                                       IReadSignal<int>? draggedSlot = null,
                                       bool suppressScrollBar = false,
                                       bool autoEdgeFade = false,
-                                      bool staggerColdRealize = false)
+                                      bool staggerColdRealize = false,
+                                      string? scrollKey = null)
         => Embed.Comp(() => new ItemsView
         {
             ItemCount = itemCount,
@@ -307,6 +313,7 @@ public sealed class ItemsView : Component
             OverscanItems = overscan,
             Grow = grow,
             SuppressScrollBar = suppressScrollBar,
+            ScrollKey = scrollKey,
             AutoEdgeFade = autoEdgeFade,
             ItemDisplacement = itemDisplacement,
             DisplacementVersion = displacementVersion,
@@ -404,11 +411,12 @@ public sealed class ItemsView : Component
             () => spec.Kind switch
             {
                 RepeatKind.Stack => new StackVirtualLayout(spec.Extent, spec.Horizontal),
-                RepeatKind.Grid => new GridVirtualLayout(spec.Columns, spec.Extent, spec.Gap),
+                RepeatKind.Grid => new GridVirtualLayout(spec.Columns, spec.Extent, spec.Gap, spec.MinCellWidth,
+                    spec.Estimate > 0f ? spec.Estimate : 120f),
                 RepeatKind.Custom => spec.CustomLayout,
                 _ => null,   // Wrap/Inline — non-virtual fallback
             },
-            spec.Kind, spec.Extent, spec.Gap, spec.Columns, spec.Horizontal, spec.CustomLayout ?? (object)0);
+            spec.Kind, spec.Extent, spec.Gap, spec.Columns, spec.MinCellWidth, spec.Estimate, spec.Horizontal, spec.CustomLayout ?? (object)0);
         bool horizontal = spec.Horizontal;
 
         var sceneRef = Context.Scene;
@@ -610,9 +618,12 @@ public sealed class ItemsView : Component
                     int dStack = spec.Horizontal ? dx : dy;
                     return dStack == 0 ? from : StepEnabled(from, dStack);
                 case RepeatKind.Grid:
-                    // Left/Right = index ±1 (may wrap rows — the cpp index-based path); Up/Down = ±columns
-                    // (column-railed), both walking past disabled items.
-                    return StepEnabled(from, dx != 0 ? dx : dy * spec.Columns);
+                {
+                    // Left/Right = index ±1; Up/Down = ±columns (column-railed). Responsive grids read live column count.
+                    int cols = spec.Columns > 0 ? spec.Columns
+                        : layout is GridVirtualLayout gv ? gv.EffectiveColumns(CrossExtent()) : 1;
+                    return StepEnabled(from, dx != 0 ? dx : dy * cols);
+                }
                 case RepeatKind.Custom:
                     return NavigateGeometric(from, dx, dy);
                 default:
@@ -1018,6 +1029,7 @@ public sealed class ItemsView : Component
                 EdgeCues = EdgeCues,
                 AutoEdgeFade = AutoEdgeFade,
                 SuppressScrollBar = SuppressScrollBar,
+                ScrollKey = ScrollKey,
                 Grow = Grow,
                 OnRealized = h => viewportNode.Value = h,
             }
@@ -1033,6 +1045,7 @@ public sealed class ItemsView : Component
                 EdgeCues = EdgeCues,
                 AutoEdgeFade = AutoEdgeFade,
                 SuppressScrollBar = SuppressScrollBar,
+                ScrollKey = ScrollKey,
                 // Grow rides through to the viewport: 1 = fill the parent (hard viewport, never content-measured);
                 // 0 = natural — FlexLayout.MeasureViewport sizes a non-flexing viewport to the layout's ContentExtent
                 // (the gallery card shape; D1).

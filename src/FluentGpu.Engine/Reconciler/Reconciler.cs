@@ -22,7 +22,7 @@ public sealed class TreeReconciler
     private readonly StringTable _strings;
 
     // Mounted child components, keyed by their host node (the ComponentEl anchor).
-    private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; public bool Parked; public bool DeferredRender; public Signal<bool>? ActiveSig; }
+    private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; public bool Parked; public bool DeferredRender; public Signal<bool>? ActiveSig; public SkeletonStyle? DerivedSkeletonStyle; }
     private readonly Dictionary<NodeHandle, CompEntry> _comps = new();
     private readonly Dictionary<Component, NodeHandle> _anchorOf = new();
     private readonly List<Component> _live = new();
@@ -59,6 +59,9 @@ public sealed class TreeReconciler
     private readonly Dictionary<int, List<Computation>> _nodeBindings = new();
     private readonly Dictionary<int, Element?> _showState = new();             // last-mounted branch per ShowEl node
     private readonly Dictionary<int, (Element[] Prev, int Len)> _forState = new();   // last realized children per ForEl node
+    private readonly Dictionary<int, float> _childStagger = new();                   // node → per-child Enter stagger (ms): a parent's Element.Stagger, read by SynthesizeDeclarative
+    private readonly Dictionary<string, NodeHandle> _keyNode = new();                 // MorphId → node: the shared-layout anchor a RelativeTo follower FLIPs against
+    private readonly Dictionary<int, string> _relativeKey = new();                    // follower node → the MorphId key it FLIPs relative to (Element.RelativeTo)
     // Skeleton-loading: per SkelRegionEl node, the last branch (0 none / 1 shimmer / 2 real / 3 failed), the last-mounted
     // child element (for ReconcileSingleChild's type-compare), and the reveal-group token (for the group coordinator).
     private readonly Dictionary<int, (byte Branch, Element? El, object? Group)> _skelState = new();
@@ -83,6 +86,32 @@ public sealed class TreeReconciler
         public int TransientSeq;
     }
     private readonly Dictionary<int, KeepAliveState> _keepAliveState = new();
+    // Reverse map: a KeepAlive entry's ROOT node index → its slot key. Lets a scroll node deep in a page resolve its
+    // enclosing navigation-slot scope (ScopeFor) so ScrollMemory keys are namespaced per (tab × page-slot) — see ScrollMemory.
+    private readonly Dictionary<int, string> _keepAliveRootKey = new();
+    // Scroll-position memory: saved offsets keyed by (KeepAlive-slot scope ∥ content ScrollKey). Lives OFF the scene so it
+    // survives the freed subtree when a page is evicted from KeepAlive — a cold revisit then seeds the offset before the
+    // first layout/realize (no scroll-to-top flash). Bounded LRU; nav-rate writes only (never a frame-hot path).
+    private sealed class ScrollMemory
+    {
+        private readonly Dictionary<string, (float X, float Y, long Used)> _map = new();
+        private long _clock;
+        private const int Cap = 64;
+        public bool TryGet(string key, out float x, out float y)
+        {
+            if (_map.TryGetValue(key, out var v)) { x = v.X; y = v.Y; _map[key] = (v.X, v.Y, ++_clock); return true; }
+            x = 0f; y = 0f; return false;
+        }
+        public void Put(string key, float x, float y)
+        {
+            _map[key] = (x, y, ++_clock);
+            if (_map.Count <= Cap) return;
+            string? lru = null; long best = long.MaxValue;
+            foreach (var kv in _map) if (kv.Value.Used < best) { best = kv.Value.Used; lru = kv.Key; }
+            if (lru is not null) _map.Remove(lru);
+        }
+    }
+    private readonly ScrollMemory _scrollMem = new();
     private readonly HashSet<int> _imagePinnedNodes = new();
     private readonly List<NodeHandle> _dirtyVirtualScratch = new();
 
@@ -334,8 +363,13 @@ public sealed class TreeReconciler
         {
             // Reuse → the component is AUTONOMOUS: it re-renders via its own effect on its own state/context. A parent
             // re-render does NOT re-render it (props are carried by signals/context, not the factory closure). Type
-            // change → replace.
-            if (oldEl is ComponentEl oce && oce.ComponentType == nce.ComponentType && _comps.ContainsKey(node))
+            // change → replace. EXCEPTION: a flip of DeriveRenderedOutput is the skeleton shimmer↔real edge — the SAME
+            // component type sits on both sides (a DeriveRenderedOutput proxy during Pending, the real component on
+            // Ready; e.g. Responsive's ResponsiveBox). Reusing across it strands the instance in shimmer-deriving mode
+            // AND keeps its stale Pending build closure (which closed over the seed), so the section never resolves —
+            // the "page only half-resolves" bug. Force a fresh mount so the real build + cleared derive flag take hold.
+            if (oldEl is ComponentEl oce && oce.ComponentType == nce.ComponentType && _comps.ContainsKey(node)
+                && oce.DeriveRenderedOutput == nce.DeriveRenderedOutput)
                 return;
             ReplaceComponent(node, nce);
             return;
@@ -409,9 +443,29 @@ public sealed class TreeReconciler
             return;
         }
 
-        WriteColumns(node, newEl, isMount: false, oldEl);
+        // GEN-01 DiffProps fast-path (WIRED): skip the redundant column rewrite when every diffable prop — incl. the
+        // inherited Element animation/declarative fields — is identical to last render. The generated AnyChanged covers
+        // the WHOLE prop set, so any change to Fill/Layout/Animate/Transition/WhileHover/… forces the full WriteColumns
+        // (keeping the BoundsAnimated/FLIP/reflow side-effects correct). Children are EXCLUDED from the diff, so they
+        // are ALWAYS reconciled. The FLIP "First" capture runs in the host commit loop over the BoundsAnimated flag
+        // (AppHost), independent of this call, so a truly-unchanged node still rides a sibling reflow.
+        if (RecordChanged(newEl, oldEl)) WriteColumns(node, newEl, isMount: false, oldEl);
         ReconcileChildren(node, ChildrenOf(newEl), ChildrenOf(oldEl));
     }
+
+    /// <summary>GEN-01 (wired): true unless <paramref name="a"/> and <paramref name="b"/> are the same leaf element
+    /// type with EVERY diffable prop unchanged (the generated <c>{T}Diff.AnyChanged</c> — inherited fields included,
+    /// Children excluded). A different type / unlisted kind conservatively returns true (always re-write).</summary>
+    private static bool RecordChanged(Element a, Element b) => a switch
+    {
+        BoxEl x => b is not BoxEl y || BoxElDiff.AnyChanged(x, y),
+        TextEl x => b is not TextEl y || TextElDiff.AnyChanged(x, y),
+        GridEl x => b is not GridEl y || GridElDiff.AnyChanged(x, y),
+        ImageEl x => b is not ImageEl y || ImageElDiff.AnyChanged(x, y),
+        SpanTextEl x => b is not SpanTextEl y || SpanTextElDiff.AnyChanged(x, y),
+        PolylineStrokeEl x => b is not PolylineStrokeEl y || PolylineStrokeElDiff.AnyChanged(x, y),
+        _ => true,
+    };
 
     /// <summary>Mount/update/replace a single optional child under <paramref name="parent"/> (component output, provider, Show).</summary>
     private void ReconcileSingleChild(NodeHandle parent, Element? newChild, Element? oldChild)
@@ -454,7 +508,13 @@ public sealed class TreeReconciler
         // parent's marker and mark this node too, so the deferred-render gate holds and descendants inherit it.
         var parent = _scene.Parent(node);
         bool parked = !parent.IsNull && (_scene.Flags(parent) & NodeFlags.Parked) != 0;
-        var entry = new CompEntry { Comp = comp, Type = ce.ComponentType, Parked = parked };
+        var entry = new CompEntry
+        {
+            Comp = comp,
+            Type = ce.ComponentType,
+            Parked = parked,
+            DerivedSkeletonStyle = ce.DerivedSkeletonStyle,
+        };
         if (parked) _scene.Mark(node, NodeFlags.Parked);
         _comps[node] = entry;
         _anchorOf[comp] = node;
@@ -481,6 +541,8 @@ public sealed class TreeReconciler
         if (Diag.Enabled) Diag.Event("render", entry.Comp.GetType().Name);   // who re-rendered (granularity diagnosis)
         var comp = entry.Comp;
         Element newRendered = comp.RunsOnce ? Reactive.Untrack(comp.RenderWithHooks) : comp.RenderWithHooks();
+        if (entry.DerivedSkeletonStyle is { } skeletonStyle)
+            newRendered = SkeletonDeriver.Derive(newRendered, skeletonStyle);
         ReconcileSingleChild(node, newRendered, entry.Rendered);
         MirrorParticipation(node, _scene.FirstChild(node));
         comp.Context.HostNode = _scene.FirstChild(node);
@@ -582,10 +644,11 @@ public sealed class TreeReconciler
                 // entrance (it draws behind the live tree, so a too-fast exit leaves an empty gap before the rows fade
                 // up). Floor the exit at the standard content-reveal duration so apps get the cross-dissolve for free —
                 // no hand-tuned ExitMs to match the list's row-add timing.
-                1 => Motion.ReducedMotion
-                        ? SkeletonDeriver.Derive(se.ShimmerSource(), se.Style)
-                        : StampShimmerExit(SkeletonDeriver.Derive(se.ShimmerSource(), se.Style),
-                            se.Reveal == SkelReveal.None ? Math.Max(se.Style.ExitMs, Expressive.Slow) : se.Style.ExitMs),
+                // The pending tree is removed immediately on Ready. Keeping it as an exiting orphan over the newly
+                // mounted real tree produced a visibly "half resolved" page when an exit track was delayed/wedged.
+                // The real branch still owns the configured reveal below, so the swap remains animated without two
+                // complete page trees painting simultaneously.
+                1 => SkeletonDeriver.Derive((se.ShimmerSource ?? se.Content)(), se.Style),
                 3 => se.OnFailed?.Invoke(),
                 _ => se.Content(),
             };
@@ -598,6 +661,10 @@ public sealed class TreeReconciler
             MirrorParticipation(node, _scene.FirstChild(node));
             _scene.Mark(node, NodeFlags.LayoutDirty);
             _skelState[idx] = (branch, desired, se.Group);
+
+            // Hide the enclosing scrollbar while this region is loading (branch 1): the short skeleton → tall real swap
+            // would otherwise pop the rail from a tiny thumb to its real size. Restored on Ready/Failed.
+            SetSkeletonScrollbarSuppression(node, branch == 1);
 
             if (branch == 1 && Anim is { } a1)
             {
@@ -623,35 +690,29 @@ public sealed class TreeReconciler
         AddBinding(node, eff);
     }
 
-    // Stamp the derived shimmer ROOT with a fast Opacity+Blur EXIT terminal so the orphan-exit (Remove) cross-blurs it
-    // out while the real content blur-reveals in (the two-layer cross-blur, same slot). Only a BoxEl root carries Animate.
-    private static Element StampShimmerExit(Element shimmerRoot, float exitMs)
-        => shimmerRoot is BoxEl b
-            ? b with
-            {
-                Animate = new LayoutTransition(
-                    TransitionChannels.Opacity,
-                    TransitionDynamics.Tween(exitMs, Easing.SmoothOut),
-                    Exit: new EnterExit(Opacity: 0f, Blur: Expressive.BlurMedium, Active: true)),
-            }
-            : shimmerRoot;
-
     private void MountFor(NodeHandle node, ForEl fe)
     {
         var eff = new Effect(Runtime, () =>
         {
             if (!_scene.IsLive(node)) return;
             int n = fe.Count();
-            var cur = n == 0 ? Array.Empty<Element>() : new Element[n];
+            // Rent the realized-children buffer from the pool (mirrors RealizeBoundWindow) instead of a fresh new Element[n]
+            // each render — drops the per-render array off the nav-churn Gen0 (finding #6).
+            var cur = n == 0 ? Array.Empty<Element>() : ArrayPool<Element>.Shared.Rent(n);
             for (int i = 0; i < n; i++)
             {
                 var el = fe.ItemAt(i);
-                string key = fe.KeyOf?.Invoke(i) ?? ("#" + i);
-                cur[i] = el with { Key = key };
+                // Skip the `el with { Key }` record clone (a heap alloc — Element is a record class) in the common keyless
+                // case: a null key positionally-diffs identically to the old positional fallback key "#i". A KeyOf supplies
+                // the real key; a user-set key under a keyless For keeps the old positional-override semantics ("#i").
+                cur[i] = fe.KeyOf is { } keyOf ? el with { Key = keyOf(i) }
+                       : el.Key is null ? el
+                       : el with { Key = "#" + i };
             }
             int idx = (int)node.Raw.Index;
             var prev = _forState.TryGetValue(idx, out var p) ? p : (Array.Empty<Element>(), 0);
             ReconcileChildren(node, cur.AsSpan(0, n), prev.Item1.AsSpan(0, prev.Item2));
+            if (prev.Item1.Length > 0) { Array.Clear(prev.Item1, 0, prev.Item2); ArrayPool<Element>.Shared.Return(prev.Item1); }
             _forState[idx] = (cur, n);
         }, owner: null, runNow: true);
         AddBinding(node, eff);
@@ -693,6 +754,7 @@ public sealed class TreeReconciler
         {
             var root = _scene.CreateNode(desired.ElementTypeId);
             _scene.AppendChild(node, root);
+            _keepAliveRootKey[(int)root.Raw.Index] = key;   // before Mount: descendant scroll nodes resolve scope at mount
             Mount(root, desired);
             entry = new KeepAliveEntry
             {
@@ -767,11 +829,13 @@ public sealed class TreeReconciler
         if (_scene.IsLive(entry.Root))
         {
             OnSubtreeDeactivated?.Invoke(entry.Root);
-            UnmountSubtree(entry.Root);
+            UnmountSubtree(entry.Root);                             // saves scroll (scope still mapped)
+            _keepAliveRootKey.Remove((int)entry.Root.Raw.Index);
             _scene.FreeSubtree(entry.Root);
         }
         var root = _scene.CreateNode(desired.ElementTypeId);
         _scene.AppendChild(parent, root);
+        _keepAliveRootKey[(int)root.Raw.Index] = entry.Key;
         Mount(root, desired);
         entry.Root = root;
         entry.El = desired;
@@ -801,7 +865,8 @@ public sealed class TreeReconciler
     {
         if (!_scene.IsLive(entry.Root)) return;
         OnSubtreeDeactivated?.Invoke(entry.Root);
-        UnmountSubtree(entry.Root);
+        UnmountSubtree(entry.Root);                             // saves each scroll node's offset (scope still mapped)
+        _keepAliveRootKey.Remove((int)entry.Root.Raw.Index);
         _scene.FreeSubtree(entry.Root);
     }
 
@@ -992,6 +1057,73 @@ public sealed class TreeReconciler
         _scene.AppendChild(node, content);
         Mount(content, se.Content);
         _scene.ScrollRef(node).ContentNode = content;
+    }
+
+    // ── Scroll-position restoration (ScrollKey → ScrollMemory). Wired through WriteColumns (mount + content-identity
+    // change), UnmountSubtree (save on teardown), and ArrangeViewport (the RestorePending latch). See ScrollState. ──
+
+    /// <summary>The enclosing KeepAlive-slot key for a node (walks parents to the nearest tracked entry root), or "" if
+    /// the node is not under a KeepAlive boundary. Namespaces the scroll cache per navigation slot — which already carries
+    /// the tab id — so the same content open in two tabs keeps independent saved positions. Computed once, at mount.</summary>
+    private string ScopeFor(NodeHandle node)
+    {
+        for (var n = _scene.Parent(node); !n.IsNull; n = _scene.Parent(n))
+            if (_keepAliveRootKey.TryGetValue((int)n.Raw.Index, out var k)) return k;
+        return "";
+    }
+
+    private static string ScrollCacheKey(string? scope, string key)
+        => scope is { Length: > 0 } ? scope + "" + key : key;
+
+    private static void SeedRestore(ref ScrollState sc, float x, float y)
+    {
+        sc.OffsetX = sc.TargetX = x; sc.OffsetY = sc.TargetY = y;
+        sc.RestoreX = x; sc.RestoreY = y; sc.RestorePending = true;
+    }
+
+    /// <summary>Seed/save the viewport offset for its <see cref="ScrollState.ScrollKey"/>. At mount: stamp the slot scope +
+    /// key and, if a saved offset exists, seed it + arm the restore latch (so the FIRST realize/layout lands at the saved
+    /// position). On a content-identity change (same reused node, new key): save the outgoing offset, then seed the
+    /// incoming — or reset to the top for never-seen content (the "page B must not inherit page A's scroll" fix).</summary>
+    private void ApplyScrollKey(NodeHandle node, ref ScrollState sc, string? newKey, bool isMount)
+    {
+        if (isMount)
+        {
+            sc.ScrollKey = newKey;
+            if (newKey is null) return;                  // the common no-restoration viewport: skip the scope walk
+            sc.ScrollScope = ScopeFor(node);
+            if (_scrollMem.TryGet(ScrollCacheKey(sc.ScrollScope, newKey), out float x, out float y))
+                SeedRestore(ref sc, x, y);
+            return;
+        }
+        if (newKey == sc.ScrollKey) return;   // not a content-identity change → leave the live offset untouched
+        if (sc.ScrollKey is not null)
+            _scrollMem.Put(ScrollCacheKey(sc.ScrollScope, sc.ScrollKey), sc.OffsetX, sc.OffsetY);
+        sc.ScrollKey = newKey;
+        if (newKey is not null)
+        {
+            sc.ScrollScope ??= ScopeFor(node);   // scope is fixed for the node's lifetime; compute once if a null-key mount skipped it
+            if (_scrollMem.TryGet(ScrollCacheKey(sc.ScrollScope, newKey), out float nx, out float ny)) { SeedRestore(ref sc, nx, ny); return; }
+        }
+        sc.OffsetX = sc.TargetX = 0f; sc.OffsetY = sc.TargetY = 0f; sc.RestorePending = false;   // fresh/keyless content → top
+    }
+
+    /// <summary>Persist a scroll node's offset to <see cref="_scrollMem"/> on teardown (content-swap removal or KeepAlive
+    /// eviction), so a later cold revisit can restore it. The scope was stamped at mount, so no parent walk is needed.</summary>
+    private void SaveScroll(NodeHandle node)
+    {
+        if (!_scene.HasScroll(node)) return;
+        ref ScrollState sc = ref _scene.ScrollRef(node);
+        if (sc.ScrollKey is not null)
+            _scrollMem.Put(ScrollCacheKey(sc.ScrollScope, sc.ScrollKey), sc.OffsetX, sc.OffsetY);
+    }
+
+    /// <summary>While a <see cref="SkelRegionEl"/> is loading, hide its enclosing viewport's scrollbar (the nearest scroll
+    /// ancestor): the short skeleton → tall real-content swap would otherwise pop the rail. Cleared on Ready/Failed.</summary>
+    private void SetSkeletonScrollbarSuppression(NodeHandle node, bool loading)
+    {
+        for (var n = _scene.Parent(node); !n.IsNull; n = _scene.Parent(n))
+            if (_scene.HasScroll(n)) { _scene.ScrollRef(n).SuppressBarLoading = loading; _scene.Mark(n, NodeFlags.PaintDirty); return; }
     }
 
     private void MountVirtual(NodeHandle node, VirtualListEl ve)
@@ -1433,7 +1565,10 @@ public sealed class TreeReconciler
     private void Remove(NodeHandle node)
     {
         _reconciled = true;
-        if (Anim is { } anim && anim.TryGetTransition(node, out var spec) && spec.Exit.Active)
+        // Parked KeepAlive content is already invisible. A reactive boundary may settle after the park edge, but its
+        // animated child must be hard-removed instead of escaping the detached page as a globally drawn exit orphan.
+        bool parked = (_scene.Flags(node) & NodeFlags.Parked) != 0;
+        if (!parked && Anim is { } anim && anim.TryGetTransition(node, out var spec) && spec.Exit.Active)
         {
             // Smooth exit (mirror of the enter-reflow): orphaning DETACHES this node, so its sibling would SNAP into the
             // freed space. For a SizeMode.Reflow exit, snapshot the surviving PARENT's with-child size + queue it — after
@@ -1461,6 +1596,7 @@ public sealed class TreeReconciler
     {
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) UnmountSubtree(c);
 
+        SaveScroll(node);   // persist this viewport's offset for its ScrollKey so a cold revisit can restore it
         Connected?.CaptureOnLeave(node, removeTag: true);   // shared-element: a tagged node leaving captures its reverse snapshot
         int idx = (int)node.Raw.Index;
         if (_keepAliveState.Remove(idx, out var kas))
@@ -1480,7 +1616,11 @@ public sealed class TreeReconciler
         if (_nodeBindings.Remove(idx, out var binds)) for (int i = 0; i < binds.Count; i++) binds[i].Dispose();
         _providerSig.Remove(idx);
         _showState.Remove(idx);
-        _forState.Remove(idx);
+        if (_forState.Remove(idx, out var fs) && fs.Prev.Length > 0)   // return the pooled For buffer (finding #6)
+        {
+            Array.Clear(fs.Prev, 0, fs.Len);
+            ArrayPool<Element>.Shared.Return(fs.Prev);
+        }
         if (_skelState.Remove(idx, out var sk) && sk.Group is { } skg) SkelGroupCoordinator.Unregister(skg, idx);
         if (_comps.Remove(node, out var e)) { e.Effect?.Dispose(); e.Comp.Unmount(); _live.Remove(e.Comp); _anchorOf.Remove(e.Comp); }
         if (_virtuals.Remove(node, out var v))
@@ -1509,11 +1649,138 @@ public sealed class TreeReconciler
         };
     }
 
+    /// <summary>Compile an element's declarative <see cref="ScrollBindDsl"/> entries into POD
+    /// <see cref="FluentGpu.Animation.ScrollBind"/> rows on the scene's scroll-binding slab: resolve the enclosing scroller
+    /// once, bake literal-px anchors now (geometry anchors re-bake at ArrangeViewport), and link each into the scroller's
+    /// eval chain + the node's teardown chain. Re-bake is wholesale (free the node's old rows first) so a prop change
+    /// self-cleans. Subsumes the old StickyTop / OnPinned / ScrollStretchHeader wiring.</summary>
+    private void BakeScrollBinds(NodeHandle node, Element el)
+    {
+        var dsls = el.ScrollBinds;
+        int nodeIdx = (int)node.Raw.Index;
+        var table = _scene.ScrollBinds;
+        bool had = table.NodeHasBinds(nodeIdx);
+        if ((dsls is null || dsls.Length == 0) && !had) return;   // nothing now, nothing before → skip
+        if (table.NodeOwnsSink(nodeIdx, FluentGpu.Animation.BindSink.PresentedHTrailing))
+        {
+            ref NodePaint p = ref _scene.Paint(node);
+            p.PresentedH = float.NaN;
+            p.ChildShiftY = 0f;
+            _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+        }
+        table.ClearNode(nodeIdx);                                 // wholesale re-bake (slot reuse self-cleans)
+        if (dsls is null || dsls.Length == 0) return;
+
+        // Resolve the enclosing scroll viewport once (the per-frame eval is then pure index arithmetic).
+        NodeHandle scroller = NodeHandle.Null;
+        for (var p = _scene.Parent(node); !p.IsNull; p = _scene.Parent(p))
+            if ((_scene.Flags(p) & NodeFlags.Scrollable) != 0) { scroller = p; break; }
+
+        foreach (var d in dsls)
+        {
+            var row = new FluentGpu.Animation.ScrollBind { Target = node, OnFlag = d.OnFlag, FlagBit = d.FlagBit };
+            if (d.PinTop is { } inset)
+            {
+                row.PinKind = 1;
+                row.Inset = inset;
+                row.Source = FluentGpu.Animation.ScrollChannel.Offset;
+                row.Sink = FluentGpu.Animation.BindSink.TransY;
+                row.Flags |= FluentGpu.Animation.ScrollBind.FlagPaintAbove;
+            }
+            else if (d.StretchFromTop)
+            {
+                row.Source = FluentGpu.Animation.ScrollChannel.OverscrollBand;
+                row.Sink = FluentGpu.Animation.BindSink.ScaleUniform;
+                row.Flags |= FluentGpu.Animation.ScrollBind.FlagStretchClosedForm;
+            }
+            else
+            {
+                row.Source = d.From;
+                row.Sink = d.To;
+                row.OutLo = d.OutStart;
+                row.OutHi = d.OutEnd;
+                row.Ease = d.Ease;
+                if (d.Clamp) row.Flags |= FluentGpu.Animation.ScrollBind.FlagClampOut;
+                var r = d.Range;
+                if (!r.HasValue)
+                {
+                    row.AnchorA = FluentGpu.Animation.ScrollBindAnchor.OffsetFrac; row.AnchorAv = 0f;
+                    row.AnchorB = FluentGpu.Animation.ScrollBindAnchor.OffsetFrac; row.AnchorBv = 1f;
+                }
+                else { row.AnchorA = r.A; row.AnchorAv = r.Av; row.AnchorB = r.B; row.AnchorBv = r.Bv; }
+                if (IsGeometryAnchor(row.AnchorA) || IsGeometryAnchor(row.AnchorB))
+                    row.Flags |= FluentGpu.Animation.ScrollBind.FlagGeometryAnchor;   // (re)bake at ArrangeViewport
+                else { row.RangeA = row.AnchorAv; row.RangeB = row.AnchorBv; }          // literal-px ⇒ bake now
+            }
+            table.Add(nodeIdx, scroller, row);
+        }
+    }
+
+    private static bool IsGeometryAnchor(FluentGpu.Animation.ScrollBindAnchor a)
+        => a != FluentGpu.Animation.ScrollBindAnchor.OffsetPx;
+
+    /// <summary>Build a LayoutTransition from the new declarative Element fields (Enter/Exit/Transition/Layout/Stagger)
+    /// so the rework's authoring surface routes through the existing FLIP/enter/exit seed lifecycle. Null when the node
+    /// declares none. (While* gesture states are wired separately; this covers Enter/Exit/Layout + the parent Stagger.)</summary>
+    private LayoutTransition? SynthesizeDeclarative(NodeHandle node, Element el)
+    {
+        bool hasEnter = el.Enter is not null, hasExit = el.Exit is not null;
+        float stagger = hasEnter ? StaggerDelayMs(node) : 0f;   // a parent's Stagger delays this child's Enter
+        if (el.Layout is { } lt)
+            return (!hasEnter && !hasExit) ? lt
+                 : lt with
+                   {
+                       Enter = hasEnter ? (el.Enter!.Value with { Active = true }) : lt.Enter,
+                       Exit = hasExit ? (el.Exit!.Value with { Active = true }) : lt.Exit,
+                       DelayMs = lt.DelayMs + stagger,
+                   };
+        if (!hasEnter && !hasExit) return null;
+        TransitionDynamics dyn = el.Transition is { } m ? m.ToDynamics() : TransitionDynamics.Default;
+        return new LayoutTransition(
+            TransitionChannels.Opacity, dyn, SizeMode.Auto,
+            Enter: hasEnter ? (el.Enter!.Value with { Active = true }) : default,
+            Exit: hasExit ? (el.Exit!.Value with { Active = true }) : default,
+            DelayMs: stagger);
+    }
+
+    /// <summary>A parent's <see cref="FluentGpu.Dsl.Element.Stagger"/> delays each child's ENTER by (sibling index ×
+    /// stagger ms) — a list/shelf whose items reveal in sequence. O(siblings) at mount (not the hot path); returns 0
+    /// when no parent staggers.</summary>
+    private float StaggerDelayMs(NodeHandle node)
+    {
+        NodeHandle parent = _scene.Parent(node);
+        if (parent.IsNull || !_childStagger.TryGetValue((int)parent.Raw.Index, out float per) || per <= 0f) return 0f;
+        int i = 0;
+        for (var c = _scene.FirstChild(parent); !c.IsNull && c.Raw.Index != node.Raw.Index; c = _scene.NextSibling(c)) i++;
+        return i * per;
+    }
+
+    /// <summary>Resolve a node's <see cref="FluentGpu.Dsl.Element.RelativeTo"/> to the live anchor node (the one carrying
+    /// that MorphId) it should FLIP relative to — the host calls this at projection capture. Null when the node has no
+    /// relativeTarget or its anchor isn't currently live (→ the default parent-relative FLIP).</summary>
+    internal NodeHandle ResolveRelativeTarget(NodeHandle node)
+    {
+        if (!_relativeKey.TryGetValue((int)node.Raw.Index, out string? key)) return default;
+        if (!_keyNode.TryGetValue(key, out NodeHandle target) || target.IsNull || !_scene.IsLive(target)) return default;
+        return target;
+    }
+
     private void WriteColumns(NodeHandle node, Element el, bool isMount, Element? old = null)
     {
         // Shared-element (connected-animation) tag: a node carrying MorphId is a Hero participant — its laid-out rect +
         // art are tracked so they fly between routes. Runs for every element type (cover Image, skeleton/cover Box).
-        if (el.MorphId is { Length: > 0 } morphKey) Connected?.NoteTagged(node, morphKey);
+        if (el.MorphId is { Length: > 0 } morphKey) { Connected?.NoteTagged(node, morphKey); _keyNode[morphKey] = node; }
+        // FLIP relativeTarget: record the follower → anchor-key link (resolved live by ResolveRelativeTarget at capture).
+        if (el.RelativeTo is { Length: > 0 } relKey) _relativeKey[(int)node.Raw.Index] = relKey; else _relativeKey.Remove((int)node.Raw.Index);
+
+        // Generic scroll-driven bindings (sticky / overscroll-stretch / parallax / fade / collapse / shy / pull-to-refresh):
+        // compiled to POD ScrollBind rows for every element type, replacing the old per-feature StickyTop/ScrollStretchHeader passes.
+        BakeScrollBinds(node, el);
+
+        // Stagger (declarative): a parent records its per-child entrance delay; each child's SynthesizeDeclarative reads
+        // it + the child's sibling index to delay that child's Enter (a staggered list/shelf reveal). Reconciler-local;
+        // cleared when Stagger drops to 0. Set for every element type (any container can stagger its children).
+        if (el.Stagger > 0f) _childStagger[(int)node.Raw.Index] = el.Stagger; else _childStagger.Remove((int)node.Raw.Index);
 
         switch (el)
         {
@@ -1551,6 +1818,7 @@ public sealed class TreeReconciler
                     }
                     _scene.SetBrushAnim(node, ba);
                     _scene.Mark(node, NodeFlags.PaintDirty);
+                    Anim?.SeedBrushFade(node, ba.DurationMs);   // drive the cross-fade T via the unified engine (no separate ticker)
                 }
 
                 // Guarded like Opacity/Width/Height/Text: a bound fill is owned by its effect — the static must never
@@ -1647,8 +1915,9 @@ public sealed class TreeReconciler
                 li.Wrap = b.Wrap;
                 if (b.ZStack) _scene.Mark(node, NodeFlags.ZStack); else _scene.Unmark(node, NodeFlags.ZStack);
                 if (b.ClipToBounds) _scene.Mark(node, NodeFlags.ClipsToBounds); else _scene.Unmark(node, NodeFlags.ClipsToBounds);
+                if (b.IsolateLayout) _scene.Mark(node, NodeFlags.LayoutBoundary); else _scene.Unmark(node, NodeFlags.LayoutBoundary);
                 if (b.CounterScale) _scene.Mark(node, NodeFlags.CounterScaled); else _scene.Unmark(node, NodeFlags.CounterScaled);
-                if (b.StickyTop is { } st) _scene.SetSticky(node, st, b.OnPinned); else _scene.ClearSticky(node);
+                // sticky + overscroll-stretch are now generic ScrollBinds (baked in WriteColumns' common section above).
                 _scene.SetBoundsChangedHandler(node, b.OnBoundsChanged);
                 if (b.Animate is { } at && Anim is { } anim)
                 {
@@ -1663,6 +1932,24 @@ public sealed class TreeReconciler
                     }
                 }
                 else { Anim?.ClearTransition(node); _scene.Unmark(node, NodeFlags.BoundsAnimated); }
+                // NEW declarative Enter/Exit/Layout (the base-Element authoring fields): when the author used the new
+                // surface instead of `Animate`, synthesize a LayoutTransition and route through the PROVEN seed/orphan/
+                // reclaim lifecycle — the mount-Enter seed here + the unmount-Exit path read the stashed spec. Guarded by
+                // `b.Animate is null` + a declarative field set, so it cannot affect the existing (b.Animate) gates.
+                if (b.Animate is null && Anim is { } danim && SynthesizeDeclarative(node, el) is { } dt)
+                {
+                    danim.SetTransition(node, dt);
+                    if ((dt.Channels & TransitionChannels.Bounds) != 0) _scene.Mark(node, NodeFlags.BoundsAnimated);
+                    if (isMount && dt.Enter.Active)
+                    {
+                        danim.SeedEnter(node, dt.Enter, dt);
+                        if (dt.Size == SizeMode.Reflow) danim.PendingEnterReflow.Add(node);
+                    }
+                }
+                // NEW declarative gesture-state targets (WhileHover/WhilePressed/WhileFocus): stashed for the
+                // InteractionState priority resolver, which springs them on the input edge (AppHost wires
+                // ApplyInteractionEdge). All-null clears the row, so it's inert for nodes that don't use While*.
+                Anim?.SetInteractTargets((int)node.Raw.Index, b.WhileHover, b.WhilePressed, b.WhileFocus, b.Transition ?? MotionTok.ControlFaster);
                 if (b.HitTestVisible) _scene.Mark(node, NodeFlags.HitTestVisible); else _scene.Unmark(node, NodeFlags.HitTestVisible);
                 // Disabled gate (set unconditionally each reconcile — toggling IsEnabled must both set AND clear the bit).
                 if (b.IsEnabled) _scene.Unmark(node, NodeFlags.Disabled); else _scene.Mark(node, NodeFlags.Disabled);
@@ -1846,9 +2133,15 @@ public sealed class TreeReconciler
                 ss.Zoomable = s.Zoomable;
                 ss.MinZoom = s.MinZoom; ss.MaxZoom = s.MaxZoom;
                 ss.EdgeCueConfig = ResolveEdgeCues(s.EdgeCues);
+                ss.Chaining = (byte)s.Chaining;                  // nested-scroll hand-off policy (touch pan)
+                // Change-only scroll-geometry observer (the escape hatch; pull-to-refresh / analytics).
+                if (s.OnScrollGeometryChanged is { } obs) _scene.SetScrollObserver(node, obs.Project, obs.Action);
+                else _scene.ClearScrollObserver(node);
                 if (s.EdgeFade is { } sef) _scene.SetEdgeFade(node, sef); else _scene.ClearEdgeFade(node);
                 ss.AutoEdgeFade = s.AutoEdgeFade; ss.AutoEdgeFadeBand = s.AutoEdgeFade ? 24f : 0f;
                 ss.AlwaysShowBar = s.AlwaysShowScrollbar;
+                ss.SuppressBar = s.SuppressScrollBar;
+                ApplyScrollKey(node, ref ss, s.ScrollKey, isMount);   // seed (mount) / save+seed (content change) the offset
                 break;
             }
             case VirtualListEl v:
@@ -1875,6 +2168,7 @@ public sealed class TreeReconciler
                 if (v.EdgeFade is { } vef) _scene.SetEdgeFade(node, vef); else _scene.ClearEdgeFade(node);
                 sc.AutoEdgeFade = v.AutoEdgeFade; sc.AutoEdgeFadeBand = v.AutoEdgeFade ? 24f : 0f;
                 sc.SuppressBar = v.SuppressScrollBar;
+                ApplyScrollKey(node, ref sc, v.ScrollKey, isMount);   // seed BEFORE RealizeWindow → first window at saved row
                 break;
             }
             case GridEl g:
@@ -1976,6 +2270,7 @@ public sealed class TreeReconciler
                     };
                     _scene.SetBrushAnim(node, ba);
                     _scene.Mark(node, NodeFlags.PaintDirty);
+                    Anim?.SeedBrushFade(node, ba.DurationMs);   // drive the cross-fade T via the unified engine (no separate ticker)
                 }
 
                 // Guarded like Text below: a bound color is owned by its effect (EditableText's doc-vs-placeholder

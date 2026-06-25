@@ -1,3 +1,4 @@
+using FluentGpu.Animation;
 using FluentGpu.Foundation;
 using FluentGpu.Scene;
 using FluentGpu.Text;
@@ -88,6 +89,22 @@ public sealed class FlexLayout
         ref RectF b = ref _scene.Bounds(node);
         float w = float.IsNaN(li.Width) ? b.W : li.Width;
         float h = float.IsNaN(li.Height) ? b.H : li.Height;
+        // A scoped relayout roots HERE (this node is a layout boundary — IsolateLayout / scroll viewport / fixed-size),
+        // so no ANCESTOR pass re-sizes this node's OUTER box. On a PARENT-DETERMINED axis (no explicit size — the node
+        // grows/stretches/fills) the stored Bounds can be STALE and too LARGE: a sibling that reserved space after this
+        // node was last arranged (a docked player bar shrinking the content region) shrinks the parent, but the firewall
+        // keeps re-solving this subtree against the stale box — so the node bleeds past its parent (content paints under
+        // the translucent player bar). Re-clamp each parent-determined axis to the parent's current inner content box
+        // (minus this node's margin): a parent-determined boundary can never legitimately exceed its parent. Explicit
+        // li.Width/Height (incl. a SizeMode.Relayout animation writing the interpolated size) are honoured untouched.
+        var parent = _scene.Parent(node);
+        if (!parent.IsNull)
+        {
+            ref RectF pb = ref _scene.Bounds(parent);
+            ref LayoutInput pli = ref _scene.Layout(parent);
+            if (float.IsNaN(li.Width))  w = MathF.Min(w, MathF.Max(0f, pb.W - pli.Padding.Horizontal - li.Margin.Horizontal));
+            if (float.IsNaN(li.Height)) h = MathF.Min(h, MathF.Max(0f, pb.H - pli.Padding.Vertical   - li.Margin.Vertical));
+        }
         Measure(node, w);
         Arrange(node, b.X, b.Y, w, h);
     }
@@ -165,7 +182,14 @@ public sealed class FlexLayout
         if (paint.VisualKind == VisualKind.Text)
         {
             float measureW = DefiniteWidth(in li, availW);
-            float maxW = li.TextStyle.Wrap != Foundation.TextWrap.NoWrap && !float.IsInfinity(measureW) ? MathF.Max(0f, measureW) : float.PositiveInfinity;
+            // MaxLines/Trim need a finite wrap width even when Wrap=NoWrap — otherwise a long title measures at its
+            // natural width, the grid cell's cross-size inflates, and glyphs bleed into the next column.
+            bool widthConstrained = !float.IsInfinity(measureW);
+            bool needsColumnBudget = li.TextStyle.Wrap != Foundation.TextWrap.NoWrap
+                || li.TextStyle.Trim != Foundation.TextTrim.None;
+            float maxW = widthConstrained && needsColumnBudget
+                ? MathF.Max(0f, measureW)
+                : float.PositiveInfinity;
             // Measure cache: skip re-shaping when (text, style, availWidth) are unchanged (the §2.3 down-rule win on a
             // scoped relayout). Pure-function key ⇒ self-invalidating; helps the real shaping path, neutral headless.
             ref TextMeasureCache mc = ref _scene.MeasureCacheRef(node);
@@ -241,7 +265,21 @@ public sealed class FlexLayout
                     var cs = Measure(c, row && cli.FlexGrow > 0f ? growAvail : childAvail);
                     float cMain = row ? cs.Width : cs.Height;
                     float cCross = row ? cs.Height : cs.Width;
-                    if (!float.IsNaN(cli.FlexBasis)) cMain = cli.FlexBasis;
+                    // In an INDEFINITE column, a growable Basis=0 child must still contribute its content height while
+                    // the parent determines its own height; otherwise the following sibling is stacked over that content.
+                    // A row with a finite width is different: Basis=0 is the standard "flex: 1 1 0" contract and MUST
+                    // suppress intrinsic width. Controls such as AutoSuggestBox depend on that to shrink before fixed
+                    // toolbar siblings. Applying the column min-size rule to finite rows makes their stale/intrinsic
+                    // content width become the flex base and lets it paint across later siblings.
+                    if (!float.IsNaN(cli.FlexBasis))
+                    {
+                        bool indefiniteMain = row
+                            ? float.IsInfinity(measureW)
+                            : float.IsNaN(li.Height);
+                        cMain = cli.FlexGrow > 0f && indefiniteMain
+                            ? MathF.Max(cli.FlexBasis, cMain)
+                            : cli.FlexBasis;
+                    }
                     cMain += MarginMain(cli, row);
                     cCross += MarginCross(cli, row);
                     main += cMain;
@@ -512,7 +550,8 @@ public sealed class FlexLayout
         float padL = li.Padding.Left, padT = li.Padding.Top;
 
         (float contentW, float contentH) =
-              sc0.ItemCount > 0 && sc0.Layout is IMeasuredVirtualLayout ml ? ArrangeVirtualMeasured(node, ml, in sc0, content, innerW, innerH, padL, padT, horizontal)
+              sc0.ItemCount > 0 && sc0.Layout is IMeasuredVirtualLayout ml && UsesMeasuredExtent(sc0.Layout)
+                ? ArrangeVirtualMeasured(node, ml, in sc0, content, innerW, innerH, padL, padT, horizontal)
             : sc0.ItemCount > 0 && sc0.Layout is not null ? ArrangeVirtualLayout(in sc0, content, innerW, innerH, padL, padT, horizontal)
             : sc0.ItemCount > 0                           ? ArrangeVirtualVariable(node, in sc0, content, innerW, innerH, padL, padT, horizontal)
             :                                               ArrangePlainScroll(content, innerW, innerH, padL, padT, horizontal);
@@ -525,30 +564,36 @@ public sealed class FlexLayout
         // Re-clamp the scroll position to the (possibly changed) content on resize/relayout, and reflect it in the
         // content's -offset transform, so a smaller content / wrapped reflow doesn't leave the view scrolled past the end.
         float maxX = MathF.Max(0f, contentW - innerW), maxY = MathF.Max(0f, contentH - innerH);
+        // Scroll-position restoration latch: a revisit seeded RestoreX/Y (Reconciler.ApplyScrollKey). Re-assert it on EACH
+        // layout until the real content extent can hold it — the loading skeleton is short, so the saved deep offset can't
+        // apply until the taller real content lands; until then sit at the top rather than a clamped-mid skeleton position.
+        // Because the seed is in place before the FIRST realize/layout, the first PRESENTED frame is already at the saved
+        // row (no scroll-to-top flash). Released on satisfaction (here) or by a user scroll (InputDispatcher.SetScrollOffset).
+        if (sc.RestorePending)
+        {
+            bool okX = maxX + 0.5f >= sc.RestoreX, okY = maxY + 0.5f >= sc.RestoreY;
+            sc.OffsetX = sc.TargetX = okX ? sc.RestoreX : 0f;
+            sc.OffsetY = sc.TargetY = okY ? sc.RestoreY : 0f;
+            if (okX && okY) sc.RestorePending = false;
+        }
         sc.OffsetX = Clamp(sc.OffsetX, 0f, maxX); sc.TargetX = Clamp(sc.TargetX, 0f, maxX);
         sc.OffsetY = Clamp(sc.OffsetY, 0f, maxY); sc.TargetY = Clamp(sc.TargetY, 0f, maxY);
         if (!content.IsNull && _scene.IsLive(content))
         {
             ref NodePaint cp = ref _scene.Paint(content);
-            // Mirror Input.ApplyScrollPosition's -(offset + band) EXACTLY (incl. its zoom branch). A RELAYOUT that fires
-            // while the rubber-band is displaced — an async re-render mid-overpan/spring at an edge — must NOT drop the band
-            // for one frame: that 1-frame band-blink shifted the WHOLE content by the band amount (~tens of px), the
-            // top/bottom-edge "another viewport" flash. And for a pinch-zoomed viewport (z!=1) the relayout must NOT drop
-            // the scale to z==1 either — write the same origin-conjugated z·p−offset map the scroll path writes.
-            float band = sc.OverscrollPx;
-            float z = sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f;
-            float offX = horizontal ? sc.OffsetX + band : 0f, offY = horizontal ? 0f : sc.OffsetY + band;
-            if (z == 1f)
-            {
-                cp.LocalTransform = Affine2D.Translation(-offX, -offY);
-            }
-            else
-            {
-                ref RectF cb = ref _scene.Bounds(content);
-                float ox = cb.W * cp.OriginX, oy = cb.H * cp.OriginY;
-                var map = new Affine2D(z, 0f, 0f, z, -offX, -offY);
-                cp.LocalTransform = Affine2D.Translation(-ox, -oy).Multiply(map).Multiply(Affine2D.Translation(ox, oy));
-            }
+            float off = horizontal ? sc.OffsetX : sc.OffsetY;
+            float maxOff = horizontal ? MathF.Max(0f, sc.ContentW - innerW) : MathF.Max(0f, sc.ContentH - innerH);
+            float band = OverscrollPhysics.GuardBandSign(sc.OverscrollPx, off, maxOff);
+            if (sc.Overscrolling && band != sc.OverscrollPx) sc.OverscrollPx = band;
+            OverscrollPhysics.WriteContentTransform(ref cp, in _scene.Bounds(content), horizontal, off, band,
+                sc.ZoomFactor);
+        }
+        // (Re)bake geometry-dependent ranges (Content*/Bounds now known), then apply the generic scroll-driven bindings
+        // in the SAME ArrangeViewport invocation — a resize frame must not paint a one-frame-stale bound transform.
+        if (!content.IsNull && _scene.IsLive(content))
+        {
+            ScrollBindEval.BakeGeometry(_scene, node, in sc);
+            ScrollBindEval.ApplyContinuous(_scene, node, ref sc);
         }
 
         // D1 realize-after-layout: the realize window was computed BEFORE this arrange published the real viewport
@@ -609,13 +654,16 @@ public sealed class FlexLayout
         for (var rc = _scene.FirstChild(content); !rc.IsNull; rc = _scene.NextSibling(rc), ord++)
         {
             var rect = layout.ItemRect(first + ord, cross);   // children are in window (index) order; content-space rect
-            Measure(rc);                                       // base sizes for the cell's own internal flex
             // Inset the item by its Margin within the slot, so a list item honors Margin like any stack child (the WinUI
             // ListViewItem backplate inset {4,2,4,2}). Without this the item filled the full slot — a margined row (an
             // inset highlight pill / backplate) then started its content at padding-only, drifting out of alignment with
             // a fixed header outside the list. The slot stride (ItemRect/extent) is unchanged; only the item insets.
             ref LayoutInput rli = ref _scene.Layout(rc);
             float mL = rli.Margin.Left, mT = rli.Margin.Top, mR = rli.Margin.Right, mB = rli.Margin.Bottom;
+            // Measure at the slot's content WIDTH (its column), not unbounded — so a grid cell's text truncates/wraps to its
+            // own column instead of measuring at its full natural width and bleeding into neighbours. A stack slot's
+            // rect.W == the full cross width, so list rows are unaffected (they already filled it).
+            Measure(rc, MathF.Max(0f, rect.W - mL - mR));
             Arrange(rc, rect.X + mL, rect.Y + mT, MathF.Max(0f, rect.W - mL - mR), MathF.Max(0f, rect.H - mT - mB));
         }
         return (contentW, contentH);
@@ -663,6 +711,10 @@ public sealed class FlexLayout
         return (contentW, contentH);
     }
 
+    /// <summary>True when the layout participates in estimate-then-correct (not a fixed-geometry grid posing as measured).</summary>
+    private static bool UsesMeasuredExtent(IVirtualLayout layout)
+        => layout is not GridVirtualLayout gv || gv.IsMeasured;
+
     // Measured-seam virtualization (E11-L0): the same estimate-then-correct + scroll-anchoring contract as the
     // built-in Fenwick path (ArrangeVirtualVariable), but the extents/prefix sums live behind the user-implementable
     // IMeasuredVirtualLayout — custom layouts can be variable/sliver-like. virtualization.md §6.2 semantics.
@@ -678,16 +730,33 @@ public sealed class FlexLayout
         int anchorIndex = layout.IndexAt(offset, cross);
         float anchorWithin = offset - layout.OffsetOf(anchorIndex, cross);
 
+        if (layout is GridVirtualLayout { IsMeasured: true } grid)
+            grid.ResetMeasurePass(sc.ItemCount, cross);
+
+        // Pass 1 — measure every realized cell and feed extents (measured grids need the full row before heights lock).
         int ord = 0;
         for (var rc = _scene.FirstChild(content); !rc.IsNull; rc = _scene.NextSibling(rc), ord++)
         {
             int index = first + ord;
-            var cs = Measure(rc);                                  // the row's natural main extent
+            var rect = layout.ItemRect(index, cross);
+            ref LayoutInput rli = ref _scene.Layout(rc);
+            float mL = rli.Margin.Left, mT = rli.Margin.Top, mR = rli.Margin.Right, mB = rli.Margin.Bottom;
+            float measureW = horizontal ? MathF.Max(0f, rect.H - mT - mB) : MathF.Max(0f, rect.W - mL - mR);
+            var cs = Measure(rc, measureW);
             float main = horizontal ? cs.Width : cs.Height;
-            layout.SetMeasured(index, main, cross);                // estimate-then-correct through the seam (O(log n))
-            var rect = layout.ItemRect(index, cross);              // post-correction content-space rect
-            if (horizontal) Arrange(rc, rect.X, rect.Y, main, innerH);
-            else            Arrange(rc, rect.X, rect.Y, innerW, main);
+            layout.SetMeasured(index, main, cross);
+        }
+
+        // Pass 2 — arrange at the corrected slots (row-synced for grids).
+        ord = 0;
+        for (var rc = _scene.FirstChild(content); !rc.IsNull; rc = _scene.NextSibling(rc), ord++)
+        {
+            int index = first + ord;
+            var rect = layout.ItemRect(index, cross);
+            ref LayoutInput rli = ref _scene.Layout(rc);
+            float mL = rli.Margin.Left, mT = rli.Margin.Top, mR = rli.Margin.Right, mB = rli.Margin.Bottom;
+            Arrange(rc, rect.X + mL, rect.Y + mT,
+                MathF.Max(0f, rect.W - mL - mR), MathF.Max(0f, rect.H - mT - mB));
         }
 
         float mainContent = layout.ContentExtent(sc.ItemCount, cross);

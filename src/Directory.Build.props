@@ -18,6 +18,11 @@
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <RootNamespace>$(MSBuildProjectName)</RootNamespace>
 
+    <!-- Write source-generator output to disk so it is inspectable: obj/<cfg>/<tfm>/generated/<analyzer>/<generator>/*.g.cs.
+         Roslyn keeps generated sources IN-MEMORY by default (they compile but never hit disk and the IDE's Analyzers node
+         only shows them after a design-time build). This makes every .g.cs a real file. -->
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+
     <!-- DocFX API reference: emit XML doc files; don't warn on members without doc comments. -->
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);CS1591</NoWarn>

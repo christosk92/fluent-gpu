@@ -12,7 +12,10 @@ namespace Wavee;
 // view model the rail/rows/trailing read from, and the four DetailConfig literals that flip the per-context knobs.
 
 /// <summary>Which detail surface a route resolves to. (Single is the Album path with ≤2 tracks — resolved post-load.)</summary>
-public enum DetailKind { Album, Playlist, Liked }
+public enum DetailKind { Album, Playlist, Liked, Show }
+
+/// <summary>The right-column content the shared detail surface renders — music tracks vs podcast episodes.</summary>
+public enum DetailContent { Tracks, Episodes }
 
 /// <summary>The left-rail badge row style.</summary>
 public enum BadgeStyle { None, TypeYear, OwnerRow }
@@ -60,7 +63,9 @@ public sealed record DetailModel(
     AlbumKind ReleaseKind = AlbumKind.Album,   // album path: which release type (drives badge + config)
     IReadOnlyList<Artist>? Fans = null,        // album trailing: "Fans also like" artist chips
     IReadOnlyList<PlaylistSummary>? FeaturedOn = null,   // album trailing: "Featured on" playlist shelf
-    PlaylistCapabilities Capabilities = default)   // playlist: what the user may do (drives read-only vs editable UI when edit lands)
+    PlaylistCapabilities Capabilities = default,   // playlist: what the user may do (drives read-only vs editable UI when edit lands)
+    // Podcast show fields — the surface renders Episodes (not Tracks) when DetailConfig.Content == Episodes.
+    IReadOnlyList<Episode>? Episodes = null, string? Publisher = null, IReadOnlyList<string>? Topics = null, double? Rating = null)
 {
     /// <summary>Shared-element (connected-animation) key for the cover art — set by <c>DetailPage</c> from the route
     /// ("album:"+uri / "pl:"+uri) so the cover flies to/from the like-tagged Home card. Null = no Hero.</summary>
@@ -89,7 +94,8 @@ public readonly record struct DetailConfig(
     bool HasTrailing,               // album/single: About/Fans/More-by (and selects the outer-scroll composition)
     HeartMode Heart,
     bool ShowPlays = false,         // album/single/EP/compilation: a Plays column + per-row video indicator + top-track star
-    bool ShowTrackArtist = false)   // show the per-track artist subline (playlist/liked, and compilations — various artists)
+    bool ShowTrackArtist = false,   // show the per-track artist subline (playlist/liked, and compilations — various artists)
+    DetailContent Content = DetailContent.Tracks)   // tracks (music) vs episodes (podcast show) for the right column
 {
     // Column track sets. Two shared instances → the header and rows are reference-equal (the alignment invariant).
     // playlist/liked: [ #, TITLE(+thumb+artist), ALBUM, ♥, DUR ]   album/single: [ #, TITLE(+artist), ♥, DUR ]
@@ -119,6 +125,14 @@ public readonly record struct DetailConfig(
         TwoColumn: false, RailWidth: 0f, Badges: BadgeStyle.None,
         ShowArtThumb: true, ShowAlbumColumn: true, Columns: ListColumns, CapTitle: true,
         Selection: ItemsSelectionMode.Extended, HasTrailing: false, Heart: HeartMode.None, ShowTrackArtist: true);
+
+    // A podcast show: the album-style two-column rail (cover · PODCAST pill · title · publisher/episode-count meta ·
+    // Play + Follow), with the right column rendering EPISODES (EpisodeList) instead of a track table.
+    public static DetailConfig Show => new(
+        TwoColumn: true, RailWidth: WaveeSize.RailAlbum, Badges: BadgeStyle.TypeYear,
+        ShowArtThumb: false, ShowAlbumColumn: false, Columns: AlbumColumns, CapTitle: false,
+        Selection: ItemsSelectionMode.None, HasTrailing: false, Heart: HeartMode.Follow,
+        Content: DetailContent.Episodes);
 }
 
 /// <summary>Shared formatting + small helpers for the detail surface.</summary>

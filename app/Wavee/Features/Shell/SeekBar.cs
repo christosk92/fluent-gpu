@@ -61,7 +61,14 @@ sealed class SeekBar : Component
             long dur = _b.DurationMs.Peek();
             if (dur <= 0L) { _displayFrac.Value = 0f; return; }
             long est = _tickPosMs + (Environment.TickCount64 - _tickWallMs);   // interpolate between 1 Hz ticks
-            _displayFrac.Value = Math.Clamp(est / (float)dur, 0f, 1f);
+            float frac = Math.Clamp(est / (float)dur, 0f, 1f);
+            // Quantize to whole-pixel granularity of the live track: a multi-minute track's playhead moves a few px/s, so
+            // most ticker frames land on the SAME pixel. Snapping _displayFrac to that pixel makes those frames write no
+            // transform → a byte-identical DrawList → the host's skip-submit gate elides the redundant GPU submit+present
+            // (the dominant at-rest cost), while a real pixel step still advances smoothly. Raw fraction when width unknown.
+            float w = _width;
+            float q = w > 1f ? MathF.Round(frac * w) / w : frac;
+            if (q != _displayFrac.Peek()) _displayFrac.Value = q;   // value-gate: an unmoved pixel is a true no-op (no bind re-run)
             return;
         }
         _displayFrac.Value = _b.PositionFrac.Peek();   // paused/stopped: static, the reported position

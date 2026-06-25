@@ -58,8 +58,12 @@ public sealed class ConnectedAnimation
     // In-flight overlay flies. Keyed so every live node carrying the key stays hidden under the overlay until it lands.
     // SrcCorners→DestCorners morph the rounding over the fly (a circular artist cover squaring into a card slot); Sx0 is
     // the seed scale, so the morph progress tracks the spring (1 at the source, 0-radius-delta at the dest).
-    private struct Flight { public NodeHandle Overlay; public NodeHandle Dest; public string Key; public int ImageId; public int Age; public CornerRadius4 SrcCorners, DestCorners; public float Sx0; public float LastDx, LastM11; public bool HasLast; public RectF DestRect; }
+    private struct Flight { public NodeHandle Overlay; public NodeHandle Dest; public string Key; public int ImageId; public int Age; public CornerRadius4 SrcCorners, DestCorners; public float Sx0; public float LastDx, LastM11; public bool HasLast; public RectF DestRect; public int DetSlot; }
     private readonly List<Flight> _flights = new();
+    // Flag-gated rebuild (FG_DETACHED_FLY): the fly renders as a DetachedAnimSlab snapshot (SceneRecorder.RecordDetached)
+    // instead of a live overlay node. Default off → the proven live-overlay path is unchanged (every existing gate holds).
+    private readonly DetachedAnimSlab _detached = new();
+    private readonly bool _detachedFly = System.Environment.GetEnvironmentVariable("FG_DETACHED_FLY") == "1";
     private const int MaxFlightFrames = 240;   // defensive: force-retire a wedged fly (~4s) so an overlay can never get stuck
 
     // Reused scratch (alloc-free steady state): keys/nodes touched this frame.
@@ -87,7 +91,10 @@ public sealed class ConnectedAnimation
     }
 
     /// <summary>The host keeps painting while a fly is in flight or a snapshot is waiting for its dest.</summary>
-    public bool HasActive => _flights.Count > 0 || _pending.Count > 0;
+    public bool HasActive => _flights.Count > 0 || _pending.Count > 0 || _detached.HasActive;
+
+    /// <summary>The detached-snapshot slab the flag-gated rebuild renders the fly through (SceneRecorder.RecordDetached).</summary>
+    public DetachedAnimSlab Detached => _detached;
 
     /// <summary>Probe/diagnostic only: the first live shared-element key currently registered (preferring a <c>pl:</c>
     /// key — the preview-path detail). Lets a harness trigger a REAL Hero fly without knowing the catalog data. Null if none.</summary>
@@ -124,8 +131,30 @@ public sealed class ConnectedAnimation
     /// <summary>Register a node as a shared-element participant for <paramref name="key"/> (its <c>MorphId</c>).</summary>
     public void NoteTagged(NodeHandle node, string key)
     {
-        if (_tagged.TryGetValue(node, out var t) && t.Key == key) return;   // already tagged with this key
+        if (_tagged.TryGetValue(node, out var t))
+        {
+            if (t.Key == key) return;   // already tagged with this key
+            // REASSIGNED to a different shared element on a REUSED node: the detail shell serves successive routes, so its
+            // ONE cover node re-tags (album:A → album:B / a sidebar nav to another playlist) every navigation. A fly still
+            // in flight under the OLD key is culling this node (Visible cleared + Opacity 0, re-applied each frame by
+            // Tick65) — but Settle restores visibility BY KEY, so once the node carries the new key that old flight's
+            // restore can never match it again and it stays record-culled forever: a permanently BLANK cover (only its
+            // sibling shimmer paints). Release the cull now; Tick65 re-applies it under the new key next frame iff a fly
+            // for `key` is genuinely in flight.
+            ReleaseCull(node);
+        }
         _tagged[node] = new Tag { Key = key };
+    }
+
+    // Undo a fly-cull (NodeFlags.Visible cleared + Opacity 0) left on a node whose shared-element key is being reassigned.
+    // Guarded on the Visible flag: a normal (un-culled) re-tag must never stomp a live opacity value — only this animation
+    // clears a content node's Visible, so Visible==0 on a tagged node means our own cull and nothing else.
+    private void ReleaseCull(NodeHandle node)
+    {
+        if (!_scene.IsLive(node) || (_scene.Flags(node) & NodeFlags.Visible) != 0) return;
+        _scene.Flags(node) |= NodeFlags.Visible;
+        _scene.Paint(node).Opacity = 1f;
+        _scene.Mark(node, NodeFlags.PaintDirty);
     }
 
     /// <summary>KeepAlive parked / un-parked a node. Reverse-fly capture on park is deferred to Phase 6 (capturing every
@@ -337,7 +366,7 @@ public sealed class ConnectedAnimation
         float ty = (snap.Rect.Y + snap.Rect.H * 0.5f) - (dest.Y + dest.H * 0.5f);
         p.LocalTransform = Affine2D.Translation(tx, ty).Multiply(Affine2D.Scale(sx, sy));
 
-        _scene.AddOverlay(ov);
+        if (!_detachedFly) _scene.AddOverlay(ov);   // detached rebuild draws via RecordDetached instead (overlay node stays engine-animated, undrawn)
         // Materialize-in: a short opacity fade so the cover eases into view rather than hard-popping at the source rect.
         // The source card has just unmounted on a forward nav (and the dest is hidden under us), so there's no double
         // image — only the overlay carries the art for this fade. Starts at a small floor (not 0) so the cover is never
@@ -362,7 +391,14 @@ public sealed class ConnectedAnimation
         }
 
         SetTaggedOpacity(key, 0f, fade: false); SetTaggedVisible(key, false);   // hide the real dest under the flying overlay (record-culled; Tick65 re-applies each frame)
-        _flights.Add(new Flight { Overlay = ov, Dest = destNode, Key = key, ImageId = snap.ImageId, SrcCorners = snap.Corners, DestCorners = destCorners, Sx0 = sx, DestRect = dest });
+        int detSlot = -1;
+        if (_detachedFly)   // rebuild: snapshot the fly into the DetachedAnimSlab; SyncDetached mirrors the engine-animated paint each frame, RecordDetached draws it
+        {
+            detSlot = _detached.Detach(_detached.OpenGroup(destNode, PresenceMode.Sync));
+            ref DetachedNode dn = ref _detached.At(detSlot);
+            dn.Kind = (byte)VisualKind.Image; dn.ImageId = snap.ImageId; dn.Fit = snap.Fit;
+        }
+        _flights.Add(new Flight { Overlay = ov, Dest = destNode, Key = key, ImageId = snap.ImageId, SrcCorners = snap.Corners, DestCorners = destCorners, Sx0 = sx, DestRect = dest, DetSlot = detSlot });
     }
 
     private void RetireFlightsForKey(string key)
@@ -372,7 +408,7 @@ public sealed class ConnectedAnimation
             if (_flights[i].Key != key) continue;
             var f = _flights[i];
             _images.Unpin(new ImageHandle(f.ImageId));
-            if (_scene.IsLive(f.Overlay)) { _scene.RemoveOverlay(f.Overlay); _scene.FreeSubtree(f.Overlay); }
+            FreeFlight(in f);
             _flights.RemoveAt(i);
         }
         SetTaggedVisible(key, true);   // a retired fly (rapid re-nav) must never leave the dest record-culled (invisible)
@@ -394,7 +430,7 @@ public sealed class ConnectedAnimation
             {
                 SetTaggedVisible(f.Key, true); SetTaggedOpacity(f.Key, 1f, fade: false);
                 _images.Unpin(new ImageHandle(f.ImageId));
-                if (_scene.IsLive(f.Overlay)) { _scene.RemoveOverlay(f.Overlay); _scene.FreeSubtree(f.Overlay); }
+                FreeFlight(in f);
                 _flights.RemoveAt(i);
                 continue;
             }
@@ -426,10 +462,47 @@ public sealed class ConnectedAnimation
             // already ran this frame, before Settle) restarts it from 0 next frame, the 1-2 frame full→dim→up flicker.
             SetTaggedVisible(f.Key, true); SetTaggedOpacity(f.Key, 1f, fade: false);
             _images.Unpin(new ImageHandle(f.ImageId));
-            if (_scene.IsLive(f.Overlay)) { _scene.RemoveOverlay(f.Overlay); _scene.FreeSubtree(f.Overlay); }
+            FreeFlight(in f);
             _flights.RemoveAt(i);
         }
         if (_flights.Count == 0) _scene.OverlayClip = RectF.Infinite;   // last fly retired — release the band clip
+    }
+
+    // Free a retired flight's overlay node AND release its detached snapshot (flag-gated). One chokepoint so EVERY
+    // removal site (rapid re-nav, dest-moved, landed) releases the slab slot — a leaked InUse row would keep drawing.
+    private void FreeFlight(in Flight f)
+    {
+        if (_scene.IsLive(f.Overlay)) { _scene.RemoveOverlay(f.Overlay); _scene.FreeSubtree(f.Overlay); }
+        if (f.DetSlot >= 0) _detached.Retire(f.DetSlot);
+    }
+
+    /// <summary>Mirror each in-flight overlay's engine-animated paint into its DetachedNode snapshot — the flag-gated
+    /// rebuild's per-frame step (called after the anim tick, before record; the recorder's <c>RecordDetached</c> draws the
+    /// snapshots, so the overlay node is never added to the scene). The world composition matches the recorder's
+    /// overlay band exactly (T(bounds) ∘ transform-about-origin), so the detached fly is pixel-identical to the live one.</summary>
+    public void SyncDetached()
+    {
+        if (!_detachedFly || _flights.Count == 0) return;
+        for (int i = 0; i < _flights.Count; i++)
+        {
+            var f = _flights[i];
+            if (f.DetSlot < 0 || !_scene.IsLive(f.Overlay)) continue;
+            ref NodePaint p = ref _scene.Paint(f.Overlay);
+            ref RectF b = ref _scene.Bounds(f.Overlay);
+            ref DetachedNode d = ref _detached.At(f.DetSlot);
+            float ox = b.W * p.OriginX, oy = b.H * p.OriginY;
+            Affine2D world = Affine2D.Translation(b.X, b.Y);
+            if (!p.LocalTransform.IsIdentity)
+                world = world.Multiply(Affine2D.Translation(ox, oy)).Multiply(p.LocalTransform).Multiply(Affine2D.Translation(-ox, -oy));
+            d.WorldTransform = world;
+            d.Bounds = b;
+            d.Opacity = p.Opacity;
+            d.Corners = p.Corners;
+            d.Fill = p.Fill;
+            d.ImageId = p.ImageId;
+            d.Fit = p.ImageFit;
+            d.Kind = (byte)VisualKind.Image;
+        }
     }
 
     // The dest's own cover image has decoded AND its placeholder→image cross-fade has fully revealed — so revealing it

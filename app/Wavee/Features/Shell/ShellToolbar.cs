@@ -77,15 +77,18 @@ sealed class ShellToolbar : ReactiveComponent
             // ── centre: omnibar (left-aligned right after Home, like WaveeMusic — not centred) ──
             new BoxEl
             {
-                Grow = 1f, Basis = 0f, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start,
-                Padding = new Edges4(8f, 0f, 8f, 0f),
+                // Right margin keeps a clear gap between the omnibar and the account cluster — without it the search box's
+                // trailing icon butts right up against the profile avatar at narrower widths (reads as overlap).
+                Grow = 1f, Basis = 0f, Shrink = 1f, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start,
+                ClipToBounds = true,
+                Padding = new Edges4(8f, 0f, 8f, 0f), Margin = new Edges4(0f, 0f, WaveeSpace.L, 0f),
                 Children =
                 [
                     // Fills the omnibar slot, capped at 720 (shrinks below that on a narrow window).
                     AutoSuggestBox.Create(NoSuggestions, Loc.Get(Strings.Shell.SearchPlaceholder),
                         grow: 1f, maxFillWidth: 720f, text: _searchText,
-                        onQuerySubmitted: _ => _go("search", null),
-                        onSuggestionChosen: _ => _go("search", null),
+                        onQuerySubmitted: q => _go("search", string.IsNullOrWhiteSpace(q) ? null : q),
+                        onSuggestionChosen: q => _go("search", string.IsNullOrWhiteSpace(q) ? null : q),
                         minHeight: 36f, cornerRadius: 18f),
                 ],
             },

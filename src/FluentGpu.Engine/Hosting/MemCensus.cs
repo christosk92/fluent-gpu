@@ -49,7 +49,7 @@ public readonly struct CensusSnapshot
         SceneLive = scene.LiveCount;
         SceneCapacity = scene.Capacity;
         SceneOrphans = scene.OrphanCount;
-        SceneSticky = scene.StickyCount;
+        SceneSticky = scene.ScrollBindCount;
         SceneScrollState = scene.ScrollStateCount;
         SceneBrushAnims = scene.BrushAnimCount;
 

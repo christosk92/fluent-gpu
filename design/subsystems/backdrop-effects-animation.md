@@ -2,11 +2,23 @@
 
 **Author scope:** ONE subsystem — the three meanings of "backdrop" (window Mica/Acrylic, editorial baked
 backdrop, in-app live Acrylic), the `IEffectRunner` offscreen-effect seam, and connected/implicit/driven
-animation built on the phase-7 `AnimTrack`. Synced-lyrics *animation timing* lives here; lyrics *layout/
+animation built on the reworked `AnimValue` slab (see the rework banner below). Synced-lyrics *animation timing* lives here; lyrics *layout/
 shaping* belongs to `FluentGpu.Media.LyricsLayoutEngine` (text seam) and is referenced, not redesigned.
 **Video is out of scope** — the present-tree (`IVideoPresenter`, `DrawVideoCmd`, hole-punch, the multi-
 visual DComp amendment to §5.1) is owned by `subsystems/media-pipeline.md`. This doc references the video
 contract only where backdrop/animation must coexist with it (z-order, the same-Commit hole handshake).
+
+> **✅ ANIMATION REWORK — LANDED + VERIFIED (this changes §5's as-built model).** The animation half (§5: connected /
+> implicit / driven animation) has been reworked and the new engine is **as-built**: a POD **`AnimValue`** slab keyed
+> `(node, channel)` + the analytical closed-form spring (sampled at absolute `t`, dt-deterministic) + a single
+> fold-and-write-once compose pass + the declarative surface (`Transition`/`While*`/`Enter`/`Exit`/`Stagger`/`Layout`) +
+> reduced-motion-as-a-value. The old phase-7 **`AnimTrack`** model + sub-stepped Euler + `InteractionAnimator` + the
+> `AdvanceBrushAnims` ticker are **deleted** (hover/press/brush are now `HoverFade`/`PressFade`/`BrushFade` slab channels);
+> `ConnectedAnimation` → `DetachedAnimSlab` / `SceneRecorder.RecordDetached` is wired behind `FG_DETACHED_FLY`. **The
+> implemented design — now the canonical as-built reference for §5's animation contract — is
+> [`docs/plans/animation-engine-rework-design.md`](../../docs/plans/animation-engine-rework-design.md)** (verified by 521
+> VerticalSlice gates). The `AnimTrack`/Euler detail in §5 below is retained for the backdrop/effects-coexistence context
+> + history; where it describes the motion *integration model*, the plan supersedes it. <!-- canon-allow: §5 animation model superseded by the implemented rework plan; AnimTrack/Euler text retained for backdrop-coexistence + history -->
 
 **Authoritative inputs honored verbatim (referenced, never re-litigated):**
 - THREADING: `hardened-v1-plan.md` §2 (13-phase→thread map, the PUBLISH seam, consume-gated quarantine,
@@ -387,6 +399,8 @@ BlurSigma via the self-blur layer) while the real content blur-reveals in — th
 ---
 
 ## 5. Connected / implicit / driven animation — the phase-7 `AnimTrack`
+
+> **🔄 DECIDED REWORK (landing in phases) — read before editing §5.** This section is the **canon owner** of the animation engine and describes the **current as-built model** (`AnimTrack`/`AnimEngine`, `IntegrationMode` Eased/Spring sub-stepped Euler, `DrivenClockTable`, `InteractionAnimator`, `ConnectedAnimation`, the `BrushTransition`/`BrushAnim` ticker, the N phase-7 tickers). The engine is being reworked to a **signals-first** model — one POD **`AnimValue`** slab keyed `(node, channel)` `{value, velocity, target, generator}` (interpolates-from-current + auto-retargets on signal change); one **`AnimScheduler`** (per-source `CadenceClass`, `min(next-due)` wake); the **analytical closed-form spring** sampled at absolute `t` (replaces the sub-stepped Euler); **owner-column → single fold-and-write-once compose pass** (one write per node×channel); a declarative orchestration layer (`Transition`/`While*`/`Enter`/`Exit`/`Stagger`/`Layout` + `UseSpringValue`/`UseAnimatedValue`); one **`MotionTok`** registry; **reduced-motion as a value**. Full design + the §5-section-by-section migration map: [`../../docs/plans/animation-engine-rework-design.md`](../../docs/plans/animation-engine-rework-design.md) (research: [`…research-dossier.md`](../../docs/plans/animation-engine-research-dossier.md)). **§5 below stays canon until each rework phase lands and reconciles its subsection** (the per-phase `check-canon.ps1` supersession rules retire the named tokens only at that point — the current model is still in force). Registered as a §2 row in [`SPEC-INDEX.md`](../SPEC-INDEX.md).
 
 ### 5.1 `AnimTrack` and the engine (owned here)
 

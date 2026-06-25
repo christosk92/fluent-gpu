@@ -45,20 +45,161 @@ internal static class WaveeNavProbe
     public static bool TryRun(AppHost host, IPlatformWindow window, IGpuDevice device)
     {
         bool connStress = Diag.EnvFlag("WAVEE_CONN_STRESS");
-        if (!Diag.EnvFlag("WAVEE_NAV_PROBE") && !connStress) return false;
+        bool trackShot = Diag.EnvFlag("WAVEE_TRACKLIST_SHOT");
+        bool heroShot = Diag.EnvFlag("WAVEE_HERO_SHOT");
+        if (!Diag.EnvFlag("WAVEE_NAV_PROBE") && !connStress && !trackShot && !heroShot) return false;
         if (window is not Win32Window w || device is not D3D12Device gpu)
         {
             Console.Error.WriteLine("[wavee-nav-probe] unavailable: requires Win32Window + D3D12Device");
             return true;
         }
+        // DiagnosticRun fires straight after window.Show(), BEFORE the first frame — so WaveeShell hasn't mounted yet
+        // and ProbeNav is still null. Pump warmup frames until the shell wires its nav hook (fixes the mount race that
+        // made earlier shot runs flakily report "nav hook not wired").
+        for (int i = 0; i < 240 && WaveeShell.ProbeNav is null && !w.IsClosed; i++)
+        { gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce(); host.RunFrame(); }
         if (WaveeShell.ProbeNav is null)
         {
             Console.Error.WriteLine("[wavee-nav-probe] nav hook not wired (WaveeShell not mounted?)");
             return true;
         }
-        if (connStress) RunConnStress(host, w, gpu);
+        if (heroShot) RunHeroCollapseShot(host, w, gpu);
+        else if (trackShot) RunTrackListShot(host, w, gpu);
+        else if (connStress) RunConnStress(host, w, gpu);
         else Run(host, w, gpu);
         return true;
+    }
+
+    // WAVEE_TRACKLIST_SHOT=1: navigate to each surface that shows tracks and capture a PNG, so the unified track row (the
+    // shared TrackRow cell) can be eyeballed for 1:1 parity — a detail playlist, the Library albums pane, an artist page
+    // ("Popular"), and search results ("Songs"). Output → C:\tmp\tl_*.png.
+    static void RunTrackListShot(AppHost host, Win32Window window, D3D12Device gpu)
+    {
+        try { System.IO.Directory.CreateDirectory(@"C:\tmp"); } catch { }
+        void Frame() { if (!window.IsClosed) { gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce(); host.RunFrame(); } }
+        void Nav(string k, string? a) => WaveeShell.ProbeNav!(k, a);
+        void Settle(int n) { for (int i = 0; i < n && !window.IsClosed; i++) Frame(); }
+        void Shot(string name)
+        {
+            var px = gpu.CaptureBgra(out int cw, out int ch);
+            PngWriter.WriteBgra($@"C:\tmp\tl_{name}.png", px, cw, ch);
+            Console.Error.WriteLine($"[tracklist-shot] wrote tl_{name}.png ({cw}x{ch})");
+        }
+
+        Nav("home", null); Settle(40); System.Threading.Thread.Sleep(700); Settle(20);   // home live + card covers decode
+
+        // 1) Detail playlist (the canonical full list — must be unchanged by the cell extraction).
+        Nav("pl:spotify:playlist:pl0", "Playlist 0"); Settle(40); System.Threading.Thread.Sleep(700); Settle(60); Shot("detail");
+        // 2) Library albums → the pane auto-selects the first album → its tracks render via the embedded TrackList.
+        Nav("albums", null); Settle(50); System.Threading.Thread.Sleep(800); Settle(80); Shot("library");
+        // 3) Artist page → "Popular" top-tracks (synthesized for any artist uri).
+        Nav("artist:spotify:artist:ar0", "Artist"); Settle(50); System.Threading.Thread.Sleep(700); Settle(60); Shot("artist");
+        Nav("artist:spotify:artist:04gDigrS5kc9YWfZHwBETP", "Maroon 5"); Settle(60); System.Threading.Thread.Sleep(2500); Settle(120); Shot("artist_maroon5");
+        // 4) Search → the "Songs" rows in the All view.
+        Nav("search", "the"); Settle(50); System.Threading.Thread.Sleep(700); Settle(60); Shot("search");
+
+        Console.Error.WriteLine("[tracklist-shot] done");
+    }
+
+    // WAVEE_HERO_SHOT=1: navigate to an artist page and capture the collapsing hero at several scroll offsets, dumping the
+    // collapse geometry (pin shift / presented height / child shift / parent height) so it can be verified numerically.
+    // Output → C:\tmp\hero_{offset}.png + a stderr [hero-geom] dump.
+    static void RunHeroCollapseShot(AppHost host, Win32Window window, D3D12Device gpu)
+    {
+        try { System.IO.Directory.CreateDirectory(@"C:\tmp"); } catch { }
+        window.SetClientSize(1280, 900);
+        void Frame() { if (!window.IsClosed) { gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce(); host.RunFrame(); } }
+        void Settle(int n) { for (int i = 0; i < n && !window.IsClosed; i++) Frame(); }
+        void Shot(int off)
+        {
+            var px = gpu.CaptureBgra(out int cw, out int ch);
+            PngWriter.WriteBgra($@"C:\tmp\hero_{off:D3}.png", px, cw, ch);
+            Console.Error.WriteLine($"[hero-shot] wrote hero_{off:D3}.png ({cw}x{ch})");
+        }
+
+        WaveeShell.ProbeNav!("home", null); Settle(40); System.Threading.Thread.Sleep(700); Settle(20);
+        WaveeShell.ProbeNav!("artist:spotify:artist:04gDigrS5kc9YWfZHwBETP", "Maroon 5");
+        Settle(50); System.Threading.Thread.Sleep(2500); Settle(120);
+
+        // List every scroller so a too-strict pick is obvious, then take the most-scrollable by content extent (lenient).
+        NodeHandle vp = NodeHandle.Null; float bestContent = 0f;
+        {
+            var st = new Stack<NodeHandle>(); if (!host.Scene.Root.IsNull) st.Push(host.Scene.Root);
+            while (st.Count > 0)
+            {
+                var n = st.Pop();
+                if (n.IsNull || !host.Scene.IsLive(n)) continue;
+                if (host.Scene.HasScroll(n) && host.Scene.TryGetScroll(n, out var s))
+                {
+                    var r = host.Scene.AbsoluteRect(n);
+                    Console.Error.WriteLine($"[hero-shot]   scroller rect=({r.X:0},{r.Y:0} {r.W:0}x{r.H:0}) viewH={s.ViewportH:0} contentH={s.ContentH:0}");
+                    if (s.ContentH > s.ViewportH + 1f && s.ContentH > bestContent) { bestContent = s.ContentH; vp = n; }
+                }
+                for (var c = host.Scene.FirstChild(n); !c.IsNull; c = host.Scene.NextSibling(c)) st.Push(c);
+            }
+        }
+        if (vp.IsNull) { Console.Error.WriteLine("[hero-shot] no scroll viewport — aborting"); return; }
+        var vr = host.Scene.AbsoluteRect(vp);
+        host.Scene.TryGetScroll(vp, out var s0);
+        float vh = s0.ViewportH > 20f ? s0.ViewportH : vr.H;
+        var pos = new Point2(vr.X + vr.W * 0.5f, vr.Y + vh * 0.5f);
+        window.QueueInput(new InputEvent(InputKind.PointerMove, pos, 0, 0));
+        Settle(2);
+        Console.Error.WriteLine($"[hero-shot] viewport content {s0.ContentH:0} viewH {s0.ViewportH:0} @ ({pos.X:0},{pos.Y:0})");
+
+        foreach (int target in new[] { 0, 90, 150, 210, 300, 410 })
+        {
+            // Approach gently: one small notch, let it settle (velocity ~0) before the next, so fling momentum doesn't
+            // overshoot the low sample points.
+            for (int i = 0; i < 200 && !window.IsClosed; i++)
+            {
+                host.Scene.TryGetScroll(vp, out var st);
+                if (st.OffsetY >= target - 2f) break;
+                window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, MathF.Min(30f, target - st.OffsetY)));
+                for (int k = 0; k < 5 && !window.IsClosed; k++) Frame();
+            }
+            Settle(6);
+            host.Scene.TryGetScroll(vp, out var stNow);
+            DumpCollapse(host.Scene, vp, stNow.OffsetY);
+            Shot((int)stNow.OffsetY);
+        }
+        Console.Error.WriteLine("[hero-shot] done");
+    }
+
+    // Walk the scene under the scroll content and print any node carrying collapse state (a PresentedH override or a
+    // ChildShiftY), with its pin shift (LocalTransform.Dy), its laid-out height, and its PARENT's height — the parent
+    // height is the sticky containing-block clamp, so a parent that tightly equals the node's height means the pin can't
+    // engage. Also prints the node's siblings so the gap between the collapsed hero and the following content is visible.
+    static void DumpCollapse(FluentGpu.Scene.SceneStore scene, NodeHandle vp, float offset)
+    {
+        scene.TryGetScroll(vp, out var sc);
+        var content = sc.ContentNode;
+        NodeHandle collapse = NodeHandle.Null;
+        var stack = new Stack<NodeHandle>();
+        if (!content.IsNull) stack.Push(content);
+        while (stack.Count > 0 && collapse.IsNull)
+        {
+            var n = stack.Pop();
+            if (n.IsNull || !scene.IsLive(n)) continue;
+            ref var p = ref scene.Paint(n);
+            if (!float.IsNaN(p.PresentedH) || MathF.Abs(p.ChildShiftY) > 0.01f) { collapse = n; break; }
+            for (var c = scene.FirstChild(n); !c.IsNull; c = scene.NextSibling(c)) stack.Push(c);
+        }
+        if (collapse.IsNull) { Console.Error.WriteLine($"[hero-geom] off={offset:0}: no collapse node (scroll-away mode)"); return; }
+        ref var cp = ref scene.Paint(collapse);
+        var cr = scene.AbsoluteRect(collapse);
+        var par = scene.Parent(collapse);
+        float parH = par.IsNull ? -1f : scene.Bounds(par).H;
+        Console.Error.WriteLine(
+            $"[hero-geom] off={offset:0}: collapse node rectY={cr.Y:0} boundsH={scene.Bounds(collapse).H:0} " +
+            $"presentedH={cp.PresentedH:0} childShiftY={cp.ChildShiftY:0} pinShift(Dy)={cp.LocalTransform.Dy:0} " +
+            $"| parentH={parH:0} (==boundsH ⇒ pin clamp=0)");
+        if (!par.IsNull)
+            for (var c = scene.FirstChild(par); !c.IsNull; c = scene.NextSibling(c))
+            {
+                var rc = scene.AbsoluteRect(c);
+                Console.Error.WriteLine($"           sibling rectY={rc.Y:0} H={scene.Bounds(c).H:0} bottom={rc.Bottom:0}");
+            }
     }
 
     // WAVEE_CONN_STRESS=1 (+ optional WAVEE_STRESS_N=100, WAVEE_STRESS_NOPACE=1): the user's scenario — SLOWLY click a Home

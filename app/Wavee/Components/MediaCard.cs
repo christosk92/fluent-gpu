@@ -42,7 +42,9 @@ public static class MediaCard
             // (bottom-right, REVEALED ON HOVER). Reactive: subscribes to the playback bridge. The container carries NO
             // OnClick, so the hit walks up to the card (its HoverScale fires + the FAB reveals off the card's hover);
             // only the FAB itself is a hit target.
-            Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, FabSize, cover: true, inner)));
+            // Skeletonized(false): a hover-only affordance is not skeleton content — without this the deriver maps the
+            // opaque overlay to its default bar, leaving a stray stripe across the top-left of every loading cover.
+            Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, FabSize, cover: true, inner)).Skeletonized(false));
 
         return new BoxEl
         {
@@ -77,6 +79,80 @@ public static class MediaCard
         };
     }
 
+    // ── Grid card: fills the grid cell width (no cardW), square or circular cover. For AutoGrid/UniformGrid cells. ──
+    // Mirrors the Shelf card but is width-AGNOSTIC: the cover fills the cell (Surfaces.ArtworkFill, CSS aspect-ratio 1)
+    // and the labels truncate to the engine-measured slot width (the proven NavCardContent pattern) — so it drops into a
+    // responsive grid whose track width isn't known at template time.
+    public static Element GridCard(Image? cover, string title, string subtitle, string uri,
+                                   Action onClick, Action onPlay, bool circular = false)
+    {
+        float r = circular ? 9999f : WaveeRadius.Card;
+        var coverStack = new BoxEl
+        {
+            ZStack = true, ClipToBounds = true, Corners = CornerRadius4.All(r),
+            Children =
+            [
+                Surfaces.ArtworkFill(cover, r),
+                Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, FabSize, cover: true, 0f)).Skeletonized(false),
+            ],
+        };
+        return new BoxEl
+        {
+            Direction = 1, Gap = Pad, Grow = 1f, ClipToBounds = true,
+            Padding = new Edges4(Pad, Pad, Pad, WaveeSpace.M),
+            Corners = CornerRadius4.All(WaveeRadius.Card),
+            Fill = Tok.FillCardSecondary, HoverFill = Tok.FillCardDefault,
+            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+            HoverScale = 1.02f, PressScale = 0.99f, OnClick = onClick,
+            Children =
+            [
+                coverStack,
+                new BoxEl
+                {
+                    Direction = 1, Gap = 2f, AlignItems = circular ? FlexAlign.Center : FlexAlign.Start,
+                    Children =
+                    [
+                        WaveeType.TrackTitle(title) with { Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis },
+                        subtitle.Length == 0 ? new BoxEl()
+                            : WaveeType.TrackMeta(subtitle) with { Wrap = TextWrap.Wrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                    ],
+                },
+            ],
+        };
+    }
+
+    // ── 16:9 video card (sized to a supplied cardW from a measured shelf): wide thumbnail + title + duration. ──
+    public static Element VideoCard(Image? thumb, string title, string duration, string uri,
+                                    Action onClick, Action onPlay, float cardW)
+    {
+        float inner = MathF.Max(64f, cardW - 2f * Pad);
+        float ar = inner * 9f / 16f;
+        return new BoxEl
+        {
+            Direction = 1, Gap = WaveeSpace.S, Grow = 1f, ClipToBounds = true,
+            Padding = new Edges4(Pad, Pad, Pad, WaveeSpace.M),
+            Corners = CornerRadius4.All(WaveeRadius.Card),
+            Fill = Tok.FillCardSecondary, HoverFill = Tok.FillCardDefault,
+            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+            HoverScale = 1.02f, PressScale = 0.99f, OnClick = onClick,
+            Children =
+            [
+                new BoxEl
+                {
+                    ZStack = true, ClipToBounds = true, Corners = CornerRadius4.All(WaveeRadius.Control),
+                    Children =
+                    [
+                        Surfaces.Artwork(thumb, Seed(uri), inner, ar, WaveeRadius.Control, decodePx: 480),
+                        Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, FabSize, cover: true, 0f)).Skeletonized(false),
+                    ],
+                },
+                WaveeType.TrackTitle(title) with { Width = inner, Wrap = TextWrap.Wrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                duration.Length == 0 ? new BoxEl()
+                    : WaveeType.TrackMeta(duration) with { Width = inner, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+            ],
+        };
+    }
+
     // ── Wide "jump back in" tile: cover + title (fills, ellipsised) + trailing now-playing/play overlay ───
     public static Element QuickPick(Image? cover, string title, string uri, Action onClick, Action onPlay)
     {
@@ -96,7 +172,7 @@ public static class MediaCard
                 {
                     Direction = 0, AlignItems = FlexAlign.Center,
                     Padding = new Edges4(0f, 0f, WaveeSpace.M, 0f),
-                    Children = [ Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, 36f, cover: false, 36f)) ],
+                    Children = [ Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, 36f, cover: false, 36f)).Skeletonized(false) ],
                 },
             ],
         };
@@ -116,36 +192,6 @@ public static class MediaCard
         Children = [ Icon(glyph, size * 0.42f, Tok.TextOnAccentPrimary) ],
     };
 
-    // ── Skeletons (matched layout for StatefulRegion's shimmer → reveal) ─────────────────────────────────
-    public static Element ShelfSkeleton(float cardW, bool circular = false)
-    {
-        float inner = MathF.Max(48f, cardW - 2f * Pad);
-        return new BoxEl
-        {
-            Direction = 1, Width = cardW, Gap = Pad,
-            Padding = new Edges4(Pad, Pad, Pad, WaveeSpace.M),
-            Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
-            Children =
-            [
-                new BoxEl { Width = inner, Height = inner, Fill = Tok.FillCardDefault,
-                            Corners = CornerRadius4.All(circular ? inner / 2f : WaveeRadius.Card) },
-                new BoxEl { Width = inner * 0.85f, Height = 13f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault },
-                new BoxEl { Width = inner * 0.55f, Height = 11f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault },
-            ],
-        };
-    }
-
-    public static Element QuickPickSkeleton() => new BoxEl
-    {
-        Direction = 0, Height = QuickH, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-        Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary, ClipToBounds = true,
-        Children =
-        [
-            new BoxEl { Width = QuickW, Height = QuickH, Fill = Tok.FillCardDefault },
-            new BoxEl { Grow = 1f, Basis = 0f, Height = 13f, Margin = new Edges4(0f, 0f, WaveeSpace.M, 0f),
-                        Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault },
-        ],
-    };
 }
 
 // The reactive now-playing / play affordance on a content card (mirrors WaveeMusic's ContentCard state model):

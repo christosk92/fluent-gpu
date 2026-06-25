@@ -42,7 +42,11 @@ public static class Surfaces
             return new BoxEl { Width = width, Height = height, Corners = CornerRadius4.All(corners), Fill = Tok.FillCardDefault with { A = 1f } };
         // Covers/cards: the breathing shimmer. Keyed by url so a virtualized card that REBINDS to a new cover remounts
         // the tile (a Component freezes its ctor args at mount) — the breathe + load-state read then track the new item.
-        return Embed.Comp(() => new CoverShimmer(u, decodeW, decodeH, width, height, corners)) with { Key = "shim:" + u };
+        // Skeletonized(false): inside a Skel.Region's derived skeleton this opaque component would otherwise map to the
+        // deriver's default bar (a stray stripe in the cover). Dropping it lets the paired Image's derived placeholder be
+        // the cover square — identical to a grid card (ArtworkFill is a bare Image), so every loading cover reads the same.
+        return (Embed.Comp(() => new CoverShimmer(u, decodeW, decodeH, width, height, corners)) with { Key = "shim:" + u })
+            .Skeletonized(false);
     }
 
     /// <summary>Artwork slot: a neutral <see cref="Shimmer"/> tile under the async image (which cross-fades in over it
@@ -67,13 +71,23 @@ public static class Surfaces
             Children = [ Shimmer(url, dw, dh, width, height, corners), img ],
         };
     }
+
+    /// <summary>A square cover that FILLS the width its layout hands it (CSS aspect-ratio 1) — for responsive grid cells
+    /// whose exact width isn't known at template time (ItemsView grid tiles). Same Cover-fit + blurhash as
+    /// <see cref="Artwork"/>; pass a huge <paramref name="corners"/> (e.g. 9999) for a circular (artist) tile.</summary>
+    public static Element ArtworkFill(Image? image, float corners, int decodePx = 256)
+    {
+        string? url = image?.Url is { Length: > 0 } u ? u : null;
+        var placeholder = ColorF.FromRgba(0x2A, 0x2A, 0x2A);
+        return Ui.Image(url ?? "", ImageFit.Cover, 1f, decodePx, corners, placeholder, image?.BlurHash);
+    }
 }
 
 // The neutral shimmer cover tile. A Component (granular re-render) so it can read the image load-state and START/STOP
 // its own opacity breathe accordingly: the UseKeyframes layout-effect is keyed by `loading`, so when the art becomes
 // ready the looping pulse is replaced by a finite flat track (opacity → 1) and the frame loop can quiesce (the engine's
 // "no forever-loop" rule). The breathe mirrors the engine SkeletonPulse (1.0↔0.5 over 1s) and the fill matches the app's
-// skeleton blocks (DetailSkeleton's reserved cover slot, MediaCard.ShelfSkeleton) so every placeholder reads identically.
+// skeleton blocks (DetailSkeleton's reserved cover slot, Skel.Region's derived shimmer bars) so every placeholder reads identically.
 sealed class CoverShimmer : Component
 {
     static readonly Keyframe[] Breathe = [new(0f, 1f), new(0.5f, 0.5f), new(1f, 1f)];
@@ -102,7 +116,7 @@ sealed class CoverShimmer : Component
         }
         // On the loading→settled edge `loading` flips, the dep changes, and the effect re-seeds a finite flat track
         // (loop:false) — the looping pulse is replaced in place and the loop-track count drops so the frame loop quiesces.
-        UseKeyframes(AnimChannel.Opacity, loading ? Breathe : Flat, loading ? 1000f : 1f, loading, loading);
+        UseKeyframes(AnimChannel.Opacity, loading ? Breathe : Flat, loading ? 1000f : 1f, loading, DepKey.From(loading));   // #9: DepKey, not a boxed object[]
         return new BoxEl { Width = _w, Height = _h, Corners = CornerRadius4.All(_corners), Fill = Tok.FillCardDefault };
     }
 }

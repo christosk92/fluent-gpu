@@ -1,5 +1,7 @@
 # Motion recipes — the Expressive Motion Kit
 
+> **✅ Animation engine — signals-first rework landed + verified.** The signals-first **declarative** surface is now live: named `MotionTok` values + `EnterExit` applied via `Enter`/`Exit`/`Stagger`/`Transition` on the element, plus `WhileHover`/`WhilePressed` for hover/press and `UseSpringValue`/`UseAnimatedValue` for bound values — one model, no handle-capture. The `Dsl.Expressive`/`Dsl.Motion` token namespaces are unified under one `MotionTok` registry. The imperative `MotionRecipes.*` seeders below still work (they run over `AnimEngine`, the slab scheduler) and remain a valid way to call the kit; the curve vocabulary (`SmoothOut`/`Overshoot`/`Pop`) and the self-blur channel are retained. Design, now implemented: [`../plans/animation-engine-rework-design.md`](../plans/animation-engine-rework-design.md). Reduced-motion rule (unchanged, load-bearing): read it as a **value**, never `if (Motion.ReducedMotion) return;` inside a `Use*`.
+
 A library of named, production-tuned transitions adopted from [transitions.dev](https://transitions.dev), expressed on
 FluentGpu's own animation engine. They ride the existing spring/eased tracks, the geometry channels, the **per-node
 self-blur** channel, and an **expressive curve + token vocabulary** — so a short travel reads as a full, polished

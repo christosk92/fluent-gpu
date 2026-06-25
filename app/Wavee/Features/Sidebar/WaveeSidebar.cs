@@ -39,6 +39,7 @@ sealed class WaveeSidebar : Component
     // can measure the selected row's laid-out Y. Plain instance fields: this component is mounted once and persists.
     readonly Dictionary<string, NodeHandle> _rowNodes = new();
     NodeHandle _contentNode;
+    LibraryBridge? _lib;   // Mutations: create-playlist + the playlist-list refresh version (set each render)
 
     // ── overlay selection-pill geometry ──────────────────────────────────────────────────────────
     internal const float PillH = 16f;        // SelectionIndicator height (WinUI 3×16)
@@ -77,8 +78,13 @@ sealed class WaveeSidebar : Component
     public override Element Render()
     {
         var svc = UseContext(Services.Slot);
-        var stats = UseAsyncResource(ct => svc!.Library.GetStatsAsync(ct), default(LibraryStats)!);
-        var playlists = UseAsyncResource(async ct => (await svc!.Library.GetPlaylistsAsync(ct)).ToArray(), Array.Empty<PlaylistSummary>());
+        var store = UseContext(LibraryStore.Slot);
+        _lib = UseContext(LibraryBridge.Slot);
+        int plVer = _lib?.PlaylistsVersion.Value ?? 0;   // subscribe → refetch the playlist list when one is created / added-to
+        store?.EnsureStats();
+        // Cached + off-page-fresh: the Your-Library counts (Liked etc.) update live when you like a song on another page.
+        var stats = store?.Stats ?? Loadable<LibraryStats>.Ready(new LibraryStats(0, 0, 0, 0));
+        var playlists = UseAsyncResource(async ct => (await svc!.Library.GetPlaylistsAsync(ct)).ToArray(), Array.Empty<PlaylistSummary>(), plVer.ToString());
 
         bool compact = _compact.Value;        // subscribe (width)
         string sel = _route.Value.Name;       // subscribe (selection pill)
@@ -130,7 +136,7 @@ sealed class WaveeSidebar : Component
     // Decide where the overlay pill should be (and whether it shows) from data only — the actual Y is MEASURED later.
     PillState ComputePillState(string sel, bool pinnedOpen, bool libOpen, bool plOpen, Loadable<PlaylistSummary[]> playlists)
     {
-        bool isLib = sel is "albums" or "artists" or "liked" or "podcasts";
+        bool isLib = sel is "albums" or "artists" or "liked" or "podcasts" or "local";
         bool isPl = sel.StartsWith("pl:", StringComparison.Ordinal);
 
         int plCount = 0; bool plLoaded = false;
@@ -168,13 +174,13 @@ sealed class WaveeSidebar : Component
                     LibRow("artists",  Mdl.Contact,    Loc.Get(Strings.Sidebar.Artists),    sel, 1, CountBadge(stats, s => s.Artists)),
                     LibRow("liked",    Icons.Heart,    Loc.Get(Strings.Sidebar.LikedSongs), sel, 2, CountBadge(stats, s => s.LikedSongs)),
                     LibRow("podcasts", Mdl.RadioTower, Loc.Get(Strings.Sidebar.Podcasts),   sel, 3, CountBadge(stats, s => s.Podcasts)),
-                    LocalRow(),
+                    LocalRow(sel),
                 ],
             }),
-            Section(Loc.Get(Strings.Sidebar.Playlists), _plOpen, StatefulRegion.List(
-                playlists, _ => PlaylistSkeletonRow(), skeletonCount: 5,
+            Section(Loc.Get(Strings.Sidebar.Playlists), _plOpen, Skel.Region(
+                playlists, _ => PlaylistSkeletonRow(), count: 5,
                 content: arr => Flow.For(() => arr.Length, i => PlaylistRow(arr[i], sel, i), keyOf: i => arr[i].Uri),
-                empty: EmptyState.Default()),
+                onEmpty: () => EmptyState.Default(), onFailed: () => ErrorState.Build(playlists.Error)),
                 action: Embed.Comp(() => new SidebarCreateButton(CreatePlaylist, CreateFolder))),
         ],
     };
@@ -240,24 +246,29 @@ sealed class WaveeSidebar : Component
         };
     }
 
-    Element LocalRow() => new BoxEl
+    // Local Files — now a real source (LocalSource owns wavee:local:*). Opens the local collection through the shared
+    // detail surface (route "local" → DetailPage → GetPlaylistAsync("wavee:local:all")). A selectable row like the rest.
+    Element LocalRow(string sel)
     {
-        Key = "local",
-        Animate = ItemReflowTransition(4),
-        Direction = 0, Height = 44f, AlignItems = FlexAlign.Center, Gap = 12f,
-        Padding = new Edges4(6f, 0f, 8f, 0f), Opacity = 0.5f,
-        Children =
-        [
-            new BoxEl { Width = 3f },
-            Icon(Icons.Folder, 16f, Tok.TextSecondary),
-            Body(Loc.Get(Strings.Sidebar.LocalFiles)) with { Grow = 1f, Trim = TextTrim.CharacterEllipsis },
-            new BoxEl
-            {
-                Padding = new Edges4(8f, 2f, 8f, 2f), Corners = CornerRadius4.All(WaveeRadius.Pill), Fill = Tok.FillSubtleSecondary,
-                Children = [ new TextEl(Loc.Get(Strings.Sidebar.Soon)) { Size = 11f, Color = Tok.TextTertiary } ],
-            },
-        ],
-    };
+        bool selected = sel == "local";
+        return new BoxEl
+        {
+            Key = "local",
+            Animate = ItemReflowTransition(4),
+            OnRealized = h => _rowNodes["local"] = h,
+            Direction = 0, Height = 44f, AlignItems = FlexAlign.Center, Gap = 12f,
+            Padding = new Edges4(6f, 0f, 8f, 0f), Corners = CornerRadius4.All(4f),
+            Fill = selected ? Tok.FillSubtleSecondary : ColorF.Transparent,
+            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+            OnClick = () => _go("local", null),
+            Children =
+            [
+                SelGutter(),
+                Icon(Icons.Folder, 16f, selected ? Tok.TextPrimary : Tok.TextSecondary),
+                Body(Loc.Get(Strings.Sidebar.LocalFiles)) with { Grow = 1f, Trim = TextTrim.CharacterEllipsis },
+            ],
+        };
+    }
 
     Element PinnedDropZone() => new BoxEl
     {
@@ -378,7 +389,7 @@ sealed class WaveeSidebar : Component
 
     // Create-affordance handlers. The library is read-only (fake-data-first, no mutation API yet), so these are the
     // entry points the create flow will hook into — intentional no-ops for now; the button + menu are the shipped UI.
-    void CreatePlaylist() { }
+    void CreatePlaylist() { if (_lib is { } lib) _go("pl:" + lib.CreatePlaylist(Loc.Get(Strings.Sidebar.NewPlaylist)), null); }
     void CreateFolder() { }
 
     // A playlist as its cover art only (the rail's compact analogue of the expanded PlaylistRow); accent ring when selected.

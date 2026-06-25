@@ -24,7 +24,7 @@ sealed class ContentHost : Component
 
     // Detail routes collapse to ONE slot per tab (identity = tab × page-class; the route is content) so album→album
     // reconciles the mounted shell instead of cold-remounting. TabId stays in the key → tabs never share a detail slot.
-    static string SlotKey(PageSlot s) => IsDetail(s.Route) ? s.TabId.ToString() + "\\u001Fdetail" : s.TabId.ToString() + "\u001F" + s.Route.Name + "\u001F" + (s.Route.Arg ?? "");
+    static string SlotKey(PageSlot s) => IsDetail(s.Route) ? s.TabId.ToString() + "\\u001Fdetail" : IsArtist(s.Route) ? s.TabId.ToString() + "\\u001Fartist" : s.Route.Name == "search" ? s.TabId.ToString() + "\\u001Fsearch" : s.TabId.ToString() + "\u001F" + s.Route.Name + "\u001F" + (s.Route.Arg ?? "");
 
     // The shared detail page (album / playlist / single / liked) reads the route reactively (via _route) and derives its
     // own kind/id, so ONE DetailPage instance serves successive detail routes in place. The Key is route-INDEPENDENT
@@ -36,8 +36,21 @@ sealed class ContentHost : Component
         Children = [ Embed.Comp(() => new DetailPage(_route)) ],
     };
 
+    // The artist page reads the route reactively so ONE instance serves successive artist routes (a fans-also-like hop,
+    // a track's artist link) in place — route-independent Key so KeepAlive reuses the mounted slot across artists.
+    Element ArtistHost() => new BoxEl
+    {
+        Key = "page:artist", Grow = 1f, Direction = 1,
+        Children = [ Embed.Comp(() => new ArtistPage(_route)) ],
+    };
+
+    // album / playlist / liked / local / SHOW all flow through the one shared detail surface (DetailPage → DetailShell);
+    // a show just renders Episodes instead of Tracks on the right (DetailConfig.Show.Content == Episodes).
     static bool IsDetail(Route r) =>
-        r.Name.StartsWith("album:", StringComparison.Ordinal) || r.Name.StartsWith("pl:", StringComparison.Ordinal) || r.Name == "liked";
+        r.Name.StartsWith("album:", StringComparison.Ordinal) || r.Name.StartsWith("pl:", StringComparison.Ordinal)
+        || r.Name.StartsWith("show:", StringComparison.Ordinal) || r.Name == "liked" || r.Name == "local";
+
+    static bool IsArtist(Route r) => r.Name.StartsWith("artist:", StringComparison.Ordinal);
 
     Element PageFor(Route r)
     {
@@ -49,6 +62,19 @@ sealed class ContentHost : Component
             return new BoxEl { Key = "page:history", Grow = 1f, Direction = 1,
                 Children = [ Embed.Comp(() => new HistoryPage()) ] };
 
+        if (r.Name == "search")
+            return new BoxEl { Key = "page:search", Grow = 1f, Direction = 1,
+                Children = [ Embed.Comp(() => new SearchPage()) ] };
+
+        if (r.Name == "albums" || r.Name == "artists" || r.Name == "podcasts")
+            return new BoxEl { Key = "page:" + r.Name, Grow = 1f, Direction = 1,
+                Children = [ Embed.Comp(() => new LibraryPage(r.Name)) ] };
+
+        if (DiscographyRoute.Is(r.Name))
+            return new BoxEl { Key = "page:disco", Grow = 1f, Direction = 1,
+                Children = [ Embed.Comp(() => new DiscographyPage(_route)) ] };
+
+        if (IsArtist(r)) return ArtistHost();
         if (IsDetail(r)) return DetailHost();
 
         var (title, glyph) = ShellNav.Dest(r);

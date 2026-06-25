@@ -19,19 +19,35 @@ public enum RepeatKind : byte { Stack, Grid, Custom, Wrap, Inline }
 public readonly struct RepeatLayout
 {
     public readonly RepeatKind Kind;
-    public readonly float Extent;          // Stack: item extent; Grid: item height; Wrap/Inline: gap
+    public readonly float Extent;          // Stack: item extent; Grid: item height (≤0 ⇒ measure rows); Wrap/Inline: gap
     public readonly float Gap;             // Grid: cell gap
-    public readonly int Columns;           // Grid: columns
+    public readonly int Columns;           // Grid: fixed columns (0 when <see cref="MinCellWidth"/> drives responsive cols)
+    public readonly float MinCellWidth;    // Grid auto/fit: min cell width → column count from cross size
+    public readonly float Estimate;        // Grid auto/fit: initial row-height estimate before cells measure
     public readonly bool Horizontal;
     public readonly IVirtualLayout? CustomLayout;
 
-    private RepeatLayout(RepeatKind kind, float extent, float gap, int columns, bool horizontal, IVirtualLayout? custom)
-        => (Kind, Extent, Gap, Columns, Horizontal, CustomLayout) = (kind, extent, gap, columns, horizontal, custom);
+    private RepeatLayout(RepeatKind kind, float extent, float gap, int columns, bool horizontal, IVirtualLayout? custom,
+                         float minCellWidth = 0f, float estimate = 0f)
+        => (Kind, Extent, Gap, Columns, Horizontal, CustomLayout, MinCellWidth, Estimate) =
+            (kind, extent, gap, columns, horizontal, custom, minCellWidth, estimate);
 
     /// <summary>Virtualized uniform stack (1-D).</summary>
     public static RepeatLayout Stack(float itemExtent, bool horizontal = false) => new(RepeatKind.Stack, itemExtent, 0, 0, horizontal, null);
-    /// <summary>Virtualized uniform card grid (2-D, by row).</summary>
+    /// <summary>Virtualized uniform card grid (2-D, by row) at a fixed row height.</summary>
     public static RepeatLayout Grid(int columns, float itemHeight, float gap = 0f) => new(RepeatKind.Grid, itemHeight, gap, columns, false, null);
+    /// <summary>Virtualized card grid with <b>measured row heights</b> (square art + text cards — no guessed text allowance).
+    /// Rows correct to the max measured cell height at arrange time; <paramref name="estimateRowHeight"/> seeds scroll extent.</summary>
+    public static RepeatLayout GridAuto(int columns, float gap = 0f, float estimateRowHeight = 120f)
+        => new(RepeatKind.Grid, 0f, gap, columns, false, null, estimate: estimateRowHeight);
+    /// <summary>Responsive measured grid: column count and cell width derive from the viewport cross size — callers pass only
+    /// <paramref name="minCellWidth"/> + gap (the virtualized <c>AutoGrid</c> shape).</summary>
+    public static RepeatLayout GridFit(float minCellWidth, float gap = 0f, float estimateRowHeight = 120f)
+        => new(RepeatKind.Grid, 0f, gap, 0, false, null, minCellWidth, estimateRowHeight);
+    /// <summary>Obsolete — use <see cref="GridAuto"/> or <see cref="GridFit"/> (measured rows) instead of guessing text height.</summary>
+    [Obsolete("Use GridAuto or GridFit — measured rows replace aspect+textAllowance guessing.")]
+    public static RepeatLayout AspectGrid(int columns, float aspect, float textAllowance, float gap = 0f)
+        => new(RepeatKind.Custom, 0, 0, 0, false, new AspectGridVirtualLayout(columns, aspect, textAllowance, gap));
     /// <summary>Virtualized with ANY custom <see cref="IVirtualLayout"/>.</summary>
     public static RepeatLayout Custom(IVirtualLayout layout, bool horizontal = false) => new(RepeatKind.Custom, 0, 0, 0, horizontal, layout);
     /// <summary>Virtualized with a variable-extent <see cref="IMeasuredVirtualLayout"/> (estimate-then-correct + anchoring).</summary>
@@ -116,7 +132,12 @@ public static class Repeater
             }
             case RepeatKind.Grid:
             {
-                var el = Virtual.Grid(count, layout.Columns, layout.Extent, layout.Gap, tpl, keyOf, overscan);
+                VirtualListEl el = layout.Extent <= 0f || layout.MinCellWidth > 0f
+                    ? Virtual.Custom(count,
+                        new GridVirtualLayout(layout.Columns, layout.Extent, layout.Gap, layout.MinCellWidth,
+                            layout.Estimate > 0f ? layout.Estimate : 120f),
+                        tpl, keyOf, overscan)
+                    : Virtual.Grid(count, layout.Columns, layout.Extent, layout.Gap, tpl, keyOf, overscan);
                 return WithLifecycle(el, elementPrepared, elementClearing, elementIndexChanged, visibleRange);
             }
             case RepeatKind.Custom:

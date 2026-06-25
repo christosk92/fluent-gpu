@@ -51,8 +51,30 @@ public sealed class SpotifyExportSource : ICatalogSource
     public Task<Artist?> GetArtistAsync(string uri, CancellationToken ct = default)
     {
         var fake = FakeData.Artist(FakeData.IndexFromUri(uri));
+        // A real artist export (artist-*.json) → the full magazine page. The overview query lacks stats / top cities /
+        // music videos, so backfill those from the deterministic fake so every section still populates.
+        if (_x.TryGetArtist(uri, out var real))
+            return Ok(real with
+            {
+                MonthlyListeners = real.MonthlyListeners > 0 ? real.MonthlyListeners : fake.MonthlyListeners,
+                Followers = real.Followers > 0 ? real.Followers : fake.Followers,
+                WorldRank = real.WorldRank > 0 ? real.WorldRank : fake.WorldRank,
+                Extras = MergeExtras(real.Extras, fake.Extras),
+            });
         _x.TryGetCard(uri, out var card);
-        return Ok(new Artist(IdFromUri(uri), uri, card?.Title ?? fake.Name, card?.Image ?? fake.Image, fake.TopAlbums));
+        return Ok(card is null ? fake : fake with { Name = card.Title, Image = card.Image });
+    }
+
+    // Real lists win; the synthesized fallback fills the facets the overview query doesn't carry (videos / cities).
+    static ArtistExtras? MergeExtras(ArtistExtras? real, ArtistExtras? fake)
+    {
+        if (real is null) return fake;
+        if (fake is null) return real;
+        return real with
+        {
+            MusicVideos = real.MusicVideos ?? fake.MusicVideos,
+            TopCities = real.TopCities ?? fake.TopCities,
+        };
     }
 
     public async IAsyncEnumerable<TrackPage> StreamTracksAsync(string contextUri, [EnumeratorCancellation] CancellationToken ct = default)
@@ -104,12 +126,16 @@ public sealed class SpotifyExportSource : ICatalogSource
     public Task<SearchResults> SearchAsync(string query, CancellationToken ct = default)
     {
         var q = query.Trim();
+        if (q.Length == 0) return Task.FromResult(SearchResults.Empty);
         var matches = _x.LibraryPlaylists
             .Where(p => p.Name.Contains(q, StringComparison.OrdinalIgnoreCase))
             .Select(p => new Playlist(IdFromUri(p.Uri), p.Uri, p.Name, null, p.OwnerName, p.Cover, p.TrackCount))
             .ToList();
         var fd = FakeData.Search(q);
-        return Task.FromResult(new SearchResults(fd.Tracks, fd.Albums, fd.Artists, matches.Count > 0 ? matches : fd.Playlists));
+        // Surface real exported artists (e.g. Maroon 5) by name so they're reachable from search.
+        var artistHits = _x.Artists.Where(a => a.Name.Contains(q, StringComparison.OrdinalIgnoreCase)).ToList();
+        IReadOnlyList<Artist> artists = artistHits.Count > 0 ? artistHits.Concat(fd.Artists).ToList() : fd.Artists;
+        return Task.FromResult(new SearchResults(fd.Tracks, fd.Albums, artists, matches.Count > 0 ? matches : fd.Playlists));
     }
 
     public Task<HomeContribution> GetHomeAsync(CancellationToken ct = default) => Task.FromResult(_x.Home);

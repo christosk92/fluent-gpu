@@ -12,7 +12,57 @@ public sealed record AlbumRef(string Id, string Uri, string Name);
 
 public sealed record Artist(
     string Id, string Uri, string Name, Image? Image,
-    IReadOnlyList<Album>? TopAlbums = null);
+    IReadOnlyList<Album>? TopAlbums = null,
+    // Artist-detail facets (docs/architecture.md §2 "Album & artist"): monthly listeners, follower count, a short bio,
+    // and the verified flag. All defaulted/additive — synthesized by the fake source, mapped where a real source has them.
+    long MonthlyListeners = 0, long Followers = 0, string? Bio = null, bool Verified = false,
+    // The "magazine" facets (the WinUI Spotify-style artist page). All additive/nullable: null/0/empty ⇒ the section
+    // hides (the real Spotify export maps what it has; the fake source synthesizes the rest). HeaderImage is a landscape
+    // hero backdrop (vs the square avatar Image); TopTracks is the real "Popular" list; Pinned is the hero promo card.
+    int WorldRank = 0, Image? HeaderImage = null,
+    IReadOnlyList<Track>? TopTracks = null, IReadOnlyList<Album>? AppearsOn = null,
+    PinnedItem? Pinned = null, ArtistExtras? Extras = null);
+
+/// <summary>The optional "magazine" facet bundle for an artist (concerts, merch, playlists, videos, top cities, links,
+/// gallery, related artists, a derived tour banner). Any empty list ⇒ that section is omitted from the page.</summary>
+public sealed record ArtistExtras(
+    IReadOnlyList<Concert>? Concerts = null,
+    IReadOnlyList<MerchItem>? Merch = null,
+    IReadOnlyList<PlaylistRef>? Playlists = null,
+    IReadOnlyList<MusicVideo>? MusicVideos = null,
+    IReadOnlyList<TopCity>? TopCities = null,
+    IReadOnlyList<ExternalLink>? ExternalLinks = null,
+    IReadOnlyList<Image>? Gallery = null,
+    IReadOnlyList<RelatedArtist>? Related = null,
+    TourBanner? Tour = null);
+
+/// <summary>A music video on the artist page (16:9 thumbnail + duration). <paramref name="TrackUri"/> plays it.</summary>
+public sealed record MusicVideo(string TrackUri, string Title, Image? Thumbnail, long DurationMs, bool IsExplicit = false);
+
+/// <summary>An upcoming concert/tour date. <paramref name="Venue"/> is the venue name; <paramref name="City"/> the city.</summary>
+public sealed record Concert(string Uri, string? Title, string Venue, string City, DateTimeOffset Date, bool IsFestival = false, bool IsNearUser = false);
+
+/// <summary>A merch product (image + name + display price). <paramref name="ShopUrl"/> opens the external shop.</summary>
+public sealed record MerchItem(string Name, string Price, string? Description, Image? Image, string? ShopUrl);
+
+/// <summary>A "Playlists and discovery" entry. <paramref name="Subtitle"/> is the source/owner label (e.g. "Spotify").</summary>
+public sealed record PlaylistRef(string Uri, string Name, Image? Cover, string Subtitle);
+
+/// <summary>A "Listened to most in" city. The page draws a proportional bar from <paramref name="Listeners"/>/max.</summary>
+public sealed record TopCity(string City, string? Country, long Listeners);
+
+/// <summary>An external/social link. <paramref name="Kind"/> drives the icon glyph.</summary>
+public sealed record ExternalLink(string Name, string Url, ExternalLinkKind Kind);
+public enum ExternalLinkKind { Generic, Twitter, Instagram, Facebook, YouTube, Wikipedia, TikTok }
+
+/// <summary>A related/"fans also like" artist (carries its own avatar, unlike a bare <see cref="ArtistRef"/>).</summary>
+public sealed record RelatedArtist(string Id, string Uri, string Name, Image? Image);
+
+/// <summary>The hero "Pinned" promo card (the artist's spotlighted release + a short comment).</summary>
+public sealed record PinnedItem(string Eyebrow, string Title, string Subtitle, string Comment, Image? Cover, string Uri);
+
+/// <summary>The "On tour now" banner copy, derived from the concert list (eyebrow/headline/subline + a live flag).</summary>
+public sealed record TourBanner(string Eyebrow, string Headline, string Subline, bool IsLive);
 
 /// <summary>The release type — drives the detail-page badge, the layout (a single is a one-track release), and whether
 /// the track rows show a per-track artist (compilations are various-artists).</summary>
@@ -67,3 +117,15 @@ public sealed record Palette(uint BackgroundDark, uint TintedDark, uint Light, u
 
 public enum QueueBucket { NowPlaying, UserQueue, NextUp }
 public sealed record QueueEntry(string EntryId, Track Track, QueueBucket Bucket, bool IsAutoplay);
+
+// ── Podcasts (docs/architecture.md §2 "Podcasts / shows / episodes") ──────────────────────────────────────────────────
+/// <summary>A podcast episode. <paramref name="ProgressMs"/> is the resume position (0 = unplayed); a real source also
+/// carries paywall/preview, transcripts and chapters — modelled as additive fields when they arrive.</summary>
+public sealed record Episode(
+    string Id, string Uri, string Title, string ShowName, Image? Image,
+    long DurationMs, DateTimeOffset PublishedAt, string? Description = null, long ProgressMs = 0);
+
+/// <summary>A podcast show. Episodes hydrate on the detail read (like an album's tracks).</summary>
+public sealed record Show(
+    string Id, string Uri, string Name, string Publisher, Image? Cover, string? Description = null,
+    IReadOnlyList<Episode>? Episodes = null);

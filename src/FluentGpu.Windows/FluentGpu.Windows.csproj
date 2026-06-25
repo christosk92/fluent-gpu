@@ -9,9 +9,17 @@
        is interface-level, so swapping the backend means swapping this one reference. -->
   <ItemGroup>
     <ProjectReference Include="..\FluentGpu.Engine\FluentGpu.Engine.csproj" />
+    <!-- GEN-COM (WIRED): the COM-binding generator (Win32-free analyzer) runs in the Windows leaf and harvests the
+         *.comabi.json below into hand-vtable calli bindings that the D3D12 backend calls (FluentGpu.Interop.Generated.*).
+         ReferenceOutputAssembly=false → the netstandard2.0 analyzer is never linked into the backend. -->
+    <ProjectReference Include="..\FluentGpu.SourceGen\FluentGpu.SourceGen.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="TerraFX.Interop.Windows" Version="10.0.26100.6" />
+  </ItemGroup>
+  <ItemGroup>
+    <AdditionalFiles Include="d3d12.comabi.json" />
   </ItemGroup>
   <!-- The gallery smoke harness (the windowsapi-smoke switch) calls Win32DropTarget.SelfTest to exercise the
        hand-vtable IDropTarget's by-value POINTL ABI in-process (the crash-fix regression guard). -->

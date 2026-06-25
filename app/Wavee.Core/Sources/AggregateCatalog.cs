@@ -8,10 +8,22 @@ namespace Wavee.Core;
 /// owning source; collection reads MERGE (concat) across catalog sources — each source contributes only what it has,
 /// so the union is clean. Provider-mappings / dedup / fallback chains are the documented extension point (trivial with
 /// one real source today). This is the layer Connect/playback federation (FederatedPlayback/Remote) will sit beside.</summary>
-public sealed class AggregateCatalog : IMusicLibrary
+public sealed class AggregateCatalog : IMusicLibrary, ICollectionEvents
 {
     readonly SourceRegistry _reg;
-    public AggregateCatalog(SourceRegistry registry) => _reg = registry;
+    readonly SimpleSubject<CollectionKind> _collections = new();
+
+    public AggregateCatalog(SourceRegistry registry)
+    {
+        _reg = registry;
+        // Fan-in: any source that emits its own collection deltas forwards into the ONE aggregate stream the cache
+        // subscribes to (off-page library freshness, docs/architecture.md §6). No source raises it today → neutral seam.
+        foreach (var s in registry.All.OfType<ISourceCollectionEvents>())
+            s.CollectionsChanged.Subscribe(new ActionObserver<CollectionKind>(k => _collections.OnNext(k)));
+    }
+
+    /// <summary>The aggregated library-delta stream — the cache refreshes the named collection in place, even off-page.</summary>
+    public IObservable<CollectionKind> CollectionsChanged => _collections;
 
     // ── single-item reads: first owning source that returns non-null wins; else a minimal empty shape ──
     public async Task<Playlist> GetPlaylistAsync(string id, CancellationToken ct = default)
@@ -37,6 +49,11 @@ public sealed class AggregateCatalog : IMusicLibrary
 
     public IAsyncEnumerable<TrackPage> StreamTracksAsync(string contextUri, CancellationToken ct = default)
         => _reg.OwnerOf(contextUri)?.StreamTracksAsync(contextUri, ct) ?? EmptyPages(ct);
+
+    // Paged discography window + facet total. A source that exposes real paging would override (the documented seam); the
+    // synthetic catalog generates a large deterministic discography per artist so the virtualized grid is exercised for real.
+    public Task<DiscographyPage> GetDiscographyAsync(string artistUri, DiscographyKind kind, int offset, int limit, CancellationToken ct = default)
+        => Task.FromResult(FakeData.Discography(artistUri, kind, offset, limit));
 
     // ── merged collections (each source returns EMPTY where it has no data → clean union, no dups) ──
     public async Task<IReadOnlyList<LibraryItem>> GetLibraryAsync(CancellationToken ct = default)
@@ -107,6 +124,22 @@ public sealed class AggregateCatalog : IMusicLibrary
         contribs.Sort((a, b) => a.Priority.CompareTo(b.Priority));
         var groups = contribs.SelectMany(c => c.Groups).ToList();
         return new HomeFeed(Greeting(), groups);
+    }
+
+    // ── podcasts: federated to the Podcasts-capable sources (route single-show reads to the owner; merge the grid) ──
+    public async Task<IReadOnlyList<Show>> GetShowsAsync(CancellationToken ct = default)
+    {
+        var r = new List<Show>();
+        foreach (var s in _reg.OfCapability(SourceCapabilities.Podcasts).OfType<IPodcastSource>())
+            r.AddRange(await s.GetShowsAsync(ct).ConfigureAwait(false));
+        return r;
+    }
+
+    public async Task<Show?> GetShowAsync(string uri, CancellationToken ct = default)
+    {
+        foreach (var s in _reg.OfCapability(SourceCapabilities.Podcasts).OfType<IPodcastSource>())
+            if (s.Owns(uri) && await s.GetShowAsync(uri, ct).ConfigureAwait(false) is { } show) return show;
+        return null;
     }
 
     /// <summary>A live, time-of-day greeting (the export's is a snapshot; compute it fresh so it's always right).</summary>

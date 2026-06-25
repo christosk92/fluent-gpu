@@ -179,22 +179,10 @@ public struct ScrollState
     public float ViewportW, ViewportH;    // Layout-published viewport inner size (for clamp + window math)
     public byte  Orientation;             // 0 = vertical scroll (Y), 1 = horizontal scroll (X)
     public float FlingVelocity;           // touch-fling speed along Orientation (px/s, signed in offset space; Input seeds, Animation friction-decays)
-    public byte  ScrollMode;              // 0 = TargetChase, 1 = touch fling, 2 = precision-touchpad tracking/tail
+    public byte  ScrollMode;              // 0 = TargetChase, 1 = touch fling, 3 = mouse-wheel momentum fling
     public bool  FlingRetargeted;         // a snap-configured fling has had its velocity re-solved to land on the snap value
                                           // (the ScrollAnimator does this ONCE on fling entry; reset when a fresh fling is seeded).
     public float FlingFromOffset;         // the offset captured when the fling was seeded (the impulse "ignored value" anchor)
-    // Precision touchpad: the PAL classifies the wheel stream by its hi-res delta signature (non-120-multiples; the OS
-    // device API is an unreliable fast-path only). Input applies each high-resolution packet directly (1:1 tracking,
-    // like WinUI during the pan); the moment the stream goes quiet ScrollAnimator continues the measured velocity as a
-    // friction glide on the very next frame (no quiet-window freeze). Velocity measured at the true end of the stream
-    // means a driver that streamed its own decay can't double the glide.
-    public uint  TouchpadLastTimestampMs; // last coalesced OS packet timestamp; 0 = no velocity baseline yet
-    public float TouchpadIdleMs;          // time since the last packet (phase-7 clock; 0 = a packet arrived this frame)
-    public bool  TouchpadInertiaStarted;  // false while a packet stream is tracking, true once the post-lift glide runs
-    public float TouchpadRawOffset;       // touchpad "raw" position that may travel PAST the clamp when the scroll chain
-                                          // is fully pinned — the touch-pan model: ApplyTouchPan splits it into the
-                                          // in-range offset + the damped rubber-band, so a precision-touchpad overpan
-                                          // rubber-bands + springs back exactly like a touch overpan (WinUI ScrollPresenter).
     public float FlingSnapTarget;         // the exact snap value a retargeted fling lands on (the integrator writes THIS on
                                           // settle, so discrete-integration drift never leaves it a fraction off the snap). NaN = no snap target.
     public bool  ContentSized;            // auto-size to content then clamp (popup lists); false = hard viewport
@@ -227,9 +215,11 @@ public struct ScrollState
     // (the SetScrollOffset clamp contract is untouched: wheel/keyboard/programmatic stay hard-clamped, no band). On
     // release the band springs back to 0 with the critically-damped StepSpring in phase 7 (TransformDirty only). Signed
     // in offset space (negative = pulled past the top/left, positive = past the bottom/right). 0 at rest.
-    public float OverscrollPx;            // current visual displacement past the clamp (Input writes on overpan; Animation springs back)
-    public float OverscrollVel;           // spring velocity for the release spring-back (px/s; 0 while the finger drives it)
-    public bool  Overscrolling;           // a finger is actively driving the band (no spring-back yet); cleared on release
+    public float OverscrollPx;            // current visual displacement past the clamp (Animation springs it back to 0)
+    public float OverscrollVel;           // spring velocity for the release spring-back (px/s)
+    public bool  Overscrolling;           // TOUCH only: finger drives the band 1:1 (no spring-back yet); cleared on pointer-up
+    public float OverscrollReleaseOmega;  // optional per-release spring frequency; 0 = the active ScrollTuning default.
+                                          // Touchpad uses a faster recoil than direct touch without splitting the band model.
 
     public float FadeT;                   // scrollbar indicator opacity 0..1 (eased in on scroll/hover, auto-hides after idle)
     public float ExpandT;                 // WinUI conscious scrollbar expansion 0=thin indicator, 1=full gutter + buttons
@@ -250,6 +240,8 @@ public struct ScrollState
     // gate at record time (hover still expands it). Set by the reconciler from ScrollEl.AlwaysShowScrollbar.
     public bool  AlwaysShowBar;
     public bool  SuppressBar;             // never draw the conscious scrollbar (paged shelves nav by pager, not the bar)
+    public bool  SuppressBarLoading;      // transient: a descendant skeleton region is loading → hide the rail until it
+                                          // resolves (kept separate from SuppressBar so a re-reconcile can't clobber it)
     public float IdleMs;                  // time since the last scroll movement / hover (drives the auto-hide)
     public bool PointerOver;              // pointer is inside this scroll viewport
     public bool PointerOverScrollbar;     // pointer is inside this viewport's scrollbar gutter
@@ -259,6 +251,24 @@ public struct ScrollState
                                           // Set by Input.SetScrollOffset on a real move; consumed every Tick. Reveals FadeT only —
                                           // never PointerOver/ExpandT (a content pan is not a lane hover), so the bar idle-hides
                                           // naturally on the move stopping (the WinUI TouchIndicator shows through a manipulation).
+
+    // ── Predicate channel (generic scroll-binding model — design/plans/generic-hookable-scroll-engine-design.md §3.5/§7).
+    // A fixed bitfield recomputed AFTER the integrator settles, struct-compared to ScrollFlagsPrev so a managed OnFlag
+    // callback / flag-triggered time-animation fires only on an edge flip (CSS scroll-state container queries). Different
+    // update cadence from the continuous progress channel (every frame) is what keeps both paths zero-alloc.
+    public byte ScrollFlags;              // current frame's scroll-state vector
+    public byte ScrollFlagsPrev;          // last frame's vector — struct-compare gate
+    public const byte StuckTopBit = 1, StuckBottomBit = 2, SnappedBit = 4, ScrollableUpBit = 8,
+                      ScrollableDownBit = 16, ScrolledFwdBit = 32, MovingNowBit = 64, IdleExpiredBit = 128;
+    // Distance-latched scroll direction: OffsetPrev advances to Offset only when |Offset − OffsetPrev| crosses a px
+    // hysteresis, so ScrolledFwd is geometry-derived and dt-invariant (no raw per-frame delta that scales with dt).
+    public float OffsetPrev;              // last latched offset (direction reference)
+    public bool  DirLatched;              // OffsetPrev has been seeded (the first sample never spuriously flips the dir bit)
+
+    // Nested-scroll chaining (the overscroll-behavior analog; design §10). 0 = Auto (an inner pan at its edge hands the
+    // residual to the nearest same-axis ancestor scroller, Compose-style), 1 = Contain (the inner rubber-bands; no
+    // hand-off), 2 = None (no band, no hand-off). Wheel already bubbles via ScrollAxis; this governs the TOUCH pan path.
+    public byte  Chaining;                // 0 = Auto, 1 = Contain, 2 = None
 
     // Virtualization (ItemCount == 0 ⇒ a plain ScrollView, non-virtual).
     public int   ItemCount;
@@ -273,6 +283,19 @@ public struct ScrollState
     public int   AnchorIndex;
     public StringId AnchorKey;
     public float AnchorViewportDelta;
+
+    // ── Scroll-position restoration (per content-identity, survives KeepAlive eviction). The reconciler keys a global
+    // ScrollMemory cache by (ScrollScope, ScrollKey): ScrollKey is the app-supplied content identity (a route key), and
+    // ScrollScope is the engine-computed enclosing KeepAlive-slot key (so the SAME content open in two tabs never shares a
+    // saved position). On mount / content-identity change the reconciler seeds Offset + arms RestorePending; on
+    // unmount/content-swap it saves the live offset. RestorePending re-asserts the restored offset on EACH layout (the
+    // loading skeleton is short → the offset can't be applied until the real, taller content lands) until the extent can
+    // satisfy it — then it releases. Cleared early by a user scroll (Input). Managed refs are fine here (dict-backed,
+    // like SnapPoints/Layout). The whole point of the cache living off-node is to outlive the freed subtree on eviction.
+    public string? ScrollKey;             // content identity (app-supplied); null ⇒ no restoration for this viewport
+    public string? ScrollScope;           // enclosing KeepAlive-slot key (engine-computed at mount); composes the cache key
+    public bool  RestorePending;          // a seeded offset is waiting for the real content extent to be able to hold it
+    public float RestoreX, RestoreY;      // the target offset to restore (offset space)
 
     public static ScrollState Default => new() { ExtentTableRef = -1, ZoomFactor = 1f, MinZoom = 0.1f, MaxZoom = 10f, FlingSnapTarget = float.NaN };
 

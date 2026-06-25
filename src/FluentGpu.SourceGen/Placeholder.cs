@@ -1,18 +1,20 @@
 namespace FluentGpu.SourceGen;
 
 /// <summary>
-/// SCAFFOLD markers for the build-time generators that are designed but not yet implemented in this
-/// (now-unified) analyzer assembly. The two SHIPPING generators live in <c>Localization/</c> and
-/// <c>Validation/</c>; the items below are the still-unbuilt ones folded here when the four separate
-/// SourceGen projects were consolidated into this one.
+/// Historical scaffold marker. The build-time generators this once reserved are now IMPLEMENTED in this
+/// (unified) analyzer assembly — see <c>docs/plans/source-generators-opportunity-investigation.md</c> §"Implementation
+/// status" for the verdict + form of each. The two original SHIPPING generators live in <c>Localization/</c> and
+/// <c>Validation/</c>; the engine + COM generators landed alongside:
 ///
-/// <para>Engine codegen (see design/subsystems/dsl-aot.md): ElementTypeId, modifier extensions, bitmask
-/// DiffProps, the scene-writer (homed in the reconciler/leaf), HookDeps (≤4-arity capture + lanes/transition
-/// lowering), Theme blobs, and the WGPU####/FG#### analyzers. Portable / Win32-free.</para>
+/// <para>Engine codegen (design/subsystems/dsl-aot.md): <c>Engine/ElementGenerator.cs</c> (the marker attributes +
+/// the WGPU0003 ElementTypeId guard, LIVE), <c>Engine/DiffPropsGenerator.cs</c> (the bitmask DiffProps + ref-equality),
+/// <c>Engine/ThemeBlobGenerator.cs</c> (Theme blobs/TokenId), <c>Engine/RejectedSetGenerators.cs</c> (the verified
+/// net-negative set, dormant), and <c>Engine/GatedMigrationGenerators.cs</c> (HookDeps/cold-slab/static-hoist behind
+/// default-off markers). Each non-live generator is dormant until its trigger is present, so it cannot regress a build.</para>
 ///
-/// <para>COM-binding generator (see design/subsystems/com-interop.md): emits hand-vtable <c>IComObject</c>
-/// consume bindings + callee CCW vtables from a harvested <c>*.comabi.json</c> (no human-typed slot indices),
-/// plus the <c>FGCOM####</c> rules. It stays Win32-free AT THE SOURCE LEVEL (no Win32/TerraFX PackageReference),
-/// so hosting it here does not pull a Win32 dependency into the portable toolchain.</para>
+/// <para>COM-binding generator (design/subsystems/com-interop.md): <c>Interop/ComInteropGenerator.cs</c> — hand-vtable
+/// <c>IComObject</c> bindings from a harvested <c>*.comabi.json</c> (no human-typed slots), dormant until a manifest is
+/// checked in. Stays Win32-free AT THE SOURCE LEVEL, so it does not pull a Win32 dependency into the portable toolchain.
+/// The WGPU####/FGCOM#### analyzer family is partially landed (WGPU0003) and otherwise designed-but-deferred.</para>
 /// </summary>
 internal static class SourceGenMarker;

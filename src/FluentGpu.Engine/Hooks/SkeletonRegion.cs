@@ -35,8 +35,9 @@ public readonly record struct SkeletonStyle(
 /// <summary>
 /// The native skeleton-loading boundary (the ONE author surface). A layout-transparent container, modelled on the
 /// reactive <c>Show</c> boundary: a reconciler effect reads the <see cref="Loadable{T}"/> state via <see cref="Pending"/>
-/// / <see cref="Failed"/> and mounts one of three branches — a DERIVED shimmer (from <see cref="ShimmerSource"/>, never a
-/// hand-authored second tree), the real <see cref="Content"/>, or the <see cref="OnFailed"/> error UI — swapping with the
+/// / <see cref="Failed"/> and mounts one of three branches — a DERIVED shimmer (from <see cref="ShimmerSource"/>, or — when
+/// it is null — from <see cref="Content"/> itself rendered against the seed; never a hand-authored second tree), the real
+/// <see cref="Content"/>, or the <see cref="OnFailed"/> error UI — swapping with the
 /// blur reveal on Ready. Build it with <see cref="Skel"/>. The shimmer is derived once per pending→loaded edge (a
 /// reconcile-edge event, not a paint phase), so it adds zero per-frame cost.
 /// </summary>
@@ -44,7 +45,7 @@ public sealed record SkelRegionEl(
     Func<bool> Pending,
     Func<bool> Failed,
     Func<Element> Content,
-    Func<Element> ShimmerSource,
+    Func<Element>? ShimmerSource,   // null ⇒ the reconciler derives Content itself (= content(seed) while Pending); set only when the shimmer is a DIFFERENT tree
     Func<Element>? OnFailed,
     SkelReveal Reveal,
     SkeletonStyle Style,
@@ -61,35 +62,65 @@ public static class Skel
 {
     /// <summary>A list/region skeleton: while <paramref name="loadable"/> is Pending, derive a shimmer from
     /// <paramref name="count"/> copies of <paramref name="rowTemplate"/>(null) (the SAME row shape as the real row —
-    /// single source); on Ready mount <paramref name="content"/>(value) and blur-reveal it (<paramref name="reveal"/>);
-    /// on Failed mount <paramref name="onFailed"/>. <paramref name="group"/> coordinates the reveal with sibling regions
-    /// sharing the token (one settle window). Reads State (subscribes) but Value via Peek (no re-fire on value change).</summary>
+    /// single source); on Ready mount <paramref name="content"/>(value) — or <paramref name="onEmpty"/> when the loaded
+    /// array is empty — and blur-reveal it (<paramref name="reveal"/>); on Failed mount <paramref name="onFailed"/>.
+    /// The engine owns all four states (Pending / Ready / Empty / Failed) so callers never branch on them by hand.
+    /// <paramref name="group"/> coordinates the reveal with sibling regions sharing the token (one settle window). Reads
+    /// State (subscribes) but Value via Peek (no re-fire on value change).</summary>
     public static SkelRegionEl Region<T>(
         Loadable<T[]> loadable, Func<T?, Element> rowTemplate, int count, Func<T[], Element> content,
-        SkelReveal reveal = SkelReveal.StaggerRows, Func<Element>? onFailed = null, object? group = null,
-        SkeletonStyle? style = null, bool smoothResize = true)
+        SkelReveal reveal = SkelReveal.StaggerRows, Func<Element>? onFailed = null, Func<Element>? onEmpty = null,
+        object? group = null, SkeletonStyle? style = null, bool smoothResize = true)
     {
         var st = style ?? SkeletonStyle.Default;
         return new SkelRegionEl(
             Pending: () => loadable.State.Value == (byte)LoadState.Pending,
             Failed: () => loadable.State.Value == (byte)LoadState.Failed,
-            Content: () => content(loadable.Value.Peek()),
+            Content: () => { var v = loadable.Value.Peek(); return onEmpty is not null && (v is null || v.Length == 0) ? onEmpty() : content(v); },
             ShimmerSource: () => RowStack(count, rowTemplate, st.RowGap),
             OnFailed: onFailed,
             Reveal: reveal, Style: st, Group: group, SmoothResize: smoothResize);
     }
 
     /// <summary>A single-subtree skeleton: while Pending derive the shimmer from <paramref name="shimmerSource"/> (your
-    /// one real subtree, built with placeholder/empty fields), on Ready mount <paramref name="content"/>(value).</summary>
+    /// one real subtree, built with placeholder/empty fields — never a hand-authored second tree), on Ready mount
+    /// <paramref name="content"/>(value) — or <paramref name="onEmpty"/> when <paramref name="isEmpty"/>(value) is true,
+    /// so the engine owns the Empty branch too — on Failed mount <paramref name="onFailed"/>.</summary>
     public static SkelRegionEl Region<T>(
         Loadable<T> loadable, Func<Element> shimmerSource, Func<T, Element> content,
-        SkelReveal reveal = SkelReveal.Soft, Func<Element>? onFailed = null, object? group = null,
-        SkeletonStyle? style = null, bool smoothResize = true)
+        SkelReveal reveal = SkelReveal.Soft, Func<Element>? onFailed = null,
+        Func<T, bool>? isEmpty = null, Func<Element>? onEmpty = null,
+        object? group = null, SkeletonStyle? style = null, bool smoothResize = true)
         => new(
             Pending: () => loadable.State.Value == (byte)LoadState.Pending,
             Failed: () => loadable.State.Value == (byte)LoadState.Failed,
-            Content: () => content(loadable.Value.Peek()),
+            Content: () => { var v = loadable.Value.Peek(); return onEmpty is not null && isEmpty is not null && isEmpty(v) ? onEmpty() : content(v); },
             ShimmerSource: shimmerSource,
+            OnFailed: onFailed,
+            Reveal: reveal, Style: style ?? SkeletonStyle.Default, Group: group, SmoothResize: smoothResize);
+
+    /// <summary>The single-subtree skeleton — pass ONLY your real <paramref name="content"/>, nothing about skeletons:
+    /// the engine renders <c>content(seed)</c> (your SAME content rendered against the loadable's own pending seed value —
+    /// the placeholder you gave <c>UseAsyncResource</c>) and DERIVES the shimmer from it, then fills in the real data on
+    /// load. There is no second tree and no shimmer arg. The author's ONLY responsibility is that the resource's seed
+    /// renders a representative shape (e.g. an empty artist whose page still lays out hero + tracks via a fake-data
+    /// fallback; a home/search seed with a few blank items) — a DATA concern declared at the resource, not skeleton code.
+    /// On Ready mount content(value) — or <paramref name="onEmpty"/> when <paramref name="isEmpty"/>(value) — on Failed
+    /// <paramref name="onFailed"/>.
+    /// (The explicit-<c>shimmerSource</c> overload exists ONLY for the two cases where <c>content(seed)</c> can't BE the
+    /// shimmer: a streaming LIST where <c>Flow.For</c> over the seed yields zero rows, and content that must reserve a slot
+    /// a derived shimmer can't carry — e.g. a connected-animation morph cover — or is a stateful component you must not
+    /// mount during load. Everything else uses THIS overload.)</summary>
+    public static SkelRegionEl Region<T>(
+        Loadable<T> loadable, Func<T, Element> content,
+        SkelReveal reveal = SkelReveal.Soft, Func<Element>? onFailed = null,
+        Func<T, bool>? isEmpty = null, Func<Element>? onEmpty = null,
+        object? group = null, SkeletonStyle? style = null, bool smoothResize = true)
+        => new(
+            Pending: () => loadable.State.Value == (byte)LoadState.Pending,
+            Failed: () => loadable.State.Value == (byte)LoadState.Failed,
+            Content: () => { var v = loadable.Value.Peek(); return onEmpty is not null && isEmpty is not null && isEmpty(v) ? onEmpty() : content(v); },
+            ShimmerSource: null,   // the shimmer IS Content(seed) — the reconciler derives Content itself, no separate field
             OnFailed: onFailed,
             Reveal: reveal, Style: style ?? SkeletonStyle.Default, Group: group, SmoothResize: smoothResize);
 
@@ -102,7 +133,7 @@ public static class Skel
             Pending: () => field.State.Value == (byte)LoadState.Pending,
             Failed: () => field.State.Value == (byte)LoadState.Failed,
             Content: () => leaf,
-            ShimmerSource: () => leaf,
+            ShimmerSource: null,   // the shimmer IS the leaf — the reconciler derives Content itself
             OnFailed: null,
             Reveal: SkelReveal.Soft, Style: style ?? SkeletonStyle.Default, Group: null);
 

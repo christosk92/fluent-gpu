@@ -201,10 +201,14 @@ public static class MotionRecipes
     /// but with the expressive curve + blur.</summary>
     public static void UseSoftReveal(this Component c, object? key = null, float dy = Expressive.DistMedium, float blur = Expressive.BlurMedium)
     {
-        if (Motion.ReducedMotion) return;
+        // Reduced-motion is read as a VALUE — never early-return. Motion.ReducedMotion is a mutable global (a drag-resize
+        // grip flips it to suppress springs), so an early-return would change THIS hook's slot count mid-life and shift
+        // every later hook in the calling component → an EffectCell↔AsyncResourceCell cast crash. When reduced, the
+        // transitions are seeded already at their end state (instant, no visible motion) so the hook order stays invariant.
+        bool reduce = Motion.ReducedMotion;
         object dep = key ?? "soft-reveal";
-        c.Context.UseTransition(AnimChannel.Opacity, 0f, 1f, Expressive.VerySlow, Easing.SmoothOut, dep);
-        c.Context.UseTransition(AnimChannel.TranslateY, dy, 0f, Expressive.VerySlow, Easing.SmoothOut, dep);
-        if (blur > 0f) c.Context.UseTransition(AnimChannel.BlurSigma, blur, 0f, Expressive.VerySlow, Easing.SmoothOut, dep);
+        c.Context.UseTransition(AnimChannel.Opacity, reduce ? 1f : 0f, 1f, Expressive.VerySlow, Easing.SmoothOut, dep);
+        c.Context.UseTransition(AnimChannel.TranslateY, reduce ? 0f : dy, 0f, Expressive.VerySlow, Easing.SmoothOut, dep);
+        if (blur > 0f) c.Context.UseTransition(AnimChannel.BlurSigma, reduce ? 0f : blur, 0f, Expressive.VerySlow, Easing.SmoothOut, dep);
     }
 }

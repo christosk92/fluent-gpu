@@ -17,7 +17,7 @@ namespace Wavee;
 // catalog seam groups a real Spotify home — dozens of sections — into a small, finite set of typed groups so it never
 // reads as an endless stack of rails; see docs/architecture.md §2). Each group renders by KIND with the existing
 // reusable cards: QuickGrid / Hero spotlight / horizontally-paged Shelf / a CollapsedGrid that folds the many
-// single-item recommendations into one grid. Async skeleton pattern throughout (UseAsyncResource + StatefulRegion).
+// single-item recommendations into one grid. Async skeleton pattern throughout (UseAsyncResource + Skel.Region).
 sealed class HomePage : Component
 {
     public override Element Render()
@@ -29,7 +29,7 @@ sealed class HomePage : Component
         var preview = UseContext(NavPreviewStore.Slot);    // pre-load: stash the card's known cover/title for the detail page
         if (svc is null) return new BoxEl { Grow = 1f };
 
-        var home = UseAsyncResource(ct => svc.Library.GetHomeAsync(ct), HomeFeed.Empty);
+        var home = UseAsyncResource(ct => svc.Library.GetHomeAsync(ct), FakeData.HomeSeed);   // seed renders the loading shape; Skel.Region derives the shimmer from it
         string? name = bridge?.User.Value?.DisplayName;     // subscribe → greeting refreshes on login
 
         void Play(string uri) => _ = svc.Player.PlayAsync(uri, 0);
@@ -87,12 +87,14 @@ sealed class HomePage : Component
             _ => new BoxEl(),
         };
 
-        Element groups = StatefulRegion.Single(
+        Element groups = Skel.Region(
             home,
-            shimmer: HomeSkeleton,
+            shimmerSource: HomeShimmer,
+            isEmpty: feed => feed.Groups.Count == 0,
+            onEmpty: () => EmptyState.Default(),
+            onFailed: () => ErrorState.Build(home.Error),
             content: feed =>
             {
-                if (feed.Groups.Count == 0) return EmptyState.Default();
                 // Warm below-the-fold cover art at the kind-matched decode size the moment the feed lands, so a first
                 // scroll reveals resident textures instead of decoding+uploading on the UI thread mid-scroll (the
                 // first-pass jank). Prefetch priority → background workers, so the visible cards still decode first;
@@ -113,7 +115,24 @@ sealed class HomePage : Component
             Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, PlayerDock.Reserve + WaveeSpace.XXL),
             Children = [ GreetingHero(name), groups ],
         };
-        return ScrollView(page) with { Grow = 1f };
+        // Scroll-position restoration: home is one route, so the key is constant — a revisit after the page was evicted
+        // from KeepAlive seeds the saved offset before layout (within KeepAlive the parked node already preserves it).
+        return ScrollView(page) with { Grow = 1f, ScrollKey = "home" };
+    }
+
+    // Lightweight loading skeleton (finding #7): a few shelf placeholders (title bar + a row of card bars) so the pending
+    // edge doesn't build the full home feed just to derive a skeleton. Sized childless boxes → shimmer bars; SmoothResize
+    // eases the swap to the real groups on load.
+    static Element HomeShimmer()
+    {
+        static Element TitleBar() => new BoxEl { Width = 180f, Height = 22f, Corners = CornerRadius4.All(WaveeRadius.Control) };
+        static Element Card() => new BoxEl { Width = 180f, Height = 56f, Corners = CornerRadius4.All(WaveeRadius.Card) };
+        static Element Shelf() => new BoxEl
+        {
+            Direction = 1, Gap = WaveeSpace.M,
+            Children = [TitleBar(), new BoxEl { Direction = 0, Gap = WaveeSpace.M, Children = [Card(), Card(), Card(), Card(), Card()] }],
+        };
+        return new BoxEl { Direction = 1, Gap = WaveeSpace.XL, Children = [Shelf(), Shelf(), Shelf()] };
     }
 
     static string Id(string uri) { int i = uri.LastIndexOf(':'); return i >= 0 ? uri[(i + 1)..] : uri; }
@@ -183,27 +202,4 @@ sealed class HomePage : Component
     // ── helpers ────────────────────────────────────────────────────────────────────────────────────────
     static Element QuickGrid(IEnumerable<Element> tiles) =>
         AutoGrid(320f, WaveeSpace.M, MediaCard.QuickH, tiles.ToArray());
-
-    static Element HomeSkeleton() => new BoxEl
-    {
-        Direction = 1, Gap = WaveeSpace.XL,
-        Children = [ QuickGrid(Enumerable.Range(0, 4).Select(_ => MediaCard.QuickPickSkeleton())), ShelfShimmer(false), ShelfShimmer(true) ],
-    };
-
-    static Element ShelfShimmer(bool circular) => new BoxEl
-    {
-        Direction = 1, Gap = WaveeSpace.M,
-        Children =
-        [
-            SkelBar(180f, 22f),
-            new BoxEl
-            {
-                Direction = 0, Gap = WaveeSpace.M, ClipToBounds = true,
-                Children = Enumerable.Range(0, 6).Select(_ => MediaCard.ShelfSkeleton(168f, circular)).ToArray(),
-            },
-        ],
-    };
-
-    static Element SkelBar(float w, float h) =>
-        new BoxEl { Width = w, Height = h, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault };
 }

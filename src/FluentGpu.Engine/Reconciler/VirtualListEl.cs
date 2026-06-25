@@ -86,4 +86,9 @@ public sealed record VirtualListEl : Element
     /// <summary>Never draw the conscious scrollbar for this viewport (a paged shelf navigates by its pager, not a
     /// draggable bar; the offset is still programmatically scrolled). Edge-fade cues are unaffected.</summary>
     public bool SuppressScrollBar { get; init; }
+
+    /// <summary>Scroll-position restoration key — a STABLE per-content identity (see <see cref="ScrollEl.ScrollKey"/>).
+    /// For a huge virtualized list this is what makes a revisit land at the saved row on the FIRST realized window (the
+    /// seed is applied before <c>RealizeWindow</c>), with no top-then-jump. Null ⇒ no restoration.</summary>
+    public string? ScrollKey { get; init; }
 }

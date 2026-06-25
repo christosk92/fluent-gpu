@@ -21,7 +21,14 @@ public static class Responsive
     /// changes. <paramref name="fallback"/> is the width passed for the one frame before the first measure;
     /// <paramref name="grow"/> &gt; 0 makes it fill a ROW parent (a column parent cross-stretches it at grow 0).</summary>
     public static Element Of(Func<float, Element> build, float fallback = 0f, float grow = 0f)
-        => Embed.Comp(() => new ResponsiveBox(build, fallback, grow));
+        // Pending uses another real ResponsiveBox. The engine derives each output it renders, so the skeleton follows the
+        // measured slot width instead of freezing at `fallback` (the previous 900-DIP proxy left a visible right gap).
+        => Embed.Comp(() => new ResponsiveBox(build, fallback, grow))
+           with
+           {
+               SkeletonProxy = () => Embed.Comp(() => new ResponsiveBox(build, fallback, grow))
+                   with { DeriveRenderedOutput = true }
+           };
 }
 
 /// <summary>The <see cref="Responsive.Of"/> component (see that summary). Reading <c>_w.Value</c> in <c>Render</c>

@@ -134,6 +134,39 @@ public static class SceneRecorder
         return stats.ToStats();
     }
 
+    /// <summary>Draw the <see cref="FluentGpu.Animation.DetachedAnimSlab"/>'s live snapshots (the connected-animation
+    /// Hero fly; presence exits) in the top band — the rework's replacement for the live-overlay Walk. Each row draws
+    /// from its VALUE snapshot (no live node): the world/opacity/corners/image are baked by
+    /// <c>ConnectedAnimation.SyncDetached</c>; fit + image readiness resolve here exactly like the main-pass image case.
+    /// Emitted LAST (after <see cref="Record"/>) so it paints above all content; clipped to <paramref name="clip"/>
+    /// (a content-region rect; <c>RectF.Infinite</c> ⇒ unbounded).</summary>
+    public static void RecordDetached(SceneStore scene, DrawList dl, ImageCache? images, FluentGpu.Animation.DetachedAnimSlab detached, RectF clip)
+    {
+        if (detached.Count == 0) return;
+        bool clipped = clip.W < 1e7f && clip.H < 1e7f;   // a finite content-region clip (RectF.Infinite ⇒ unbounded fly)
+        if (clipped) dl.PushClip(clip);
+        int n = detached.NodeCount;
+        for (int s = 0; s < n; s++)
+        {
+            ref FluentGpu.Animation.DetachedNode d = ref detached.At(s);
+            if (!d.InUse || (VisualKind)d.Kind != VisualKind.Image || d.ImageId == 0) continue;
+            var ih = new ImageHandle(d.ImageId);
+            bool ready = images is not null && images.StateOf(ih) == ImageState.Ready;
+            float crossFade = images is not null ? images.CrossFadeOf(ih) : 1f;
+            RectF local = new RectF(0f, 0f, d.Bounds.W, d.Bounds.H);
+            RectF drawRect = local;
+            RectF uv = new RectF(0f, 0f, 1f, 1f);
+            if (ready && images is not null)
+            {
+                var (srcW, srcH) = images.SizeOf(ih);
+                (drawRect, uv) = ImageContentFit((ImageFit)d.Fit, in local, srcW, srcH);
+            }
+            ulong key = (ulong)((1 << 16) | 1) << 32;   // top band — above the drag ghost, matching the old overlay-band depth
+            dl.DrawImage(drawRect, d.Corners, d.ImageId, ready, d.Fill, d.WorldTransform, d.Opacity, uv, crossFade, key);
+        }
+        if (clipped) dl.PopClip();
+    }
+
     /// <summary>
     /// Record ONE subtree into its own DrawList, re-origined so the subtree's on-screen top-left lands at the
     /// DrawList's (0,0) — the root-override path for E4 out-of-bounds popup windows (the popup subtree stays in the
@@ -987,7 +1020,7 @@ public static class SceneRecorder
     /// <summary>An auto-hiding scrollbar thumb sized from the viewport's content/offset, faded by <c>FadeT</c>, expanded on lane hover.</summary>
     private static void EmitScrollbar(DrawList dl, in RectF b, in ScrollState sc, in Affine2D world, float opacity, ulong key, ColorF thumb, ColorF track)
     {
-        if (sc.SuppressBar) return;   // paged shelves navigate by pager, not a draggable bar — never draw it
+        if (sc.SuppressBar || sc.SuppressBarLoading) return;   // pager-driven shelf, or a descendant skeleton is loading — no rail
         bool horizontal = sc.Orientation == 1;
         float content = horizontal ? sc.ContentW : sc.ContentH;
         float viewport = horizontal ? sc.ViewportW : sc.ViewportH;

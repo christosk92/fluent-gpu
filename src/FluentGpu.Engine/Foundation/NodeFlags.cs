@@ -18,6 +18,12 @@ public enum NodeFlags : uint
                                    // wins when the gesture runs along its own axis and yields (the list scrolls) when
                                    // cross-axis (input-a11y.md §7A; the declarative form of DragController.YieldsToPan)
 
+    // layout firewall (opt-in)
+    LayoutBoundary = 1u << 7,         // the app declares this node's size PARENT-determined (it fills/clips, never content-
+                                      // sized): a descendant relayout stops here (LayoutInvalidator) and re-solves only this
+                                      // subtree via RunSubtree against the node's current bounds, instead of a full-tree
+                                      // layout from the root. Set from Element.IsolateLayout. A resize still does a full layout.
+
     // layout notification
     BoundsChangedPending = 1u << 4,   // a NEW OnBoundsChanged handler was just installed on this node — deliver the
                                       // node's current arranged rect to it ONCE on the next arrange even if the rect is
@@ -47,6 +53,8 @@ public enum NodeFlags : uint
     // (The virtualization spec names VirtualRangeDirty=1<<13 / StickyPinned=1<<14, but those bits are already
     //  taken by Focusable/Focused in this map — see architecture-spec §2 vs the live NodeFlags column. We honor
     //  the *semantics* (distinct bits, NOT the Realized bit) at free positions in the live map.)
+    // 1u << 6 is FREE — formerly ScrollStretchHeader; overscroll-stretch is now a generic ScrollBind closed-form op
+    // (the bind targets the hero node by handle, so no per-node flag is needed).
     Scrollable = 1u << 17,        // node is a scroll viewport (carries a ScrollState row; Input may scroll it)
     VirtualRangeDirty = 1u << 18, // virtual list crossed an item boundary → re-realize the window next render
     StickyPinned = 1u << 19,      // a sticky header pinned by a phase-7 transform (excluded from clean-span reuse)
