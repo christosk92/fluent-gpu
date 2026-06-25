@@ -53,10 +53,18 @@ namespace FluentGpu.SourceGen.Interop
                     sb.Append("        public static readonly global::System.Guid IID = new global::System.Guid(\"").Append(f.Iid).Append("\");\n");
                 foreach (ComAbi.Method method in f.Methods)
                 {
-                    // calli through the COM vtable: (*(void***)self)[slot] is the function pointer; first arg is `this`.
+                    // Typed calli through the COM vtable: (*(void***)self)[slot] is the fn-ptr; first arg is `this`.
+                    string sig = "void*", parms = "void* self", args = "self";
+                    for (int i = 0; i < method.Params.Length; i++)
+                    {
+                        sig += ", " + method.Params[i];
+                        parms += ", " + method.Params[i] + " p" + i;
+                        args += ", p" + i;
+                    }
+                    sig += ", " + method.Ret;
                     sb.Append("        /// <summary>vtable slot ").Append(method.Slot).Append(".</summary>\n");
-                    sb.Append("        public static int ").Append(method.Name).Append("(void* self) => ((delegate* unmanaged<void*, int>)(*(void***)self)[")
-                      .Append(method.Slot).Append("])(self);\n");
+                    sb.Append("        public static ").Append(method.Ret).Append(' ').Append(method.Name).Append('(').Append(parms)
+                      .Append(") => ((delegate* unmanaged<").Append(sig).Append(">)(*(void***)self)[").Append(method.Slot).Append("])(").Append(args).Append(");\n");
                 }
                 sb.Append("    }\n");
             }
@@ -80,9 +88,11 @@ namespace FluentGpu.SourceGen.Interop
     {
         internal readonly struct Method
         {
-            public Method(string name, int slot) { Name = name; Slot = slot; }
+            public Method(string name, int slot, string ret, string[] @params) { Name = name; Slot = slot; Ret = ret; Params = @params; }
             public string Name { get; }
             public int Slot { get; }
+            public string Ret { get; }       // C# return type ("int" = HRESULT default; "void"; "ulong"; ...)
+            public string[] Params { get; }  // C# param types AFTER `this` (e.g. "ulong", "void*")
         }
 
         internal readonly struct Iface
@@ -112,7 +122,11 @@ namespace FluentGpu.SourceGen.Interop
                         if (mo is not Dictionary<string, object?> md) continue;
                         string mn = SanitizeId(Str(md, "name"));
                         if (mn.Length == 0) continue;
-                        methods.Add(new Method(mn, (int)Num(md, "slot")));
+                        string ret = Str(md, "ret"); if (ret.Length == 0) ret = "int";
+                        var ps = new List<string>();
+                        if (md.TryGetValue("params", out object? pv) && pv is List<object?> pa)
+                            foreach (object? p in pa) if (p is string ptype) ps.Add(ptype);
+                        methods.Add(new Method(mn, (int)Num(md, "slot"), ret, ps.ToArray()));
                     }
                 }
                 result.Add(new Iface(name, Str(io, "iid"), methods));

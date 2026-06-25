@@ -439,8 +439,10 @@ public sealed unsafe class D3D12Device : IGpuDevice
         }
         else
         {
-            _acrylic?.TickIdle(_fence->GetCompletedValue());   // age/trim the layer RT pools while no layer is on screen
-            _opacity?.TickIdle(_fence->GetCompletedValue());
+            // GEN-COM (WIRED): the generated hand-vtable calli binding replaces the TerraFX method call. TerraFX still
+            // supplies the ID3D12Fence* type; the vtable[8] calli is emitted from d3d12.comabi.json (no human-typed slot).
+            _acrylic?.TickIdle(global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence));   // age/trim layer RT pools
+            _opacity?.TickIdle(global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence));
             _cmdList->OMSetRenderTargets(1, &rtv, BOOL.FALSE, null);
             float* clear = stackalloc float[4] { ctx.Clear.R, ctx.Clear.G, ctx.Clear.B, ctx.Clear.A };
             _cmdList->ClearRenderTargetView(rtv, clear, 0, null);
