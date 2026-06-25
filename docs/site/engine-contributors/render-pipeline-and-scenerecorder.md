@@ -1,5 +1,7 @@
 # Render pipeline and SceneRecorder
 
+> **✅ Animation engine — signals-first rework landed + verified.** The recorder's hover/press-scale and brush composition now reads a precomputed `NodePaint.InteractionScale` field produced by the unified slab's **owner-column → single fold-and-write-once compose pass** (one write per node×channel; hit-test still reads layout `Bounds`, not the composited scale). Hover/press are the `HoverFade`/`PressFade` slab channels and brush transitions the `BrushFade` channel — no separate `InteractionAnimator` or per-control brush ticker. Design, now implemented: [`../../plans/animation-engine-rework-design.md`](../../plans/animation-engine-rework-design.md).
+
 [← Contributing to the engine](./index.md) · [Reconciler and the retained scene](./reconciler-and-scene.md) · [Layout internals](./layout-internals.md)
 
 This page is for engine contributors changing the **record half** of the frame — phase 8 and its neighbours. It tells you
@@ -75,17 +77,19 @@ the recorder uses it for every cull/clip test. `Bounds` are **node-LOCAL** ([`SP
 §2, color/coordinate row), and `LocalTransform` maps local→parent, which is exactly why the recorder rebuilds `world` on the
 way down instead of reading a stored absolute matrix.
 
-On top of the local transform, `Walk` also composes (in order): an **interaction-driven scale** (hover/press thumb-grow,
-eased by the node's own or nearest interactive ancestor's progress via `TryResolveInteractionProgress`), a **`CounterScaled`**
-inverse for children that opted out of an ancestor's animated scale (Framer-Motion-style projection), and a **child-group
-shift** (`ChildShiftX/Y`, the `SizeMode.Reflow` trailing-anchor slide) applied only to the children's world, never the node's
-own fill.
+On top of the local transform, `Walk` also composes (in order): an **interaction-driven scale** (hover/press thumb-grow),
+a **`CounterScaled`** inverse for children that opted out of an ancestor's animated scale (Framer-Motion-style projection),
+and a **child-group shift** (`ChildShiftX/Y`, the `SizeMode.Reflow` trailing-anchor slide) applied only to the children's
+world, never the node's own fill. The interaction scale is **precomputed** — the slab's `HoverFade`/`PressFade` channels
+are folded once per frame into `NodePaint.InteractionScale` by the compose pass, and the recorder reads that field (it
+resolves a node's own or nearest interactive ancestor's value via `TryResolveInteractionProgress`); the walk no longer
+runs the ease itself.
 
 ### Opacity: cumulative, with flat opacity groups for overlap
 
-Opacity multiplies down the tree: `opacity = parentOpacity * ResolveOpacity(...)`. `ResolveOpacity` eases hover/press opacity
-targets when present, else returns the resting `Opacity`. The default model is **per-node multiplied alpha** (WinUI's plain
-`Visual.Opacity`).
+Opacity multiplies down the tree: `opacity = parentOpacity * ResolveOpacity(...)`. `ResolveOpacity` returns the
+hover/press opacity the slab's compose pass already folded into the node (the `HoverFade`/`PressFade` channels), else the
+resting `Opacity`. The default model is **per-node multiplied alpha** (WinUI's plain `Visual.Opacity`).
 
 When a node sets `OpacityGroup` and its cumulative alpha is `< 1`, the recorder instead emits a **flat opacity layer**: the
 subtree renders at full alpha into a pooled offscreen and composites **once** at the group alpha, so overlapping children
@@ -250,8 +254,8 @@ The canonical color/coordinate/DPI contract is owned by [foundations.md P8 + arc
   the pipeline only fixes the buffer format here.
 - **Premultiplied, linear blend.** The blend state is `SrcBlend = ONE`, `DestBlend = INV_SRC_ALPHA` (premultiplied SrcOver),
   and the PS returns premultiplied output: `float aOut = baseCol.a * cov * opacity; return float4(baseCol.rgb * aOut, aOut);`.
-  Every cross-fade the recorder computes (hover/press ramps, implicit `BrushTransition`, gradient stop morphs) goes through
-  `ColorF.LerpLinear` — **linear-light, alpha-weighted** premultiplied blend (`Geometry.cs`), not a straight sRGB lerp. That
+  Every cross-fade the recorder composites (hover/press ramps, the `BrushFade` brush channel, gradient stop morphs) goes
+  through `ColorF.LerpLinear` — **linear-light, alpha-weighted** premultiplied blend (`Geometry.cs`), not a straight sRGB lerp. That
   weighting is load-bearing: a translucent white card fill cross-fading to an opaque dark solid must stay dark mid-flight; a
   straight per-channel lerp would flash bright half-transparent grey. `ColorF` itself stores **straight-alpha sRGB** (the
   authoring/dedup convention); linearization happens at blend/shader.

@@ -89,6 +89,22 @@ public sealed class FlexLayout
         ref RectF b = ref _scene.Bounds(node);
         float w = float.IsNaN(li.Width) ? b.W : li.Width;
         float h = float.IsNaN(li.Height) ? b.H : li.Height;
+        // A scoped relayout roots HERE (this node is a layout boundary — IsolateLayout / scroll viewport / fixed-size),
+        // so no ANCESTOR pass re-sizes this node's OUTER box. On a PARENT-DETERMINED axis (no explicit size — the node
+        // grows/stretches/fills) the stored Bounds can be STALE and too LARGE: a sibling that reserved space after this
+        // node was last arranged (a docked player bar shrinking the content region) shrinks the parent, but the firewall
+        // keeps re-solving this subtree against the stale box — so the node bleeds past its parent (content paints under
+        // the translucent player bar). Re-clamp each parent-determined axis to the parent's current inner content box
+        // (minus this node's margin): a parent-determined boundary can never legitimately exceed its parent. Explicit
+        // li.Width/Height (incl. a SizeMode.Relayout animation writing the interpolated size) are honoured untouched.
+        var parent = _scene.Parent(node);
+        if (!parent.IsNull)
+        {
+            ref RectF pb = ref _scene.Bounds(parent);
+            ref LayoutInput pli = ref _scene.Layout(parent);
+            if (float.IsNaN(li.Width))  w = MathF.Min(w, MathF.Max(0f, pb.W - pli.Padding.Horizontal - li.Margin.Horizontal));
+            if (float.IsNaN(li.Height)) h = MathF.Min(h, MathF.Max(0f, pb.H - pli.Padding.Vertical   - li.Margin.Vertical));
+        }
         Measure(node, w);
         Arrange(node, b.X, b.Y, w, h);
     }
@@ -249,7 +265,21 @@ public sealed class FlexLayout
                     var cs = Measure(c, row && cli.FlexGrow > 0f ? growAvail : childAvail);
                     float cMain = row ? cs.Width : cs.Height;
                     float cCross = row ? cs.Height : cs.Width;
-                    if (!float.IsNaN(cli.FlexBasis)) cMain = cli.FlexBasis;
+                    // In an INDEFINITE column, a growable Basis=0 child must still contribute its content height while
+                    // the parent determines its own height; otherwise the following sibling is stacked over that content.
+                    // A row with a finite width is different: Basis=0 is the standard "flex: 1 1 0" contract and MUST
+                    // suppress intrinsic width. Controls such as AutoSuggestBox depend on that to shrink before fixed
+                    // toolbar siblings. Applying the column min-size rule to finite rows makes their stale/intrinsic
+                    // content width become the flex base and lets it paint across later siblings.
+                    if (!float.IsNaN(cli.FlexBasis))
+                    {
+                        bool indefiniteMain = row
+                            ? float.IsInfinity(measureW)
+                            : float.IsNaN(li.Height);
+                        cMain = cli.FlexGrow > 0f && indefiniteMain
+                            ? MathF.Max(cli.FlexBasis, cMain)
+                            : cli.FlexBasis;
+                    }
                     cMain += MarginMain(cli, row);
                     cCross += MarginCross(cli, row);
                     main += cMain;
@@ -534,6 +564,18 @@ public sealed class FlexLayout
         // Re-clamp the scroll position to the (possibly changed) content on resize/relayout, and reflect it in the
         // content's -offset transform, so a smaller content / wrapped reflow doesn't leave the view scrolled past the end.
         float maxX = MathF.Max(0f, contentW - innerW), maxY = MathF.Max(0f, contentH - innerH);
+        // Scroll-position restoration latch: a revisit seeded RestoreX/Y (Reconciler.ApplyScrollKey). Re-assert it on EACH
+        // layout until the real content extent can hold it — the loading skeleton is short, so the saved deep offset can't
+        // apply until the taller real content lands; until then sit at the top rather than a clamped-mid skeleton position.
+        // Because the seed is in place before the FIRST realize/layout, the first PRESENTED frame is already at the saved
+        // row (no scroll-to-top flash). Released on satisfaction (here) or by a user scroll (InputDispatcher.SetScrollOffset).
+        if (sc.RestorePending)
+        {
+            bool okX = maxX + 0.5f >= sc.RestoreX, okY = maxY + 0.5f >= sc.RestoreY;
+            sc.OffsetX = sc.TargetX = okX ? sc.RestoreX : 0f;
+            sc.OffsetY = sc.TargetY = okY ? sc.RestoreY : 0f;
+            if (okX && okY) sc.RestorePending = false;
+        }
         sc.OffsetX = Clamp(sc.OffsetX, 0f, maxX); sc.TargetX = Clamp(sc.TargetX, 0f, maxX);
         sc.OffsetY = Clamp(sc.OffsetY, 0f, maxY); sc.TargetY = Clamp(sc.TargetY, 0f, maxY);
         if (!content.IsNull && _scene.IsLive(content))

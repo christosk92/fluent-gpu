@@ -39,15 +39,26 @@ sealed class SearchPage : Component
         var results = UseAsyncResource(ct => svc.Library.SearchAsync(q, ct), FakeData.SearchSeed, q);   // seed renders the loading shape; Skel.Region derives the shimmer from it
         int chip = _chip.Value;                             // subscribe
 
+        // Scroll-position restoration keyed by the query: each distinct query has its own remembered scroll (a new query
+        // starts at the top; returning to a prior query restores it). One ScrollView node serves every query in place.
         if (q.Length == 0)
-            return ScrollView(BrowseAll(querySig)) with { Grow = 1f };
+            return ScrollView(BrowseAll(querySig)) with { Grow = 1f, ScrollKey = "search:" };
 
         return ScrollView(new BoxEl
         {
             Direction = 1, Gap = WaveeSpace.L,
             Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, PlayerDock.Reserve + WaveeSpace.XXL),
-            Children = [ChipBar(chip), Skel.Region(results, r => ResultsFor(r, chip, q, svc, go), onFailed: () => ErrorState.Build(results.Error))],
-        }) with { Grow = 1f };
+            Children = [ChipBar(chip), Skel.Region(results, SearchShimmer, r => ResultsFor(r, chip, q, svc, go), onFailed: () => ErrorState.Build(results.Error))],
+        }) with { Grow = 1f, ScrollKey = "search:" + q };
+    }
+
+    // Lightweight loading skeleton (finding #7): a fixed list of result-row placeholders so the pending edge doesn't build
+    // the full results tree just to derive a skeleton. Sized childless boxes → shimmer bars; SmoothResize eases the swap.
+    static Element SearchShimmer()
+    {
+        var rows = new Element[10];
+        for (int i = 0; i < rows.Length; i++) rows[i] = new BoxEl { Height = 48f, Corners = CornerRadius4.All(WaveeRadius.Control) };
+        return new BoxEl { Direction = 1, Gap = WaveeSpace.S, Children = rows };
     }
 
     Element ChipBar(int chip) => new BoxEl

@@ -487,6 +487,7 @@ public sealed class AutoSuggestBox : Component
             Width = Grow > 0f ? float.NaN : width,
             Height = Grow > 0f ? FieldMinHeight : float.NaN,
             Grow = Grow,
+            Shrink = Grow > 0f ? 1f : 0f,
             MaxWidth = Grow > 0f && MaxFillWidth > 0f ? MaxFillWidth : float.NaN,
             MaxHeight = Grow > 0f ? FieldMinHeight : float.NaN,
             MinHeight = FieldMinHeight, AlignItems = FlexAlign.Center,

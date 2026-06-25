@@ -62,7 +62,7 @@ sealed partial class ArtistPage : Component
         ],
     };
 
-    static string KindLabel(AlbumKind k) => k switch
+    internal static string KindLabel(AlbumKind k) => k switch
     {
         AlbumKind.Single => Loc.Get(Strings.Detail.Badge.Single),
         AlbumKind.EP => Loc.Get(Strings.Detail.Badge.Ep),

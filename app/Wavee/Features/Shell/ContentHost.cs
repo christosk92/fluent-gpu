@@ -70,6 +70,10 @@ sealed class ContentHost : Component
             return new BoxEl { Key = "page:" + r.Name, Grow = 1f, Direction = 1,
                 Children = [ Embed.Comp(() => new LibraryPage(r.Name)) ] };
 
+        if (DiscographyRoute.Is(r.Name))
+            return new BoxEl { Key = "page:disco", Grow = 1f, Direction = 1,
+                Children = [ Embed.Comp(() => new DiscographyPage(_route)) ] };
+
         if (IsArtist(r)) return ArtistHost();
         if (IsDetail(r)) return DetailHost();
 

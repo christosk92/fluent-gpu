@@ -240,6 +240,8 @@ public struct ScrollState
     // gate at record time (hover still expands it). Set by the reconciler from ScrollEl.AlwaysShowScrollbar.
     public bool  AlwaysShowBar;
     public bool  SuppressBar;             // never draw the conscious scrollbar (paged shelves nav by pager, not the bar)
+    public bool  SuppressBarLoading;      // transient: a descendant skeleton region is loading → hide the rail until it
+                                          // resolves (kept separate from SuppressBar so a re-reconcile can't clobber it)
     public float IdleMs;                  // time since the last scroll movement / hover (drives the auto-hide)
     public bool PointerOver;              // pointer is inside this scroll viewport
     public bool PointerOverScrollbar;     // pointer is inside this viewport's scrollbar gutter
@@ -281,6 +283,19 @@ public struct ScrollState
     public int   AnchorIndex;
     public StringId AnchorKey;
     public float AnchorViewportDelta;
+
+    // ── Scroll-position restoration (per content-identity, survives KeepAlive eviction). The reconciler keys a global
+    // ScrollMemory cache by (ScrollScope, ScrollKey): ScrollKey is the app-supplied content identity (a route key), and
+    // ScrollScope is the engine-computed enclosing KeepAlive-slot key (so the SAME content open in two tabs never shares a
+    // saved position). On mount / content-identity change the reconciler seeds Offset + arms RestorePending; on
+    // unmount/content-swap it saves the live offset. RestorePending re-asserts the restored offset on EACH layout (the
+    // loading skeleton is short → the offset can't be applied until the real, taller content lands) until the extent can
+    // satisfy it — then it releases. Cleared early by a user scroll (Input). Managed refs are fine here (dict-backed,
+    // like SnapPoints/Layout). The whole point of the cache living off-node is to outlive the freed subtree on eviction.
+    public string? ScrollKey;             // content identity (app-supplied); null ⇒ no restoration for this viewport
+    public string? ScrollScope;           // enclosing KeepAlive-slot key (engine-computed at mount); composes the cache key
+    public bool  RestorePending;          // a seeded offset is waiting for the real content extent to be able to hold it
+    public float RestoreX, RestoreY;      // the target offset to restore (offset space)
 
     public static ScrollState Default => new() { ExtentTableRef = -1, ZoomFactor = 1f, MinZoom = 0.1f, MaxZoom = 10f, FlingSnapTarget = float.NaN };
 

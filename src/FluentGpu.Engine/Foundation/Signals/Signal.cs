@@ -42,6 +42,11 @@ public sealed class Signal<T> : ISignalSource, IReadSignal<T>
     /// <summary>True when at least one computation is subscribed (lets the host skip publishing an ambient value nobody reads).</summary>
     public bool HasSubscribers => _subs.Count > 0;
 
+    /// <summary>Number of subscribed computations. Used as a steady-state guardrail (finding #4): a perpetual
+    /// <c>FrameClock.Tick</c> poller that fails to unmount keeps the frame loop awake forever — the soak/CI harness can
+    /// assert <c>AppHost.FrameClockPollerCount</c> returns to 0 when playback/animation stops, catching that regression class.</summary>
+    public int SubscriberCount => _subs.Count;
+
     /// <summary>Functional update (read-modify-write off the latest committed value), e.g. <c>s.Update(x =&gt; x + 1)</c>.</summary>
     public void Update(Func<T, T> f) => Value = f(_value);
 

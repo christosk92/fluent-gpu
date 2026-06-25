@@ -384,10 +384,14 @@ public sealed unsafe class D3D12Device : IGpuDevice
         // Normally throttle to present cadence before producing this frame. A keep-alive repaint fired from inside an
         // OS modal move/size loop (host called SuppressLatencyWaitOnce) skips it so the WndProc thread isn't blocked
         // up to a vblank — the drag-start/live-resize hitch. Self-resetting: one suppressed wait per call.
+        // Time the two BLOCKING GPU-fence waits (latency waitable + frame fence) separately — this UI-thread stall is the
+        // bulk of measured "submit" (FrameStats.FenceWaitMs); the render-thread seam will move it off this thread.
+        long fenceWaitStart = System.Diagnostics.Stopwatch.GetTimestamp();
         if (_skipLatencyOnce) _skipLatencyOnce = false;
         else WaitForLatency();   // bound queued-frame latency before starting this frame's production
         _frameIndex = _swapChain->GetCurrentBackBufferIndex();
         WaitForFrame(_frameIndex);
+        _lastFenceWaitMs = System.Diagnostics.Stopwatch.GetElapsedTime(fenceWaitStart).TotalMilliseconds;
         ID3D12CommandAllocator* allocator = _allocators[_frameIndex];
         Check(allocator->Reset(), "allocator.Reset");
         Check(_cmdList->Reset(allocator, null), "cmdList.Reset");
@@ -1084,6 +1088,13 @@ public sealed unsafe class D3D12Device : IGpuDevice
     }
 
     private bool _skipLatencyOnce;   // set by SuppressLatencyWaitOnce, consumed by the next SubmitDrawList
+
+    private double _lastFenceWaitMs;   // wall-time blocked on the latency waitable + frame fence in the last SubmitDrawList
+    /// <inheritdoc/>
+    public double LastFenceWaitMs => _lastFenceWaitMs;
+
+    /// <inheritdoc/>
+    public bool HasPendingUploads => _imageTextures?.HasPendingUploads ?? false;
 
     public void SuppressLatencyWaitOnce() => _skipLatencyOnce = true;
 

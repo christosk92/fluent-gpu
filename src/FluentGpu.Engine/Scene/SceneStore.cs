@@ -510,23 +510,17 @@ public sealed class SceneStore : ISceneBackend
     public void SetBrushAnim(NodeHandle h, in BrushAnim ba) => _brushAnims[(int)h.Raw.Index] = ba;
     public bool TryGetBrushAnim(NodeHandle h, out BrushAnim ba) => _brushAnims.TryGetValue((int)h.Raw.Index, out ba);
 
-    /// <summary>Advance every active brush transition by <paramref name="dtMs"/>, mark the nodes PaintDirty, and drop
-    /// settled rows. Called by the host at phase 7 (next to the interaction animator). 0-alloc (reused scratch).</summary>
-    public void AdvanceBrushAnims(float dtMs)
+    /// <summary>Set the brush cross-fade progress, driven by the unified engine's <c>AnimChannel.BrushFade</c> track
+    /// (the separate per-frame AdvanceBrushAnims ticker is deleted). Marks PaintDirty; drops the row at T≥1 so the
+    /// recorder snaps to the live color. The engine's BrushFade track keeps the loop awake while a fade runs.</summary>
+    public void SetBrushAnimT(int idx, float t)
     {
-        if (_brushAnims.Count == 0) return;
-        _brushScratch.Clear();
-        foreach (var kv in _brushAnims) _brushScratch.Add(kv.Key);
-        for (int i = 0; i < _brushScratch.Count; i++)
-        {
-            int idx = _brushScratch[i];
-            if (_gen[idx] == 0) { _brushAnims.Remove(idx); continue; }
-            var ba = _brushAnims[idx];
-            ba.T = ba.DurationMs <= 0f ? 1f : MathF.Min(1f, ba.T + dtMs / ba.DurationMs);
-            _flags[idx] |= NodeFlags.PaintDirty;
-            if (ba.T >= 1f) _brushAnims.Remove(idx);
-            else _brushAnims[idx] = ba;
-        }
+        if (!_brushAnims.TryGetValue(idx, out var ba)) return;
+        if (_gen[idx] == 0) { _brushAnims.Remove(idx); return; }
+        ba.T = t < 0f ? 0f : (t > 1f ? 1f : t);
+        _flags[idx] |= NodeFlags.PaintDirty;
+        if (ba.T >= 1f) _brushAnims.Remove(idx);
+        else _brushAnims[idx] = ba;
     }
 
     // ── text-edit decoration side-table (sparse; only editor TEXT nodes have an entry) ───────────────
@@ -839,6 +833,17 @@ public sealed class SceneStore : ISceneBackend
         return ref s;
     }
     public bool TryGetInteract(NodeHandle h, out InteractionAnim s) => _interact.TryGetValue((int)h.Raw.Index, out s);
+
+    /// <summary>Write the eased hover (or press) progress for a node — driven by the engine's HoverFade/PressFade track
+    /// (the deleted InteractionAnimator.Tick's job). The row exists (the fade was seeded through InteractRef); marks
+    /// PaintDirty so the recorder re-composites the hover/press cross-fade + scale.</summary>
+    public void SetInteractT(NodeHandle node, bool press, float t)
+    {
+        if (!IsLive(node)) return;
+        ref InteractionAnim ia = ref InteractRef(node);
+        if (press) ia.PressT = t; else ia.HoverT = t;
+        Mark(node, NodeFlags.PaintDirty);
+    }
 
     public void SetShadow(NodeHandle h, in ShadowSpec s) => _shadows[(int)h.Raw.Index] = s;
     public bool TryGetShadow(NodeHandle h, out ShadowSpec s) => _shadows.TryGetValue((int)h.Raw.Index, out s);

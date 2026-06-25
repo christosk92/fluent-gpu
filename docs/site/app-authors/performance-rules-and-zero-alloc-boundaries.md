@@ -1,5 +1,7 @@
 # Performance rules and zero-alloc boundaries
 
+> **✅ Animation engine — signals-first rework landed + verified.** Relevant for hot paths: motion runs on one `AnimScheduler` with **per-source cadence** (`DisplayRate`/`Hz(n)`/`Driven(signal)`/`OneShot`) and a `min(next-due)` wake — a `Driven` source emits **zero frames when its signal is unchanged** (a paused playhead costs nothing; no global FPS cap). Design, now implemented: [`../../plans/animation-engine-rework-design.md`](../../plans/animation-engine-rework-design.md).
+
 You almost never need this page. FluentGpu is fast *by construction* — the signals-first core means a state change touches only what read it, and the compositor recomposites without relayout. Read [signals, components, and bindings](./signals-components-and-bindings.md) first; it teaches the model. Come **here** when you have a concrete hot path (a slider that drags at 200 Hz, a 100k-row list, a page that stutters on one keystroke) and you want to (a) reach for the cheapest mechanism, (b) draw the **layout boundary** that firewalls a relayout, and (c) *prove* the result with numbers instead of eyeballing it.
 
 The whole page rests on one fact about the frame loop (`src/FluentGpu.Engine/Hosting/AppHost.cs`): **a frame does only as much work as the dirtiest thing that changed.** Three update mechanisms map onto three increasing tiers of work, and your job is to keep each change in the cheapest tier that expresses it.

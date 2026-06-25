@@ -179,6 +179,12 @@ sealed class DetailShell : Component
         var handlers = new DetailHandlers(Play, () => Play(0), Shuffle, PlayContext, go, accent, _sort, SetSort,
             _query, _filterFlags, f => _filterFlags.Value = f, _density, SetDensity, AddToQueue, AddToPlaylist);
 
+        // Viewport-size context signal — resolved UNCONDITIONALLY here (rules of hooks): the positional-hook cursor must
+        // see the SAME hook sequence on every render, but the branches below differ (single-column / vertical / two-column),
+        // and only the two-column path needs the window height. Reading `.Value` (the subscription) is deferred to that
+        // branch so single-column / vertical pages don't take a needless re-render on every resize.
+        var viewportSig = UseContextSignal(Viewport.Size);
+
         // Single-column (liked): just the track table, full width, no rail / no wash (its toolbar stays in the chrome).
         if (!_cfg.TwoColumn)
             return Embed.Comp(() => new TrackList(_route, _model, bridge, handlers));
@@ -213,7 +219,7 @@ sealed class DetailShell : Component
         // WINDOW height (known at mount + identical across navigation), NOT a post-layout measurement — so the title never
         // jumps/flickers on a nav and resizes smoothly. The rail's scrollbar stays the last resort.
         float railW = RailW(mode, _cfg);
-        float winH = UseContextSignal(Viewport.Size).Value.Height;   // subscribe → re-fit smoothly on resize (stable per page → no nav jump)
+        float winH = viewportSig.Value.Height;   // subscribe (only here) → re-fit smoothly on resize (stable per page → no nav jump)
         float titleSize = Math.Clamp(24f + (winH - 620f) * 0.05f, 24f, 38f);   // 620px window → 24px … 900px → 38px
         int descLines = winH < 760f ? 3 : 6;
         var row = new BoxEl

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -36,25 +37,40 @@ sealed partial class ArtistPage : Component
 
         // Keep one stable loadable and re-key it by URI. ContentHost retains one ArtistPage across artist navigation,
         // so replacing the Loadable instance would leave the skeleton region's mounted thunks subscribed to the old artist.
-        var artist = UseAsyncResource(ct => svc.Library.GetArtistAsync(uri, ct), EmptyArtist(uri), uri);
+        // TEMP(debug): a 2s delay so the derived pending state is visible on load. Remove when done.
+        var artist = UseAsyncResource(async ct =>
+        {
+            await System.Threading.Tasks.Task.Delay(2000, ct);
+            return await svc.Library.GetArtistAsync(uri, ct);
+        }, PendingArtist(uri), uri);
         store.EnsureArtists();
         var fansList = store.Artists.Value.Value;
 
         var pinned = UseSignal(false);
-        // ONE skeleton mechanism, and no second tree: pass ONLY the real content. The engine derives the shimmer from
-        // content(seed) — i.e. Body rendered against the loadable's empty seed artist (which still lays out hero +
-        // top-tracks + bio via FakeData). No shimmer arg. The engine owns Pending/Ready/Failed; a single artist is never empty.
+        var pageScroll = UseSignal(0f);   // live page scroll offset → published so the in-page virtualized discography grids window against it
+        // One tree: the boundary renders Body with the resource's pending value, derives its loading paint, then fills
+        // the same Body with the loaded artist. The page does not author or pass a separate skeleton subtree.
         var scroll = ScrollView(Skel.Region(artist,
+            shimmerSource: ArtistShimmer,
             content: a => Body(a, fansList, svc, go, bridge, pinned),
-            onFailed: () => ErrorState.Build(artist.Error))) with { Grow = 1f };
+            onFailed: () => ErrorState.Build(artist.Error)))
+            with
+            {
+                // Scroll-position restoration keyed by the artist (route). One ScrollView serves successive artists in place,
+                // so without a key artist B would inherit A's scroll; with it, B starts at the top and a revisit to A restores it.
+                Grow = 1f, ScrollKey = route.Name,
+                // Publish the live offset (coarse, ~per-row) so the LazyGrid discography sections window against the page scroll.
+                OnScrollGeometryChanged = (g => (long)(g.OffsetY / 24f), g => pageScroll.Value = g.OffsetY),
+            };
 
-        return new BoxEl
+        // Provide the page scroll to the discography LazyGrids deeper in the body (the SwiftUI LazyVGrid-in-ScrollView wiring).
+        return Ctx.Provide(LazyScroll.Slot, (IReadSignal<float>)pageScroll, new BoxEl
         {
             Grow = 1f, ZStack = true,
             Children =
             [
                 scroll,
-                new BoxEl
+                new BoxEl   // shy pill overlay
                 {
                     Grow = 1f, HitTestPassThrough = true, Direction = 1,
                     AlignItems = FlexAlign.Center, Justify = FlexJustify.Start,
@@ -62,10 +78,79 @@ sealed partial class ArtistPage : Component
                     Children = [ Embed.Comp(() => new ArtistShyPill(uri, artist, pinned, svc)) ],
                 },
             ],
-        };
+        });
     }
 
-    static Artist EmptyArtist(string uri) => new("", uri, "", null);
+    // Lightweight loading skeleton (finding #7): an explicit shimmer that MIRRORS the real ArtistPage layout — a 420px
+    // full-bleed hero (dim image placeholder with the headline block anchored bottom-left: verified pill → big name → meta
+    // → action buttons, matching Banner()), then the two-column band (LEFT top-tracks list, RIGHT popular-releases column).
+    // Cover-like blocks are ImageEls (deriver → dim MediaColor) so they read distinctly under the brighter text bars; sized
+    // childless boxes → bars. This avoids building the full 14-section Body just to derive a skeleton; SmoothResize eases the
+    // swap to the real Body on load.
+    static Element ArtistShimmer()
+    {
+        static Element Bar(float w, float h, float r = 4f) => new BoxEl { Width = w, Height = h, Corners = CornerRadius4.All(r) };
+        static Element GrowBar(float h, float r = 4f) => new BoxEl { Height = h, Grow = 1f, Corners = CornerRadius4.All(r) };
+        static Element Cover(float size, float r) => new ImageEl { Width = size, Height = size, Corners = CornerRadius4.All(r) };
+
+        // Hero: a full-width dim image placeholder (ImageEl stretches in the ZStack) with the headline overlaid bottom-left.
+        Element heroCopy = new BoxEl
+        {
+            Direction = 1, Justify = FlexJustify.End, Gap = WaveeSpace.S,
+            Padding = new Edges4(WaveeSpace.XL, WaveeSpace.XL, WaveeSpace.XL, WaveeSpace.XL),
+            Children =
+            [
+                Bar(96f, 26f, 13f),                 // verified pill
+                Bar(360f, 64f, 8f),                 // big artist name
+                Bar(480f, 16f),                     // monthly-listeners / followers meta line
+                new BoxEl
+                {
+                    Direction = 0, Gap = WaveeSpace.M, AlignItems = FlexAlign.Center, Padding = new Edges4(0f, WaveeSpace.S, 0f, 0f),
+                    Children = [ Bar(120f, 48f, 24f), Bar(44f, 44f, 22f), Bar(120f, 44f, 22f), Bar(150f, 44f, 22f) ],   // Play / shuffle / Follow / radio
+                },
+            ],
+        };
+        Element hero = new BoxEl { Height = 420f, ZStack = true, Children = [ new ImageEl { Height = 420f }, heroCopy ] };
+
+        // LEFT column (wider): "Top tracks & popular releases" header + track rows (index · cover · title · duration).
+        static Element TrackRow() => new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Height = 48f,
+            Children = [ Bar(14f, 14f), Cover(40f, 4f), GrowBar(14f), Bar(36f, 12f) ],
+        };
+        Element left = new BoxEl
+        {
+            Direction = 1, Grow = 2f, Basis = 0f, Gap = WaveeSpace.M,
+            Children = [ Bar(240f, 20f), new BoxEl { Direction = 1, Gap = WaveeSpace.S, Children = [ TrackRow(), TrackRow(), TrackRow(), TrackRow(), TrackRow() ] } ],
+        };
+        // RIGHT column (narrower): "Popular releases" header + album rows (cover · title · year).
+        static Element ReleaseRow() => new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Height = 64f,
+            Children = [ Cover(56f, 8f), new BoxEl { Direction = 1, Grow = 1f, Gap = WaveeSpace.S, Children = [ Bar(130f, 14f), Bar(80f, 12f) ] } ],
+        };
+        Element right = new BoxEl
+        {
+            Direction = 1, Grow = 1f, Basis = 0f, Gap = WaveeSpace.M,
+            Children = [ Bar(150f, 20f), new BoxEl { Direction = 1, Gap = WaveeSpace.S, Children = [ ReleaseRow(), ReleaseRow(), ReleaseRow(), ReleaseRow() ] } ],
+        };
+        Element band = new BoxEl
+        {
+            Direction = 0, Gap = WaveeSpace.XL, Padding = new Edges4(WaveeSpace.XL, WaveeSpace.XL, WaveeSpace.XL, WaveeSpace.XL),
+            Children = [ left, right ],
+        };
+
+        return new BoxEl { Direction = 1, Children = [ hero, band ] };
+    }
+
+    static Artist PendingArtist(string uri)
+    {
+        // Async resources need a value while Pending because Body is data-driven (sections are conditional). Reuse a
+        // route-stable catalog shape so the one real Body has representative hero/tracks/releases/biography geometry.
+        // The engine replaces all text/media paint, so none of this sample content is shown to the user.
+        var shape = FakeData.Artist(FakeData.IndexFromUri(uri));
+        return shape with { Id = "", Uri = uri, Name = "" };
+    }
 
     Element Body(Artist a, IReadOnlyList<Artist> fansAll, Services svc, Action<string, string?> go,
                  PlaybackBridge? bridge, Signal<bool> pinned)
@@ -84,8 +169,9 @@ sealed partial class ArtistPage : Component
 
         var sections = new List<Element>(14);
         if (popular.Count > 0) sections.Add(TopBand(popular, uri, bridge, svc, albumsAll, go, PlayContext));
-        if (albums.Length > 0) sections.Add(DiscographyGrid(Loc.Get(Strings.Artist.Albums), albums, go, PlayContext));
-        if (singles.Length > 0) sections.Add(DiscographyGrid(Loc.Get(Strings.Artist.SinglesEps), singles, go, PlayContext));
+        // Discography facets: a capped grid + "See all N" that navigates to the dedicated facet page (breadcrumb + full grid).
+        if (albums.Length > 0) sections.Add(Embed.Comp(() => new DiscographySection(uri, a.Name, DiscographyKind.Albums, Loc.Get(Strings.Artist.Albums), svc, go, PlayContext)));
+        if (singles.Length > 0) sections.Add(Embed.Comp(() => new DiscographySection(uri, a.Name, DiscographyKind.Singles, Loc.Get(Strings.Artist.SinglesEps), svc, go, PlayContext)));
         if (a.AppearsOn is { Count: > 0 } appears) sections.Add(AppearsOnShelf(appears, go, PlayContext));
         if (extras?.Tour is { } tour) sections.Add(TourBannerCard(tour,
             () => { if (extras.Concerts is { Count: > 0 } cs) PlayContext(cs[0].Uri); }));

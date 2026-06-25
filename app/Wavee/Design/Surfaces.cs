@@ -42,7 +42,11 @@ public static class Surfaces
             return new BoxEl { Width = width, Height = height, Corners = CornerRadius4.All(corners), Fill = Tok.FillCardDefault with { A = 1f } };
         // Covers/cards: the breathing shimmer. Keyed by url so a virtualized card that REBINDS to a new cover remounts
         // the tile (a Component freezes its ctor args at mount) — the breathe + load-state read then track the new item.
-        return Embed.Comp(() => new CoverShimmer(u, decodeW, decodeH, width, height, corners)) with { Key = "shim:" + u };
+        // Skeletonized(false): inside a Skel.Region's derived skeleton this opaque component would otherwise map to the
+        // deriver's default bar (a stray stripe in the cover). Dropping it lets the paired Image's derived placeholder be
+        // the cover square — identical to a grid card (ArtworkFill is a bare Image), so every loading cover reads the same.
+        return (Embed.Comp(() => new CoverShimmer(u, decodeW, decodeH, width, height, corners)) with { Key = "shim:" + u })
+            .Skeletonized(false);
     }
 
     /// <summary>Artwork slot: a neutral <see cref="Shimmer"/> tile under the async image (which cross-fades in over it
@@ -112,7 +116,7 @@ sealed class CoverShimmer : Component
         }
         // On the loading→settled edge `loading` flips, the dep changes, and the effect re-seeds a finite flat track
         // (loop:false) — the looping pulse is replaced in place and the loop-track count drops so the frame loop quiesces.
-        UseKeyframes(AnimChannel.Opacity, loading ? Breathe : Flat, loading ? 1000f : 1f, loading, loading);
+        UseKeyframes(AnimChannel.Opacity, loading ? Breathe : Flat, loading ? 1000f : 1f, loading, DepKey.From(loading));   // #9: DepKey, not a boxed object[]
         return new BoxEl { Width = _w, Height = _h, Corners = CornerRadius4.All(_corners), Fill = Tok.FillCardDefault };
     }
 }

@@ -1,5 +1,7 @@
 # Adding or modifying a control
 
+> **✅ Animation engine — signals-first rework landed + verified.** A control's hover/press can now be authored the **same way an app author animates any element** — `WhileHover`/`WhilePressed` targets + a themed `Transition = MotionTok.ControlFaster` token (brush is just the `BrushFade` channel); there is no separate `InteractionAnimator` and no `BrushTransitionMs`, those are folded into the unified `AnimValue` slab (`HoverFade`/`PressFade`/`BrushFade` channels). The `Style`-based `BoxEl.{Hover,Pressed}*` fields below still work — they seed the same slab channels. Design, now implemented: [`../../plans/animation-engine-rework-design.md`](../../plans/animation-engine-rework-design.md).
+
 This page is for people **adding a control to, or changing a control in, `src/FluentGpu.Controls/`** so it looks and
 moves 1:1 with WinUI 3. If you are *using* the controls in an app, read the app-author
 [Controls cookbook](../app-authors/controls-cookbook.md) and the guide's
@@ -48,8 +50,9 @@ work lands *there*, then the control consumes it.
 
 > **Where the code is.** Controls are composition-only: `src/FluentGpu.Controls/*.cs`. The primitives they compose live
 > elsewhere and are the place an honest gap gets fixed: Element shapes/props in `src/FluentGpu.Engine/Dsl/Element.cs`; the
-> `TemplateParts` door in `src/FluentGpu.Engine/Dsl/TemplateParts.cs`; the interaction animator + authored timelines in
-> `src/FluentGpu.Engine/Animation/AnimEngine.cs`; the rounded-rect rasterizer in `src/FluentGpu.Engine/Render/SceneRecorder.cs`;
+> `TemplateParts` door in `src/FluentGpu.Engine/Dsl/TemplateParts.cs`; the `AnimValue` slab + scheduler (the interaction
+> `HoverFade`/`PressFade`/`BrushFade` channels and authored timelines) in `src/FluentGpu.Engine/Animation/AnimEngine.cs`;
+> the rounded-rect rasterizer in `src/FluentGpu.Engine/Render/SceneRecorder.cs`;
 > theme tokens in `src/FluentGpu.Engine/Dsl/Tokens.cs`. The reactive shell for stateful controls (`Component`, hooks) is
 > `src/FluentGpu.Engine/Hooks/`. See the full [Contributor map](./contributor-map.md).
 
@@ -105,9 +108,10 @@ public readonly record struct StateBrush(ColorF Rest, ColorF Hover, ColorF Press
 - Put the timing on the *same* element via `HoverDurationMs`, `PressDurationMs`, `HoverEasing`, `PressEasing` — use
   WinUI's tokens when the template does (83 / 167 / 250 ms, usually `Easing.FluentPopOpen`).
 
-The engine's `InteractionAnimator` eases the displayed value toward the current target and retargets interruptibly.
-Disabled is a flat resting swap (`StateBrush.Resting(enabled)`) unless WinUI explicitly animates disabled. The target a
-node displays falls out of one priority rule (no `GoToState`, no storyboards):
+The slab's `HoverFade`/`PressFade` channels ease the displayed value toward the current target and retarget
+interruptibly (interpolate-from-current + auto-retarget — no separate `InteractionAnimator`). Disabled is a flat
+resting swap (`StateBrush.Resting(enabled)`) unless WinUI explicitly animates disabled. The target a node displays
+falls out of one priority rule (no `GoToState`, no storyboards):
 
 ```text
 if !enabled:       use logical.Disabled
@@ -170,16 +174,16 @@ For the rounded-rect rendering rules that geometry depends on (the hollow-ring b
 SDF quad inflation — each the fix for a real bug), see [control-fidelity §1](../../guide/control-fidelity.md). Do not
 regress them.
 
-## Step 4 — motion ownership: `InteractionAnimator` vs `AnimEngine`
+## Step 4 — motion ownership: interaction channels vs authored timelines
 
-There are two animation systems on purpose, with one ownership rule:
+Both rest on the one unified `AnimValue` slab; the ownership rule splits by authoring surface, not by engine:
 
-- **`InteractionAnimator` owns hover/press visual states.** Use `BoxEl.{Hover,Pressed}{Fill,BorderColor,Opacity}`,
-  `HoverScale`, `PressScale`, and the per-element duration/easing fields. This covers every WinUI state-group
-  storyboard that reacts to `PointerOver`/`Pressed`, including child parts that inherit the root's interaction
-  progress.
-- **`AnimEngine` owns authored timelines.** Use keyframes/channels for explicit non-input timelines: FLIP, reveal,
-  stroke trim, path draw-on, open/close, or any `AnimatedIcon` segment with real keyframes. Channels are the
+- **The `HoverFade`/`PressFade` slab channels own hover/press visual states.** Use `BoxEl.{Hover,Pressed}{Fill,BorderColor,Opacity}`,
+  `HoverScale`, `PressScale`, and the per-element duration/easing fields (or, equivalently, `WhileHover`/`WhilePressed`
+  targets). This covers every WinUI state-group storyboard that reacts to `PointerOver`/`Pressed`, including child parts
+  that inherit the root's interaction progress. (There is no separate `InteractionAnimator` — these are slab channels.)
+- **`AnimEngine` (the slab scheduler) owns authored timelines.** Use keyframes/channels for explicit non-input timelines:
+  FLIP, reveal, stroke trim, path draw-on, open/close, or any `AnimatedIcon` segment with real keyframes. Channels are the
   `AnimChannel` enum (`src/FluentGpu.Engine/Animation/AnimEngine.cs`): `TranslateX/Y`, `ScaleX/Y`, `Rotation`, `Opacity`,
   `SizeW/H`, `StrokeTrimStart/End`, `ClipL/T/R/B`, `LayoutW/H`.
 - **Enter/exit presets are lifecycle sugar over `AnimEngine`.** `ControlMotion.IconPop` and `ControlMotion.DotScaleIn`
@@ -311,7 +315,7 @@ The process, condensed from [control-fidelity §5](../../guide/control-fidelity.
    (rest/hover/pressed/disabled). Note where press *dims*.
 3. **Sizes & geometry** — box/glyph size, corner radius, padding, min-height → exact `Style` values.
 4. **Sub-parts & glyphs** — the right Segoe Fluent glyph(s), indicator parts, parts that appear on a state.
-5. **Motion** — hover/press storyboards → `InteractionAnimator` targets/specs; authored timelines (stroke trim, reveal,
+5. **Motion** — hover/press storyboards → the `HoverFade`/`PressFade` slab channels (`BoxEl.{Hover,Pressed}*` targets/specs); authored timelines (stroke trim, reveal,
    FLIP, open/close) → `AnimEngine` keyframes/channels; enter/exit presets only for true insert/remove sub-parts.
 6. **Verify** — a headless `Check()` for behavior + a key motion assertion; a `--shot` capture diffed against WinUI
    (incl. the slow-motion proof). Save a golden PNG.
@@ -323,7 +327,7 @@ The process, condensed from [control-fidelity §5](../../guide/control-fidelity.
 - Exact C++/H/IDL behavior files read, or `framework source not present in controls/dev`.
 - Exact generated property/template-setting files read, or `Generated: none`.
 - The mapped state matrix: logical state × interaction state × focus/disabled.
-- The mapped motion source: `BrushTransition`, storyboard, `TemplateSettings`, animated-icon segment, or no animation.
+- The mapped motion source: the `BrushFade`/`HoverFade`/`PressFade` channel, an `AnimEngine` storyboard, `TemplateSettings`, an animated-icon segment, or no animation.
 - A headless vertical-slice check for the changed behavior or animation.
 - A live GPU screenshot or slow-motion proof for motion the headless harness cannot prove.
 

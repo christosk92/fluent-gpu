@@ -224,6 +224,10 @@ sealed class WaveeShell : Component
                                         // host's live re-theme (RethemeAll) re-fires it → FillCardDefault follows the theme.
                                         Fill = Prop.Of(() => WaveeColors.FileArea), Corners = CornerRadius4.All(WaveeRadius.Card),
                                         Shadow = Elevation.Card, ClipToBounds = true,
+                                        // Layout firewall (#5): this card is Grow=1 (its size is the shell's content region,
+                                        // parent-determined) and clips — so a re-render deep inside a page re-solves only this
+                                        // subtree (RunSubtree) instead of a full-tree layout from the root on every nav.
+                                        IsolateLayout = true,
                                         Children = [ Embed.Comp(() => new ContentHost(_route, ActiveTabId)) ],
                                     },
                                 ],
@@ -252,7 +256,16 @@ sealed class WaveeShell : Component
                 // "player bar disappears then slides back" glitch). The chrome rows (TitleBar, ShellToolbar) and the
                 // PlayerBar host keep the default Shrink=0, so the player bar stays a fixed 72px slot docked at the
                 // window bottom and only the middle gives — its bounded height then lets the sidebar ScrollView scroll.
-                ) with { Grow = 1f, Shrink = 1f, MinHeight = 0f },
+                //
+                // ClipToBounds: this region's OWN box is clamped to the dock every frame (Shrink=1 yields → the player bar
+                // never moves), but it is a ZStack and a ZStack deliberately lets children OVERFLOW (a popup must escape the
+                // window). So while a page's content settles, the content-sized child chain can extend past this box down
+                // into the docked player-bar band, where the translucent bar reveals it. Clip the region to its own box so
+                // its bottom edge IS the player bar's top — content can never paint into the reserved dock slot. (The engine
+                // RunSubtree fix keeps the IsolateLayout card's own box flush at rest; this clip covers the settle window
+                // and is correct composition regardless. The Hero fly draws in a separate top band; popups live in the
+                // OUTER OverlayHost ZStack — neither is affected.)
+                ) with { Grow = 1f, Shrink = 1f, MinHeight = 0f, ClipToBounds = true },
                 Embed.Comp(() => new PlayerBar()),
             ],
         };

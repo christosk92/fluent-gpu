@@ -18,6 +18,12 @@ public enum NodeFlags : uint
                                    // wins when the gesture runs along its own axis and yields (the list scrolls) when
                                    // cross-axis (input-a11y.md §7A; the declarative form of DragController.YieldsToPan)
 
+    // layout firewall (opt-in)
+    LayoutBoundary = 1u << 7,         // the app declares this node's size PARENT-determined (it fills/clips, never content-
+                                      // sized): a descendant relayout stops here (LayoutInvalidator) and re-solves only this
+                                      // subtree via RunSubtree against the node's current bounds, instead of a full-tree
+                                      // layout from the root. Set from Element.IsolateLayout. A resize still does a full layout.
+
     // layout notification
     BoundsChangedPending = 1u << 4,   // a NEW OnBoundsChanged handler was just installed on this node — deliver the
                                       // node's current arranged rect to it ONCE on the next arrange even if the rect is

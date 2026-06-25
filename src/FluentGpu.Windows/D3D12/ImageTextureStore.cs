@@ -88,6 +88,11 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     public int DroppedThisRun { get; private set; }
     public int AtlasImages => _atlasCount;
     public int PoolImages => _poolCount;
+    /// <summary>True when decoded pixels are staged but not yet copied to their resident texture (drained by
+    /// <see cref="FlushUploads"/> at the top of the next submit). The host must NOT skip that submit, or the texture
+    /// stays empty and the image renders white — uploads are throttled, so a deferred one can land on an otherwise
+    /// idle frame whose DrawList is unchanged.</summary>
+    public bool HasPendingUploads => _pendingCopies.Count > 0;
 
     // ── MemCensus accessors (O(1), or a tiny fixed-bucket sum at census cadence — never per-frame) ──
     /// <summary>Images currently packed into atlas pages — O(1) census (alias of <see cref="AtlasImages"/>).</summary>

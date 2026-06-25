@@ -16,13 +16,12 @@ namespace Wavee;
 sealed partial class ArtistPage : Component
 {
     // ── discography (responsive grids) ───────────────────────────────────────────────────────────────────
-    static Element DiscographyGrid(string title, IReadOnlyList<Album> albums, Action<string, string?> go, Action<string> play)
-    {
-        var cells = albums.Take(24).Select(al => MediaCard.GridCard(al.Cover, al.Name,
-            al.Year > 0 ? al.Year + " · " + KindLabel(al.Kind) : KindLabel(al.Kind), al.Uri,
-            () => go("album:" + al.Uri, al.Name), () => play(al.Uri))).ToArray();
-        return SectionN(title, albums.Count, AutoGrid(180f, WaveeSpace.M, float.NaN, cells));
-    }
+    // The discography grid now expands an album INLINE on click (iTunes-style: a full-width track drawer opens after the
+    // clicked album's row) via ExpandableAlbumGrid, instead of navigating away. The drawer header still links to the full
+    // album page. svc is threaded in so the drawer can lazy-load each album's tracks.
+    static Element DiscographyGrid(string title, IReadOnlyList<Album> albums, Services svc, Action<string, string?> go, Action<string> play)
+        => SectionN(title, albums.Count,
+            Embed.Comp(() => new ExpandableAlbumGrid(albums.Take(24).ToList(), svc, go, play)));
 
     static Element AppearsOnShelf(IReadOnlyList<Album> albums, Action<string, string?> go, Action<string> play) => new BoxEl
     {

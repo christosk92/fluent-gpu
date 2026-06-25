@@ -29,8 +29,11 @@ public sealed class ExtentTable
     {
         if (n < 0) n = 0;
         _n = n; _estimate = estimate;
-        _bit = new double[n + 1];
-        _extent = new float[n];
+        // Reuse the backing arrays when they already fit (finding #11) instead of reallocating two arrays on every
+        // item-count change: _bit must be zeroed (it accumulates), _extent is fully overwritten below. Mirrors the
+        // capacity-guarded reuse in LinedFlowLayout / SpanningGridVirtualLayout.
+        if (_bit.Length >= n + 1) System.Array.Clear(_bit, 0, n + 1); else _bit = new double[n + 1];
+        if (_extent.Length < n) _extent = new float[n];
         for (int i = 0; i < n; i++) _extent[i] = estimate;
         // O(n) Fenwick build: each node accumulates its range, then folds into its parent.
         for (int i = 1; i <= n; i++)

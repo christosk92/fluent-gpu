@@ -95,6 +95,36 @@ public static class FakeData
         return new Album($"al{i}", $"spotify:album:al{i}", s.Title, Cover(i, 300), [artist], 2014 + (i % 11), tracks.Length, tracks, kind);
     }
 
+    // A LARGE synthetic discography per artist so the artist-page grid genuinely virtualizes (hundreds of singles like the
+    // real Spotify shape). Deterministic per (artist, kind, index); returns the window [offset, offset+limit) + facet total.
+    public static DiscographyPage Discography(string artistUri, DiscographyKind kind, int offset, int limit)
+    {
+        int seed = ((IndexFromUri(artistUri) % Seed.Length) + Seed.Length) % Seed.Length;
+        int total = kind switch
+        {
+            DiscographyKind.Albums => 60 + (seed * 7) % 40,
+            DiscographyKind.Singles => 380 + (seed * 53) % 320,
+            _ => 110 + (seed * 17) % 120,
+        };
+        offset = Math.Clamp(offset, 0, total);
+        int n = Math.Clamp(limit, 0, total - offset);
+        var items = new Album[n];
+        for (int i = 0; i < n; i++) items[i] = DiscographyAlbum(seed, kind, offset + i);
+        return new DiscographyPage(items, total);
+    }
+
+    static Album DiscographyAlbum(int artistSeed, DiscographyKind kind, int idx)
+    {
+        int g = (artistSeed * 131 + idx * 31) & 0x7fffffff;
+        var s = Seed[g % Seed.Length];
+        var artist = ArtistRef(artistSeed);
+        var k = kind switch { DiscographyKind.Singles => AlbumKind.Single, DiscographyKind.Compilations => AlbumKind.Compilation, _ => AlbumKind.Album };
+        int trackCount = kind == DiscographyKind.Singles ? 1 + g % 3 : 6 + g % 18;
+        var tracks = AlbumTracks(trackCount, idx * 10, artist, k == AlbumKind.Compilation);
+        string id = $"disc{artistSeed}_{(int)kind}_{idx}";
+        return new Album(id, $"spotify:album:{id}", s.Title, Cover(g, 300), [artist], 2000 + g % 26, tracks.Length, tracks, k);
+    }
+
     public static Artist Artist(int i)
     {
         var s = Seed[i % Seed.Length];

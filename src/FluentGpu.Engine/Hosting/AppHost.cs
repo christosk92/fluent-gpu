@@ -33,6 +33,12 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public double AnimMs { get; init; }
     public double RecordMs { get; init; }
     public double SubmitMs { get; init; }
+    // Submit sub-split (diagnostics for the #1 hotspot — GPU fence/present pacing is charged to "submit" on the UI thread
+    // until the render-thread seam lands). FenceWaitMs = wall-time BLOCKED on the frame fence + present-latency waitable
+    // INSIDE SubmitDrawList; PresentMs = the Present() call. cmdBuild = SubmitMs − FenceWaitMs − PresentMs is the real CPU
+    // command-build cost. Lets a probe attribute a 27 ms "submit" spike to the stall vs the build without an external profiler.
+    public double FenceWaitMs { get; init; }
+    public double PresentMs { get; init; }
 }
 
 /// <summary>
@@ -97,7 +103,6 @@ public sealed class AppHost : IDisposable
     private readonly IFrameTimeSource _frameTime;
     private readonly AnimEngine _anim;
     private readonly ConnectedAnimation _connected;
-    private readonly InteractionAnimator _interact;
     private readonly ScrollAnimator _scrollAnim;   // the deterministic, engine-owned scroll integrator (wheel/touchpad/touch/spring) — the ONLY scroll source
     private readonly RepeatTicker _repeat;
     private readonly CaretBlinker _caretBlinker;
@@ -383,7 +388,10 @@ public sealed class AppHost : IDisposable
         // display refresh. A real input/post still wakes WaitForWork early, so this paces only the autonomous tick.
         if (AmbientAnimationFps > 0 && (r & LatencySensitiveWake) == 0 && AnimIsAmbient()
             && Stopwatch.GetTimestamp() >= _scrollGraceUntil)
+        {
+            MaybeTrimOnIdle();   // #10: playback/ambient never reaches WakeReasons.None, so trim the slab tail here too (30s-cadence-gated)
             return AmbientFrameWaitMs();
+        }
         return 0;                                   // latency-sensitive / one-shot motion: display-rate pacing
     }
 
@@ -422,6 +430,33 @@ public sealed class AppHost : IDisposable
         _scene.TrimExcessCapacity();   // no-op (returns 0) unless the slab is a mostly-empty high-water tail past the floor
     }
 
+    // ── Skip-submit gate state (finding #3a) ─────────────────────────────────────────────────────────────────────────
+    private ulong _lastPresentedDrawListHash;   // FNV-1a of the last PRESENTED command stream; a byte-identical frame skips submit+present
+    private long _framesSkippedSubmit;          // diagnostic census of elided submits (idle/playback redundant presents avoided)
+    /// <summary>Frames whose GPU submit+present was elided because the recorded command stream matched the last presented one.</summary>
+    public long FramesSkippedSubmit => _framesSkippedSubmit;
+
+    /// <summary>Steady-state guardrail (finding #4): the number of live <c>FrameClock.Tick</c> subscribers (per-frame
+    /// pollers — e.g. the playback playhead ticker). It MUST fall back to 0 once playback/animation stops; a soak/CI
+    /// check can assert that, catching a leaked poller that would keep the frame loop awake forever.</summary>
+    public int FrameClockPollerCount => _frameClockSig.SubscriberCount;
+
+    /// <summary>FNV-1a 64 over the recorded command stream + painter sort keys, length-prefixed so the two spans can't
+    /// alias. Record is a pure function of the scene, so an equal hash ⇒ byte-identical pixels ⇒ the front buffer is still
+    /// correct. Hashed 8 bytes at a time; only computed on quiet candidate frames (active frames short-circuit before it).</summary>
+    private static ulong DrawListHash(ReadOnlySpan<byte> bytes, ReadOnlySpan<ulong> sortKeys)
+    {
+        const ulong Off = 14695981039346656037UL, Prime = 1099511628211UL;
+        ulong h = Off;
+        h = (h ^ (uint)bytes.Length) * Prime;
+        var words = MemoryMarshal.Cast<byte, ulong>(bytes);
+        for (int i = 0; i < words.Length; i++) h = (h ^ words[i]) * Prime;
+        for (int i = words.Length * 8; i < bytes.Length; i++) h = (h ^ bytes[i]) * Prime;   // tail (< 8 bytes)
+        h = (h ^ (uint)sortKeys.Length) * Prime;
+        for (int i = 0; i < sortKeys.Length; i++) h = (h ^ sortKeys[i]) * Prime;
+        return h;
+    }
+
     /// <summary>The bitmask form of <see cref="HasActiveWork"/>: one bit per OR-term, semantically identical (the
     /// boolean is just <c>!= None</c>). Every term is an O(1) read (ImageCache.PendingCount/HasActiveCrossfades were
     /// made O(1) so this never scans). Drives FG_WAKE_DIAG attribution; otherwise as cheap as the original chain.</summary>
@@ -434,8 +469,7 @@ public sealed class AppHost : IDisposable
         if (_reconciler.HasWarmingVirtuals) r |= WakeReasons.FrameNeeded;
         if (_runtime.HasPending) r |= WakeReasons.RuntimePending;
         if (_scene.HasDynamicText) r |= WakeReasons.DynamicText;
-        if (_anim.HasActive || _connected.HasActive) r |= WakeReasons.Anim;   // connected-animation fly in flight / snapshot awaiting its dest
-        if (_interact.HasActive) r |= WakeReasons.Interact;
+        if (_anim.HasActive || _connected.HasActive) r |= WakeReasons.Anim;   // connected fly / snapshot awaiting dest; hover/press fades are now _anim tracks too
         if (_scrollAnim.HasActive) r |= WakeReasons.ScrollAnim;
         if (_repeat.HasActive) r |= WakeReasons.Repeat;
         if (_caretBlinker.HasActive) r |= WakeReasons.Caret;
@@ -463,7 +497,7 @@ public sealed class AppHost : IDisposable
     // already expose are reused; these surface the rest. All passive O(1) reads.
     internal StringTable Strings => _strings;
     internal TreeReconciler Reconciler => _reconciler;
-    internal int InteractionAnimatorCensus => _interact.ActiveCount;
+    internal int InteractionAnimatorCensus => _anim.HoverPressTrackCount;   // hover/press are now engine HoverFade/PressFade tracks (InteractionAnimator deleted)
     internal int ScrollAnimatorCensus => _scrollAnim.ActiveCount;
 
     /// <summary>The frame loop's current wake-reason mask — why <see cref="HasActiveWork"/> would keep running this
@@ -519,7 +553,6 @@ public sealed class AppHost : IDisposable
         _reconciler.OnSubtreeDeactivated = _dispatcher.DeactivateSubtree;
         _anim = new AnimEngine(_scene);
         _connected = new ConnectedAnimation(_scene, _anim, _images);   // shared-element (connected-animation) Hero flies
-        _interact = new InteractionAnimator(_scene);
         // Scroll is fully engine-owned: the deterministic ScrollAnimator is the single, portable scroll source on every
         // platform (wheel target-chase + touch/touchpad fling + overscroll spring + conscious scrollbar). There is no OS
         // scroll source — touchpad arrives as hi-res WM_POINTERWHEEL → PanTouchpad, touch as the dispatcher's gesture path.
@@ -533,8 +566,10 @@ public sealed class AppHost : IDisposable
         _runtime.FrameRequested = WakeFrame;
         _dispatcher.RequestRerender = WakeFrame;   // virtual list crossing an item boundary on scroll
         _scrollAnim.RequestRerender = WakeFrame;   // re-realize the virtual window on a boundary crossing
-        _dispatcher.OnHoverChanged = _interact.SetHover;
-        _dispatcher.OnPressChanged = _interact.SetPress;
+        // Hover/press edges drive BOTH the (record-time) InteractionAnimator AND the new declarative While* resolver.
+        // The resolver is a no-op for nodes without WhileHover/WhilePressed targets — additive, no regression.
+        _dispatcher.OnHoverChanged = (n, on) => { _anim.SetHover(n, on); _anim.ApplyInteractionEdge(n, AnimEngine.InteractKind.Hover, on); };
+        _dispatcher.OnPressChanged = (n, on) => { _anim.SetPress(n, on); _anim.ApplyInteractionEdge(n, AnimEngine.InteractKind.Press, on); };
         _dispatcher.OnScrollArmed = _scrollAnim.Arm;
         _dispatcher.OnScrollHover = _scrollAnim.Hover;
         _dispatcher.OnScrollLeave = _scrollAnim.Leave;
@@ -1124,8 +1159,10 @@ public sealed class AppHost : IDisposable
             RunReflowLayout(layoutSize);                       // 7 boundary-scoped re-solve for SizeMode.Reflow (smooth reflow)
             ReclaimSettledOrphans();                           // 7 free settled exit orphans
             _connected.Settle();                               // 7 retire landed shared-element flies (reveal dest, unpin, free overlay)
-            _interact.Tick(dtMs);                              // 7 eased hover/press
-            _scene.AdvanceBrushAnims(dtMs);                    // 7 implicit BrushTransition (logical state flips)
+            _connected.SyncDetached();                         // 7 flag-gated rebuild: mirror the engine-animated fly into its DetachedNode snapshot (RecordDetached draws it)
+            // 7 eased hover/press: HoverT/PressT now driven by the engine's HoverFade/PressFade tracks (ticked in _anim.Tick above); InteractionAnimator deleted
+            // 7 implicit BrushTransition: the cross-fade T is now driven by the unified engine (AnimChannel.BrushFade,
+            // seeded at reconcile); the separate per-frame AdvanceBrushAnims ticker is deleted.
             _dispatcher.TickTouchpad(dtMs);                    // 7 precision-touchpad pan: ease applied offset + lift→inertia (before the pump so the fling it seeds runs this frame)
             _scrollAnim.Tick(dtMs);                            // 7 smooth scroll + fling + overscroll spring + scrollbar fade (the engine-owned integrator)
             ScrollBindEval.ApplyPinAndFlagPass(_scene);       // 7 generic scroll-bind pins + the predicate-flag channel (sticky etc.)
@@ -1170,10 +1207,12 @@ public sealed class AppHost : IDisposable
                     _popupSkipRoots.Add(_popupWindows[i].Root);
             var recordStats = SceneRecorder.Record(_scene, _drawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicFlyout.Fallback, in textEdit,
                 CollectionsMarshal.AsSpan(_popupSkipRoots)); // 8 record
+            SceneRecorder.RecordDetached(_scene, _drawList, _images, _connected.Detached, _scene.OverlayClip);   // 8 detached fly snapshots (flag-gated rebuild; no-op when none)
             RecordPopupWindows(in focus, in textEdit);         // 8b record each popup window's subtree DrawList
             // 8c consume the frame's motion bits (the glyph-snap gate read them during record). A motion frame queues ONE
             // settle frame: the last moved frame recorded its text unsnapped, so the trailing static record re-snaps crisp.
-            if (_scene.AnyTransformWrote) { _frameAfterPaint = true; _scene.ClearTransformDirty(); }
+            bool transformWrote = _scene.AnyTransformWrote;
+            if (transformWrote) { _frameAfterPaint = true; _scene.ClearTransformDirty(); }
             long tRecord = Stopwatch.GetTimestamp();
             if (s_allocDiag) { db = Probe(SegRecord, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
             // Modal-loop repaint: present at SyncInterval 0 so Present is a cheap, tear-free hand-off (the composited DComp
@@ -1181,13 +1220,37 @@ public sealed class AppHost : IDisposable
             // live-resize/move hitch. We KEEP the frame-latency waitable wait (do NOT SuppressLatencyWaitOnce here) as the
             // pacing gate: with SetMaximumFrameLatency=1 it self-throttles the producer to one in-flight frame so interval-0
             // presents can't back up the present queue and re-block in Present/back-buffer acquire (DXGI pacing review).
-            if (keepAlive) _device.SuppressVsyncOnce();
+            // Skip-submit gate (idle/slow-change power, finding #3a): when this frame mutated nothing the recorder reads
+            // (no reconcile, no relayout, no transform write) AND the recorded command stream is byte-identical to the last
+            // PRESENTED frame, the already-presented front buffer is still correct — elide the GPU submit + Present (the
+            // dominant ~2.5ms/frame cost at rest). The cheap flags short-circuit so ACTIVE frames never hash; the hash
+            // confirms byte-identity for paint-channel / image-state changes that set no flag. Conservative: steady main
+            // window only (presented before, no resize, not a modal keep-alive, no interleaving popup windows). A playback
+            // playhead quantized to whole pixels (SeekBar) lands on the same stream most frames, so this fires during play.
+            bool maybeUnchanged = _everLaidOut && !resized && !keepAlive && _popupWindows.Count == 0
+                && !reconciled && !layoutNeeded && !transformWrote
+                && !_device.HasPendingUploads;   // a staged texture upload is flushed INSIDE submit — skipping would leave it white
+            ulong dlHash = maybeUnchanged ? DrawListHash(_drawList.Bytes, _drawList.SortKeys) : 0UL;
+            bool skipSubmit = maybeUnchanged && dlHash == _lastPresentedDrawListHash;
             long subStart = (keepAlive && s_resizeDiag) ? Stopwatch.GetTimestamp() : 0;
-            _device.SubmitDrawList(_drawList.Bytes, _drawList.SortKeys,
-                new FrameInfo(_window.ClientSizePx, _window.Scale, Clear)); // 10 submit
-            _swapchain.Present();                              // 11 present
-            long hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
-            long tSubmit = Stopwatch.GetTimestamp();
+            long tSubmitDone, tSubmit, hotAlloc;
+            if (skipSubmit)
+            {
+                _framesSkippedSubmit++;
+                hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
+                tSubmitDone = tSubmit = Stopwatch.GetTimestamp();
+            }
+            else
+            {
+                if (keepAlive) _device.SuppressVsyncOnce();
+                _device.SubmitDrawList(_drawList.Bytes, _drawList.SortKeys,
+                    new FrameInfo(_window.ClientSizePx, _window.Scale, Clear)); // 10 submit
+                tSubmitDone = Stopwatch.GetTimestamp();        // boundary: SubmitDrawList done, Present not yet called
+                _swapchain.Present();                          // 11 present
+                if (maybeUnchanged) _lastPresentedDrawListHash = dlHash;   // track the stream only across quiet runs (active frames don't hash)
+                hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
+                tSubmit = Stopwatch.GetTimestamp();
+            }
             if (s_allocDiag) { db = Probe(SegSubmit, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             DrainPassiveEffects();                             // 12 passive effects
@@ -1211,7 +1274,9 @@ public sealed class AppHost : IDisposable
                 LayoutMs = ToMs(tLayout - tFlush),
                 AnimMs = ToMs(tAnim - tLayout),         // phase-7 ticks + projections
                 RecordMs = ToMs(tRecord - tAnim),       // image pump + SceneRecorder (+ text shaping) + dyntext
-                SubmitMs = ToMs(tSubmit - tRecord),     // command build + GPU submit + present
+                SubmitMs = ToMs(tSubmit - tRecord),     // command build + GPU submit + present (total; ~0 on a skipped frame)
+                FenceWaitMs = skipSubmit ? 0.0 : _device.LastFenceWaitMs,  // of which: UI-thread stall on the frame fence + latency waitable
+                PresentMs = ToMs(tSubmit - tSubmitDone),// of which: the Present() call (0 on a skipped frame)
             };
             PublishFrameStats(LastStats);
             if (_frameClockSig.HasSubscribers) _frameClockSig.Value = ++_frameClock;   // drive per-frame pollers (overlay close) only when watched
@@ -1403,12 +1468,28 @@ public sealed class AppHost : IDisposable
         return new RectF(b.X + p.LocalTransform.Dx, b.Y + p.LocalTransform.Dy, b.W, b.H);
     }
 
+    /// <summary>The node's presented rect relative to an arbitrary FRAME's origin (FLIP relativeTarget). Uses the
+    /// absolute translation sum, so the relative rect is UNCHANGED when node + frame move together (coherence). For
+    /// frame == the node's parent this equals <see cref="RelRect"/>.</summary>
+    private RectF RelRectIn(NodeHandle n, NodeHandle frame)
+    {
+        RectF a = _scene.AbsoluteRect(n), f = _scene.AbsoluteRect(frame);
+        return new RectF(a.X - f.X, a.Y - f.Y, a.W, a.H);
+    }
+
     // FLIP "First" capture — every BoundsAnimated node's presented PARENT-RELATIVE rect, snapshotted BEFORE this commit.
     private void CaptureProjections(NodeHandle n)
     {
         if (n.IsNull) return;
         if ((_scene.Flags(n) & NodeFlags.BoundsAnimated) != 0)
-            _projectBefore[n] = new ProjCapture(RelRect(n), _scene.Parent(n));
+        {
+            // FLIP relativeTarget: capture relative to the resolved shared-layout anchor (if any) instead of the parent,
+            // so the node rides the anchor's motion coherently (its anchor-relative rect is unchanged ⇒ no re-FLIP).
+            NodeHandle anchor = _reconciler.ResolveRelativeTarget(n);
+            _projectBefore[n] = anchor.IsNull
+                ? new ProjCapture(RelRect(n), _scene.Parent(n))
+                : new ProjCapture(RelRectIn(n, anchor), anchor);
+        }
         for (var c = _scene.FirstChild(n); !c.IsNull; c = _scene.NextSibling(c))
             CaptureProjections(c);
     }
@@ -1427,8 +1508,11 @@ public sealed class AppHost : IDisposable
             var n = kv.Key;
             if (n == _dispatcher.Drag.ActiveNode) continue;   // E5: the pointer owns the dragged node's transform
             if (!_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.BoundsAnimated) == 0) continue;
-            if (_scene.Parent(n) != kv.Value.Parent) continue;   // reparented: rel frames incomparable — snap
-            RectF from = kv.Value.Rel, to = RelRect(n);
+            // The captured "frame" is the parent OR (for a relativeTarget) the shared-layout anchor; re-resolve it now.
+            NodeHandle anchor = _reconciler.ResolveRelativeTarget(n);
+            NodeHandle frameNow = anchor.IsNull ? _scene.Parent(n) : anchor;
+            if (frameNow != kv.Value.Parent) continue;   // reparented / anchor changed: rel frames incomparable — snap
+            RectF from = kv.Value.Rel, to = anchor.IsNull ? RelRect(n) : RelRectIn(n, anchor);
             if (MathF.Abs(from.X - to.X) < PosEps && MathF.Abs(from.Y - to.Y) < PosEps
                 && MathF.Abs(from.W - to.W) < SizeEps && MathF.Abs(from.H - to.H) < SizeEps)
                 continue;                                     // no LOCAL change ⇒ ancestor-driven move only

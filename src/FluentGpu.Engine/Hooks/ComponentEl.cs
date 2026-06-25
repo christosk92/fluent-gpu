@@ -17,6 +17,12 @@ public sealed record ComponentEl(Func<Component> Factory, Type ComponentType) : 
     /// by size-reactive primitives that hold a pure build function (Responsive / PagedShelf), so the section shimmers as
     /// its real shape. Null ⇒ the component still maps to one default bar (a true dynamic boundary).</summary>
     public Func<Element>? SkeletonProxy { get; init; }
+
+    /// <summary>Pending-tree internal: mount this component normally, then derive each output it renders. This is used
+    /// by self-measuring controls such as Responsive, whose skeleton cannot be frozen at a guessed proxy width.</summary>
+    public bool DeriveRenderedOutput { get; init; }
+
+    internal SkeletonStyle? DerivedSkeletonStyle { get; init; }
 }
 
 /// <summary>Fluent helper: <c>Embed.Comp(() =&gt; new MyComponent())</c> embeds a stateful child component.</summary>

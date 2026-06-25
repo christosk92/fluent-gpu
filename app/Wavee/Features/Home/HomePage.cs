@@ -89,6 +89,7 @@ sealed class HomePage : Component
 
         Element groups = Skel.Region(
             home,
+            shimmerSource: HomeShimmer,
             isEmpty: feed => feed.Groups.Count == 0,
             onEmpty: () => EmptyState.Default(),
             onFailed: () => ErrorState.Build(home.Error),
@@ -114,7 +115,24 @@ sealed class HomePage : Component
             Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, PlayerDock.Reserve + WaveeSpace.XXL),
             Children = [ GreetingHero(name), groups ],
         };
-        return ScrollView(page) with { Grow = 1f };
+        // Scroll-position restoration: home is one route, so the key is constant — a revisit after the page was evicted
+        // from KeepAlive seeds the saved offset before layout (within KeepAlive the parked node already preserves it).
+        return ScrollView(page) with { Grow = 1f, ScrollKey = "home" };
+    }
+
+    // Lightweight loading skeleton (finding #7): a few shelf placeholders (title bar + a row of card bars) so the pending
+    // edge doesn't build the full home feed just to derive a skeleton. Sized childless boxes → shimmer bars; SmoothResize
+    // eases the swap to the real groups on load.
+    static Element HomeShimmer()
+    {
+        static Element TitleBar() => new BoxEl { Width = 180f, Height = 22f, Corners = CornerRadius4.All(WaveeRadius.Control) };
+        static Element Card() => new BoxEl { Width = 180f, Height = 56f, Corners = CornerRadius4.All(WaveeRadius.Card) };
+        static Element Shelf() => new BoxEl
+        {
+            Direction = 1, Gap = WaveeSpace.M,
+            Children = [TitleBar(), new BoxEl { Direction = 0, Gap = WaveeSpace.M, Children = [Card(), Card(), Card(), Card(), Card()] }],
+        };
+        return new BoxEl { Direction = 1, Gap = WaveeSpace.XL, Children = [Shelf(), Shelf(), Shelf()] };
     }
 
     static string Id(string uri) { int i = uri.LastIndexOf(':'); return i >= 0 ? uri[(i + 1)..] : uri; }

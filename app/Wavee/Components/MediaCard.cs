@@ -42,7 +42,9 @@ public static class MediaCard
             // (bottom-right, REVEALED ON HOVER). Reactive: subscribes to the playback bridge. The container carries NO
             // OnClick, so the hit walks up to the card (its HoverScale fires + the FAB reveals off the card's hover);
             // only the FAB itself is a hit target.
-            Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, FabSize, cover: true, inner)));
+            // Skeletonized(false): a hover-only affordance is not skeleton content — without this the deriver maps the
+            // opaque overlay to its default bar, leaving a stray stripe across the top-left of every loading cover.
+            Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, FabSize, cover: true, inner)).Skeletonized(false));
 
         return new BoxEl
         {
@@ -91,7 +93,7 @@ public static class MediaCard
             Children =
             [
                 Surfaces.ArtworkFill(cover, r),
-                Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, FabSize, cover: true, 0f)),
+                Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, FabSize, cover: true, 0f)).Skeletonized(false),
             ],
         };
         return new BoxEl
@@ -141,7 +143,7 @@ public static class MediaCard
                     Children =
                     [
                         Surfaces.Artwork(thumb, Seed(uri), inner, ar, WaveeRadius.Control, decodePx: 480),
-                        Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, FabSize, cover: true, 0f)),
+                        Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, FabSize, cover: true, 0f)).Skeletonized(false),
                     ],
                 },
                 WaveeType.TrackTitle(title) with { Width = inner, Wrap = TextWrap.Wrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
@@ -170,7 +172,7 @@ public static class MediaCard
                 {
                     Direction = 0, AlignItems = FlexAlign.Center,
                     Padding = new Edges4(0f, 0f, WaveeSpace.M, 0f),
-                    Children = [ Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, 36f, cover: false, 36f)) ],
+                    Children = [ Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, 36f, cover: false, 36f)).Skeletonized(false) ],
                 },
             ],
         };

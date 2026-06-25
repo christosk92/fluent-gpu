@@ -50,6 +50,11 @@ public sealed class AggregateCatalog : IMusicLibrary, ICollectionEvents
     public IAsyncEnumerable<TrackPage> StreamTracksAsync(string contextUri, CancellationToken ct = default)
         => _reg.OwnerOf(contextUri)?.StreamTracksAsync(contextUri, ct) ?? EmptyPages(ct);
 
+    // Paged discography window + facet total. A source that exposes real paging would override (the documented seam); the
+    // synthetic catalog generates a large deterministic discography per artist so the virtualized grid is exercised for real.
+    public Task<DiscographyPage> GetDiscographyAsync(string artistUri, DiscographyKind kind, int offset, int limit, CancellationToken ct = default)
+        => Task.FromResult(FakeData.Discography(artistUri, kind, offset, limit));
+
     // ── merged collections (each source returns EMPTY where it has no data → clean union, no dups) ──
     public async Task<IReadOnlyList<LibraryItem>> GetLibraryAsync(CancellationToken ct = default)
     {

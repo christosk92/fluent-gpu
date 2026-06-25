@@ -151,10 +151,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     // literals — the FG_TP_SCALE/KNEE/MAXRAW env overrides + their startup TryParse were removed once the feel settled.
     // Change a value here and rebuild to retune.
     //
-    // Pan distance: DIP of content travel per raw wheel-delta unit (HIWORD of WM_POINTERWHEEL). This device's
-    // promoted-wheel deltas are large/accelerated (−400…−1700 per packet), so a small factor keeps the felt speed sane.
-    // The driver also emits the momentum tail; the engine lightly smooths these packets but does not add another inertia.
-    private static readonly float s_tpScale = 0.08f;
+    // Pan distance: DIP of content travel per raw wheel-delta unit (HIWORD of WM_POINTERWHEEL). This is THE base scroll-speed
+    // knob — raise it if everyday scrolling feels heavy/laborious, lower it if it feels twitchy. The ShapeTouchpadPacketDelta
+    // precision zone (≤18 DIP) keeps small/precise motions linear after this scale, so a higher value speeds normal swipes
+    // without making fine adjustments overshoot. The driver emits the momentum tail; the engine smooths it, adds no inertia.
+    // WAS 0.08 — on-device + with other testers, normal-speed swipes didn't travel far enough ("too slow / laborious";
+    // the fast swipes in the trace looked fine, but you had to swipe HARD). 0.11 (+~38%) lifts the everyday feel.
+    private static readonly float s_tpScale = 0.11f;
     // Soft-knee that tames the device's accelerated raw notch BEFORE scaling: small deltas stay EXACTLY linear (precise
     // panning untouched), only the big accelerated packets are compressed toward a soft ceiling — |notch| below s_tpKnee
     // is passed through 1:1, above it the curve asymptotes toward s_tpMaxRaw. Applies ONLY to the hi-res
@@ -927,7 +930,17 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                     float tpDipY = horizontal ? 0f : -dip;
                     float tpDipX = horizontal ? dip : 0f;
                     if (FluentGpu.Foundation.ScrollLog.On)
-                        FluentGpu.Foundation.ScrollLog.Line($"TPPAN   {(horizontal ? "H" : "V")} notch={notch} dip={(horizontal ? tpDipX : tpDipY):0.0}");
+                    {
+                        // DIAGNOSTIC: dump the pointer flags so a trace shows whether Windows distinguishes an active
+                        // two-finger scroll (POINTER_FLAG_INCONTACT 0x04 set) from the post-lift momentum tail (INCONTACT
+                        // cleared) — the clean "finger lifted" signal we want instead of guessing from the packet trend.
+                        uint flags = 0;
+                        POINTER_INFO wpi;
+                        if (GetPointerInfo(wheelPid, &wpi)) flags = wpi.pointerFlags;
+                        FluentGpu.Foundation.ScrollLog.Line(
+                            $"TPPAN   {(horizontal ? "H" : "V")} notch={notch} dip={(horizontal ? tpDipX : tpDipY):0.0} " +
+                            $"flags=0x{flags:X5} inContact={((flags & 0x4u) != 0)} up={((flags & 0x40000u) != 0)} new={((flags & 0x1u) != 0)}");
+                    }
                     _queue.Enqueue(new InputEvent(InputKind.Wheel, WheelPt(lp), 0, 0, tpDipY, Mods(),
                         Pointer: PointerKind.Touchpad, TimestampMs: nowMs,
                         PointerId: wheelPid, ScrollDeltaX: tpDipX, WheelNotch: 0f, WheelNotchX: 0f));

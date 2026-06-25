@@ -36,6 +36,7 @@ internal sealed class MemoHookCell<T> : HookCell, IDisposableCell
 internal sealed class EffectCell : HookCell
 {
     public object[]? Deps;
+    public DepKey? Key;     // set instead of Deps when the call site uses the zero-alloc DepKey overload (finding #9)
     public Action? Cleanup;
 }
 
@@ -43,6 +44,7 @@ internal sealed class MemoCell<T> : HookCell
 {
     public T Value = default!;
     public object[]? Deps;
+    public DepKey? Key;     // see EffectCell.Key
 }
 
 internal sealed class RefHolderCell : HookCell
@@ -181,10 +183,35 @@ public sealed partial class RenderContext
     internal void BeginRender() => _cursor = 0;
     internal void EndRender()
     {
+        DebugCheckHooksConsumed();   // rules-of-hooks guard (DEBUG only; erased on Release) — see below
         _mounted = true;
         // The "form under construction" thread-local (set by UseForm so same-component UseField calls auto-join) lives
         // only for this render — clear it so it never leaks into the next component the reconciler renders.
         FluentGpu.Forms.FormScope.Building = null;
+    }
+
+    // ── Rules-of-hooks guard (engine follow-up to the DetailShell conditional-hook crash) ─────────────────────────────
+    // Positional hooks (UseState/UseMemo/UseEffect/UseContextSignal/…) index a fixed _cells list by a per-render cursor,
+    // so EVERY render of a mounted component must call the SAME hooks in the SAME order. A conditional hook (inside an
+    // if/branch/loop, or after an early return) desyncs the cursor → an opaque IndexOutOfRange / InvalidCast deep in a
+    // Use* call (the back-forward crash). These [Conditional("DEBUG")] checks turn that into a clear, named error in
+    // DEBUG/CI and are entirely erased from the shipping Release/AOT binary (zero production cost).
+    [System.Diagnostics.Conditional("DEBUG")]
+    private void DebugCheckHooksConsumed()
+    {
+        if (_mounted && _cursor != _cells.Count)
+            throw new InvalidOperationException(
+                $"Rules of hooks violated: a component called {_cursor} positional hook(s) this render but {_cells.Count} on its first render — " +
+                "a Use* hook was called conditionally (inside an if/branch/loop) or after an early return. Hoist every hook above any branch/return.");
+    }
+
+    [System.Diagnostics.Conditional("DEBUG")]
+    private void DebugGuardCursor()
+    {
+        if (_cursor >= _cells.Count)
+            throw new InvalidOperationException(
+                "Rules of hooks violated: more positional hooks ran this render than on the first render — a Use* hook was called conditionally " +
+                "(inside an if/branch/loop) or after an early return. Hoist every hook above any branch/return.");
     }
 
     /// <summary>Run every pending effect cleanup + dispose owned reactive primitives (component unmount).</summary>
@@ -276,6 +303,12 @@ public sealed partial class RenderContext
     /// <summary>Like <see cref="UseEffect"/> but runs after layout, before paint (Bounds are valid). Phase 6.5.</summary>
     public void UseLayoutEffect(Action effect, params object[] deps) => EffectImpl(effect, deps, PendingLayoutEffects);
 
+    /// <summary>Zero-alloc dep variant (finding #9): pass a <see cref="DepKey"/> instead of a <c>params object[]</c> — no
+    /// array allocation, no value-type boxing per render. Use for hot hooks whose deps are scalars (e.g. a loading bool).</summary>
+    public void UseEffect(Action effect, DepKey deps) => EffectImplKey(effect, deps, PendingEffects);
+    /// <inheritdoc cref="UseEffect(Action, DepKey)"/>
+    public void UseLayoutEffect(Action effect, DepKey deps) => EffectImplKey(effect, deps, PendingLayoutEffects);
+
     /// <summary>Mount a signal-tracked effect owned by this component. The body runs once, then whenever signals it reads
     /// change. Use sparingly for adapter components that bridge a hot signal into a coarser retained signal.</summary>
     public void UseSignalEffect(Action effect)
@@ -290,13 +323,28 @@ public sealed partial class RenderContext
     {
         EffectCell cell;
         if (!_mounted) { cell = new EffectCell(); _cells.Add(cell); }
-        else { cell = (EffectCell)_cells[_cursor]; }
+        else { DebugGuardCursor(); cell = (EffectCell)_cells[_cursor]; }
         _cursor++;
 
         bool changed = !_mounted || !DepsEqual(cell.Deps, deps);
         if (changed)
         {
             cell.Deps = deps;
+            target.Add(() => { cell.Cleanup?.Invoke(); effect(); });
+        }
+    }
+
+    private void EffectImplKey(Action effect, DepKey deps, List<Action> target)
+    {
+        EffectCell cell;
+        if (!_mounted) { cell = new EffectCell(); _cells.Add(cell); }
+        else { DebugGuardCursor(); cell = (EffectCell)_cells[_cursor]; }
+        _cursor++;
+
+        bool changed = !_mounted || cell.Key is not { } k || k != deps;
+        if (changed)
+        {
+            cell.Key = deps;
             target.Add(() => { cell.Cleanup?.Invoke(); effect(); });
         }
     }
@@ -325,8 +373,27 @@ public sealed partial class RenderContext
         }
         else
         {
-            cell = (MemoCell<T>)_cells[_cursor];
+            DebugGuardCursor(); cell = (MemoCell<T>)_cells[_cursor];
             if (!DepsEqual(cell.Deps, deps)) { cell.Value = factory(); cell.Deps = deps; }
+        }
+        _cursor++;
+        return cell.Value;
+    }
+
+    /// <summary>Zero-alloc dep variant of <see cref="UseMemo{T}(Func{T}, object[])"/> (finding #9): a <see cref="DepKey"/>
+    /// instead of a <c>params object[]</c> — no per-render array/boxing.</summary>
+    public T UseMemo<T>(Func<T> factory, DepKey deps)
+    {
+        MemoCell<T> cell;
+        if (!_mounted)
+        {
+            cell = new MemoCell<T> { Value = factory(), Key = deps };
+            _cells.Add(cell);
+        }
+        else
+        {
+            DebugGuardCursor(); cell = (MemoCell<T>)_cells[_cursor];
+            if (cell.Key is not { } k || k != deps) { cell.Value = factory(); cell.Key = deps; }
         }
         _cursor++;
         return cell.Value;
@@ -357,7 +424,7 @@ public sealed partial class RenderContext
     {
         ContextSignalCell<T> cell;
         if (!_mounted) { cell = new ContextSignalCell<T>(this, context); _cells.Add(cell); }
-        else cell = (ContextSignalCell<T>)_cells[_cursor];
+        else { DebugGuardCursor(); cell = (ContextSignalCell<T>)_cells[_cursor]; }
         _cursor++;
         return cell.Signal;
     }
@@ -480,6 +547,16 @@ public sealed partial class RenderContext
         => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Keyframes(HostNode, channel, keys, durationMs, loop); }, deps);
 
     public void UseDrivenAnimation(AnimChannel channel, Keyframe[] keys, Func<float> source, float min, float max, params object[] deps)
+        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Drive(HostNode, channel, keys, a.Clocks.Register(source), min, max); }, deps);
+
+    // Zero-alloc DepKey variants of the retained-anim hooks (finding #9) — no per-render params object[] box.
+    public void UseSpring(AnimChannel channel, float to, SpringParams spring, DepKey deps)
+        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Spring(HostNode, channel, to, spring); }, deps);
+    public void UseTransition(AnimChannel channel, float from, float to, float durationMs, Easing easing, DepKey deps)
+        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Animate(HostNode, channel, from, to, durationMs, easing); }, deps);
+    public void UseKeyframes(AnimChannel channel, Keyframe[] keys, float durationMs, bool loop, DepKey deps)
+        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Keyframes(HostNode, channel, keys, durationMs, loop); }, deps);
+    public void UseDrivenAnimation(AnimChannel channel, Keyframe[] keys, Func<float> source, float min, float max, DepKey deps)
         => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Drive(HostNode, channel, keys, a.Clocks.Register(source), min, max); }, deps);
 
     /// <summary>Declare a gesture handler on this component's node (input-a11y.md §13 <c>UseGesture</c>). Config-only:

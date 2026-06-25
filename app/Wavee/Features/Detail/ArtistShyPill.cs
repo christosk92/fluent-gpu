@@ -21,9 +21,44 @@ sealed class ArtistShyPill : Component
     public ArtistShyPill(string uri, Loadable<Artist> artist, Signal<bool> pinned, Services svc)
     { _uri = uri; _artist = artist; _pinned = pinned; _svc = svc; }
 
+    static readonly LayoutTransition Presence = new(
+        TransitionChannels.Opacity,
+        TransitionDynamics.Tween(280f, Easing.SmoothOut),
+        Enter: new EnterExit(Dy: -12f, Sx: 0.96f, Sy: 0.96f, Opacity: 0f, Active: true, Blur: 3f),
+        Exit: new EnterExit(Dy: -8f, Sx: 0.985f, Sy: 0.985f, Opacity: 0f, Active: true, Blur: 2f),
+        ExitDynamics: TransitionDynamics.Tween(170f, Easing.SmoothOut));
+
     public override Element Render()
     {
-        if (!_pinned.Value) return new BoxEl();          // not stuck → no pill, no hit area
+        // Gate on Ready, not just pinned: the pill is a scrolled-past-hero affordance, so showing its real avatar +
+        // monthly-listeners over the page's loading skeleton both leaks real data early and floats a solid card on top
+        // of the shimmer grid (the "overlapping components" artifact). While Pending/Failed it stays hidden; on Ready,
+        // if still scrolled past the hero, it animates in. KeepAlive owns page visibility and detaches this entire
+        // subtree synchronously on navigation; page deactivation must not be converted into a local animated exit.
+        return Flow.Show(
+            () => _pinned.Value && _artist.State.Value == (byte)LoadState.Ready,
+            new BoxEl
+            {
+                Animate = Presence,
+                TransformOriginX = 0.5f,
+                TransformOriginY = 0f,
+                Children = [Embed.Comp(() => new ArtistShyPillSurface(_uri, _artist, _svc))],
+            });
+    }
+}
+
+// The live pill content is a child component so the reactive presence boundary can remain stable while artist data
+// updates. The animated wrapper above owns insertion/removal; this component only renders the actual interactive card.
+sealed class ArtistShyPillSurface : Component
+{
+    readonly string _uri;
+    readonly Loadable<Artist> _artist;
+    readonly Services _svc;
+    public ArtistShyPillSurface(string uri, Loadable<Artist> artist, Services svc)
+    { _uri = uri; _artist = artist; _svc = svc; }
+
+    public override Element Render()
+    {
         var a = _artist.Value.Value;                     // Loadable.Value is a Signal<Artist>; read its value
         return new BoxEl
         {

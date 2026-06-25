@@ -242,7 +242,11 @@ sealed class TrackList : Component
                 // Cold-mount stagger: the track list is the heaviest part of a detail-page mount (the nav cold-mount
                 // spike). Realize its initial window a few rows/frame so no single frame mounts the whole window — the
                 // skeleton/reveal masks the brief fill-in, and the scroll extent stays correct (driven by the full count).
-                staggerColdRealize: true);
+                staggerColdRealize: true,
+                // Scroll-position restoration keyed by the detail content (route): navigate away from a 10k-track
+                // playlist and back and the viewport seeds the saved row BEFORE its first realize — no scroll-to-top
+                // flash, no jump (the engine scopes this per tab via the KeepAlive slot). A different album starts at top.
+                scrollKey: _route.Value.Name);
 
         // The tracks stream in via the engine's skeleton boundary: while the model is Pending it shows shimmer rows the
         // engine DERIVES from the real Row(EmptyTrack) template (ONE definition — no hand-written shimmer, no drift); on

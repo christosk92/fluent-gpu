@@ -47,18 +47,22 @@ public sealed class ScrollAnimator
     public const float MinBarOverflowPx = 4f;
 
     /// <summary>Touch/trackpad-fling friction: the per-second exponential SURVIVAL factor applied to the velocity each
-    /// tick (v *= FlingDecayPerS^dt_s). MATCHES WinUI's InteractionTracker resting feel via the engine-internal base
-    /// <c>r = 1 − 0.95 = 0.05</c> per SECOND: the integrator <c>v(t) = v0·r^t</c> is fed <c>r</c> directly (no ^(1/60)
-    /// conversion). The decay constant is <c>k = −ln(FlingDecayPerS)</c> per second (≈3.0/s at 0.05); a fling's
-    /// asymptotic coast is <c>v0/k</c> and it settles (≤ <see cref="FlingMinVelocityPxPerS"/>) after ≈ <c>ln(v0/v_min)/k</c> s.
-    /// At 0.05 ⇒ k ≈ 3.0/s ⇒ a 1600 px/s flick coasts ~534 px and settles in ~1.33 s — a WinUI-like glide. (1000 px/s ⇒
-    /// ~334 px asymptote, settling near ~324 px at the 30 px/s cutoff.) THIS IS THE FEEL KNOB: tune on-device against a
-    /// real WinUI ScrollViewer. The snap-retarget integral below derives k from this value, so it stays consistent when
-    /// only this constant changes.</summary>
-    public const float FlingDecayPerS = 0.05f;   // per-second velocity survival (k ≈ 3.0/s) — WinUI 0.95 InteractionTracker feel (r = 1 − 0.95). WAS 0.03
+    /// tick (v *= FlingDecayPerS^dt_s). Tuned to iOS UIScrollView's <c>.normal</c> deceleration (decelerationRate
+    /// 0.998/ms ⇒ 0.998^1000 ≈ 0.135 survival per SECOND): the integrator <c>v(t) = v0·r^t</c> is fed <c>r</c> directly
+    /// (no ^(1/60) conversion). The decay constant is <c>k = −ln(FlingDecayPerS)</c> per second (≈2.0/s at 0.135); a
+    /// fling's asymptotic coast is <c>v0/k</c> and it settles (≤ <see cref="FlingMinVelocityPxPerS"/>) after ≈
+    /// <c>ln(v0/v_min)/k</c> s. At 0.135 ⇒ k ≈ 2.0/s ⇒ a 1600 px/s flick coasts ~799 px and settles in ~2.4 s — the
+    /// floaty iOS-normal glide. (1000 px/s ⇒ ~500 px asymptote.) WAS 0.05 (k ≈ 3.0/s, a WinUI-InteractionTracker-like
+    /// 0.95 survival); customer A/B found that glide too short ("the de-accel is too strong, barely any momentum"), so
+    /// the friction was softened toward the iOS end. THIS IS THE FEEL KNOB: tune on-device. The snap-retarget integral
+    /// below derives k from this value, so it stays consistent when only this constant changes.</summary>
+    public const float FlingDecayPerS = 0.135f;   // per-second velocity survival (k ≈ 2.0/s) — iOS UIScrollView .normal deceleration. WAS 0.05 (k ≈ 3.0/s, WinUI-like) — too short per customer A/B
     /// <summary>Below this speed the fling has settled: it reverts to TargetChase with zero velocity (a slow drift
-    /// reads as stopped, and snapping idle keeps the frame loop quiet). px/s. == WinUI <c>s_minimumVelocity</c>.</summary>
-    public const float FlingMinVelocityPxPerS = 30f;
+    /// reads as stopped, and snapping idle keeps the frame loop quiet). px/s. WAS 30 (WinUI <c>s_minimumVelocity</c>);
+    /// lowered to 13 to pair with the softer iOS-normal <see cref="FlingDecayPerS"/> — at k ≈ 2.0/s the below-cutoff
+    /// remainder (~v_min/k) would otherwise grow to ~15 px and the hard cutoff (no terminal taper) reads as an abrupt
+    /// stop, so the long tail is let fade closer to rest. ENGINE-DELIBERATE divergence from WinUI's 30.</summary>
+    public const float FlingMinVelocityPxPerS = 13f;
     /// <summary>A snap fling's landing tolerance: once the decay's remaining asymptotic travel is within this many DIP of
     /// the snap value, the integrator writes the exact snap offset and ends (so a snap fling lands ON the snap rather
     /// than v_min/k short). Sub-pixel; deterministic across the integrator dt sweep. px.</summary>
@@ -69,6 +73,9 @@ public sealed class ScrollAnimator
     /// WAS 40ms: still visibly trailed a fast mouse wheel (~150ms to settle ⇒ "doesn't match my hand"). 18ms settles in
     /// ~3 frames — crisp 1:1-feeling wheel that still spreads a clicky notch over a frame or two (no harsh single-frame jump).</summary>
     public const float WheelEaseTauMs = 18f;
+    /// <summary>Programmatic bring-into-view smoothing. Deliberately slower than the wheel response: selection-driven
+    /// viewport movement should be legible and coordinated with surrounding layout motion, not feel like a wheel notch.</summary>
+    public const float ProgrammaticEaseTauMs = 110f;
     /// <summary>Mouse-wheel MOMENTUM friction (per-second velocity survival, the wheel-fling analogue of
     /// <see cref="FlingDecayPerS"/>). Heavier than a touch fling so a single notch settles crisply (~0.25s) while a fast
     /// spin still coasts. k = −ln(decay); the seed picks v0 = notchDip·k so one notch coasts ≈ one notch. Env-tunable via
@@ -104,6 +111,9 @@ public sealed class ScrollAnimator
 
     /// <summary><see cref="ScrollState.ScrollMode"/> value for an active touch fling (vs 0 = TargetChase).</summary>
     private const byte FlingMode = 1;
+    /// <summary>Animated programmatic bring-into-view. Public so controls can opt into the slower selection/navigation
+    /// profile without introducing another host seam.</summary>
+    public const byte ProgrammaticMode = 2;
     /// <summary>Mouse-wheel momentum fling (browser-like coast): seeded by InputDispatcher's smooth-wheel path, decayed by
     /// <see cref="WheelFlingDecayPerS"/>, and — unlike a touch fling — hard-clamps at the edge with NO rubber-band/snap.</summary>
     private const byte WheelFlingMode = 3;
@@ -320,12 +330,14 @@ public sealed class ScrollAnimator
             else
             {
                 if (sc.ScrollMode == FlingMode || sc.ScrollMode == WheelFlingMode) { sc.ScrollMode = 0; sc.FlingVelocity = 0f; }   // retargeted away → TargetChase
-                float kOff = 1f - MathF.Exp(-dtMs / _wheelEaseTauMs);   // unified wheel/scrollbar offset smoothing (the feel knob)
+                float tau = sc.ScrollMode == ProgrammaticMode ? ProgrammaticEaseTauMs : _wheelEaseTauMs;
+                float kOff = 1f - MathF.Exp(-dtMs / tau);
                 float oldOff = off;
                 off += (tgt - off) * kOff;
                 if (MathF.Abs(tgt - off) < 0.5f) off = tgt;
                 moved = off != oldOff;
                 if (horizontal) sc.OffsetX = off; else sc.OffsetY = off;
+                if (sc.ScrollMode == ProgrammaticMode && off == tgt) sc.ScrollMode = 0;
 
                 if (moved)
                 {
