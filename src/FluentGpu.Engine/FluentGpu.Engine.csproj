@@ -10,4 +10,13 @@
        Windows leaves live in FluentGpu.Windows behind the interface-level seams. Intra-engine layering (e.g. Dsl
        must not see Scene) is folder/namespace discipline now; the load-bearing direction (Engine never sees a
        platform backend) is still compiler-enforced by the library boundary. -->
+
+  <ItemGroup>
+    <!-- The unified in-repo Roslyn analyzer (FluentGpu.SourceGen) as an analyzer. The Element records live HERE, so
+         the engine-DSL generators (ElementGenerator/WGPU0003 today; DiffProps/HookDeps/Theme in later waves) must run
+         in THIS compilation. OutputItemType=Analyzer + ReferenceOutputAssembly=false → the netstandard2.0 analyzer is
+         never linked into the AOT engine. TerraFX-free at the source level, so the portable closure stays clean. -->
+    <ProjectReference Include="..\FluentGpu.SourceGen\FluentGpu.SourceGen.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
 </Project>
