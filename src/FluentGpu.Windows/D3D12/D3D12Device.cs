@@ -1283,13 +1283,14 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _rectPipe?.Dispose();
         for (uint i = 0; i < FRAME_COUNT; i++) _backBuffers[i] = null;
         D3D12MemoryDiagnostics.Snapshot("D3D12Device.Dispose");
-        if (_cmdList != null) _cmdList->Release();
+        // GEN-COM (wired): COM teardown via the generated IUnknown.Release calli (vtable slot 2, universal to every COM ptr).
+        if (_cmdList != null) global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_cmdList);
         for (uint i = 0; i < FRAME_COUNT; i++)
-            if (_allocators[i] != null) _allocators[i]->Release();
-        if (_fence != null) _fence->Release();
-        if (_queue != null) _queue->Release();
-        if (_factory != null) _factory->Release();
-        if (_device != null) _device->Release();
+            if (_allocators[i] != null) global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_allocators[i]);
+        if (_fence != null) global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_fence);
+        if (_queue != null) global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_queue);
+        if (_factory != null) global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_factory);
+        if (_device != null) global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_device);
         if (_fenceEvent != HANDLE.NULL) CloseHandle(_fenceEvent);
     }
 }

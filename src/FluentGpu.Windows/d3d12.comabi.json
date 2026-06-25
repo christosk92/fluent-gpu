@@ -2,6 +2,14 @@
   "$comment": "comabi manifest for the render-thread hot path (com-interop.md §2.2). A real one is AbiHarvest-produced (winmd x ClangSharp) + runtime self-checked; this representative file drives GEN-COM so the hand-vtable calli bindings emit and are CALLED from the backend (no human-typed slots; FGCOM0006). Slots are absolute, reconciled from the base chain. 'ret'/'params' are C# types after the implicit `this`.",
   "interfaces": [
     {
+      "name": "IUnknown",
+      "iid": "00000000-0000-0000-c000-000000000046",
+      "methods": [
+        { "name": "AddRef", "slot": 1, "ret": "uint", "params": [] },
+        { "name": "Release", "slot": 2, "ret": "uint", "params": [] }
+      ]
+    },
+    {
       "name": "ID3D12Fence",
       "iid": "0a753dcf-c4d8-4b91-adf6-be5a60d95a76",
       "methods": [
