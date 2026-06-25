@@ -1661,6 +1661,13 @@ public sealed class TreeReconciler
         var table = _scene.ScrollBinds;
         bool had = table.NodeHasBinds(nodeIdx);
         if ((dsls is null || dsls.Length == 0) && !had) return;   // nothing now, nothing before → skip
+        if (table.NodeOwnsSink(nodeIdx, FluentGpu.Animation.BindSink.PresentedHTrailing))
+        {
+            ref NodePaint p = ref _scene.Paint(node);
+            p.PresentedH = float.NaN;
+            p.ChildShiftY = 0f;
+            _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+        }
         table.ClearNode(nodeIdx);                                 // wholesale re-bake (slot reuse self-cleans)
         if (dsls is null || dsls.Length == 0) return;
 

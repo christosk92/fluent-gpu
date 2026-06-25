@@ -3635,7 +3635,14 @@ public sealed class InputDispatcher
         var q = abs;
         float sx = 1f, sy = 1f;
         for (int i = _chain.Count - 1; i >= 0; i--)
+        {
             if (!StepIntoNode(_chain[i], ref q, ref sx, ref sy)) return q;   // degenerate scale: best-effort
+            if (i > 0)
+            {
+                ref NodePaint p = ref _scene.Paint(_chain[i]);
+                q = new Point2(q.X - p.ChildShiftX, q.Y - p.ChildShiftY);
+            }
+        }
         return q;
     }
 
@@ -3712,15 +3719,19 @@ public sealed class InputDispatcher
             return NodeHandle.Null;
 
         ref RectF b = ref _scene.Bounds(node);
+        ref NodePaint np = ref _scene.Paint(node);
         var local = q;
         if (!StepIntoNode(node, ref local, ref netSx, ref netSy)) return NodeHandle.Null;
-        bool inside = local.X >= 0f && local.X < b.W && local.Y >= 0f && local.Y < b.H;
+        float hitW = float.IsNaN(np.PresentedW) ? b.W : np.PresentedW;
+        float hitH = float.IsNaN(np.PresentedH) ? b.H : np.PresentedH;
+        bool inside = local.X >= 0f && local.X < hitW && local.Y >= 0f && local.Y < hitH;
         if ((flags & NodeFlags.ClipsToBounds) != 0 && !inside) return NodeHandle.Null;
 
+        var childLocal = new Point2(local.X - np.ChildShiftX, local.Y - np.ChildShiftY);
         NodeHandle result = NodeHandle.Null;
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
         {
-            var r = HitAny(c, local, netSx, netSy);
+            var r = HitAny(c, childLocal, netSx, netSy);
             if (!r.IsNull) result = r;
         }
         if (result.IsNull && inside && !YieldsToPassThrough(node))
@@ -3735,15 +3746,19 @@ public sealed class InputDispatcher
             return NodeHandle.Null;
 
         ref RectF b = ref _scene.Bounds(node);
+        ref NodePaint np = ref _scene.Paint(node);
         var local = q;
         if (!StepIntoNode(node, ref local, ref netSx, ref netSy)) return NodeHandle.Null;
-        bool inside = local.X >= 0f && local.X < b.W && local.Y >= 0f && local.Y < b.H;
+        float hitW = float.IsNaN(np.PresentedW) ? b.W : np.PresentedW;
+        float hitH = float.IsNaN(np.PresentedH) ? b.H : np.PresentedH;
+        bool inside = local.X >= 0f && local.X < hitW && local.Y >= 0f && local.Y < hitH;
         if ((flags & NodeFlags.ClipsToBounds) != 0 && !inside) return NodeHandle.Null;
 
+        var childLocal = new Point2(local.X - np.ChildShiftX, local.Y - np.ChildShiftY);
         NodeHandle result = NodeHandle.Null;
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
         {
-            var r = Hit(c, local, netSx, netSy);
+            var r = Hit(c, childLocal, netSx, netSy);
             if (!r.IsNull) result = r;
         }
 

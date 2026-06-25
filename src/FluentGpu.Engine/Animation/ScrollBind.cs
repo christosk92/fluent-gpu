@@ -26,6 +26,7 @@ public enum BindSink : byte
     ClipBottom = 6,    // NodePaint.ClipRect bottom edge
     ClipTop = 7,       // NodePaint.ClipRect top edge
     PresentedH = 8,    // NodePaint.PresentedH (compositor reveal; clips children, no relayout)
+    PresentedHTrailing = 9, // PresentedH + ChildShiftY: child content's trailing edge rides the reveal edge
 }
 
 /// <summary>How a <see cref="ScrollBind"/> range anchor is authored before it is baked to a scroll-px bound. Literal-px
@@ -107,6 +108,15 @@ public sealed class ScrollBindTable
 
     /// <summary>True when any scroller has at least one bind (skip the whole pass otherwise).</summary>
     public bool HasAny => _headByVp.Count != 0;
+
+    /// <summary>True when this node currently owns a row writing <paramref name="sink"/>.</summary>
+    public bool NodeOwnsSink(int nodeIndex, BindSink sink)
+    {
+        if (!_headByNode.TryGetValue(nodeIndex, out int s)) return false;
+        for (; s >= 0; s = _binds[s].NodeNext)
+            if (_binds[s].Sink == sink) return true;
+        return false;
+    }
 
     /// <summary>The scroller node-indices that currently own binds — the phase-7 pin/flag pass iterates these
     /// (struct enumerator, allocation-free).</summary>

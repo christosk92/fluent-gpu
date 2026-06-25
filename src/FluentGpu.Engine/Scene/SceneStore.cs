@@ -973,6 +973,12 @@ public sealed class SceneStore : ISceneBackend
         {
             x += _bounds[n.Raw.Index].X + _paint[n.Raw.Index].LocalTransform.Dx;   // include scroll / composited translation
             y += _bounds[n.Raw.Index].Y + _paint[n.Raw.Index].LocalTransform.Dy;
+            var parent = Parent(n);
+            if (!parent.IsNull)
+            {
+                x += _paint[parent.Raw.Index].ChildShiftX;
+                y += _paint[parent.Raw.Index].ChildShiftY;
+            }
         }
         return new RectF(x, y, _bounds[h.Raw.Index].W, _bounds[h.Raw.Index].H);
     }

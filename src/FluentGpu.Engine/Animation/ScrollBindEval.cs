@@ -238,8 +238,20 @@ public static class ScrollBindEval
 
     static void WriteScalarSink(SceneStore scene, ref ScrollBind b, float v)
     {
-        if (MathF.Abs(v - b.LastWritten) <= 1e-3f) return;
         ref NodePaint p = ref scene.Paint(b.Target);
+        if (b.Sink == BindSink.PresentedHTrailing)
+        {
+            float h = MathF.Max(0f, v);
+            float shift = h - scene.Bounds(b.Target).H;
+            bool sameH = !float.IsNaN(p.PresentedH) && MathF.Abs(p.PresentedH - h) <= 1e-3f;
+            if (sameH && MathF.Abs(p.ChildShiftY - shift) <= 1e-3f) return;
+            p.PresentedH = h;
+            p.ChildShiftY = shift;
+            scene.Mark(b.Target, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+            b.LastWritten = v;
+            return;
+        }
+        if (MathF.Abs(v - b.LastWritten) <= 1e-3f) return;
         var lt = p.LocalTransform;
         switch (b.Sink)
         {

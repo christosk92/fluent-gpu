@@ -4292,6 +4292,91 @@ static class Slice
                 $"restY={restY:0} pinnedY={pinnedY:0} (vpTop={vpTop:0}) clampedY={clampedY:0} releasedY={releasedY:0} pinEvents={pinEvents} lastPin={lastPin}");
         }
 
+        // 23u2 — trailing-anchored presented height: a pinned hero collapses without relayout, its bottom-authored
+        // child + edge stay attached to the live reveal edge, the following content meets that edge through normal
+        // scrolling, and hit-testing follows the child-group shift.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("scroll-collapse-trailing", new Size2(320, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            NodeHandle heroN = NodeHandle.Null, edgeN = NodeHandle.Null, bodyN = NodeHandle.Null;
+            int edgeClicks = 0, bodyClicks = 0;
+            var root = new W0fStaticProbe
+            {
+                Build = () => ScrollView(new BoxEl
+                {
+                    Direction = 1,
+                    Children =
+                    [
+                        new BoxEl
+                        {
+                            Height = 200f, Direction = 1, Justify = FlexJustify.End, ClipToBounds = true,
+                            ScrollBinds =
+                            [
+                                new() { PinTop = 0f },
+                                new()
+                                {
+                                    From = ScrollChannel.Offset, To = BindSink.PresentedHTrailing,
+                                    Range = ScrollRange.Px(0f, 200f), OutStart = 200f, OutEnd = 0f
+                                },
+                            ],
+                            OnRealized = h => heroN = h,
+                            Children =
+                            [
+                                new BoxEl { Height = 30f, OnClick = () => edgeClicks++, OnRealized = h => edgeN = h },
+                            ],
+                        },
+                        new BoxEl { Height = 600f, OnClick = () => bodyClicks++, OnRealized = h => bodyN = h },
+                    ],
+                }),
+            };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var s = host.Scene;
+            NodeHandle FindScrollable(NodeHandle n)
+            {
+                if (n.IsNull) return NodeHandle.Null;
+                if (s.HasScroll(n)) return n;
+                for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+                {
+                    var r = FindScrollable(c);
+                    if (!r.IsNull) return r;
+                }
+                return NodeHandle.Null;
+            }
+            var vp = FindScrollable(s.Root);
+            var content = s.ScrollRef(vp).ContentNode;
+            ref ScrollState st = ref s.ScrollRef(vp);
+            st.OffsetY = 80f; st.TargetY = 80f;
+            s.Paint(content).LocalTransform = Affine2D.Translation(0f, -80f);
+            s.Mark(content, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+            ScrollBindEval.ApplyContinuous(s, vp, ref st);
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(8f, 8f), 0, 0));
+            host.RunFrame();
+
+            float vpTop = s.AbsoluteRect(vp).Y;
+            float ph = s.Paint(heroN).PresentedH;
+            float shift = s.Paint(heroN).ChildShiftY;
+            RectF edge = s.AbsoluteRect(edgeN);
+            RectF body = s.AbsoluteRect(bodyN);
+            var edgePoint = new Point2(edge.X + 5f, edge.Y + edge.H * 0.5f);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, edgePoint, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, edgePoint, 0, 0));
+            host.RunFrame();
+            var bodyPoint = new Point2(body.X + 5f, body.Y + 10f);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, bodyPoint, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, bodyPoint, 0, 0));
+            host.RunFrame();
+
+            bool geometry = Near(ph, 120f, 0.5f) && Near(shift, -80f, 0.5f)
+                && Near(edge.Bottom, vpTop + ph, 0.75f) && Near(body.Y, vpTop + ph, 0.75f);
+            Check("23u2. trailing PresentedH collapse keeps child/content on one live edge and hit-testing follows",
+                geometry && edgeClicks == 1 && bodyClicks == 1,
+                $"ph={ph:0.0} shift={shift:0.0} edgeBottom={edge.Bottom:0.0} bodyY={body.Y:0.0} vpTop={vpTop:0.0} edgeClicks={edgeClicks} bodyClicks={bodyClicks}");
+        }
+
         // 23v/23w — scroll-position restoration (ScrollKey): a revisit seeds the saved offset BEFORE the first realize
         // (no scroll-to-top flash, even cold), a never-seen key starts at the top, and a reused viewport saves/restores
         // per content identity. The "1-2 frames at the top then a jump" antipattern is structurally impossible here.
