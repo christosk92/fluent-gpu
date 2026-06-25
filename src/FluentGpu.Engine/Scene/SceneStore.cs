@@ -28,6 +28,7 @@ public interface ISceneBackend
 }
 
 /// <summary>Struct-of-arrays retained RenderNode tree. One spine (gen + free-list) indexes all parallel columns.</summary>
+[FluentGpu.CodeGen.EnableColdSlab] // GEN-17 (wired): generates the ColdSlab<T> the cold paint side-tables below use
 public sealed class SceneStore : ISceneBackend
 {
     // spine
@@ -98,21 +99,21 @@ public sealed class SceneStore : ISceneBackend
     private readonly Dictionary<int, GridSpec> _grids = new();
     // Optional rich-paint side-tables (O(decorated nodes), keyed by node index): eased interaction, shadow, gradient, acrylic.
     private readonly Dictionary<int, InteractionAnim> _interact = new();
-    private readonly Dictionary<int, ShadowSpec> _shadows = new();
-    private readonly Dictionary<int, ArcSpec> _arcs = new();
-    private readonly Dictionary<int, PolylineStrokeSpec> _polylines = new();
-    private readonly Dictionary<int, GradientSpec> _gradients = new();
-    private readonly Dictionary<int, GradientSpec> _borderBrushes = new();   // gradient border stroke (elevation edge)
+    private readonly ColdSlab<ShadowSpec> _shadows = new();   // GEN-17 (wired): dense slab, not Dictionary
+    private readonly ColdSlab<ArcSpec> _arcs = new();
+    private readonly ColdSlab<PolylineStrokeSpec> _polylines = new();   // GEN-17 (wired)
+    private readonly ColdSlab<GradientSpec> _gradients = new();   // GEN-17 (wired)
+    private readonly ColdSlab<GradientSpec> _borderBrushes = new();   // GEN-17 (wired) — gradient border stroke (elevation edge)
     // Stateful gradient variants (P4b): the recorder per-frame interpolates resting→state stops by the eased hover/press
     // progress. Sparse (O(state-gradient nodes)). Stop arrays are mount-allocated + stable — never rebuilt per frame.
-    private readonly Dictionary<int, GradientSpec> _hoverGradients = new();
-    private readonly Dictionary<int, GradientSpec> _pressedGradients = new();
-    private readonly Dictionary<int, GradientSpec> _hoverBorderBrushes = new();
-    private readonly Dictionary<int, GradientSpec> _pressedBorderBrushes = new();
-    private readonly Dictionary<int, AcrylicSpec> _acrylics = new();
+    private readonly ColdSlab<GradientSpec> _hoverGradients = new();   // GEN-17 (wired)
+    private readonly ColdSlab<GradientSpec> _pressedGradients = new();   // GEN-17 (wired)
+    private readonly ColdSlab<GradientSpec> _hoverBorderBrushes = new();   // GEN-17 (wired)
+    private readonly ColdSlab<GradientSpec> _pressedBorderBrushes = new();   // GEN-17 (wired)
+    private readonly ColdSlab<AcrylicSpec> _acrylics = new();   // GEN-17 (wired)
     // Per-element edge fade (sparse): feather the subtree's alpha (+ optional blur) near chosen edges; read at record
     // time → PushLayer{EdgeFade}. Freed on FreeSubtree.
-    private readonly Dictionary<int, EdgeFadeSpec> _edgeFades = new();
+    private readonly ColdSlab<EdgeFadeSpec> _edgeFades = new();   // GEN-17 (wired)
     // Per-text-node measure cache (pure-function: (text,style,availW) → size); self-invalidating, freed on FreeSubtree.
     private readonly Dictionary<int, TextMeasureCache> _measureCache = new();
     // Implicit brush transitions (WinUI BrushTransition): sparse, O(transitioning nodes), advanced at phase 7.
@@ -845,48 +846,48 @@ public sealed class SceneStore : ISceneBackend
         Mark(node, NodeFlags.PaintDirty);
     }
 
-    public void SetShadow(NodeHandle h, in ShadowSpec s) => _shadows[(int)h.Raw.Index] = s;
-    public bool TryGetShadow(NodeHandle h, out ShadowSpec s) => _shadows.TryGetValue((int)h.Raw.Index, out s);
+    public void SetShadow(NodeHandle h, in ShadowSpec s) => _shadows.GetOrAdd((int)h.Raw.Index) = s;
+    public bool TryGetShadow(NodeHandle h, out ShadowSpec s) => _shadows.TryGet((int)h.Raw.Index, out s);
     public void ClearShadow(NodeHandle h) => _shadows.Remove((int)h.Raw.Index);
 
-    public void SetArc(NodeHandle h, in ArcSpec a) => _arcs[(int)h.Raw.Index] = a;
-    public bool TryGetArc(NodeHandle h, out ArcSpec a) => _arcs.TryGetValue((int)h.Raw.Index, out a);
+    public void SetArc(NodeHandle h, in ArcSpec a) => _arcs.GetOrAdd((int)h.Raw.Index) = a;
+    public bool TryGetArc(NodeHandle h, out ArcSpec a) => _arcs.TryGet((int)h.Raw.Index, out a);
     public void ClearArc(NodeHandle h) => _arcs.Remove((int)h.Raw.Index);
 
-    public void SetPolylineStroke(NodeHandle h, in PolylineStrokeSpec p) => _polylines[(int)h.Raw.Index] = p;
-    public bool TryGetPolylineStroke(NodeHandle h, out PolylineStrokeSpec p) => _polylines.TryGetValue((int)h.Raw.Index, out p);
+    public void SetPolylineStroke(NodeHandle h, in PolylineStrokeSpec p) => _polylines.GetOrAdd((int)h.Raw.Index) = p;
+    public bool TryGetPolylineStroke(NodeHandle h, out PolylineStrokeSpec p) => _polylines.TryGet((int)h.Raw.Index, out p);
     public void ClearPolylineStroke(NodeHandle h) => _polylines.Remove((int)h.Raw.Index);
 
-    public void SetGradient(NodeHandle h, in GradientSpec g) => _gradients[(int)h.Raw.Index] = g;
-    public bool TryGetGradient(NodeHandle h, out GradientSpec g) => _gradients.TryGetValue((int)h.Raw.Index, out g);
+    public void SetGradient(NodeHandle h, in GradientSpec g) => _gradients.GetOrAdd((int)h.Raw.Index) = g;
+    public bool TryGetGradient(NodeHandle h, out GradientSpec g) => _gradients.TryGet((int)h.Raw.Index, out g);
     public void ClearGradient(NodeHandle h) => _gradients.Remove((int)h.Raw.Index);
 
-    public void SetBorderBrush(NodeHandle h, in GradientSpec g) => _borderBrushes[(int)h.Raw.Index] = g;
-    public bool TryGetBorderBrush(NodeHandle h, out GradientSpec g) => _borderBrushes.TryGetValue((int)h.Raw.Index, out g);
+    public void SetBorderBrush(NodeHandle h, in GradientSpec g) => _borderBrushes.GetOrAdd((int)h.Raw.Index) = g;
+    public bool TryGetBorderBrush(NodeHandle h, out GradientSpec g) => _borderBrushes.TryGet((int)h.Raw.Index, out g);
     public void ClearBorderBrush(NodeHandle h) => _borderBrushes.Remove((int)h.Raw.Index);
 
-    public void SetHoverGradient(NodeHandle h, in GradientSpec g) => _hoverGradients[(int)h.Raw.Index] = g;
-    public bool TryGetHoverGradient(NodeHandle h, out GradientSpec g) => _hoverGradients.TryGetValue((int)h.Raw.Index, out g);
+    public void SetHoverGradient(NodeHandle h, in GradientSpec g) => _hoverGradients.GetOrAdd((int)h.Raw.Index) = g;
+    public bool TryGetHoverGradient(NodeHandle h, out GradientSpec g) => _hoverGradients.TryGet((int)h.Raw.Index, out g);
     public void ClearHoverGradient(NodeHandle h) => _hoverGradients.Remove((int)h.Raw.Index);
 
-    public void SetPressedGradient(NodeHandle h, in GradientSpec g) => _pressedGradients[(int)h.Raw.Index] = g;
-    public bool TryGetPressedGradient(NodeHandle h, out GradientSpec g) => _pressedGradients.TryGetValue((int)h.Raw.Index, out g);
+    public void SetPressedGradient(NodeHandle h, in GradientSpec g) => _pressedGradients.GetOrAdd((int)h.Raw.Index) = g;
+    public bool TryGetPressedGradient(NodeHandle h, out GradientSpec g) => _pressedGradients.TryGet((int)h.Raw.Index, out g);
     public void ClearPressedGradient(NodeHandle h) => _pressedGradients.Remove((int)h.Raw.Index);
 
-    public void SetHoverBorderBrush(NodeHandle h, in GradientSpec g) => _hoverBorderBrushes[(int)h.Raw.Index] = g;
-    public bool TryGetHoverBorderBrush(NodeHandle h, out GradientSpec g) => _hoverBorderBrushes.TryGetValue((int)h.Raw.Index, out g);
+    public void SetHoverBorderBrush(NodeHandle h, in GradientSpec g) => _hoverBorderBrushes.GetOrAdd((int)h.Raw.Index) = g;
+    public bool TryGetHoverBorderBrush(NodeHandle h, out GradientSpec g) => _hoverBorderBrushes.TryGet((int)h.Raw.Index, out g);
     public void ClearHoverBorderBrush(NodeHandle h) => _hoverBorderBrushes.Remove((int)h.Raw.Index);
 
-    public void SetPressedBorderBrush(NodeHandle h, in GradientSpec g) => _pressedBorderBrushes[(int)h.Raw.Index] = g;
-    public bool TryGetPressedBorderBrush(NodeHandle h, out GradientSpec g) => _pressedBorderBrushes.TryGetValue((int)h.Raw.Index, out g);
+    public void SetPressedBorderBrush(NodeHandle h, in GradientSpec g) => _pressedBorderBrushes.GetOrAdd((int)h.Raw.Index) = g;
+    public bool TryGetPressedBorderBrush(NodeHandle h, out GradientSpec g) => _pressedBorderBrushes.TryGet((int)h.Raw.Index, out g);
     public void ClearPressedBorderBrush(NodeHandle h) => _pressedBorderBrushes.Remove((int)h.Raw.Index);
 
-    public void SetAcrylic(NodeHandle h, in AcrylicSpec a) => _acrylics[(int)h.Raw.Index] = a;
-    public bool TryGetAcrylic(NodeHandle h, out AcrylicSpec a) => _acrylics.TryGetValue((int)h.Raw.Index, out a);
+    public void SetAcrylic(NodeHandle h, in AcrylicSpec a) => _acrylics.GetOrAdd((int)h.Raw.Index) = a;
+    public bool TryGetAcrylic(NodeHandle h, out AcrylicSpec a) => _acrylics.TryGet((int)h.Raw.Index, out a);
     public void ClearAcrylic(NodeHandle h) => _acrylics.Remove((int)h.Raw.Index);
 
-    public void SetEdgeFade(NodeHandle h, in EdgeFadeSpec e) => _edgeFades[(int)h.Raw.Index] = e;
-    public bool TryGetEdgeFade(NodeHandle h, out EdgeFadeSpec e) => _edgeFades.TryGetValue((int)h.Raw.Index, out e);
+    public void SetEdgeFade(NodeHandle h, in EdgeFadeSpec e) => _edgeFades.GetOrAdd((int)h.Raw.Index) = e;
+    public bool TryGetEdgeFade(NodeHandle h, out EdgeFadeSpec e) => _edgeFades.TryGet((int)h.Raw.Index, out e);
     public void ClearEdgeFade(NodeHandle h) => _edgeFades.Remove((int)h.Raw.Index);
 
     // ── E5-L2 drag-drop columns (BoxEl.Draggable / BoxEl.DropTarget → Input.DragDropContext) ──────

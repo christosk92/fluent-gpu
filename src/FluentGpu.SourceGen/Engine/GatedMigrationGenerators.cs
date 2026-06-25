@@ -117,16 +117,46 @@ namespace FluentGpu.Scene
     {
         private int[] _column = global::System.Array.Empty<int>(); // node index -> slab slot+1 (0 = absent)
         private T[] _slab = global::System.Array.Empty<T>();
-        private int _count;
+        private int[] _free = global::System.Array.Empty<int>();   // reclaimed slab slots (0-based), LIFO
+        private int _freeCount;
+        private int _hi;                                           // high-water of allocated slab slots
         public ref T GetOrAdd(int node)
         {
-            if ((uint)node >= (uint)_column.Length) global::System.Array.Resize(ref _column, global::System.Math.Max(node + 1, 16));
+            EnsureColumn(node);
             int slot = _column[node];
-            if (slot == 0) { if (_count == _slab.Length) global::System.Array.Resize(ref _slab, global::System.Math.Max(_slab.Length * 2, 16)); slot = ++_count; _column[node] = slot; }
+            if (slot == 0)
+            {
+                int s = _freeCount > 0 ? _free[--_freeCount] : _hi++;
+                if (s >= _slab.Length) global::System.Array.Resize(ref _slab, global::System.Math.Max(_slab.Length * 2, 16));
+                _slab[s] = default;
+                _column[node] = s + 1;
+                slot = s + 1;
+            }
             return ref _slab[slot - 1];
         }
+        public bool TryGet(int node, out T value)
+        {
+            if ((uint)node < (uint)_column.Length && _column[node] != 0) { value = _slab[_column[node] - 1]; return true; }
+            value = default; return false;
+        }
         public bool Contains(int node) => (uint)node < (uint)_column.Length && _column[node] != 0;
-        public void Remove(int node) { if ((uint)node < (uint)_column.Length) _column[node] = 0; }
+        // Free-list reclaim: the slab slot returns to the pool so the slab never grows unbounded across create/free
+        // churn (the census return-to-baseline gate). Capacity high-water persists, exactly like the Dictionary it replaces.
+        public void Remove(int node)
+        {
+            if ((uint)node >= (uint)_column.Length || _column[node] == 0) return;
+            int s = _column[node] - 1;
+            _column[node] = 0;
+            if (_freeCount >= _free.Length) global::System.Array.Resize(ref _free, global::System.Math.Max(_free.Length * 2, 16));
+            _free[_freeCount++] = s;
+        }
+        private void EnsureColumn(int node)
+        {
+            if (node < _column.Length) return;
+            int n = _column.Length == 0 ? 16 : _column.Length;
+            while (n <= node) n *= 2;
+            global::System.Array.Resize(ref _column, n);
+        }
     }
 }
 ";
