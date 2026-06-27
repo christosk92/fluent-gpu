@@ -37,12 +37,7 @@ sealed partial class ArtistPage : Component
 
         // Keep one stable loadable and re-key it by URI. ContentHost retains one ArtistPage across artist navigation,
         // so replacing the Loadable instance would leave the skeleton region's mounted thunks subscribed to the old artist.
-        // TEMP(debug): a 2s delay so the derived pending state is visible on load. Remove when done.
-        var artist = UseAsyncResource(async ct =>
-        {
-            await System.Threading.Tasks.Task.Delay(2000, ct);
-            return await svc.Library.GetArtistAsync(uri, ct);
-        }, PendingArtist(uri), uri);
+        var artist = UseAsyncResource(ct => svc.Library.GetArtistAsync(uri, ct), PendingArtist(uri), uri);
         store.EnsureArtists();
         var fansList = store.Artists.Value.Value;
 
