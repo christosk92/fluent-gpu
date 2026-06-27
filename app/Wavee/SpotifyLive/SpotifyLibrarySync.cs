@@ -69,6 +69,9 @@ public static class SpotifyLibrarySync
         using var connect = new ConnectService(transport, live.DeviceId,
             mid => connectBuilder.BuildPutState(mid, isActive: false, Wavee.Protocol.Player.PutStateReason.NewConnection),
             onClusterBytes: null, log: log);
+        // Stage C — receive + ack inbound remote commands (play/pause/seek/skip/...). Logged here; wired to the real
+        // controller in Stage E. Ack-on-dispatch keeps us inside the 10 s SLA so the device stays healthy.
+        using var commands = new ConnectCommandRouter(transport, cmd => log("  remote command: " + cmd.Kind), log);
         transport.Start();
 
         log("Dealer firehose open + Connect device announced; listening for live updates for 20s...");
