@@ -7,7 +7,7 @@ namespace Wavee.SpotifyLive;
 // Shared live spclient bring-up: login (AP) -> client-token (attestation) -> login5 (spclient access token) -> resolve an
 // spclient host -> the middleware HttpPipeline (bearer + client-token + 429-backoff) + a SessionContext. The metadata and
 // library probes build on this. Needs creds + network — the USER runs the probes; only the wire shape is unverifiable here.
-public sealed record LiveSpclient(HttpPipeline Pipeline, string BaseUrl, SessionContext Session, string Username, string AccessToken, string DeviceId, Credential ReusableCredential, ApConnection? ApChannel = null);
+public sealed record LiveSpclient(HttpPipeline Pipeline, string BaseUrl, SessionContext Session, string Username, string AccessToken, string DeviceId, Credential ReusableCredential, Func<CancellationToken, Task<string>> TokenProvider, ApConnection? ApChannel = null);
 
 public static class SpotifyLiveSpclient
 {
@@ -29,14 +29,30 @@ public static class SpotifyLiveSpclient
 
         // 2. login5 -> the spclient access token (the device-code OAuth token is a Web-API audience, not spclient).
         log("Minting an spclient access token via login5...");
+        var login5 = new Login5Client(ClientId, deviceId);
         Login5Client.AccessToken access;
         try
         {
-            access = await new Login5Client(ClientId, deviceId)
-                .GetAccessTokenAsync(welcome.Username, welcome.ReusableCredentials, clientToken, ct).ConfigureAwait(false);
+            access = await login5.GetAccessTokenAsync(welcome.Username, welcome.ReusableCredentials, clientToken, ct).ConfigureAwait(false);
         }
         catch (Exception ex) { log("login5 failed: " + ex.Message); login.Channel?.Dispose(); return null; }
         log("  access token obtained (expires " + access.ExpiresAt.ToString("u") + ").");
+
+        // Re-minting access-token provider: login5 tokens expire (~1h), and a long-lived dealer/AP session re-invokes the
+        // provider on every reconnect — refresh just before expiry (or on a forced 401 retry) instead of a stale constant.
+        var current = access;
+        var tokenGate = new SemaphoreSlim(1, 1);
+        async Task<string> Provider(bool force, CancellationToken c)
+        {
+            await tokenGate.WaitAsync(c).ConfigureAwait(false);
+            try
+            {
+                if (force || DateTimeOffset.UtcNow >= current.ExpiresAt - TimeSpan.FromMinutes(2))
+                    current = await login5.GetAccessTokenAsync(welcome.Username, welcome.ReusableCredentials, clientToken, c).ConfigureAwait(false);
+                return current.Token;
+            }
+            finally { tokenGate.Release(); }
+        }
 
         // 3. resolve an spclient host.
         var spJson = await SharedHttp.Client.GetStringAsync("https://apresolve.spotify.com/?type=spclient", ct).ConfigureAwait(false);
@@ -49,7 +65,7 @@ public static class SpotifyLiveSpclient
         string accessToken = access.Token;
         var pipeline = new HttpPipeline(
             new HttpClientExchange(),
-            new AuthMiddleware((force, _) => Task.FromResult(accessToken)),
+            new AuthMiddleware((force, c) => Provider(force, c)),   // refreshes on expiry / forced 401-retry
             new ClientTokenMiddleware(_ => Task.FromResult(clientToken)),
             new RateLimitMiddleware());
 
@@ -57,6 +73,6 @@ public static class SpotifyLiveSpclient
         var session = new SessionContext(welcome.Username, welcome.Country ?? "US",
             tier == Tier.Premium ? "premium" : "free", "en", tier, false);
         var reusable = new Credential(CredentialKind.ReusableBlob, welcome.Username, System.Convert.ToBase64String(welcome.ReusableCredentials));
-        return new LiveSpclient(pipeline, baseUrl, session, welcome.Username, accessToken, deviceId, reusable, login.Channel);
+        return new LiveSpclient(pipeline, baseUrl, session, welcome.Username, accessToken, deviceId, reusable, c => Provider(false, c), login.Channel);
     }
 }

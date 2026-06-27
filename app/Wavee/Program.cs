@@ -124,6 +124,15 @@ static class Program
             Environment.Exit(code);
         }
 
+        // LIVE Connect session bring-up demo: login -> dealer + AP channel -> swap the live playback backend into a REAL
+        // Services (svc.GoLive) and log the now-playing the UI bridge sees through the switchable. Usage: --connect-live
+        if (Array.IndexOf(args, "--connect-live") >= 0)
+        {
+            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(2));
+            int code = Wavee.SpotifyLive.LiveSessionHost.RunAsync(Console.Error.WriteLine, cts.Token).GetAwaiter().GetResult();
+            Environment.Exit(code);
+        }
+
         // Seed the theme BEFORE the window comes up (no startup flash): honor the persisted preference, falling back to
         // the live OS theme for a fresh install (mode == System). FluentApp.Run then applies the matching Mica material
         // and the in-app surfaces mount with the right tokens; the store is reused by the app so there's one instance.
