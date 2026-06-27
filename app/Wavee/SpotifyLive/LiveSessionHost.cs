@@ -2,7 +2,9 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Wavee.Backend;
+using Wavee.Backend.Playlists;
 using Wavee.Backend.Spotify;
+using Wavee.Core;
 
 namespace Wavee.SpotifyLive;
 
@@ -35,6 +37,12 @@ public sealed class LiveSessionHost : IAsyncDisposable
         var liveSession = new LiveSpotifySession(live.Username, live.Session.Tier == Tier.Premium);
         svc.GoLive(connect.Controller, connect.Devices, liveSession);
         log("Live Connect session active — Wavee is a controllable device, mirrors now-playing, and shows the live account.");
+
+        // The rootlist sync stored only playlist URIs; hydrate their headers (name/cover) into the SAME store the catalog
+        // reads so the home + sidebar show real names, not URIs (InMemoryStore is lock-guarded → safe off-thread).
+        if (svc.RealStore is { } store)
+            _ = Task.Run(() => HydratePlaylistHeadersAsync(live, store, log, ct));
+
         return new LiveSessionHost(transport, connect);
     }
 
@@ -43,6 +51,29 @@ public sealed class LiveSessionHost : IAsyncDisposable
         _connect.Dispose();
         _transport.Dispose();
         return ValueTask.CompletedTask;
+    }
+
+    // Hydrate each rootlist playlist's header (name/cover) — header-only (no member pull). Skips already-hydrated ones,
+    // sequential + best-effort so a single failure never stops the rest. The store fires Changes → the UI refreshes.
+    static async Task HydratePlaylistHeadersAsync(LiveSpclient live, IStore store, Action<string> log, CancellationToken ct)
+    {
+        try
+        {
+            var fetcher = new PlaylistFetcher(live.Pipeline, () => live.BaseUrl, store, (_, _) => Task.CompletedTask);
+            // Coalesce the per-playlist upserts into ONE store change so the home/sidebar refresh once at the end, not N×.
+            using var bulk = store.BeginBulk();
+            int n = 0;
+            foreach (var e in store.Rootlist())
+            {
+                if (ct.IsCancellationRequested) break;
+                if (e.Kind != 0 || !e.Uri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) continue;
+                if (store.GetPlaylist(e.Uri) is not null) continue;   // already hydrated (header present)
+                try { await fetcher.FetchPlaylistHeaderAsync(e.Uri, ct).ConfigureAwait(false); n++; }
+                catch { /* skip a failed playlist, keep going */ }
+            }
+            if (n > 0) log($"hydrated {n} playlist headers (home + sidebar names)");
+        }
+        catch (Exception ex) { log("playlist header hydration: " + ex.Message); }
     }
 
     /// <summary>CLI demo (`--connect-live`): bring up the live session over a REAL Services and log the now-playing the

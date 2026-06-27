@@ -18,6 +18,10 @@ public sealed class Services
     /// of the FakeData demo. Off by default until live sync (login → fetchers → dealer) is verified end to end.</summary>
     public static bool UseRealBackend;
 
+    /// <summary>The persistent backend store (REAL backend only; null for the fake). Exposed so the live-session bootstrap
+    /// can hydrate playlist headers into the SAME store the catalog reads (InMemoryStore is lock-guarded → safe).</summary>
+    public Wavee.Backend.IStore? RealStore { get; private set; }
+
     public IWaveeLog Log { get; }
     public ISpotifySession Session { get; }
     public IMusicLibrary Library { get; }
@@ -148,6 +152,7 @@ public sealed class Services
         var swDevices = new Wavee.Backend.SwitchableDevices(devices);
         var swSession = new Wavee.Backend.SwitchableSession(session);
         var svc = new Services(WaveeLog.Instance, swSession, library, swPlayer, swDevices, player, settings, mutations, userPlaylists);
+        svc.RealStore = store;
         svc.Log.Info("app", "Services created (REAL backend: persistent Store + StoreLibrarySource + durable multi-set mutations; live session/fetch/dealer connect on bootstrap)");
         return svc;
     }

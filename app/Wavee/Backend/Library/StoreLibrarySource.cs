@@ -79,8 +79,46 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         return Task.FromResult(new SearchResults(tracks, Array.Empty<Album>(), Array.Empty<Artist>(), Array.Empty<Playlist>()));
     }
 
-    public Task<HomeContribution> GetHomeAsync(CancellationToken ct = default)
-        => Task.FromResult(new HomeContribution(Array.Empty<HomeGroup>(), Priority: 100));
+    // A home built from the SYNCED library (no Spotify home-feed API needed): a jump-back-in quick grid (Liked +
+    // first playlists), then "Your playlists" / "Your albums" / "Your artists" shelves. Empty only on a truly empty store.
+    public async Task<HomeContribution> GetHomeAsync(CancellationToken ct = default)
+    {
+        var playlists = await GetPlaylistsAsync(ct).ConfigureAwait(false);
+        var albums = await GetAlbumsAsync(ct).ConfigureAwait(false);
+        var artists = await GetArtistsAsync(ct).ConfigureAwait(false);
+        int likedCount = _store.SavedUris("liked").Count;
+
+        var groups = new List<HomeGroup>();
+
+        var quick = new List<HomeCard>();
+        if (likedCount > 0)
+            quick.Add(new HomeCard("spotify:collection:tracks", "Liked Songs", likedCount + " songs", null, HomeCardKind.Liked));
+        for (int i = 0; i < playlists.Count && quick.Count < 8; i++)
+            quick.Add(new HomeCard(playlists[i].Uri, playlists[i].Name, null, playlists[i].Cover, HomeCardKind.Playlist));
+        if (quick.Count > 0)
+            groups.Add(new HomeGroup(HomeGroupKind.QuickGrid, null, quick));
+
+        if (playlists.Count > 0)
+        {
+            var cards = new List<HomeCard>(playlists.Count);
+            foreach (var p in playlists) cards.Add(new HomeCard(p.Uri, p.Name, p.OwnerName, p.Cover, HomeCardKind.Playlist));
+            groups.Add(new HomeGroup(HomeGroupKind.Shelf, "Your playlists", cards));
+        }
+        if (albums.Count > 0)
+        {
+            var cards = new List<HomeCard>(albums.Count);
+            foreach (var a in albums) cards.Add(new HomeCard(a.Uri, a.Name, "Album", a.Cover, HomeCardKind.Album));
+            groups.Add(new HomeGroup(HomeGroupKind.Shelf, "Your albums", cards));
+        }
+        if (artists.Count > 0)
+        {
+            var cards = new List<HomeCard>(artists.Count);
+            foreach (var a in artists) cards.Add(new HomeCard(a.Uri, a.Name, "Artist", a.Image, HomeCardKind.Artist));
+            groups.Add(new HomeGroup(HomeGroupKind.Shelf, "Your artists", cards));
+        }
+
+        return new HomeContribution(groups, Priority: 100);
+    }
 
     public Task<LibraryStats> GetStatsAsync(CancellationToken ct = default)
         => Task.FromResult(new LibraryStats(

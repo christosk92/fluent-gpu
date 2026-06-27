@@ -29,7 +29,15 @@ sealed class HomePage : Component
         var preview = UseContext(NavPreviewStore.Slot);    // pre-load: stash the card's known cover/title for the detail page
         if (svc is null) return new BoxEl { Grow = 1f };
 
-        var home = UseAsyncResource(ct => svc.Library.GetHomeAsync(ct), FakeData.HomeSeed);   // seed renders the loading shape; Skel.Region derives the shimmer from it
+        // Re-fetch the home when the library changes (e.g. the live-session playlist-header hydration lands) so playlist
+        // names/covers replace the initial URIs without a manual nav.
+        var libVer = Context.UseSignal(0);
+        Context.UseEffect(() =>
+        {
+            if (svc.Library is Wavee.Core.ICollectionEvents ev)
+                ev.CollectionsChanged.Subscribe(Wavee.Backend.Observers.From<Wavee.Core.CollectionKind>(_ => libVer.Value++));
+        });
+        var home = UseAsyncResource(ct => svc.Library.GetHomeAsync(ct), FakeData.HomeSeed, libVer.Value);   // seed renders the loading shape; Skel.Region derives the shimmer from it
         string? name = bridge?.User.Value?.DisplayName;     // subscribe → greeting refreshes on login
 
         void Play(string uri) => _ = svc.Player.PlayAsync(uri, 0);
@@ -151,7 +159,9 @@ sealed class HomePage : Component
                     : h < 12 ? Loc.Get(Strings.Home.GoodMorning)
                     : h < 18 ? Loc.Get(Strings.Home.GoodAfternoon)
                     : Loc.Get(Strings.Home.GoodEvening);
-        string greet = string.IsNullOrWhiteSpace(name) ? part : Strings.Home.Greeting(part, name);
+        // Omit a Spotify user-id handle (a long, space-less hash) — show the bare greeting until a real display name lands.
+        bool looksLikeHandle = name is { Length: >= 20 } && !name.Contains(' ');
+        string greet = (string.IsNullOrWhiteSpace(name) || looksLikeHandle) ? part : Strings.Home.Greeting(part, name);
         return new BoxEl
         {
             Direction = 1, Gap = WaveeSpace.XS, Padding = new Edges4(0f, WaveeSpace.S, 0f, 0f),

@@ -14,7 +14,7 @@ namespace Wavee.Backend.Playlists;
 // The same path serves a playlist and the rootlist (the rootlist is just a playlist of playlist-uri + group markers).
 public sealed class PlaylistFetcher
 {
-    const string Decorate = "?decorate=revision,attributes,length,owner,capabilities";
+    const string Decorate = "?decorate=revision,attributes,length,owner,capabilities,picture";
 
     readonly IHttpExchange _http;
     readonly Func<string> _baseUrl;
@@ -36,6 +36,14 @@ public sealed class PlaylistFetcher
         if (slc.Attributes is { } attr) _store.UpsertPlaylist(HeaderOf(playlistUri, attr, slc));   // thin header (no tracklist baked)
         _store.SetMembership(playlistUri, members, rev);
         await HydrateAsync(members, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Fetch + store ONLY a playlist's header (name / cover / owner / count) — no membership, no track hydration.
+    /// Populates the rootlist playlists' names + covers for the home + sidebar without pulling every playlist's tracks.</summary>
+    public async Task FetchPlaylistHeaderAsync(string playlistUri, CancellationToken ct = default)
+    {
+        var slc = await GetAsync(playlistUri, ct).ConfigureAwait(false);
+        if (slc.Attributes is { } attr) _store.UpsertPlaylist(HeaderOf(playlistUri, attr, slc));
     }
 
     public async Task FetchRootlistAsync(string rootlistUri, CancellationToken ct = default)
@@ -96,7 +104,16 @@ public sealed class PlaylistFetcher
         string? desc = attr.HasDescription ? attr.Description : null;
         string owner = slc.HasOwnerUsername ? slc.OwnerUsername : "";
         int len = slc.HasLength ? slc.Length : 0;
-        return new Playlist(IdOf(uri), uri, name, desc, owner, null, len);   // Tracks defaults null → thin
+        return new Playlist(IdOf(uri), uri, name, desc, owner, CoverOf(attr), len);   // Tracks defaults null → thin
+    }
+
+    // The playlist cover: the server's pre-sized URLs first (largest), else the raw picture file id → the image CDN.
+    static Image? CoverOf(Pl.ListAttributes attr)
+    {
+        for (int i = attr.PictureSize.Count - 1; i >= 0; i--)
+            if (!string.IsNullOrEmpty(attr.PictureSize[i].Url)) return new Image(attr.PictureSize[i].Url);
+        if (attr.Picture.Length > 0) return new Image("https://i.scdn.co/image/" + Convert.ToHexStringLower(attr.Picture.Span));
+        return null;
     }
 
     static string IdOf(string uri) { int i = uri.LastIndexOf(':'); return i >= 0 ? uri.Substring(i + 1) : uri; }
