@@ -52,6 +52,10 @@ public sealed class PlaybackBridge
     public Signal<AuthStatus> Auth { get; } = new(AuthStatus.LoggedOut);
     public Signal<WaveeUser?> User { get; } = new(null);
 
+    /// <summary>UI-only: the full now-playing view is open. The player-bar expand button toggles it; the shell renders the
+    /// panel as a top layer. Lives on the bridge so any component under the playback context can open/close it.</summary>
+    public Signal<bool> Expanded { get; } = new(false);
+
     // ── intents (UI → Core) ─────────────────────────────────────────────────────────────────────────────────────────
     public IPlaybackPlayer Player => _player;
     public IConnectDevices DeviceControl => _devices;

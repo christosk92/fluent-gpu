@@ -325,12 +325,14 @@ sealed class PlayerBarContent : Component
         }
         if (!showLike && active)
             overflowCommands.Add(new AppBarCommand(liked ? Mdl.HeartFill : Icons.Heart, Loc.Get(Strings.Player.Like), () => { if (track is { } lt) lib?.ToggleSaved(lt.Uri); }, AppBarCommandKind.ToggleButton, liked, true));
+        // In the small-window overflow, Queue / Devices / Now Playing all open the full now-playing view (where those
+        // controls live — the queue rail, the device picker, the big transport).
         if (!showQueue)
-            overflowCommands.Add(new AppBarCommand(Icons.Queue, Loc.Get(Strings.Player.Queue), () => { /* TODO: queue panel not wired yet */ }, Enabled: canTransport));
+            overflowCommands.Add(new AppBarCommand(Icons.Queue, Loc.Get(Strings.Player.Queue), () => { b.Expanded.Value = true; }, Enabled: canTransport));
         if (!showDevices)
-            overflowCommands.Add(new AppBarCommand(Icons.Devices, Loc.Get(Strings.Player.Devices), () => { /* TODO: device picker not wired yet */ }, Enabled: canTransport));
+            overflowCommands.Add(new AppBarCommand(Icons.Devices, Loc.Get(Strings.Player.Devices), () => { b.Expanded.Value = true; }, Enabled: canTransport));
         if (!showExpand)
-            overflowCommands.Add(new AppBarCommand(Icons.ChevronUp, Loc.Get(Strings.Player.NowPlaying), () => { /* TODO: now-playing expand panel not wired yet */ }, Enabled: canTransport));
+            overflowCommands.Add(new AppBarCommand(Icons.ChevronUp, Loc.Get(Strings.Player.NowPlaying), () => { b.Expanded.Value = true; }, Enabled: canTransport));
 
         var rightKids = new List<Element>(8);
         if (showShuffleRepeat)
@@ -360,7 +362,7 @@ sealed class PlayerBarContent : Component
         if (showDevices)
             rightKids.Add(Embed.Comp(() => new DevicesButton(b, accent, buttonBox, buttonGlyph)) with { Key = "devices" });
         if (showExpand)
-            rightKids.Add(Transport(Icons.ChevronUp, () => { /* TODO: now-playing expand panel not wired yet */ }, canTransport, false, accent, buttonBox, buttonGlyph)
+            rightKids.Add(Transport(Icons.ChevronUp, () => { b.Expanded.Value = true; }, canTransport, false, accent, buttonBox, buttonGlyph)
                 with { Key = "expand", Animate = ItemMotion });
         rightKids.Add(MoreButton(overflowCommands, buttonBox, buttonGlyph));
 
@@ -396,12 +398,12 @@ sealed class PlayerBarContent : Component
     }
 
     // ── intents (optimistic: write the signal first so the UI is instant, then the bridge reconciles) ──
-    static void ToggleShuffle(PlaybackBridge b)
+    internal static void ToggleShuffle(PlaybackBridge b)
     {
         bool s = b.IsShuffle.Peek(); b.IsShuffle.Value = !s; _ = b.Player.SetShuffleAsync(!s);
     }
 
-    static void CycleRepeat(PlaybackBridge b)
+    internal static void CycleRepeat(PlaybackBridge b)
     {
         var r = b.Repeat.Peek();
         var next = r == RepeatMode.Off ? RepeatMode.Context : r == RepeatMode.Context ? RepeatMode.Track : RepeatMode.Off;

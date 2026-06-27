@@ -280,12 +280,16 @@ sealed class WaveeShell : Component
             Children = [column],
         };
 
+        // The full-screen now-playing view is a TOP layer over the whole shell (inside the OverlayHost so its own flyouts —
+        // the device picker, the volume popup — still render above it). Gated on bridge.Expanded; zero-cost when closed.
+        var shellWithNowPlaying = Ui.ZStack(tinted, Embed.Comp(() => new NowPlayingLayer())) with { Grow = 1f };
+
         return Ctx.Provide(ShellTint.Slot, _shellTint,
                Ctx.Provide(HistoryStore.NavCtx, (Action<string, string?>)GoNav,
                Ctx.Provide(HistoryStore.Slot, _historyStore,
                Ctx.Provide(NavPreviewStore.Slot, _navPreview,
                Ctx.Provide(SearchQuery.Slot, _searchText,
-               Embed.Comp(() => new OverlayHost { Child = tinted }))))));
+               Embed.Comp(() => new OverlayHost { Child = shellWithNowPlaying }))))));
     }
 
     TabStrip BuildTabStrip() => new TabStrip
