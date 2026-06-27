@@ -34,7 +34,7 @@ public sealed class Services
     public IAppSettings Settings { get; }
 
     Services(IWaveeLog log, ISpotifySession session, IMusicLibrary library,
-             FakePlaybackProvider player, IConnectDevices devices, IAppSettings settings, IMutationSource mutations,
+             IPlaybackPlayer player, IConnectDevices devices, ILyricsProvider lyrics, IAppSettings settings, IMutationSource mutations,
              UserPlaylistSource userPlaylists)
     {
         Log = log;
@@ -42,7 +42,7 @@ public sealed class Services
         Library = library;
         Player = player;
         Devices = devices;
-        Lyrics = player;                               // the fake player also provides lyrics
+        Lyrics = lyrics;
         Settings = settings;
         Playback = new PlaybackBridge(player, devices, session);
         LibraryBridge = new LibraryBridge(mutations, userPlaylists);
@@ -93,7 +93,7 @@ public sealed class Services
             devices,                           // Remote (Connect devices / transfer)
         });
         var library = new AggregateCatalog(registry);
-        var svc = new Services(WaveeLog.Instance, session, library, player, devices, settings, mutations, userPlaylists);
+        var svc = new Services(WaveeLog.Instance, session, library, player, devices, player, settings, mutations, userPlaylists);
         svc.Log.Info("app", "Services created (sources: spotify-export, local-files, user-playlists, podcasts, fake + playback/session/remote facets; mutations: saved-state + playlists)");
         return svc;
     }
@@ -142,8 +142,21 @@ public sealed class Services
             devices,               // Remote
         });
         var library = new AggregateCatalog(registry);
-        var svc = new Services(WaveeLog.Instance, session, library, player, devices, settings, mutations, userPlaylists);
+        // Switchable facades over the fake playback/devices: a live Connect session swaps in at runtime (svc.GoLive)
+        // without rebuilding the UI — the PlaybackBridge binds to these stable facades.
+        var swPlayer = new Wavee.Backend.SwitchablePlayer(player);
+        var swDevices = new Wavee.Backend.SwitchableDevices(devices);
+        var svc = new Services(WaveeLog.Instance, session, library, swPlayer, swDevices, player, settings, mutations, userPlaylists);
         svc.Log.Info("app", "Services created (REAL backend: persistent Store + StoreLibrarySource + durable multi-set mutations; live session/fetch/dealer connect on bootstrap)");
         return svc;
+    }
+
+    /// <summary>Swap the playback player + Connect device roster to a live backend at runtime. The PlaybackBridge bound to
+    /// the switchable facades re-points without a rebuild (no-op if this Services wasn't built with switchables).</summary>
+    public void GoLive(IPlaybackPlayer player, IConnectDevices devices)
+    {
+        (Player as Wavee.Backend.SwitchablePlayer)?.SetInner(player);
+        (Devices as Wavee.Backend.SwitchableDevices)?.SetInner(devices);
+        Log.Info("app", "playback backend swapped to LIVE (Connect device + now-playing + remote control active)");
     }
 }
