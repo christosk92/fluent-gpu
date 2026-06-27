@@ -8,46 +8,64 @@ using Wavee.Backend.Spotify;
 namespace Wavee.SpotifyLive;
 
 // ── Stage F — the persistent AP channel (audio-key fetch over the long-lived Shannon socket) ──────────────────────────
-// Spotify's login socket is discarded after APWelcome; the audio-key path (0x0c/0x0d) needs a long-lived encrypted channel.
-// ApConnection opens its own AP socket (re-using the reusable credential), runs a read-pump that answers pings + routes
-// 0x0d/0x0e to the proto-free AudioKeyDispatcher, and sends 0x0c requests. The dispatcher is shared with LiveAudioKeySource.
+// ONE AP connection serves both login AND audio keys: the login handshake's socket+codec are ADOPTED here (no second
+// handshake). The read-pump answers pings + routes the 0x0d/0x0e audio-key replies to the internal dispatcher; 0x0c
+// requests go out via RequestAudioKeyAsync. (A standalone ConnectAsync also exists for opening a dedicated channel.)
 public sealed class ApConnection : IDisposable
 {
-    const byte CmdPing = 0x04, CmdPong = 0x49, CmdAesKeyRequest = 0x0c, CmdAesKey = 0x0d, CmdAesKeyError = 0x0e;
-    static readonly TimeSpan IdleReadTimeout = TimeSpan.FromSeconds(90);   // > the AP ping interval so idle reads survive
+    /// <summary>Idle read timeout for the persistent channel — longer than the AP's ping interval so idle reads survive.</summary>
+    public static readonly TimeSpan IdleReadTimeout = TimeSpan.FromSeconds(90);
+
+    const byte CmdPing = 0x04, CmdPong = 0x49, CmdPongAck = 0x4a, CmdAesKeyRequest = 0x0c, CmdAesKey = 0x0d, CmdAesKeyError = 0x0e;
+    static readonly byte[] PongPayload = new byte[4];   // librespot answers Ping with Pong(0x00000000), not the echoed payload
 
     readonly IDuplexStream _stream;
     readonly ApCodec _codec;
-    readonly AudioKeyDispatcher _keys;
+    readonly AudioKeyDispatcher _keys = new();
     readonly Action<string>? _log;
     readonly SemaphoreSlim _sendLock = new(1, 1);
     readonly CancellationTokenSource _cts = new();
     Task? _pump;
 
-    ApConnection(IDuplexStream stream, ApCodec codec, AudioKeyDispatcher keys, Action<string>? log)
+    ApConnection(IDuplexStream stream, ApCodec codec, Action<string>? log)
     {
         _stream = stream;
         _codec = codec;
-        _keys = keys;
         _log = log;
     }
 
+    /// <summary>Adopt an already-handshaken AP socket + its negotiated codec (e.g. the login socket) as the persistent
+    /// channel, and start the read-pump. The returned connection owns the socket lifetime.</summary>
+    public static ApConnection Adopt(IDuplexStream stream, ApCodec codec, Action<string>? log)
+    {
+        var c = new ApConnection(stream, codec, log);
+        c._pump = Task.Run(() => c.PumpAsync(c._cts.Token));
+        log?.Invoke("AP channel adopted (login socket reused) — audio-key path ready");
+        return c;
+    }
+
+    /// <summary>Open a DEDICATED AP socket + handshake (used only when not reusing the login socket).</summary>
     public static async Task<ApConnection> ConnectAsync(string apHost, int apPort, Credential cred, string deviceId,
-        AudioKeyDispatcher keys, Action<string>? log, CancellationToken ct)
+        Action<string>? log, CancellationToken ct)
     {
         var tcp = await TcpDuplexStream.ConnectAsync(apHost, apPort, ct, IdleReadTimeout).ConfigureAwait(false);
         try
         {
             var (_, codec) = await SpotifyConnection.HandshakeRetainAsync(tcp, cred, deviceId, ct).ConfigureAwait(false);
-            var conn = new ApConnection(tcp, codec, keys, log);
-            conn._pump = Task.Run(() => conn.PumpAsync(conn._cts.Token));
-            log?.Invoke("AP channel open (" + apHost + ") — audio-key path ready");
-            return conn;
+            return Adopt(tcp, codec, log);
         }
         catch { tcp.Dispose(); throw; }
     }
 
-    public Task SendAudioKeyRequestAsync(byte[] body, CancellationToken ct = default) => SendAsync(CmdAesKeyRequest, body, ct);
+    /// <summary>Fetch the 16-byte AES key for a file via the 0x0c/0x0d exchange (5 s timeout).</summary>
+    public async Task<byte[]> RequestAudioKeyAsync(ReadOnlyMemory<byte> fileId, ReadOnlyMemory<byte> trackGid, CancellationToken ct = default)
+    {
+        var (body, keyTask) = _keys.Begin(fileId.Span, trackGid.Span);
+        await SendAsync(CmdAesKeyRequest, body, ct).ConfigureAwait(false);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(5));
+        return await keyTask.WaitAsync(timeout.Token).ConfigureAwait(false);
+    }
 
     async Task PumpAsync(CancellationToken ct)
     {
@@ -65,7 +83,8 @@ public sealed class ApConnection : IDisposable
                 {
                     case CmdAesKey: _keys.OnAesKey(payload); break;
                     case CmdAesKeyError: _keys.OnAesKeyError(payload); break;
-                    case CmdPing: await SendAsync(CmdPong, payload, ct).ConfigureAwait(false); break;
+                    case CmdPing: await SendAsync(CmdPong, PongPayload, ct).ConfigureAwait(false); break;   // keepalive: server Ping -> Pong(0x00000000)
+                    case CmdPongAck: break;   // the server's PongAck for our Pong — nothing to do
                     // Mercury (0xb2-0xb6), country/product trailers, legacy packets: ignored for now.
                 }
             }
@@ -74,7 +93,7 @@ public sealed class ApConnection : IDisposable
         catch (Exception ex)
         {
             _log?.Invoke("AP channel dropped: " + ex.Message);
-            _keys.FailAll(ex);   // pending key waiters fail → callers retry on the next connection
+            _keys.FailAll(ex);   // pending key waiters fail → callers retry / fall back
         }
     }
 
@@ -94,20 +113,15 @@ public sealed class ApConnection : IDisposable
     }
 }
 
-// IAudioKeySource over the persistent AP channel + an in-memory key cache. The connection is fetched via a delegate so it
-// can be (re)established by the session owner (Stage 0) without re-creating this source.
+// IAudioKeySource over the persistent AP channel + an in-memory key cache. The connection is fetched via a delegate so the
+// session owner can (re)establish it without re-creating this source.
 public sealed class LiveAudioKeySource : IAudioKeySource
 {
-    readonly AudioKeyDispatcher _dispatcher;
     readonly Func<ApConnection?> _connection;
     readonly Dictionary<string, byte[]> _cache = new();
     readonly object _cacheGate = new();
 
-    public LiveAudioKeySource(AudioKeyDispatcher dispatcher, Func<ApConnection?> connection)
-    {
-        _dispatcher = dispatcher;
-        _connection = connection;
-    }
+    public LiveAudioKeySource(Func<ApConnection?> connection) => _connection = connection;
 
     public async Task<ReadOnlyMemory<byte>> GetKeyAsync(ReadOnlyMemory<byte> fileId, ReadOnlyMemory<byte> trackGid, CancellationToken ct = default)
     {
@@ -115,11 +129,7 @@ public sealed class LiveAudioKeySource : IAudioKeySource
         lock (_cacheGate) if (_cache.TryGetValue(hex, out var cached)) return cached;
 
         var conn = _connection() ?? throw new InvalidOperationException("AP channel not connected");
-        var (body, keyTask) = _dispatcher.Begin(fileId.Span, trackGid.Span);
-        await conn.SendAudioKeyRequestAsync(body, ct).ConfigureAwait(false);
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeout.CancelAfter(TimeSpan.FromSeconds(5));
-        var key = await keyTask.WaitAsync(timeout.Token).ConfigureAwait(false);
+        var key = await conn.RequestAudioKeyAsync(fileId, trackGid, ct).ConfigureAwait(false);
         lock (_cacheGate) _cache[hex] = key;
         return key;
     }

@@ -19,7 +19,8 @@ public static class SpotifyLiveLogin
     ];
 
     /// <summary>The shared result of a live login — enough to continue to login5 / spclient.</summary>
-    public sealed record LoginResult(SpotifyWelcome Welcome, string DeviceId, LocalCredentialStore CredStore, string Scheme);
+    public sealed record LoginResult(SpotifyWelcome Welcome, string DeviceId, LocalCredentialStore CredStore, string Scheme,
+        ApConnection? Channel = null);
 
     public static async Task<int> RunAsync(Action<string> log, CancellationToken ct)
     {
@@ -43,7 +44,7 @@ public static class SpotifyLiveLogin
     /// <summary>The credential chain (stored reusable creds → device-code) → AP handshake/login (with AP failover) → APWelcome,
     /// persisting the fresh reusable credentials. Returns null on any failure (already logged). Reused by RunAsync (the
     /// premium gate) and by the metadata probe (which continues to login5 + spclient).</summary>
-    public static async Task<LoginResult?> LoginAsync(Action<string> log, CancellationToken ct)
+    public static async Task<LoginResult?> LoginAsync(Action<string> log, CancellationToken ct, bool retainChannel = false)
     {
         // Step 1 - PORTABLE credential store. DPAPI on Windows, Keychain/libsecret on macOS/Linux, else NoOp - same seam.
         ICredentialProtector protector = new NoOpProtector();
@@ -72,16 +73,31 @@ public static class SpotifyLiveLogin
             var ordered = aps.Where(a => a.EndsWith(":4070")).Concat(aps.Where(a => !a.EndsWith(":4070"))).ToList();
 
             SpotifyWelcome? welcome = null;
+            ApConnection? channel = null;
             foreach (var apHostPort in ordered)
             {
                 var parts = apHostPort.Split(':');
                 string host = parts[0];
                 int port = int.Parse(parts[1]);
                 log("Connecting to " + host + ":" + port + "...");
+                TcpDuplexStream? tcp = null;
+                bool keep = false;
                 try
                 {
-                    using var tcp = await TcpDuplexStream.ConnectAsync(host, port, ct).ConfigureAwait(false);
-                    welcome = await SpotifyConnection.HandshakeAndLoginAsync(tcp, cred, deviceId, ct).ConfigureAwait(false);
+                    // retainChannel: keep THIS socket alive as the one persistent AP channel (login + audio-key share it —
+                    // no second handshake). Otherwise the socket is disposed after login (the original probe/gate behavior).
+                    tcp = await TcpDuplexStream.ConnectAsync(host, port, ct, retainChannel ? ApConnection.IdleReadTimeout : null).ConfigureAwait(false);
+                    if (retainChannel)
+                    {
+                        var (w, codec) = await SpotifyConnection.HandshakeRetainAsync(tcp, cred, deviceId, ct).ConfigureAwait(false);
+                        welcome = w;
+                        channel = ApConnection.Adopt(tcp, codec, log);   // the login socket becomes the persistent AP channel
+                        keep = true;
+                    }
+                    else
+                    {
+                        welcome = await SpotifyConnection.HandshakeAndLoginAsync(tcp, cred, deviceId, ct).ConfigureAwait(false);
+                    }
                     break;   // logged in
                 }
                 catch (SpotifyAuthRejectedException ex)
@@ -93,6 +109,7 @@ public static class SpotifyLiveLogin
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }   // user cancel → stop
                 catch (Exception ex) { log("  " + host + " failed (" + ex.Message + ") - trying the next access point."); }   // TryAnotherAP / connection / timeout
+                finally { if (!keep) tcp?.Dispose(); }   // dispose on failure / non-retain (matches the old `using`)
             }
             if (welcome is null) { log("All access points failed."); return null; }
 
@@ -101,7 +118,7 @@ public static class SpotifyLiveLogin
             // Persist the fresh reusable credentials (bytes never logged, only the count) — login5 + the next launch use them.
             credStore.Save(new Credential(CredentialKind.ReusableBlob, welcome.Username, Convert.ToBase64String(welcome.ReusableCredentials)));
             log("Saved " + welcome.ReusableCredentials.Length + "-byte reusable credentials [" + protector.Scheme + "].");
-            return new LoginResult(welcome, deviceId, credStore, protector.Scheme);
+            return new LoginResult(welcome, deviceId, credStore, protector.Scheme, channel);
         }
         catch (OperationCanceledException) { log("Live login timed out / cancelled."); return null; }
         catch (Exception ex) { log("Live login failed: " + ex.Message); return null; }

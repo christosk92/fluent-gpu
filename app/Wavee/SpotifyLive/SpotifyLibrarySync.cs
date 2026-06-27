@@ -20,7 +20,7 @@ public static class SpotifyLibrarySync
 
     public static async Task<int> RunAsync(Action<string> log, CancellationToken ct)
     {
-        var live = await SpotifyLiveSpclient.ConnectAsync(log, ct).ConfigureAwait(false);
+        var live = await SpotifyLiveSpclient.ConnectAsync(log, ct, retainApChannel: true).ConfigureAwait(false);
         if (live is null) return 1;
 
         string dbPath = System.IO.Path.Combine(
@@ -65,22 +65,14 @@ public static class SpotifyLibrarySync
         // Stage B — register this device on Spotify Connect: ConnectService captures the dealer connection_id (the pusher
         // hello header) and PUTs /connect-state/v1/devices/{id}, so the device APPEARS in the Connect picker. Created BEFORE
         // Start() so the first connection_id hello isn't missed. Later stages add inbound command handling + the projection.
-        var connectBuilder = new ConnectStateBuilder(live.DeviceId, "Wavee");
-        // Stage D — the bidirectional now-playing projection + device roster, fed by the cluster ingest (and the
-        // announce-response echo). In viewer mode this mirrors whatever device is currently playing.
-        var nowPlaying = new NowPlayingProjection(live.DeviceId);
-        var devices = new LiveConnectDevices();
-        using var clusterIngest = new ClusterIngest(transport, nowPlaying, devices, live.DeviceId, log);
-        using var connect = new ConnectService(transport, live.DeviceId,
-            mid => connectBuilder.BuildPutState(mid, isActive: false, Wavee.Protocol.Player.PutStateReason.NewConnection),
-            onClusterBytes: clusterIngest.OnAnnounceResponse, log: log);
-        // Stage C — receive + ack inbound remote commands (play/pause/seek/skip/...). Logged here; wired to the real
-        // controller in Stage E. Ack-on-dispatch keeps us inside the 10 s SLA so the device stays healthy.
-        using var commands = new ConnectCommandRouter(transport, cmd => log("  remote command: " + cmd.Kind), log);
-        using var npSub = nowPlaying.Changes.Subscribe(Observers.From<Wavee.Core.IPlaybackState>(s =>
+        // Stages 0+B+C+D+E+F+H — the full live Connect+playback composition: device announce, cluster projection, inbound
+        // command routing -> controller, outbound forwarding, the silent local host, and the persistent AP key channel.
+        // The persistent AP channel is the LOGIN socket (retained above), reused for audio keys — no second handshake.
+        using var liveConnect = new LiveConnect(transport, live.DeviceId, live.ApChannel, log: log);
+        using var npSub = liveConnect.Projection.Changes.Subscribe(Observers.From<Wavee.Core.IPlaybackState>(s =>
         {
             if (s.CurrentTrack is { } tk)
-                log("  now-playing: " + tk.Title + " — " + (s.IsPlaying ? "playing" : "paused") + " (active=" + nowPlaying.ActiveDeviceId + ")");
+                log("  now-playing: " + tk.Title + " — " + (s.IsPlaying ? "playing" : "paused") + " (active=" + liveConnect.Projection.ActiveDeviceId + ")");
         }));
         transport.Start();
 
