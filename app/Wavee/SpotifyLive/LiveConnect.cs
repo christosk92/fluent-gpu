@@ -46,9 +46,11 @@ public sealed class LiveConnect : IDisposable
         var resolver = new LiveTrackResolver(transport, keySource, log);
         _host = new SilentAudioHost();
         var outbound = new LiveOutboundControl(transport, deviceId);
+        // Stage I — play-history telemetry fans off the controller's event log (Recently Played / play counts).
+        var telemetry = new TelemetryProjection(new GaboTelemetry(log), () => Projection.ContextUri);
         Controller = new PlaybackController(_host, resolver, Projection,
             resolveContext ?? ((_, _) => Task.FromResult<IReadOnlyList<Track>>(Array.Empty<Track>())),
-            deviceId, outbound, log);
+            deviceId, outbound, telemetry, log);
 
         _commands = new ConnectCommandRouter(transport, cmd => Controller.HandleRemoteCommand(cmd), log);
         Devices.TransferHandler = (id, c) => Controller.TransferToAsync(id, c);

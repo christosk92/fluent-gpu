@@ -56,6 +56,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     readonly NowPlayingProjection _projection;
     readonly Func<string, CancellationToken, Task<IReadOnlyList<Track>>> _resolveContext;
     readonly IOutboundControl? _outbound;
+    readonly IPlaybackProjection? _telemetry;
     readonly string _ourDeviceId;
     readonly Action<string>? _log;
     readonly IDisposable _hostSub;
@@ -65,7 +66,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
 
     public PlaybackController(IAudioHost host, ITrackResolver resolver, NowPlayingProjection projection,
         Func<string, CancellationToken, Task<IReadOnlyList<Track>>> resolveContext,
-        string ourDeviceId, IOutboundControl? outbound = null, Action<string>? log = null)
+        string ourDeviceId, IOutboundControl? outbound = null, IPlaybackProjection? telemetry = null, Action<string>? log = null)
     {
         _host = host;
         _resolver = resolver;
@@ -73,6 +74,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         _resolveContext = resolveContext;
         _ourDeviceId = ourDeviceId;
         _outbound = outbound;
+        _telemetry = telemetry;
         _log = log;
         _hostSub = host.Signals.Subscribe(Observers.From<AudioHostSignal>(OnHostSignal));
         _projSub = projection.Changes.Subscribe(Observers.From<IPlaybackState>(OnProjectionChanged));
@@ -251,7 +253,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             _projection.NoteLocalCommand();
             var t = _queue.Next();
             if (t is not null) await LoadAndPlayCurrentAsync(EvKind.TrackChanged, ct).ConfigureAwait(false);
-            else { _host.Stop(); _projection.OnEvent(new PlaybackEvent(EvKind.Ended, null, 0)); }   // end-of-context
+            else { _host.Stop(); Emit(new PlaybackEvent(EvKind.Ended, null, 0)); }   // end-of-context
         }
         finally { _lock.Release(); }
     }
@@ -278,7 +280,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         long pos = _projection.PositionMs;
         if (pos > 0) _host.Seek(pos);
         _host.Play();
-        _projection.OnEvent(new PlaybackEvent(EvKind.Started, track, pos));
+        Emit(new PlaybackEvent(EvKind.Started, track, pos));
     }
 
     async Task LoadAndPlayCurrentAsync(EvKind kind, CancellationToken ct)
@@ -288,8 +290,11 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         var handle = await _resolver.ResolveAsync(cur, ct).ConfigureAwait(false);
         _host.Load(handle);
         _host.Play();
-        _projection.OnEvent(new PlaybackEvent(kind, cur, 0));
+        Emit(new PlaybackEvent(kind, cur, 0));
     }
+
+    // Fan the event log out to the now-playing projection + the telemetry projection (Recently Played).
+    void Emit(in PlaybackEvent e) { _projection.OnEvent(e); _telemetry?.OnEvent(e); }
 
     void OnHostSignal(AudioHostSignal s)
     {
