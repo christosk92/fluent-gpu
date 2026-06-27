@@ -35,6 +35,9 @@ public class CollectionFetcherTests
 
         Assert.Equal("POST", captured!.Method);
         Assert.Contains("/collection/v2/paging", captured.Url);
+        // The collection2v2 route only accepts its vendor media type — `application/protobuf` 400s. Guard both headers.
+        Assert.Equal("application/vnd.collection-v2.spotify.proto", captured.Headers["Content-Type"]);
+        Assert.Equal("application/vnd.collection-v2.spotify.proto", captured.Headers["Accept"]);
         Assert.True(store.IsSaved("albums", "spotify:album:a"));
         Assert.True(store.IsSaved("albums", "spotify:album:b"));
         Assert.Equal("tok-1", revs["albums"]);
@@ -42,7 +45,56 @@ public class CollectionFetcherTests
 
         var sent = Col.PageRequest.Parser.ParseFrom(captured.Body);   // the request body is a real PageRequest
         Assert.Equal("bob", sent.Username);
-        Assert.Equal("albums", sent.Set);
+        Assert.Equal("collection", sent.Set);   // albums has no wire set of its own — it rides inside "collection"
+    }
+
+    [Fact]
+    public async Task FetchSet_CollectionSharedWireSet_SplitsTracksToLiked_AndAlbumsToAlbums()
+    {
+        // One wire "collection" page mixes tracks + albums; "liked" must keep only spotify:track:, "albums" only spotify:album:.
+        var store = new InMemoryStore();
+        var mixed = new Col.PageResponse { SyncToken = "tok-1", NextPageToken = "" };
+        mixed.Items.Add(new Col.CollectionItem { Uri = "spotify:track:t1", AddedAt = 1 });
+        mixed.Items.Add(new Col.CollectionItem { Uri = "spotify:album:al1", AddedAt = 2 });
+        mixed.Items.Add(new Col.CollectionItem { Uri = "spotify:track:t2", AddedAt = 3 });
+
+        var sentSets = new List<string>();
+        var revs = new Dictionary<string, string?>();
+        var http = new FakeExchange((req, _) =>
+        {
+            sentSets.Add(Col.PageRequest.Parser.ParseFrom(req.Body).Set);
+            return Ok(mixed.ToByteArray());
+        });
+        var fetcher = new CollectionFetcher(http, () => "https://x", () => "bob", store,
+            s => revs.TryGetValue(s, out var r) ? r : null, (s, r) => revs[s] = r, (u, c) => Task.CompletedTask);
+
+        await fetcher.FetchSetAsync("liked", TestContext.Current.CancellationToken);
+        await fetcher.FetchSetAsync("albums", TestContext.Current.CancellationToken);
+
+        Assert.Equal(new[] { "collection", "collection" }, sentSets);   // both hit the same wire set
+        Assert.True(store.IsSaved("liked", "spotify:track:t1"));
+        Assert.True(store.IsSaved("liked", "spotify:track:t2"));
+        Assert.False(store.IsSaved("liked", "spotify:album:al1"));      // album filtered OUT of liked
+        Assert.True(store.IsSaved("albums", "spotify:album:al1"));
+        Assert.False(store.IsSaved("albums", "spotify:track:t1"));      // track filtered OUT of albums
+    }
+
+    [Fact]
+    public async Task FetchSet_WireSetNames_AreTheSingularServerNames()
+    {
+        // Regression guard for the other half of the 400: the server sets are singular ("artist"/"show") + "listenlater".
+        foreach (var (setId, wire) in new[] { ("artists", "artist"), ("shows", "show"), ("episodes", "listenlater") })
+        {
+            var store = new InMemoryStore();
+            var page = new Col.PageResponse { SyncToken = "t", NextPageToken = "" };
+            string? sentSet = null;
+            var http = new FakeExchange((req, _) => { sentSet = Col.PageRequest.Parser.ParseFrom(req.Body).Set; return Ok(page.ToByteArray()); });
+            var fetcher = new CollectionFetcher(http, () => "https://x", () => "bob", store,
+                _ => null, (_, _) => { }, (u, c) => Task.CompletedTask);
+
+            await fetcher.FetchSetAsync(setId, TestContext.Current.CancellationToken);
+            Assert.Equal(wire, sentSet);
+        }
     }
 
     [Fact]

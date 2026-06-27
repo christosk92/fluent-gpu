@@ -15,7 +15,9 @@ namespace Wavee.Backend.Collections;
 // fetcher stays decoupled from persistence and unit-testable.
 public sealed class CollectionFetcher
 {
-    const string ContentType = "application/protobuf";
+    // The collection2v2 route only accepts its vendor media type — `application/protobuf` is the extended-metadata type and
+    // the gateway 400s on it at the media-type layer before it ever reads the body (confirmed against the reference client).
+    const string ContentType = "application/vnd.collection-v2.spotify.proto";
 
     readonly IHttpExchange _http;
     readonly Func<string> _baseUrl;
@@ -41,6 +43,7 @@ public sealed class CollectionFetcher
     public async Task FetchSetAsync(string setId, CancellationToken ct = default)
     {
         string wireSet = WireSet(setId);
+        string? prefix = UriPrefix(setId);   // sets that share the "collection" wire set are split client-side by URI prefix
         var token = _getRevision(setId);
 
         if (!string.IsNullOrEmpty(token))
@@ -48,7 +51,7 @@ public sealed class CollectionFetcher
             var delta = await DeltaAsync(wireSet, token!, ct).ConfigureAwait(false);
             if (delta.DeltaUpdatePossible)
             {
-                var d = CollectionWireMapper.ParseDelta(setId, delta);
+                var d = FilterByPrefix(CollectionWireMapper.ParseDelta(setId, delta), prefix);
                 CollectionDeltaApplier.Apply(_store, d);
                 await HydrateAsync(d, ct).ConfigureAwait(false);
                 _setRevision(setId, d.NewRevision);
@@ -64,7 +67,7 @@ public sealed class CollectionFetcher
             do
             {
                 var page = await PageAsync(wireSet, pageToken, ct).ConfigureAwait(false);
-                var d = CollectionWireMapper.ParsePage(setId, page);
+                var d = FilterByPrefix(CollectionWireMapper.ParsePage(setId, page), prefix);
                 CollectionDeltaApplier.Apply(_store, d);
                 newRev = d.NewRevision ?? newRev;
                 await HydrateAsync(d, ct).ConfigureAwait(false);
@@ -108,14 +111,36 @@ public sealed class CollectionFetcher
         if (uris.Count > 0) await _hydrate(uris, ct).ConfigureAwait(false);
     }
 
-    // logical UI set_id → the wire collection set name (the only place the mapping lives).
+    // logical UI set_id → the wire collection set name (the only place the mapping lives). Confirmed against the reference
+    // (Wavee SpotifyLibraryService): the real wire sets are "collection" (tracks AND albums, mixed), "artist", "show", and
+    // "listenlater" (saved episodes) — all singular; there is no "albums"/"artists"/"shows"/"episodes" set. Sending those
+    // names is the other half of the /paging 400 (InvalidArgument on the set string).
     static string WireSet(string setId) => setId switch
     {
         "liked" => "collection",
-        "albums" => "albums",
-        "artists" => "artists",
-        "shows" => "shows",
-        "episodes" => "episodes",
+        "albums" => "collection",   // no "albums" wire set — albums ride inside "collection"; split out by URI prefix below
+        "artists" => "artist",
+        "shows" => "show",
+        "episodes" => "listenlater",
         _ => setId,
     };
+
+    // Sets that share the "collection" wire set are disambiguated client-side by entity-URI prefix; null = keep everything.
+    static string? UriPrefix(string setId) => setId switch
+    {
+        "liked" => "spotify:track:",
+        "albums" => "spotify:album:",
+        _ => null,
+    };
+
+    // Keep only the items whose entity URI matches the set's prefix (the "collection"-shared sets); identity otherwise. The
+    // revision/sync-token is per-prefix unaffected, so liked and albums each advance their own token over the shared wire set.
+    static CollectionDelta FilterByPrefix(CollectionDelta d, string? prefix)
+    {
+        if (prefix is null) return d;
+        var kept = new List<CollectionItem>(d.Items.Count);
+        for (int i = 0; i < d.Items.Count; i++)
+            if (d.Items[i].Uri.StartsWith(prefix, StringComparison.Ordinal)) kept.Add(d.Items[i]);
+        return d with { Items = kept };
+    }
 }
