@@ -67,7 +67,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
             {
                 if (ct.IsCancellationRequested) break;
                 if (e.Kind != 0 || !e.Uri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) continue;
-                if (store.GetPlaylist(e.Uri) is not null) continue;   // already hydrated (header present)
+                if (store.GetPlaylist(e.Uri) is { Cover: not null }) continue;   // fully hydrated (name + cover) — skip
                 try { await fetcher.FetchPlaylistHeaderAsync(e.Uri, ct).ConfigureAwait(false); n++; }
                 catch { /* skip a failed playlist, keep going */ }
             }
