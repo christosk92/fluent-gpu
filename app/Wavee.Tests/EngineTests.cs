@@ -258,6 +258,26 @@ public class QueueCoreTests
         for (int i = 0; i < 50; i++) natural.Add($"n{i}");
         Assert.NotEqual(natural, seen);   // deterministic LCG shuffle of 50 is not the identity
     }
+
+    [Fact]
+    public void Snapshot_NowThenUserQueueThenContextNextUp()
+    {
+        var q = WithContext(3, 0);   // t0 current; t1, t2 upcoming
+        q.EnqueueUser(T.Trk("spotify:track:u", "user", "U"));
+        var snap = q.Snapshot();
+        Assert.Equal(4, snap.Count);
+        Assert.Equal(QueueBucket.NowPlaying, snap[0].Bucket); Assert.Equal("t0", snap[0].Track.Title);
+        Assert.Equal(QueueBucket.UserQueue, snap[1].Bucket);  Assert.Equal("user", snap[1].Track.Title);
+        Assert.Equal(QueueBucket.NextUp, snap[2].Bucket);     Assert.Equal("t1", snap[2].Track.Title);
+        Assert.Equal(QueueBucket.NextUp, snap[3].Bucket);     Assert.Equal("t2", snap[3].Track.Title);
+    }
+
+    [Fact]
+    public void Snapshot_ContextNextUp_IsCapped()
+    {
+        var q = WithContext(500, 0);
+        Assert.True(q.Snapshot().Count <= 52);   // now + cap(50) + slack; never the full 500
+    }
 }
 
 public class PlaybackReducerTests

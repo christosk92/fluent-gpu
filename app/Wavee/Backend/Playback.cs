@@ -95,12 +95,17 @@ public sealed class QueueCore
         return _seedState % (maxInclusive + 1);
     }
 
+    // The up-next the queue panel renders: now-playing, then the user queue (q#, drains first), then the CONTEXT next-up
+    // (the upcoming context tracks after the cursor, in play order — capped so a 10k-track context doesn't realize a 10k list).
     public IReadOnlyList<QueueEntry> Snapshot()
     {
+        const int NextUpCap = 50;
         var list = new List<QueueEntry>();
         if (Current != null) list.Add(new QueueEntry("now", Current, QueueBucket.NowPlaying, false));
         int i = 0;
         foreach (var t in _userQueue) list.Add(new QueueEntry($"q{i++}", t, QueueBucket.UserQueue, false));
+        for (int c = _cursor + 1; c < _context.Count && list.Count <= NextUpCap; c++)
+            list.Add(new QueueEntry($"c{c}", _context[c], QueueBucket.NextUp, false));
         return list;
     }
 }
