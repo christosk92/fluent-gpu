@@ -84,6 +84,37 @@ static class Program
             Environment.Exit(code);
         }
 
+        // LIVE playlist membership round-trip: login -> GET /playlist/v2 -> thin header + ordered membership -> hydrate -> print.
+        // Usage: --spotify-playlist spotify:playlist:<id>
+        int plIdx = Array.IndexOf(args, "--spotify-playlist");
+        if (plIdx >= 0)
+        {
+            string uri = plIdx + 1 < args.Length && !args[plIdx + 1].StartsWith("--") ? args[plIdx + 1] : "";
+            if (uri.Length == 0) { Console.Error.WriteLine("usage: --spotify-playlist spotify:playlist:<id>"); Environment.Exit(2); }
+            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(8));
+            int code = Wavee.SpotifyLive.SpotifyLibraryProbe.RunPlaylistAsync(uri, Console.Error.WriteLine, cts.Token).GetAwaiter().GetResult();
+            Environment.Exit(code);
+        }
+
+        // LIVE rootlist round-trip: login -> GET /playlist/v2/user/{me}/rootlist -> the folder/playlist tree -> print.
+        if (Array.IndexOf(args, "--spotify-rootlist") >= 0)
+        {
+            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(8));
+            int code = Wavee.SpotifyLive.SpotifyLibraryProbe.RunRootlistAsync(Console.Error.WriteLine, cts.Token).GetAwaiter().GetResult();
+            Environment.Exit(code);
+        }
+
+        // LIVE collection round-trip: login -> POST /collection/v2/{paging|delta} -> set membership -> hydrate -> print.
+        // Usage: --spotify-collection [liked|albums|artists|shows|episodes] (defaults to liked).
+        int colIdx = Array.IndexOf(args, "--spotify-collection");
+        if (colIdx >= 0)
+        {
+            string setId = colIdx + 1 < args.Length && !args[colIdx + 1].StartsWith("--") ? args[colIdx + 1] : "liked";
+            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(8));
+            int code = Wavee.SpotifyLive.SpotifyLibraryProbe.RunCollectionAsync(setId, Console.Error.WriteLine, cts.Token).GetAwaiter().GetResult();
+            Environment.Exit(code);
+        }
+
         // Seed the theme BEFORE the window comes up (no startup flash): honor the persisted preference, falling back to
         // the live OS theme for a fresh install (mode == System). FluentApp.Run then applies the matching Mica material
         // and the in-app surfaces mount with the right tokens; the store is reused by the app so there's one instance.
