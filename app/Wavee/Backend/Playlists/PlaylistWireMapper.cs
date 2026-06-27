@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Google.Protobuf;
 using Google.Protobuf.Collections;
 using Pl = Wavee.Protocol.Playlist;
 
@@ -75,5 +76,40 @@ public static class PlaylistWireMapper
         string? addedBy = a.HasAddedBy ? a.AddedBy : null;
         long addedAt = a.HasTimestamp ? a.Timestamp : 0;
         return new[] { new PlaylistMember("", "", addedBy, addedAt) };   // carries only the changed attributes for UPDATE_ITEM
+    }
+
+    // ── write direction: domain ops → the ListChanges body POSTed to /playlist/v2/{path}/changes ──
+    /// <summary>Serialize an edit (ops against a base revision) into the ListChanges wire body.</summary>
+    public static byte[] BuildChanges(byte[]? baseRev, IReadOnlyList<PlaylistOp> ops)
+    {
+        var changes = new Pl.ListChanges();
+        var delta = new Pl.Delta();
+        if (baseRev is not null)
+        {
+            var rev = ByteString.CopyFrom(baseRev);
+            changes.BaseRevision = rev;
+            delta.BaseVersion = rev;
+        }
+        for (int i = 0; i < ops.Count; i++) delta.Ops.Add(ToWireOp(ops[i]));
+        changes.Deltas.Add(delta);
+        return changes.ToByteArray();
+    }
+
+    static Pl.Op ToWireOp(PlaylistOp op) => op.Kind switch
+    {
+        PlaylistOpKind.Add => new Pl.Op { Kind = Pl.Op.Types.Kind.Add, Add = BuildAdd(op) },
+        PlaylistOpKind.Remove => new Pl.Op { Kind = Pl.Op.Types.Kind.Rem, Rem = new Pl.Rem { FromIndex = op.FromIndex, Length = op.Length } },
+        PlaylistOpKind.Move => new Pl.Op { Kind = Pl.Op.Types.Kind.Mov, Mov = new Pl.Mov { FromIndex = op.FromIndex, Length = op.Length, ToIndex = op.ToIndex } },
+        PlaylistOpKind.UpdateList => new Pl.Op { Kind = Pl.Op.Types.Kind.UpdateListAttributes },
+        _ => new Pl.Op { Kind = Pl.Op.Types.Kind.Unknown },
+    };
+
+    static Pl.Add BuildAdd(PlaylistOp op)
+    {
+        var add = new Pl.Add { FromIndex = op.FromIndex, AddFirst = op.AddFirst, AddLast = op.AddLast };
+        if (op.Items is { } items)
+            for (int i = 0; i < items.Count; i++)
+                add.Items.Add(new Pl.Item { Uri = items[i].ItemUri });
+        return add;
     }
 }

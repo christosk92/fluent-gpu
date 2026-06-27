@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Wavee.Backend.Playlists;
 
 namespace Wavee.Backend;
 
@@ -12,7 +13,10 @@ namespace Wavee.Backend;
 // one wired here (the plan also has OpRebase for playlists and OnlineOnly for pins/cover-upload). The outbox is in-memory
 // here (the durable table is store-backed in §4.1); the coalescing + reconcile shape is the real one.
 
-public sealed record OutboxOp(long Id, string Type, string EntityKey, string SetId, bool TargetSaved, long LogicalTs, int Attempts);
+// Carries either a boolean end-state (SetReplay) OR an ordered op list + base revision (OpRebase). Ops/BaseRev are
+// additive/nullable so the boolean save path is unchanged.
+public sealed record OutboxOp(long Id, string Type, string EntityKey, string SetId, bool TargetSaved, long LogicalTs, int Attempts,
+    IReadOnlyList<PlaylistOp>? Ops = null, byte[]? BaseRev = null);
 
 public interface IMutationStrategy
 {
@@ -44,6 +48,33 @@ public sealed class SetReplayStrategy : IMutationStrategy
         => store.SetSaved(op.SetId, op.EntityKey, !op.TargetSaved, SyncState.Confirmed);
 }
 
+/// <summary>OpRebase: ordered playlist edits (add/remove/reorder). Optimistic-applies the ops to the local membership;
+/// replays as a POST of the ListChanges body to /playlist/v2/{path}/changes against the captured base revision. The
+/// pre-edit membership snapshot (for rollback on terminal failure) is engine-managed.</summary>
+public sealed class OpRebaseStrategy : IMutationStrategy
+{
+    public string Type => "oprebase";
+    public bool OfflineQueueable => true;
+
+    public void ApplyOptimistic(OutboxOp op, IStore store)
+    {
+        var list = new List<PlaylistMember>(store.Membership(op.EntityKey));
+        try { PlaylistDiffApplier.Apply(list, op.Ops ?? Array.Empty<PlaylistOp>()); }
+        catch (ArgumentOutOfRangeException) { return; }   // can't apply against the local baseline → leave it; the server reconciles
+        store.SetMembership(op.EntityKey, list, store.PlaylistRevision(op.EntityKey));
+    }
+
+    public async Task<bool> Replay(OutboxOp op, ITransport t, SessionContext ctx, CancellationToken ct)
+    {
+        var path = op.EntityKey.StartsWith("spotify:", StringComparison.Ordinal) ? op.EntityKey.Substring(8).Replace(':', '/') : op.EntityKey;
+        var body = PlaylistWireMapper.BuildChanges(op.BaseRev, op.Ops ?? Array.Empty<PlaylistOp>());
+        var r = await t.Request(Channel.Spclient, $"/playlist/v2/{path}/changes", body, ct).ConfigureAwait(false);
+        return r.Ok;   // a 409 (revision conflict) surfaces as !Ok → retry/rebase on the next drain
+    }
+
+    public void Rollback(OutboxOp op, IStore store) { /* membership restore is engine-managed via the pre-edit snapshot */ }
+}
+
 public sealed class MutationEngine
 {
     const int MaxAttempts = 10;
@@ -51,8 +82,13 @@ public sealed class MutationEngine
     readonly IStore _store;
     readonly Dictionary<string, IMutationStrategy> _strategies;
     readonly object _gate = new();
-    readonly Dictionary<(string type, string setId, string key), OutboxOp> _outbox = new();   // coalesced: one row per (type, setId, entity)
+    // "set" rows coalesce (one per (set, entity), latest end-state wins); "oprebase" rows append (keyed by unique id —
+    // the server permits duplicate playlist items, so edits must NOT dedupe).
+    readonly Dictionary<string, OutboxOp> _outbox = new();
+    readonly Dictionary<long, IReadOnlyList<PlaylistMember>> _editSnapshots = new();   // pre-edit membership, for OpRebase rollback
     long _seq;
+
+    static string KeyOf(OutboxOp op) => op.Type == "set" ? $"set|{op.SetId}|{op.EntityKey}" : $"{op.Type}|{op.Id}";
 
     public List<OutboxOp> DeadLetter { get; } = new();
 
@@ -70,7 +106,19 @@ public sealed class MutationEngine
         if (!_strategies.TryGetValue("set", out var s)) return;
         var id = Interlocked.Increment(ref _seq);
         var op = new OutboxOp(id, "set", uri, setId, saved, id, 0);
-        lock (_gate) _outbox[("set", setId, uri)] = op;   // coalesce to the latest end-state (per set, so two sets don't collide)
+        lock (_gate) _outbox[KeyOf(op)] = op;   // coalesce to the latest end-state (per set, so two sets don't collide)
+        s.ApplyOptimistic(op, _store);
+    }
+
+    /// <summary>Edit a playlist's ordered membership (add/remove/reorder). Each edit is a DISTINCT outbox row — appended,
+    /// never coalesced. Optimistic: the membership reflects it immediately; a pre-edit snapshot is captured so a terminal
+    /// replay failure rolls the membership back.</summary>
+    public void Edit(string playlistUri, IReadOnlyList<PlaylistOp> ops, byte[]? baseRev = null)
+    {
+        if (!_strategies.TryGetValue("oprebase", out var s)) return;
+        var id = Interlocked.Increment(ref _seq);
+        var op = new OutboxOp(id, "oprebase", playlistUri, playlistUri, false, id, 0, ops, baseRev);
+        lock (_gate) { _outbox[KeyOf(op)] = op; _editSnapshots[id] = _store.Membership(playlistUri); }   // snapshot BEFORE apply
         s.ApplyOptimistic(op, _store);
     }
 
@@ -83,7 +131,7 @@ public sealed class MutationEngine
         foreach (var op in ops)
         {
             var s = _strategies[op.Type];
-            var key = (op.Type, op.SetId, op.EntityKey);
+            var key = KeyOf(op);
             bool ok;
             try { ok = await s.Replay(op, t, ctx, ct).ConfigureAwait(false); }
             catch { ok = false; }
@@ -96,25 +144,35 @@ public sealed class MutationEngine
                 lock (_gate)
                 {
                     stillCurrent = _outbox.TryGetValue(key, out var cur) && cur.Id == op.Id;
-                    if (stillCurrent) _outbox.Remove(key);
+                    if (stillCurrent) { _outbox.Remove(key); _editSnapshots.Remove(op.Id); }
                 }
-                if (stillCurrent) _store.SetSaved(op.SetId, op.EntityKey, op.TargetSaved, SyncState.Confirmed);
+                // "set" reconciles to Confirmed; "oprebase" leaves the already-applied membership (the dealer echo / next /diff confirms).
+                if (stillCurrent && op.Type == "set") _store.SetSaved(op.SetId, op.EntityKey, op.TargetSaved, SyncState.Confirmed);
                 // else: a newer Save superseded this op mid-replay → leave it Pending for the next drain.
             }
             else
             {
                 var bumped = op with { Attempts = op.Attempts + 1 };
                 bool deadLetter = false;
+                IReadOnlyList<PlaylistMember>? snapshot = null;
                 lock (_gate)
                 {
                     if (_outbox.TryGetValue(key, out var cur) && cur.Id == op.Id)   // only touch the row if it's still ours
                     {
-                        if (bumped.Attempts >= MaxAttempts) { _outbox.Remove(key); DeadLetter.Add(op); deadLetter = true; }
+                        if (bumped.Attempts >= MaxAttempts)
+                        {
+                            _outbox.Remove(key); DeadLetter.Add(op); deadLetter = true;
+                            if (_editSnapshots.Remove(op.Id, out var snap)) snapshot = snap;
+                        }
                         else _outbox[key] = bumped;
                     }
                     // else: a newer Save superseded this op → drop this stale attempt; the newer op drains next.
                 }
-                if (deadLetter) s.Rollback(op, _store);   // revert the optimistic write OUTSIDE the lock (cardinal rule)
+                if (deadLetter)   // revert the optimistic write OUTSIDE the lock (cardinal rule)
+                {
+                    if (op.Type == "oprebase") { if (snapshot is not null) _store.SetMembership(op.EntityKey, snapshot, op.BaseRev); }
+                    else s.Rollback(op, _store);
+                }
             }
         }
     }

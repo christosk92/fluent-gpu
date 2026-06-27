@@ -47,6 +47,30 @@ public class PlaylistWireMapperTests
         Assert.Equal(PlaylistOpKind.Move, ops[2].Kind);
         Assert.Equal(4, ops[2].ToIndex);
     }
+
+    [Fact]
+    public void BuildChanges_WritesListChanges_WithBaseRevAndOps()
+    {
+        var ops = new[]
+        {
+            new PlaylistOp(PlaylistOpKind.Add, AddLast: true, Items: new[] { new PlaylistMember("", "spotify:track:x", null, 0) }),
+            new PlaylistOp(PlaylistOpKind.Remove, FromIndex: 2, Length: 1),
+            new PlaylistOp(PlaylistOpKind.Move, FromIndex: 0, Length: 1, ToIndex: 3),
+        };
+        var bytes = PlaylistWireMapper.BuildChanges(new byte[] { 5, 6 }, ops);
+        var changes = Pl.ListChanges.Parser.ParseFrom(bytes);
+
+        Assert.Equal(new byte[] { 5, 6 }, changes.BaseRevision.ToByteArray());
+        var delta = Assert.Single(changes.Deltas);
+        Assert.Equal(3, delta.Ops.Count);
+        Assert.Equal(Pl.Op.Types.Kind.Add, delta.Ops[0].Kind);
+        Assert.True(delta.Ops[0].Add.AddLast);
+        Assert.Equal("spotify:track:x", delta.Ops[0].Add.Items[0].Uri);
+        Assert.Equal(Pl.Op.Types.Kind.Rem, delta.Ops[1].Kind);
+        Assert.Equal(2, delta.Ops[1].Rem.FromIndex);
+        Assert.Equal(Pl.Op.Types.Kind.Mov, delta.Ops[2].Kind);
+        Assert.Equal(3, delta.Ops[2].Mov.ToIndex);
+    }
 }
 
 // Map the collection2v2 DeltaResponse/PageResponse onto the domain CollectionDelta.
