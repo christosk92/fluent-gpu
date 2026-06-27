@@ -22,6 +22,10 @@ public sealed class Services
     /// can hydrate playlist headers into the SAME store the catalog reads (InMemoryStore is lock-guarded → safe).</summary>
     public Wavee.Backend.IStore? RealStore { get; private set; }
 
+    /// <summary>The store-backed catalog source (REAL backend only) — exposed so the live bootstrap can wire on-open
+    /// track hydration via <c>OnDemandFetch</c> (playlists/albums open empty otherwise).</summary>
+    public Wavee.Backend.Library.StoreLibrarySource? RealLibrarySource { get; private set; }
+
     public IWaveeLog Log { get; }
     public ISpotifySession Session { get; }
     public IMusicLibrary Library { get; }
@@ -153,6 +157,7 @@ public sealed class Services
         var swSession = new Wavee.Backend.SwitchableSession(session);
         var svc = new Services(WaveeLog.Instance, swSession, library, swPlayer, swDevices, player, settings, mutations, userPlaylists);
         svc.RealStore = store;
+        svc.RealLibrarySource = storeLibrary;
         svc.Log.Info("app", "Services created (REAL backend: persistent Store + StoreLibrarySource + durable multi-set mutations; live session/fetch/dealer connect on bootstrap)");
         return svc;
     }

@@ -38,10 +38,25 @@ public sealed class LiveSessionHost : IAsyncDisposable
         svc.GoLive(connect.Controller, connect.Devices, liveSession);
         log("Live Connect session active — Wavee is a controllable device, mirrors now-playing, and shows the live account.");
 
-        // The rootlist sync stored only playlist URIs; hydrate their headers (name/cover) into the SAME store the catalog
-        // reads so the home + sidebar show real names, not URIs (InMemoryStore is lock-guarded → safe off-thread).
+        // Live data wiring into the SAME store the catalog reads (InMemoryStore is lock-guarded → safe off-thread):
         if (svc.RealStore is { } store)
+        {
+            // (a) fetch playlist/album TRACKS the first time a detail page opens (the sync stored headers only). The real
+            //     hydrator (MetadataService over the extended-metadata batch) replaces the no-op that left lists empty.
+            var metadata = new Wavee.Backend.Metadata.MetadataService(
+                new Wavee.Backend.Metadata.ExtendedMetadataSource(live.Pipeline, () => live.BaseUrl, () => live.Session),
+                store, () => live.Session);
+            var fetcher = new PlaylistFetcher(live.Pipeline, () => live.BaseUrl, store, (uris, c) => metadata.SyncAllAsync(uris, c));
+            if (svc.RealLibrarySource is { } libSrc)
+                libSrc.OnDemandFetch = async (uri, c) =>
+                {
+                    if (uri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) await fetcher.FetchPlaylistAsync(uri, c).ConfigureAwait(false);
+                    else if (uri.StartsWith("spotify:album:", StringComparison.Ordinal)) await metadata.SyncAllAsync(new[] { uri }, c).ConfigureAwait(false);
+                };
+
+            // (b) hydrate playlist HEADERS (name/cover) in the background so the home + sidebar show names, not URIs.
             _ = Task.Run(() => HydratePlaylistHeadersAsync(live, store, log, ct));
+        }
 
         return new LiveSessionHost(transport, connect);
     }
@@ -90,6 +105,26 @@ public sealed class LiveSessionHost : IAsyncDisposable
             if (s.CurrentTrack is { } t)
                 log("  bridge now-playing: " + t.Title + " — " + (s.IsPlaying ? "playing" : "paused") + " (active=" + (s.ActiveDeviceId ?? "") + ")");
         }));
+
+        // Stage 1 verification: open the first rootlist playlist + an album through the catalog (fires OnDemandFetch).
+        string? plUri = null, alUri = null;
+        if (svc.RealStore is { } st)
+        {
+            foreach (var e in st.Rootlist())
+                if (e.Kind == 0 && e.Uri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) { plUri = e.Uri; break; }
+            foreach (var u in st.SavedUris("albums")) { alUri = u; break; }
+        }
+        if (plUri is not null)
+        {
+            var full = await svc.Library.GetPlaylistAsync(plUri, ct).ConfigureAwait(false);
+            log($"  on-open playlist '{full?.Name}' → {full?.Tracks?.Count ?? 0} tracks");
+        }
+        if (alUri is not null)
+        {
+            var al = await svc.Library.GetAlbumAsync(alUri, ct).ConfigureAwait(false);
+            log($"  on-open album '{al?.Name}' → {al?.Tracks?.Count ?? 0} tracks");
+        }
+
         log("Listening 25s (control Wavee from your phone's Connect picker to drive commands)...");
         try { await Task.Delay(TimeSpan.FromSeconds(25), ct).ConfigureAwait(false); } catch { }
         return 0;

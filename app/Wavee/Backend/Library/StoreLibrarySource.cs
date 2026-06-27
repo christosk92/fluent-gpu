@@ -20,6 +20,10 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     readonly SimpleSubject<CollectionKind> _collections = new();
     readonly IDisposable _sub;
 
+    /// <summary>Set by the live bootstrap: fetch a playlist's membership+tracks / an album's tracks on FIRST open (the
+    /// rootlist + collection sync stores headers only). Null offline/in tests → reads stay pure store lookups.</summary>
+    public Func<string, CancellationToken, Task>? OnDemandFetch { get; set; }
+
     public StoreLibrarySource(IStore store)
     {
         _store = store;
@@ -32,20 +36,38 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     public IObservable<CollectionKind> CollectionsChanged => _collections;
 
     // ── single-item reads ──
-    public Task<Playlist?> GetPlaylistAsync(string uri, CancellationToken ct = default)
+    public async Task<Playlist?> GetPlaylistAsync(string uri, CancellationToken ct = default)
     {
+        await EnsureFetchedAsync(uri, ct).ConfigureAwait(false);
         var header = _store.GetPlaylist(uri);
-        if (header is null) return Task.FromResult<Playlist?>(null);
+        if (header is null) return null;
         var tracks = JoinMembership(uri);
-        return Task.FromResult<Playlist?>(header with { Tracks = tracks, TrackCount = tracks.Count });
+        return header with { Tracks = tracks, TrackCount = tracks.Count };
     }
 
-    public Task<Album?> GetAlbumAsync(string uri, CancellationToken ct = default) => Task.FromResult(_store.GetAlbum(uri));
+    public async Task<Album?> GetAlbumAsync(string uri, CancellationToken ct = default)
+    {
+        await EnsureFetchedAsync(uri, ct).ConfigureAwait(false);
+        return _store.GetAlbum(uri);
+    }
+
     public Task<Artist?> GetArtistAsync(string uri, CancellationToken ct = default) => Task.FromResult(_store.GetArtist(uri));
+
+    // First open of a playlist/album fetches its tracks (the rootlist/collection sync stores headers only). No-op offline.
+    async Task EnsureFetchedAsync(string uri, CancellationToken ct)
+    {
+        var fetch = OnDemandFetch;
+        if (fetch is null) return;
+        bool need =
+            uri.StartsWith("spotify:playlist:", StringComparison.Ordinal) ? _store.Membership(uri).Count == 0 :
+            uri.StartsWith("spotify:album:", StringComparison.Ordinal) ? _store.GetAlbum(uri)?.Tracks is null or { Count: 0 } :
+            false;
+        if (need) { try { await fetch(uri, ct).ConfigureAwait(false); } catch { } }
+    }
 
     public async IAsyncEnumerable<TrackPage> StreamTracksAsync(string contextUri, [EnumeratorCancellation] CancellationToken ct = default)
     {
-        await Task.CompletedTask;
+        await EnsureFetchedAsync(contextUri, ct).ConfigureAwait(false);
         IReadOnlyList<Track> tracks =
             contextUri.StartsWith("spotify:playlist:", StringComparison.Ordinal) ? JoinMembership(contextUri)
             : _store.GetAlbum(contextUri)?.Tracks ?? Array.Empty<Track>();
