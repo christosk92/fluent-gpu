@@ -165,6 +165,7 @@ sealed class PlayerBarContent : Component
         // Hooks FIRST (stable call order — rule #7), before any early return.
         var b = UseContext(PlaybackBridge.Slot);
         var lib = UseContext(LibraryBridge.Slot);    // Mutations: the now-playing like reflects + toggles the saved-set
+        var go = UseContext(HistoryStore.NavCtx);    // navigate to the now-playing album / artist on click
         var titleHover = UseSignal(false);           // hover the now-playing text → BOTH lines scroll together (synced); idle = static + edge fade
         var L = _layout.Value;                       // coarse breakpoint signal; does NOT change for every resize pixel
         if (DiagEnabled)
@@ -228,23 +229,41 @@ sealed class PlayerBarContent : Component
         // Both lines scroll only on hover (TriggerMode.Hover) and share ONE gate (titleHover) driven by the meta column
         // below — so they start together and stay phase-locked (CycleMs), instead of each toggling under its own line.
         // The edge fade is unaffected: a right-edge "there's more" cue at rest, both edges while scrolling.
-        var metaKids = new List<Element>(2)
+        // Now-playing is clickable: art + title → the album; the subtitle splits into an artist link + an album link.
+        var npAlbum = track?.Album;
+        var npArtist = track is { Artists.Count: > 0 } ? track.Artists[0] : null;
+        bool albumNav = npAlbum is { Uri.Length: > 0 };
+        bool artistNav = npArtist is { Uri.Length: > 0 };
+        void NavAlbum() { if (albumNav) go?.Invoke("album:" + npAlbum!.Uri, npAlbum.Name); }
+        void NavArtist() { if (artistNav) go?.Invoke("artist:" + npArtist!.Uri, npArtist.Name); }
+
+        Element titleEl = Marquee.Of(Prop.Of(() => NowPlaying(b).Title),
+            new Marquee.Style { FontSize = 14f, Weight = 700, Foreground = Prop.Of(() => NowPlaying(b).Color), CycleMs = MarqueeCycleMs, Trigger = Marquee.TriggerMode.Hover },
+            scrollWhen: titleHover);
+        if (albumNav)   // the title opens the album (click); hover still scrolls the marquee (the metaCol drives titleHover)
+            titleEl = new BoxEl { Cursor = CursorId.Hand, OnClick = NavAlbum, Children = [titleEl] };
+
+        var metaKids = new List<Element>(2) { titleEl };
+        if (showSubtitle && track is not null && err is null)
         {
-            Marquee.Of(Prop.Of(() => NowPlaying(b).Title),
-                new Marquee.Style { FontSize = 14f, Weight = 700, Foreground = Prop.Of(() => NowPlaying(b).Color), CycleMs = MarqueeCycleMs, Trigger = Marquee.TriggerMode.Hover },
-                scrollWhen: titleHover),
-        };
-        if (showSubtitle)
-            metaKids.Add(Marquee.Of(Prop.Of(() => NowPlayingSubtitle(b)),
-                new Marquee.Style { FontSize = 12f, Foreground = Tok.TextSecondary, CycleMs = MarqueeCycleMs, Trigger = Marquee.TriggerMode.Hover },
-                scrollWhen: titleHover));
+            var subKids = new List<Element>(3);
+            if (npArtist is { Name.Length: > 0 })
+                subKids.Add(NavSpan(string.Join(", ", track.Artists.Select(a => a.Name)), NavArtist, artistNav));
+            if (npAlbum is { Name.Length: > 0 })
+            {
+                if (subKids.Count > 0) subKids.Add(new TextEl(" · ") { Size = 12f, Color = Tok.TextSecondary });
+                subKids.Add(NavSpan(npAlbum.Name, NavAlbum, albumNav));
+            }
+            if (subKids.Count > 0)
+                metaKids.Add(new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, ClipToBounds = true, Children = subKids.ToArray() });
+        }
 
         var metaCol = new BoxEl
         {
             Key = "meta", Animate = MoveMotion,
             Direction = 1, Grow = 1f, Shrink = 1f, Gap = 2f, Justify = FlexJustify.Center, ClipToBounds = true,
-            // The shared hover target: the inner marquees no longer self-hover (they read titleHover), so this column is
-            // the deepest pointer target over the now-playing text → hovering anywhere on it scrolls both lines.
+            // The shared hover target: the title marquee reads titleHover, so this column is the deepest pointer target
+            // over the now-playing text → hovering anywhere on it scrolls the title.
             OnHoverMove = _ => { if (!titleHover.Peek()) titleHover.Value = true; },
             OnPointerExit = () => { if (titleHover.Peek()) titleHover.Value = false; },
             Children = metaKids.ToArray(),
@@ -255,6 +274,8 @@ sealed class PlayerBarContent : Component
             leftKids.Add(new BoxEl
             {
                 Key = "art", Width = artSize, Height = artSize, Animate = ItemMotion,
+                Cursor = albumNav ? CursorId.Hand : (CursorId?)null,
+                OnClick = albumNav ? NavAlbum : null,   // album art → the album
                 Children = [Surfaces.Artwork(track?.Image, SeedOf(track), artSize, artSize, 6f)]
             });
         leftKids.Add(metaCol);
@@ -468,6 +489,15 @@ sealed class PlayerBarContent : Component
         long total = ms / 1000, m = total / 60, s = total % 60;
         return m.ToString() + ":" + (s < 10 ? "0" + s : s.ToString());
     }
+
+    // A clickable now-playing meta link (artist / album): Hand cursor + a brighter foreground on hover when navigable.
+    static Element NavSpan(string text, Action onClick, bool enabled) => new BoxEl
+    {
+        Cursor = enabled ? CursorId.Hand : (CursorId?)null,
+        OnClick = enabled ? onClick : null,
+        ClipToBounds = true,
+        Children = [new TextEl(text) { Size = 12f, Color = Tok.TextSecondary, HoverColor = enabled ? Tok.TextPrimary : Tok.TextSecondary }],
+    };
 
     /// <summary>A transport TOGGLE/command glyph button. The active state is shown by an ACCENT glyph + a 3px accent dot
     /// under it — never a filled background (that's reserved for the hover/press interaction axis). Box never fills at
