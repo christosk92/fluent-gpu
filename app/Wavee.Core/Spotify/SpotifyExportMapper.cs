@@ -235,16 +235,29 @@ public static class SpotifyExportMapper
             Merch: MapMerch(Dig(au, "goods", "merch", "items")),
             Playlists: MapPlaylistRefs(Dig(au, "profile", "playlistsV2", "items")),
             MusicVideos: null,
-            TopCities: null,
+            TopCities: MapTopCities(Dig(au, "stats", "topCities", "items")),
             ExternalLinks: MapLinks(Dig(au, "profile", "externalLinks", "items")),
             Gallery: MapGallery(Dig(au, "visuals", "gallery", "items")),
             Related: MapRelated(Dig(au, "relatedContent", "relatedArtists", "items")),
             Tour: FakeData.TourBannerFor(name, concerts));
 
         return new Artist(IdFromUri(uri), uri, name, avatar, topAlbums,
-            MonthlyListeners: 0, Followers: 0, Bio: bio, Verified: verified,
-            WorldRank: 0, HeaderImage: header, TopTracks: topTracks,
+            MonthlyListeners: Long(au, "stats", "monthlyListeners"), Followers: Long(au, "stats", "followers"), Bio: bio, Verified: verified,
+            WorldRank: (int)Long(au, "stats", "worldRank"), HeaderImage: header, TopTracks: topTracks,
             AppearsOn: appearsOn.Count > 0 ? appearsOn : null, Pinned: pinned, Extras: extras);
+    }
+
+    static IReadOnlyList<TopCity>? MapTopCities(JsonElement items)
+    {
+        if (items.ValueKind != JsonValueKind.Array || items.GetArrayLength() == 0) return null;
+        var list = new List<TopCity>();
+        foreach (var c in items.EnumerateArray())
+        {
+            var city = Str(c, "city");
+            if (string.IsNullOrEmpty(city)) continue;
+            list.Add(new TopCity(city, Str(c, "country"), Long(c, "numberOfListeners")));
+        }
+        return list.Count > 0 ? list : null;
     }
 
     static void AddReleases(JsonElement groups, List<Album> into)
