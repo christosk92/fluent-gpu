@@ -238,10 +238,16 @@ sealed class NowPlayingView : Component
         if (p) _ = _b.Player.PauseAsync(); else _ = _b.Player.ResumeAsync();
     }
 
+    // Full-bleed BELOW the title bar: the top 48px stays transparent + pass-through so the window caption (min/max/close +
+    // drag) keeps working while the immersive view fills the rest.
     BoxEl Shell(ColorF bg, Element[] children) => new BoxEl
     {
-        Grow = 1f, Direction = 1, Fill = bg, ClipToBounds = true,
-        Children = children,
+        Grow = 1f, Direction = 1,
+        Children =
+        [
+            new BoxEl { Height = TitleBar.ExpandedHeight, HitTestPassThrough = true },
+            new BoxEl { Grow = 1f, Direction = 1, Fill = bg, ClipToBounds = true, Children = children },
+        ],
     };
 
     static int SeedOf(Track? t) => t is null ? 11 : Math.Abs((t.Uri ?? t.Id).Length * 7 + t.Title.Length);

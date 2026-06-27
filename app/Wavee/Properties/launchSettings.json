@@ -2,8 +2,7 @@
   "profiles": {
     "Wavee (live)": {
       "commandName": "Project",
-      "commandLineArgs": "--real-backend",
-      "nativeDebugging": true
+      "commandLineArgs": "--real-backend"
     },
     "Wavee (demo)": {
       "commandName": "Project"

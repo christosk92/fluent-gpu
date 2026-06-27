@@ -61,6 +61,8 @@ sealed class WaveeApp : Component
                 _ = _services.Player.ResumeAsync();   // in-memory demo playback
                 _services.Log.Info("app", "Shell online; demo playback started");
             }
+            // Diagnostic: open the full now-playing view on launch (for --screenshot visual diffing of that surface).
+            if (Diag.EnvFlag("WAVEE_NOWPLAYING_OPEN")) _services.Playback.Expanded.Value = true;
         });
 
         this.UseSoftReveal(); // app entrance (compositor-only, reduced-motion-aware)

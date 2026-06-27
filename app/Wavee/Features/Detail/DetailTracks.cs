@@ -991,7 +991,7 @@ sealed class MoreButton : Component
     IReadOnlyList<MenuFlyoutItem> Items() =>
     [
         new(Loc.Get(Strings.Detail.Play), Icons.Play, Invoke: () => _h.PlayAll()),
-        new(Loc.Get(Strings.Detail.AddToQueue), Icons.Add, Invoke: () => { /* TODO: queue API */ }),
+        new(Loc.Get(Strings.Detail.AddToQueue), Icons.Add, Invoke: () => _h.AddToQueue()),
         MenuFlyoutItem.Separator,
         new(Loc.Get(Strings.Detail.GoToArtist), Enabled: _m.Artists.Count > 0,
             Invoke: () => { if (_m.Artists.Count > 0) _h.Go(_m.Artists[0].Uri, _m.Artists[0].Name); }),
