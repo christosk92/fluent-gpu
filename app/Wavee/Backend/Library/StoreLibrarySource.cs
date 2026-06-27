@@ -24,6 +24,10 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     /// rootlist + collection sync stores headers only). Null offline/in tests → reads stay pure store lookups.</summary>
     public Func<string, CancellationToken, Task>? OnDemandFetch { get; set; }
 
+    /// <summary>Set by the live bootstrap: the editorial/personalized Pathfinder home groups, prepended ABOVE the
+    /// store-derived library shelves. Null offline → only the library-derived home.</summary>
+    public Func<CancellationToken, Task<IReadOnlyList<HomeGroup>>>? LiveHomeFetch { get; set; }
+
     public StoreLibrarySource(IStore store)
     {
         _store = store;
@@ -138,6 +142,12 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         int likedCount = _store.SavedUris("liked").Count;
 
         var groups = new List<HomeGroup>();
+
+        // The live editorial/personalized home (Pathfinder) goes first, above the library-derived shelves.
+        if (LiveHomeFetch is { } liveFetch)
+        {
+            try { groups.AddRange(await liveFetch(ct).ConfigureAwait(false)); } catch { /* editorial home is best-effort */ }
+        }
 
         var quick = new List<HomeCard>();
         if (likedCount > 0)

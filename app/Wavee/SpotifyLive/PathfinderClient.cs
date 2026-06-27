@@ -103,4 +103,7 @@ public static class PathfinderOps
 
     public const string GetAlbum = "getAlbum";
     public const string GetAlbumHash = "b9bfabef66ed756e5e13f68a942deb60bd4125ec1f1be8cc42769dc0259b4b10";
+
+    public const string Home = "home";
+    public const string HomeHash = "40c1423fc26ea0d68cd8f212e79ca47df7968fc40d83d184e756af54fd043143";
 }

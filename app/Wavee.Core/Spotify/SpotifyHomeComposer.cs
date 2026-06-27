@@ -8,7 +8,7 @@ namespace Wavee.Core;
 /// horizontal rows (docs/architecture.md §2). Rules: a QuickGrid of the user's playlists at the top; the Spotlight as a
 /// Hero; the substantial multi-item shelves (capped) as carousels; and ALL the single-item baseline sections folded
 /// into ONE "Made for you" grid.</summary>
-internal static class SpotifyHomeComposer
+public static class SpotifyHomeComposer
 {
     const int MaxShelves = 6;
     const int CardsPerShelf = 12;
