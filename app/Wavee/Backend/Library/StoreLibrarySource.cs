@@ -28,6 +28,10 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     /// store-derived library shelves. Null offline → only the library-derived home.</summary>
     public Func<CancellationToken, Task<IReadOnlyList<HomeGroup>>>? LiveHomeFetch { get; set; }
 
+    /// <summary>Set by the live bootstrap: full-catalog online search (Pathfinder). Primary when present; the offline
+    /// store track search is the fallback. Returns null on failure → caller degrades to offline.</summary>
+    public Func<string, CancellationToken, Task<SearchResults?>>? LiveSearch { get; set; }
+
     public StoreLibrarySource(IStore store)
     {
         _store = store;
@@ -122,14 +126,20 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     public Task<IReadOnlyList<Artist>> GetArtistsAsync(CancellationToken ct = default) => Task.FromResult(JoinSet("artists", _store.GetArtist));
     public Task<IReadOnlyList<Track>> GetLikedSongsAsync(CancellationToken ct = default) => Task.FromResult(JoinSet("liked", _store.GetTrack));
 
-    public Task<SearchResults> SearchAsync(string query, CancellationToken ct = default)
+    public async Task<SearchResults> SearchAsync(string query, CancellationToken ct = default)
     {
         var q = query.Trim();
-        if (q.Length == 0) return Task.FromResult(SearchResults.Empty);
-        // The Store indexes tracks (offline search over the cached library); album/artist full-text search is the online
-        // search endpoint's job (a separate source), so this contributes track hits only.
+        if (q.Length == 0) return SearchResults.Empty;
+        // Online catalog search (Pathfinder) is primary — the WHOLE Spotify catalog (tracks/albums/artists/playlists).
+        // The Store's offline track index (the cached library) is the fallback when the live session isn't up.
+        if (LiveSearch is { } live)
+        {
+            try { if (await live(q, ct).ConfigureAwait(false) is { } online) return online; }
+            catch (OperationCanceledException) { throw; }
+            catch { /* fall through to offline */ }
+        }
         var tracks = _store.QueryTracks(q);
-        return Task.FromResult(new SearchResults(tracks, Array.Empty<Album>(), Array.Empty<Artist>(), Array.Empty<Playlist>()));
+        return new SearchResults(tracks, Array.Empty<Album>(), Array.Empty<Artist>(), Array.Empty<Playlist>());
     }
 
     // A home built from the SYNCED library (no Spotify home-feed API needed): a jump-back-in quick grid (Liked +

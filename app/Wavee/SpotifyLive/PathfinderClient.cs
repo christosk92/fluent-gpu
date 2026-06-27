@@ -106,4 +106,15 @@ public static class PathfinderOps
 
     public const string Home = "home";
     public const string HomeHash = "40c1423fc26ea0d68cd8f212e79ca47df7968fc40d83d184e756af54fd043143";
+
+    // Per-facet search — the variable is "searchTerm" (NOT "query"), and these hashes are current. Each fills its own
+    // data.searchV2.<facet> (tracksV2.items[].item.data; albumsV2/artists/playlists.items[].data).
+    public const string SearchTracks = "searchTracks";
+    public const string SearchTracksHash = "59ee4a659c32e9ad894a71308207594a65ba67bb6b632b183abe97303a51fa55";
+    public const string SearchAlbums = "searchAlbums";
+    public const string SearchAlbumsHash = "5e7d2724fbef31a25f714844bf1313ffc748ebd4bd199eaad50628a4f246a7ab";
+    public const string SearchArtists = "searchArtists";
+    public const string SearchArtistsHash = "270905851ba5c7faca81cfe053c2dbd8ceb4f156a0e0ef4b385af75ab69ffd13";
+    public const string SearchPlaylists = "searchPlaylists";
+    public const string SearchPlaylistsHash = "af1730623dc1248b75a61a18bad1f47f1fc7eff802fb0676683de88815c958d8";
 }

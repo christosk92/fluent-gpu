@@ -71,6 +71,60 @@ public static class SpotifyExportMapper
     static int YearFromIso(string? iso)
         => iso is { Length: >= 4 } && int.TryParse(iso.AsSpan(0, 4), out var y) ? y : 0;
 
+    /// <summary>Map a LIVE Pathfinder <c>searchTopResultsList</c> response (data.searchV2) → the domain SearchResults.
+    /// Per facet: tracksV2.items[].item.data (tracks carry an extra item wrapper); albumsV2/artists/playlists.items[].data.</summary>
+    public static SearchResults SearchFromV2(JsonElement responseRoot)
+    {
+        var sv = Dig(responseRoot, "data", "searchV2");
+
+        var tracks = new List<Track>();
+        foreach (var it in Arr(Dig(sv, "tracksV2", "items")))
+        {
+            var d = it.TryGetProperty("item", out var item) ? Dig(item, "data") : Dig(it, "data");
+            if (Str(d, "uri") is not { } uri) continue;
+            var alb = Dig(d, "albumOfTrack");
+            tracks.Add(new Track(IdFromUri(uri), uri, Str(d, "name") ?? "",
+                MapUnionArtists(Dig(d, "artists", "items")),
+                new AlbumRef(IdFromUri(Str(alb, "uri") ?? ""), Str(alb, "uri") ?? "", Str(alb, "name") ?? ""),
+                Long(d, "duration", "totalMilliseconds"), Str(d, "contentRating", "label") == "EXPLICIT",
+                PickImage(Dig(alb, "coverArt", "sources"))));
+        }
+
+        var albums = new List<Album>();
+        foreach (var it in Arr(Dig(sv, "albumsV2", "items")))
+        {
+            var d = Dig(it, "data");
+            if (Str(d, "uri") is not { } uri) continue;
+            albums.Add(new Album(IdFromUri(uri), uri, Str(d, "name") ?? "", PickImage(Dig(d, "coverArt", "sources")),
+                MapUnionArtists(Dig(d, "artists", "items")), (int)Long(d, "date", "year"), 0));
+        }
+
+        var artists = new List<Artist>();
+        foreach (var it in Arr(Dig(sv, "artists", "items")))
+        {
+            var d = Dig(it, "data");
+            if (Str(d, "uri") is not { } uri) continue;
+            artists.Add(new Artist(IdFromUri(uri), uri, Str(d, "profile", "name") ?? "",
+                PickImage(Dig(d, "visuals", "avatarImage", "sources"))));
+        }
+
+        var playlists = new List<Playlist>();
+        foreach (var it in Arr(Dig(sv, "playlists", "items")))
+        {
+            var d = Dig(it, "data");
+            if (Str(d, "uri") is not { } uri) continue;
+            var imgs = Dig(d, "images", "items");
+            Image? cover = imgs.ValueKind == JsonValueKind.Array && imgs.GetArrayLength() > 0 ? PickImage(Dig(imgs[0], "sources")) : null;
+            playlists.Add(new Playlist(IdFromUri(uri), uri, Str(d, "name") ?? "", Str(d, "description"),
+                Str(d, "ownerV2", "data", "name") ?? "", cover, 0));
+        }
+
+        return new SearchResults(tracks, albums, artists, playlists);
+    }
+
+    static System.Collections.Generic.IEnumerable<JsonElement> Arr(JsonElement e)
+        => e.ValueKind == JsonValueKind.Array ? e.EnumerateArray() : System.Linq.Enumerable.Empty<JsonElement>();
+
     // ── safe JSON navigation ───────────────────────────────────────────────────────────────────────────────
     public static JsonElement Dig(JsonElement e, params string[] path)
     {

@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Wavee.Backend;
@@ -58,6 +60,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
                     else if (uri.StartsWith("spotify:artist:", StringComparison.Ordinal)) await FetchArtistAsync(pathfinder, store, uri, c).ConfigureAwait(false);
                 };
                 libSrc.LiveHomeFetch = c => FetchHomeAsync(pathfinder, c);   // the editorial/personalized home (Pathfinder)
+                libSrc.LiveSearch = (q, c) => FetchSearchAsync(pathfinder, q, c);   // full-catalog online search
             }
 
             // (b) hydrate playlist HEADERS (name/cover) so the home + sidebar show names; for cover-less playlists also
@@ -122,6 +125,40 @@ public sealed class LiveSessionHost : IAsyncDisposable
         if (doc is null) return;
         if (Wavee.Core.SpotifyExportMapper.ArtistFromOverview(doc.RootElement) is { Uri.Length: > 0 } artist)
             store.UpsertArtist(artist);
+    }
+
+    // Full-catalog online search via Pathfinder — the per-facet ops (searchTracks/Albums/Artists/Playlists) fired in
+    // parallel, each filling its own data.searchV2.<facet>, merged into one SearchResults. The query variable is
+    // "searchTerm" (NOT "query"), matching the captured wire request exactly.
+    static async Task<SearchResults?> FetchSearchAsync(PathfinderClient pf, string query, CancellationToken ct)
+    {
+        void Vars(Utf8JsonWriter w)
+        {
+            w.WriteBoolean("includePreReleases", false);
+            w.WriteBoolean("includeAlbumPreReleases", true);
+            w.WriteNumber("numberOfTopResults", 20);
+            w.WriteString("searchTerm", query);
+            w.WriteNumber("offset", 0);
+            w.WriteNumber("limit", 20);
+            w.WriteBoolean("includeAudiobooks", true);
+            w.WriteBoolean("includeAuthors", true);
+            w.WriteBoolean("includeEpisodeContentRatingsV2", true);
+        }
+        Task<JsonDocument?> Op(string op, string hash) => pf.QueryAsync(op, hash, Vars, PathfinderClient.Platform.WebPlayer, ct);
+
+        var tT = Op(PathfinderOps.SearchTracks, PathfinderOps.SearchTracksHash);
+        var aT = Op(PathfinderOps.SearchAlbums, PathfinderOps.SearchAlbumsHash);
+        var rT = Op(PathfinderOps.SearchArtists, PathfinderOps.SearchArtistsHash);
+        var pT = Op(PathfinderOps.SearchPlaylists, PathfinderOps.SearchPlaylistsHash);
+        await Task.WhenAll(tT, aT, rT, pT).ConfigureAwait(false);
+        using var td = await tT; using var ad = await aT; using var rd = await rT; using var pd = await pT;
+        if (td is null && ad is null && rd is null && pd is null) return null;
+
+        var tracks = td is null ? (IReadOnlyList<Track>)Array.Empty<Track>() : Wavee.Core.SpotifyExportMapper.SearchFromV2(td.RootElement).Tracks;
+        var albums = ad is null ? (IReadOnlyList<Album>)Array.Empty<Album>() : Wavee.Core.SpotifyExportMapper.SearchFromV2(ad.RootElement).Albums;
+        var artists = rd is null ? (IReadOnlyList<Artist>)Array.Empty<Artist>() : Wavee.Core.SpotifyExportMapper.SearchFromV2(rd.RootElement).Artists;
+        var playlists = pd is null ? (IReadOnlyList<Playlist>)Array.Empty<Playlist>() : Wavee.Core.SpotifyExportMapper.SearchFromV2(pd.RootElement).Playlists;
+        return new SearchResults(tracks, albums, artists, playlists);
     }
 
     // The editorial/personalized home via Pathfinder → the existing composer (data.home.sectionContainer.sections).
@@ -196,6 +233,8 @@ public sealed class LiveSessionHost : IAsyncDisposable
         }
         var home = await svc.Library.GetHomeAsync(ct).ConfigureAwait(false);
         log($"  home → {home.Groups.Count} groups (editorial Pathfinder + library)");
+        var sr = await svc.Library.SearchAsync("paul kim", ct).ConfigureAwait(false);
+        log($"  search 'paul kim' → {sr.Tracks.Count} tracks, {sr.Albums.Count} albums, {sr.Artists.Count} artists, {sr.Playlists.Count} playlists");
 
         log("Listening 25s (control Wavee from your phone's Connect picker to drive commands)...");
         try { await Task.Delay(TimeSpan.FromSeconds(25), ct).ConfigureAwait(false); } catch { }
