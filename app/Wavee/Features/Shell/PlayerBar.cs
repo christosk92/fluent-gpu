@@ -356,8 +356,7 @@ sealed class PlayerBarContent : Component
         if (showVolumeSlider)
             rightKids.Add(Slider.Bind(b.Volume, v => { _ = b.Player.SetVolumeAsync(v); }, 96f, 16f, RailStyle) with { Key = "volume-slider", Animate = ItemMotion });
         if (showQueue)
-            rightKids.Add(Transport(Icons.Queue, () => { /* TODO: queue panel not wired yet */ }, canTransport, false, accent, buttonBox, buttonGlyph)
-                with { Key = "queue", Animate = ItemMotion });
+            rightKids.Add(Embed.Comp(() => new QueueButton(b, accent, buttonBox, buttonGlyph)) with { Key = "queue" });
         if (showDevices)
             rightKids.Add(Embed.Comp(() => new DevicesButton(b, accent, buttonBox, buttonGlyph)) with { Key = "devices" });
         if (showExpand)
@@ -707,6 +706,58 @@ sealed class DevicesButton : Component
         }
 
         return PlayerBarContent.Transport(Icons.Devices, Toggle, true, active, _accent, _box, _glyph, h => anchor.Value = h);
+    }
+}
+
+// The up-next queue: opens a MenuFlyout peek of the live queue (now-playing checked, then "Next in queue" = user q#,
+// then "Next up" = the context tracks ahead). Clicking an up-next entry plays that track (best-effort; a true
+// skip-to-queue-item needs a seam addition). Re-renders when the queue changes.
+sealed class QueueButton : Component
+{
+    readonly PlaybackBridge _b; readonly ColorF _accent; readonly float _box, _glyph;
+    public QueueButton(PlaybackBridge b, ColorF accent, float box = 36f, float glyph = 16f)
+    {
+        _b = b; _accent = accent; _box = box; _glyph = glyph;
+    }
+
+    public override Element Render()
+    {
+        var anchor = UseRef<NodeHandle>(default);
+        var handle = UseRef<OverlayHandle?>(null);
+        var svc = UseContext(Overlay.Service);
+        var queue = _b.Queue.Value;   // subscribe → re-render when the queue changes
+
+        void Toggle()
+        {
+            if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
+            var items = new List<MenuFlyoutItem>(Math.Max(1, queue.Count));
+            if (queue.Count == 0)
+                items.Add(new MenuFlyoutItem(Loc.Get(Strings.Player.Queue), null, false, () => { }));
+            else
+            {
+                QueueBucket? last = null;
+                foreach (var e in queue)
+                {
+                    var entry = e;
+                    if (entry.Bucket != QueueBucket.NowPlaying && entry.Bucket != last)
+                        items.Add(new MenuFlyoutItem(entry.Bucket == QueueBucket.UserQueue ? "Next in queue" : "Next up", null, false, () => { }));
+                    last = entry.Bucket;
+                    string label = entry.Track.Artists.Count > 0 ? entry.Track.Title + "  ·  " + entry.Track.Artists[0].Name : entry.Track.Title;
+                    if (entry.Bucket == QueueBucket.NowPlaying)
+                        items.Add(MenuFlyoutItem.Toggle(label, true, () => { }, Icons.Queue, enabled: false));
+                    else
+                        items.Add(new MenuFlyoutItem(label, null, true, () => { _ = _b.Player.PlayTrackAsync(entry.Track.Uri); }));
+                }
+            }
+            handle.Value = svc.Open(
+                () => anchor.Value,
+                () => MenuFlyout.Build(items, () => handle.Value?.Close()),
+                FlyoutPlacement.TopEdgeAlignedRight,
+                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
+            handle.Value.ClosedAction = () => handle.Value = null;
+        }
+
+        return PlayerBarContent.Transport(Icons.Queue, Toggle, true, false, _accent, _box, _glyph, h => anchor.Value = h);
     }
 }
 
