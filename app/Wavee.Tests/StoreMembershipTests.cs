@@ -53,6 +53,25 @@ public class StoreMembershipTests
     }
 
     [Fact]
+    public void Membership_WarmLru_EvictsLeastRecentlyUsed_AndReloadsFromCold()
+    {
+        var path = TempDb();
+        try
+        {
+            using var store = new CachedStore(new SqliteColdStore(path), maxResidentPlaylists: 2);
+            store.SetMembership("spotify:playlist:p1", new[] { M("a") }, null);
+            store.SetMembership("spotify:playlist:p2", new[] { M("b") }, null);
+            store.Membership("spotify:playlist:p1");                              // touch p1 → p2 is now the LRU
+            store.SetMembership("spotify:playlist:p3", new[] { M("c") }, null);   // count 3 > cap 2 → evict the LRU (p2)
+
+            Assert.Equal(2, store.ResidentMembershipCount);                       // bounded to the cap
+            // p2 was evicted from the resident mirror but the cold tier still has it (correctness preserved on reload).
+            Assert.Equal("spotify:track:b", Assert.Single(store.Membership("spotify:playlist:p2")).ItemUri);
+        }
+        finally { TryDelete(path); }
+    }
+
+    [Fact]
     public void Cached_Rootlist_PersistsAndLazyLoadsOnReopen()
     {
         var path = TempDb();

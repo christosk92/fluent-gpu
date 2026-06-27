@@ -184,6 +184,11 @@ public sealed class InMemoryStore : IStore
         lock (_gate) return _membership.TryGetValue(playlistUri, out var m) ? m.Rows : Array.Empty<PlaylistMember>();
     }
 
+    /// <summary>Drop a resident membership baseline (the WARM-tier evictor calls this); the cold tier keeps it, so the
+    /// next access rehydrates it.</summary>
+    public void EvictMembership(string playlistUri) { lock (_gate) _membership.Remove(playlistUri); }
+    public int ResidentMembershipCount { get { lock (_gate) return _membership.Count; } }
+
     public byte[]? PlaylistRevision(string playlistUri)
     {
         lock (_gate) return _membership.TryGetValue(playlistUri, out var m) ? m.Rev : null;

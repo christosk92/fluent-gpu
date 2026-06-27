@@ -18,11 +18,49 @@ public sealed class CachedStore : IStore, IDisposable
     readonly InMemoryStore _hot = new();
     readonly IColdStore _cold;
 
-    public CachedStore(IColdStore cold)
+    // WARM tier: resident playlist membership baselines are bounded by a byte budget AND a count cap. On overflow the
+    // least-recently-used baseline is evicted from the resident mirror (it stays in the cold tier and rehydrates on next
+    // access). ~40 B/item is the SoA membership estimate. (HOT pinning — open/outbox-pending — is a later refinement;
+    // the open list is touched constantly so it stays MRU.)
+    const int BytesPerMembershipItem = 40;
+    readonly int _maxResidentPlaylists;
+    readonly long _maxResidentBytes;
+    readonly object _lruGate = new();
+    readonly Dictionary<string, (long Tick, long Bytes)> _resident = new();
+    long _residentTick;
+    long _residentBytes;
+
+    public CachedStore(IColdStore cold, int maxResidentPlaylists = 128, long maxResidentBytes = 24L * 1024 * 1024)
     {
         _cold = cold;
+        _maxResidentPlaylists = maxResidentPlaylists;
+        _maxResidentBytes = maxResidentBytes;
         foreach (var e in _cold.LoadAllEntities()) Replay(e);                                  // entities → memory
         foreach (var s in _cold.LoadAllSaved()) _hot.SetSaved(s.SetId, s.Uri, true, s.Sync);   // + library state
+    }
+
+    public int ResidentMembershipCount { get { lock (_lruGate) return _resident.Count; } }
+
+    void TouchResident(string playlistUri, int itemCount)
+    {
+        lock (_lruGate)
+        {
+            long bytes = (long)itemCount * BytesPerMembershipItem;
+            if (_resident.TryGetValue(playlistUri, out var prev)) _residentBytes -= prev.Bytes;
+            _resident[playlistUri] = (++_residentTick, bytes);
+            _residentBytes += bytes;
+            // Evict LRU until under both budgets — but never the just-touched MRU (count > 1 guards that).
+            while (_resident.Count > 1 && (_resident.Count > _maxResidentPlaylists || _residentBytes > _maxResidentBytes))
+            {
+                string? lru = null;
+                long min = long.MaxValue;
+                foreach (var kv in _resident) if (kv.Value.Tick < min) { min = kv.Value.Tick; lru = kv.Key; }
+                if (lru is null) break;
+                _residentBytes -= _resident[lru].Bytes;
+                _resident.Remove(lru);
+                _hot.EvictMembership(lru);
+            }
+        }
     }
 
     void Replay(in ColdEntity e)
@@ -59,15 +97,17 @@ public sealed class CachedStore : IStore, IDisposable
     {
         _hot.SetMembership(playlistUri, rows, baseRev);
         _cold.ReplaceMembership(playlistUri, ToCold(rows), baseRev);
+        TouchResident(playlistUri, rows.Count);
     }
     public IReadOnlyList<PlaylistMember> Membership(string playlistUri)
     {
         var m = _hot.Membership(playlistUri);
-        if (m.Count > 0) return m;
+        if (m.Count > 0) { TouchResident(playlistUri, m.Count); return m; }   // resident hit → bump recency
         var cold = _cold.LoadMembership(playlistUri);
         if (cold.Count == 0) return m;
         var rows = FromCold(cold);
         _hot.SetMembership(playlistUri, rows, _cold.GetPlaylistRevision(playlistUri));   // promote into the resident mirror
+        TouchResident(playlistUri, rows.Count);
         return rows;
     }
     public byte[]? PlaylistRevision(string playlistUri) => _hot.PlaylistRevision(playlistUri) ?? _cold.GetPlaylistRevision(playlistUri);
