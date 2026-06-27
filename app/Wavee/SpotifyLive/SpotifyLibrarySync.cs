@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using Wavee.Backend;
 using Wavee.Backend.Collections;
 using Wavee.Backend.Metadata;
 using Wavee.Backend.Persistence;
@@ -61,9 +62,16 @@ public static class SpotifyLibrarySync
         using var router = new DealerRouter(transport, store,
             uri => { log("  push: " + uri + " (re-syncing)"); _ = playlistFetcher.FetchPlaylistAsync(uri, ct); },
             set => { foreach (var s in Sets) _ = collectionFetcher.FetchSetAsync(s, ct); });
+        // Stage B — register this device on Spotify Connect: ConnectService captures the dealer connection_id (the pusher
+        // hello header) and PUTs /connect-state/v1/devices/{id}, so the device APPEARS in the Connect picker. Created BEFORE
+        // Start() so the first connection_id hello isn't missed. Later stages add inbound command handling + the projection.
+        var connectBuilder = new ConnectStateBuilder(live.DeviceId, "Wavee");
+        using var connect = new ConnectService(transport, live.DeviceId,
+            mid => connectBuilder.BuildPutState(mid, isActive: false, Wavee.Protocol.Player.PutStateReason.NewConnection),
+            onClusterBytes: null, log: log);
         transport.Start();
 
-        log("Dealer firehose open; listening for live updates for 20s...");
+        log("Dealer firehose open + Connect device announced; listening for live updates for 20s...");
         try { await Task.Delay(TimeSpan.FromSeconds(20), ct).ConfigureAwait(false); } catch { }
         store.Flush();
         return 0;
