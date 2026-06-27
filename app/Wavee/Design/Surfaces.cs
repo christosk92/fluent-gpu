@@ -54,6 +54,11 @@ public static class Surfaces
     /// to/from the like-tagged Home card. The tile shares ONE decode handle with the image (matched W×H, any aspect).</summary>
     public static Element Artwork(Image? image, int seed, float width, float height, float corners, string? morphKey = null, int decodePx = 0)
     {
+        if (image?.MosaicTiles is { Count: > 0 } tiles)
+        {
+            if (tiles.Count >= 4) return Mosaic(tiles, width, height, corners);
+            image = new Image(tiles[0]);   // 1–3 distinct album covers → show the first as a single cover
+        }
         string? url = image?.Url is { Length: > 0 } u ? u : null;
         // Decode target: the display size by default; when decodePx>0 decode at THAT square size and COVER-fit it into the
         // slot instead. A connected-animation dest (the detail cover) passes the SAME decodePx as the Home card (256) so it
@@ -77,10 +82,32 @@ public static class Surfaces
     /// <see cref="Artwork"/>; pass a huge <paramref name="corners"/> (e.g. 9999) for a circular (artist) tile.</summary>
     public static Element ArtworkFill(Image? image, float corners, int decodePx = 256)
     {
+        // A cover-less playlist in a fluid grid cell falls back to its first tile (the explicit-size Mosaic needs a known
+        // width, which a fill cell doesn't have); the home/sidebar/detail cover-less cases use Artwork/Shelf which mosaic.
+        if (image?.MosaicTiles is { Count: > 0 } tiles) image = new Image(tiles[0]);
         string? url = image?.Url is { Length: > 0 } u ? u : null;
         var placeholder = ColorF.FromRgba(0x2A, 0x2A, 0x2A);
         return Ui.Image(url ?? "", ImageFit.Cover, 1f, decodePx, corners, placeholder, image?.BlurHash);
     }
+
+    /// <summary>A 2×2 mosaic of 4 album covers at an EXPLICIT size — how Spotify renders a cover-less playlist. Each
+    /// quadrant is url-keyed, so when the playlist's tracklist changes the changed tile re-decodes + the rest stay.</summary>
+    public static Element Mosaic(System.Collections.Generic.IReadOnlyList<string> tiles, float width, float height, float corners)
+    {
+        var ph = ColorF.FromRgba(0x2A, 0x2A, 0x2A);
+        int cell = (int)(width / 2);
+        Element Cell(string u) => new BoxEl { Grow = 1f, ClipToBounds = true, Children = [ Ui.Image(u, ImageFit.Cover, 1f, cell, 0f, ph) ] };
+        return new BoxEl
+        {
+            Width = width, Height = height, ClipToBounds = true, Corners = CornerRadius4.All(corners), Direction = 1,
+            Children =
+            [
+                new BoxEl { Direction = 0, Grow = 1f, Children = [ Cell(tiles[0]), Cell(tiles[1]) ] },
+                new BoxEl { Direction = 0, Grow = 1f, Children = [ Cell(tiles[2]), Cell(tiles[3]) ] },
+            ],
+        };
+    }
+
 }
 
 // The neutral shimmer cover tile. A Component (granular re-render) so it can read the image load-state and START/STOP

@@ -36,8 +36,10 @@ public static class MediaCard
             // fetch). Shares the decode handle with the Image below (ShelfDecodePx) so it reads the same load-state.
             Surfaces.Shimmer(cover?.Url, (int)ShelfDecodePx, (int)ShelfDecodePx, inner, inner, r),
             // morphKey ⇒ this cover is a connected-animation (Hero) participant. Transparent placeholder so the gradient
-            // shows through until the image arrives (rather than a flat fill that would hide it).
-            Image(cover?.Url ?? "", ImageFit.Cover, 1f, ShelfDecodePx, r, placeholder: ColorF.Transparent) with { MorphId = morphKey },
+            // shows through until the image arrives. A cover-less playlist (MosaicTiles set) renders a 2×2 album mosaic.
+            (cover?.MosaicTiles is { Count: >= 4 } mtiles
+                ? Surfaces.Mosaic(mtiles, inner, inner, r)
+                : Image(cover?.Url ?? "", ImageFit.Cover, 1f, ShelfDecodePx, r, placeholder: ColorF.Transparent) with { MorphId = morphKey }),
             // The now-playing equalizer (bottom-left, when this card's context is playing) + the play/pause FAB
             // (bottom-right, REVEALED ON HOVER). Reactive: subscribes to the playback bridge. The container carries NO
             // OnClick, so the hit walks up to the card (its HoverScale fires + the FAB reveals off the card's hover);

@@ -5,7 +5,11 @@ namespace Wavee.Core;
 // Framework-neutral: no FluentGpu / WinUI / Spotify-proto types leak in here.
 
 /// <summary>An image reference (album art, avatar, …). <paramref name="BlurHash"/> backs a cheap placeholder.</summary>
-public sealed record Image(string Url, int? Width = null, int? Height = null, string? BlurHash = null);
+// Url is the single cover. When Url is empty and MosaicTiles carries ≥4 album-cover URLs, renderers compose a 2×2 mosaic
+// (a cover-less playlist, the way Spotify does). Carrying the tiles on Image lets every Surfaces.Artwork call site mosaic
+// with no per-card plumbing.
+public sealed record Image(string Url, int? Width = null, int? Height = null, string? BlurHash = null,
+    System.Collections.Generic.IReadOnlyList<string>? MosaicTiles = null);
 
 public sealed record ArtistRef(string Id, string Uri, string Name);
 public sealed record AlbumRef(string Id, string Uri, string Name);

@@ -54,8 +54,9 @@ public sealed class LiveSessionHost : IAsyncDisposable
                     else if (uri.StartsWith("spotify:album:", StringComparison.Ordinal)) await metadata.SyncAllAsync(new[] { uri }, c).ConfigureAwait(false);
                 };
 
-            // (b) hydrate playlist HEADERS (name/cover) in the background so the home + sidebar show names, not URIs.
-            _ = Task.Run(() => HydratePlaylistHeadersAsync(live, store, log, ct));
+            // (b) hydrate playlist HEADERS (name/cover) so the home + sidebar show names; for cover-less playlists also
+            //     pull the tracklist so they render a 2×2 album mosaic.
+            _ = Task.Run(() => HydratePlaylistHeadersAsync(fetcher, store, log, ct));
         }
 
         return new LiveSessionHost(transport, connect);
@@ -68,27 +69,41 @@ public sealed class LiveSessionHost : IAsyncDisposable
         return ValueTask.CompletedTask;
     }
 
-    // Hydrate each rootlist playlist's header (name/cover) — header-only (no member pull). Skips already-hydrated ones,
-    // sequential + best-effort so a single failure never stops the rest. The store fires Changes → the UI refreshes.
-    static async Task HydratePlaylistHeadersAsync(LiveSpclient live, IStore store, Action<string> log, CancellationToken ct)
+    // Phase 1: hydrate each rootlist playlist's HEADER (name/cover) — fast, coalesced into one refresh. Phase 2: for the
+    // cover-less ones, pull the TRACKLIST so SummaryOf can derive a 2×2 mosaic (progressive — each fills in as it lands).
+    static async Task HydratePlaylistHeadersAsync(PlaylistFetcher fetcher, IStore store, Action<string> log, CancellationToken ct)
     {
         try
         {
-            var fetcher = new PlaylistFetcher(live.Pipeline, () => live.BaseUrl, store, (_, _) => Task.CompletedTask);
-            // Coalesce the per-playlist upserts into ONE store change so the home/sidebar refresh once at the end, not N×.
-            using var bulk = store.BeginBulk();
-            int n = 0;
+            int headers = 0;
+            using (store.BeginBulk())   // one store change → home/sidebar refresh once with all names
+            {
+                foreach (var e in store.Rootlist())
+                {
+                    if (ct.IsCancellationRequested) break;
+                    if (e.Kind != 0 || !e.Uri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) continue;
+                    if (store.GetPlaylist(e.Uri) is not null) continue;   // header already present
+                    try { await fetcher.FetchPlaylistHeaderAsync(e.Uri, ct).ConfigureAwait(false); headers++; }
+                    catch { }
+                }
+            }
+            if (headers > 0) log($"hydrated {headers} playlist headers (home + sidebar names)");
+
+            // Cover-less playlists: pull the tracklist so the 2×2 mosaic can compose. NOT bulk-coalesced → each playlist's
+            // mosaic fills in as its tracks land (progressive). Throttled implicitly by being sequential + best-effort.
+            int mosaics = 0;
             foreach (var e in store.Rootlist())
             {
                 if (ct.IsCancellationRequested) break;
                 if (e.Kind != 0 || !e.Uri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) continue;
-                if (store.GetPlaylist(e.Uri) is { Cover: not null }) continue;   // fully hydrated (name + cover) — skip
-                try { await fetcher.FetchPlaylistHeaderAsync(e.Uri, ct).ConfigureAwait(false); n++; }
-                catch { /* skip a failed playlist, keep going */ }
+                if (store.GetPlaylist(e.Uri)?.Cover is not null) continue;   // has a custom cover → no mosaic needed
+                if (store.Membership(e.Uri).Count > 0) continue;            // already has a tracklist
+                try { await fetcher.FetchPlaylistAsync(e.Uri, ct).ConfigureAwait(false); mosaics++; }
+                catch { }
             }
-            if (n > 0) log($"hydrated {n} playlist headers (home + sidebar names)");
+            if (mosaics > 0) log($"hydrated {mosaics} cover-less playlist tracklists (mosaics)");
         }
-        catch (Exception ex) { log("playlist header hydration: " + ex.Message); }
+        catch (Exception ex) { log("playlist hydration: " + ex.Message); }
     }
 
     /// <summary>CLI demo (`--connect-live`): bring up the live session over a REAL Services and log the now-playing the
