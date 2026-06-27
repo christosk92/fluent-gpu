@@ -61,7 +61,6 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     readonly IDisposable _hostSub;
     readonly SemaphoreSlim _lock = new(1, 1);
     bool _localActive;
-    bool _disposed;
 
     public PlaybackController(IAudioHost host, ITrackResolver resolver, NowPlayingProjection projection,
         Func<string, CancellationToken, Task<IReadOnlyList<Track>>> resolveContext,
@@ -255,5 +254,5 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         return new Track(id, uri, uri, Array.Empty<ArtistRef>(), new AlbumRef("", "", ""), 0, false, null);
     }
 
-    public void Dispose() { _disposed = true; _hostSub.Dispose(); _lock.Dispose(); }
+    public void Dispose() { _hostSub.Dispose(); _lock.Dispose(); }
 }

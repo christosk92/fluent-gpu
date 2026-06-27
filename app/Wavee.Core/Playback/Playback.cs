@@ -42,6 +42,17 @@ public interface IPlaybackState : System.ComponentModel.INotifyPropertyChanged
     Palette? Palette { get; }
     IReadOnlyList<QueueEntry> Queue { get; }
 
+    // ── Stage G — widened surface (default members so existing providers keep working; the live projection overrides) ────
+    /// <summary>The initial track-resolve before audio begins — a loading affordance distinct from mid-stream buffering.</summary>
+    bool IsLoading => false;
+    /// <summary>A user-facing playback error (null = none); the player bar surfaces it + offers retry on the primary action.</summary>
+    string? Error => null;
+    /// <summary>Whether skip-next / skip-prev are currently allowed (queue position / context restrictions).</summary>
+    bool CanSkipNext => true;
+    bool CanSkipPrev => true;
+    /// <summary>The Connect device currently active (null/empty = this device / nobody) — drives the "playing on X" label.</summary>
+    string? ActiveDeviceId => null;
+
     /// <summary>Coarse "something changed" signal (track / play-state / queue / palette).</summary>
     IObservable<IPlaybackState> Changes { get; }
 

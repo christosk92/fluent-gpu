@@ -35,6 +35,10 @@ public sealed class PlaybackBridge
     // non-null user-facing message (the bar shows it + offers retry on the primary). See PlayerBar.PlayerState.
     public Signal<bool> IsLoading { get; } = new(false);
     public Signal<string?> Error { get; } = new(null);
+    // Stage G — skip gating + the active Connect device (drives the prev/next enable state + the "playing on X" label).
+    public Signal<bool> CanSkipNext { get; } = new(true);
+    public Signal<bool> CanSkipPrev { get; } = new(true);
+    public Signal<string?> ActiveDeviceId { get; } = new(null);
     public Signal<bool> IsShuffle { get; } = new(false);
     public Signal<RepeatMode> Repeat { get; } = new(RepeatMode.Off);
     public FloatSignal PositionFrac { get; } = new(0f);
@@ -87,6 +91,11 @@ public sealed class PlaybackBridge
         DurationMs.Value = s.DurationMs;
         TrackPalette.Value = s.Palette;
         Queue.Value = s.Queue;
+        IsLoading.Value = s.IsLoading;
+        Error.Value = s.Error;
+        CanSkipNext.Value = s.CanSkipNext;
+        CanSkipPrev.Value = s.CanSkipPrev;
+        ActiveDeviceId.Value = s.ActiveDeviceId;
         PushPosition(s.PositionMs);
     }
 
