@@ -56,7 +56,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     readonly NowPlayingProjection _projection;
     readonly Func<string, CancellationToken, Task<IReadOnlyList<Track>>> _resolveContext;
     readonly IOutboundControl? _outbound;
-    readonly IPlaybackProjection? _telemetry;
+    readonly IReadOnlyList<IPlaybackProjection> _extra;
     readonly string _ourDeviceId;
     readonly Action<string>? _log;
     readonly IDisposable _hostSub;
@@ -66,7 +66,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
 
     public PlaybackController(IAudioHost host, ITrackResolver resolver, NowPlayingProjection projection,
         Func<string, CancellationToken, Task<IReadOnlyList<Track>>> resolveContext,
-        string ourDeviceId, IOutboundControl? outbound = null, IPlaybackProjection? telemetry = null, Action<string>? log = null)
+        string ourDeviceId, IOutboundControl? outbound = null, IReadOnlyList<IPlaybackProjection>? extraProjections = null, Action<string>? log = null)
     {
         _host = host;
         _resolver = resolver;
@@ -74,7 +74,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         _resolveContext = resolveContext;
         _ourDeviceId = ourDeviceId;
         _outbound = outbound;
-        _telemetry = telemetry;
+        _extra = extraProjections ?? Array.Empty<IPlaybackProjection>();
         _log = log;
         _hostSub = host.Signals.Subscribe(Observers.From<AudioHostSignal>(OnHostSignal));
         _projSub = projection.Changes.Subscribe(Observers.From<IPlaybackState>(OnProjectionChanged));
@@ -293,8 +293,8 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         Emit(new PlaybackEvent(kind, cur, 0));
     }
 
-    // Fan the event log out to the now-playing projection + the telemetry projection (Recently Played).
-    void Emit(in PlaybackEvent e) { _projection.OnEvent(e); _telemetry?.OnEvent(e); }
+    // Fan the event log out to the now-playing projection + every extra projection (telemetry, the PutState publisher).
+    void Emit(in PlaybackEvent e) { _projection.OnEvent(e); for (int i = 0; i < _extra.Count; i++) _extra[i].OnEvent(e); }
 
     void OnHostSignal(AudioHostSignal s)
     {

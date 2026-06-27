@@ -1,5 +1,7 @@
 using System;
 using Google.Protobuf;
+using Wavee.Backend;
+using Wavee.Core;
 using Wavee.Protocol.Media;
 using Wavee.Protocol.Player;
 // The UI defines an internal `enum PlayerState` in the parent Wavee namespace (PlayerBar.cs), which shadows the proto type
@@ -93,25 +95,56 @@ public sealed class ConnectStateBuilder
         return c;
     }
 
-    /// <summary>Serialize a PutStateRequest. <paramref name="nowMs"/> overridable for deterministic tests.</summary>
-    public byte[] BuildPutState(uint messageId, bool isActive = false,
-        PutStateReason reason = PutStateReason.NewConnection, ProtoPlayerState? playerState = null, long? nowMs = null)
+    /// <summary>Serialize a PutStateRequest from OUR local playback snapshot (null = empty player_state, for the initial
+    /// NewConnection announce). Matches the DeviceStatePublisher's builder delegate. <paramref name="nowMs"/> overridable
+    /// for deterministic tests.</summary>
+    public byte[] BuildPutState(PutStateReasonKind reason, LocalPlaybackSnapshot? snap, uint messageId, bool isActive, long? nowMs = null)
     {
         long ts = nowMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var ps = snap is { } s ? BuildPlayerState(s, ts) : new ProtoPlayerState { Timestamp = ts };
         var req = new PutStateRequest
         {
             MemberType = MemberType.ConnectState,
             Device = new Device
             {
                 DeviceInfo = BuildDeviceInfo(),
-                PlayerState = playerState ?? new ProtoPlayerState { Timestamp = ts },
+                PlayerState = ps,
                 PrivateDeviceInfo = new PrivateDeviceInfo { Platform = SpotifyClientIdentity.GetPrivateDevicePlatform() },
             },
             IsActive = isActive,
-            PutStateReason = reason,
+            PutStateReason = reason == PutStateReasonKind.NewConnection ? PutStateReason.NewConnection : PutStateReason.PlayerStateChanged,
             MessageId = messageId,
             ClientSideTimestamp = (ulong)ts,
         };
+        if (snap is { } s2)
+        {
+            if (s2.HasBeenPlayingForMs > 0) req.HasBeenPlayingForMs = (ulong)s2.HasBeenPlayingForMs;
+            if (s2.StartedPlayingAtMs > 0) req.StartedPlayingAt = (ulong)s2.StartedPlayingAtMs;
+        }
         return req.ToByteArray();
+    }
+
+    static ProtoPlayerState BuildPlayerState(LocalPlaybackSnapshot s, long ts)
+    {
+        var ps = new ProtoPlayerState
+        {
+            Timestamp = ts,
+            ContextUri = s.ContextUri ?? "",
+            PositionAsOfTimestamp = s.PositionMs,
+            Duration = s.DurationMs,
+            IsPlaying = s.IsPlaying,
+            IsPaused = s.IsPaused,
+            PlaybackId = s.PlaybackId,
+            SessionId = s.SessionId,
+            Track = new ProvidedTrack { Uri = s.TrackUri, Uid = s.TrackUid ?? "" },
+            Options = new ContextPlayerOptions
+            {
+                ShufflingContext = s.Shuffle,
+                RepeatingContext = s.Repeat == RepeatMode.Context,
+                RepeatingTrack = s.Repeat == RepeatMode.Track,
+            },
+        };
+        foreach (var u in s.NextUris) ps.NextTracks.Add(new ProvidedTrack { Uri = u });
+        return ps;
     }
 }

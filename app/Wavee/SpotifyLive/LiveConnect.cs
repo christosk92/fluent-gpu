@@ -23,6 +23,7 @@ public sealed class LiveConnect : IDisposable
     public PlaybackController Controller { get; }
 
     readonly ConnectService _connect;
+    readonly DeviceStatePublisher _publisher;
     readonly ClusterIngest _ingest;
     readonly ConnectCommandRouter _commands;
     readonly SilentAudioHost _host;
@@ -38,19 +39,22 @@ public sealed class LiveConnect : IDisposable
         _ingest = new ClusterIngest(transport, Projection, Devices, deviceId, log);
 
         var builder = new ConnectStateBuilder(deviceId, "Wavee");
-        _connect = new ConnectService(transport, deviceId,
-            mid => builder.BuildPutState(mid, isActive: false, Wavee.Protocol.Player.PutStateReason.NewConnection),
-            onClusterBytes: _ingest.OnAnnounceResponse, log: log);
+        _connect = new ConnectService(transport);   // connection-id capture only
+        // The SINGLE PutState writer: NewConnection announce on the connection-id + our local player_state on playback
+        // changes (so other devices/controllers see us as the active player). Re-injects the response cluster.
+        _publisher = new DeviceStatePublisher(transport, deviceId, Projection, _connect.ConnectionId, () => _connect.CurrentConnectionId,
+            (reason, snap, mid, isActive) => builder.BuildPutState(reason, snap, mid, isActive),
+            onCluster: _ingest.OnAnnounceResponse, log: log);
 
         var keySource = new LiveAudioKeySource(() => _apChannel);
         var resolver = new LiveTrackResolver(transport, keySource, log);
         _host = new SilentAudioHost();
         var outbound = new LiveOutboundControl(transport, deviceId);
-        // Stage I — play-history telemetry fans off the controller's event log (Recently Played / play counts).
+        // Play-history telemetry (Recently Played) + the PutState publisher both fan off the controller's event log.
         var telemetry = new TelemetryProjection(new GaboTelemetry(log), () => Projection.ContextUri);
         Controller = new PlaybackController(_host, resolver, Projection,
             resolveContext ?? ((_, _) => Task.FromResult<IReadOnlyList<Track>>(Array.Empty<Track>())),
-            deviceId, outbound, telemetry, log);
+            deviceId, outbound, new IPlaybackProjection[] { telemetry, _publisher }, log);
 
         _commands = new ConnectCommandRouter(transport, cmd => Controller.HandleRemoteCommand(cmd), log);
         Devices.TransferHandler = (id, c) => Controller.TransferToAsync(id, c);
@@ -59,6 +63,7 @@ public sealed class LiveConnect : IDisposable
     public void Dispose()
     {
         _commands.Dispose();
+        _publisher.Dispose();
         _connect.Dispose();
         _ingest.Dispose();
         Controller.Dispose();
