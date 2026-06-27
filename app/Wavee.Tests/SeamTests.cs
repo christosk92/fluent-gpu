@@ -42,6 +42,26 @@ public class SeamAdapterTests
     }
 
     [Fact]
+    public async Task EngineMutationSource_MultiSet_RoutesByUriKind()
+    {
+        var store = new InMemoryStore();
+        var mut = new MutationEngine(store, [new SetReplayStrategy()]);
+        var ctx = new SessionContext("me", "US", "premium", "en", Tier.Premium, false);
+        var src = new EngineMutationSource(store, mut, new StubTransport(), () => ctx);
+
+        await src.SetSavedAsync("spotify:track:t", true);
+        await src.SetSavedAsync("spotify:album:a", true);
+        await src.SetSavedAsync("spotify:artist:r", true);
+
+        Assert.True(store.IsSaved("liked", "spotify:track:t"));     // track → liked
+        Assert.True(store.IsSaved("albums", "spotify:album:a"));    // album → albums
+        Assert.True(store.IsSaved("artists", "spotify:artist:r"));  // artist → artists
+        Assert.True(src.IsSaved("spotify:track:t"));                // one aggregated snapshot across sets
+        Assert.True(src.IsSaved("spotify:album:a"));
+        Assert.True(src.IsSaved("spotify:artist:r"));
+    }
+
+    [Fact]
     public async Task EngineMutationSource_SavedChanged_Emits()
     {
         var store = new InMemoryStore();

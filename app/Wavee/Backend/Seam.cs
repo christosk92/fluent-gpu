@@ -28,7 +28,7 @@ public sealed class EngineMutationSource : IMutationSource, IDisposable
     public EngineMutationSource(IStore store, MutationEngine mut, ITransport transport, Func<SessionContext> ctx, string setId = "liked")
     {
         _store = store; _mut = mut; _transport = transport; _ctx = ctx; _setId = setId;
-        _saved = new HashSet<string>(store.SavedUris(setId), StringComparer.Ordinal);
+        _saved = BuildUnion(store);
         _savedChanged = new SimpleSubject<IReadOnlySet<string>>(_saved);
         _sub = store.Changes.Subscribe(Observers.From<StoreChange>(OnStoreChange));
     }
@@ -44,7 +44,7 @@ public sealed class EngineMutationSource : IMutationSource, IDisposable
     public async Task SetSavedAsync(string uri, bool saved, CancellationToken ct = default)
     {
         // store.SetSaved → Bump → OnStoreChange updates _saved + emits, synchronously — no explicit recompute needed.
-        _mut.Save(_setId, uri, saved);                                     // optimistic + outbox (store shows Pending)
+        _mut.Save(SetForUri(uri), uri, saved);                             // optimistic + outbox; set inferred from the uri kind
         await _mut.Drain(_transport, _ctx(), ct).ConfigureAwait(false);    // replay + reconcile (stub transport = succeeds)
     }
 
@@ -57,12 +57,12 @@ public sealed class EngineMutationSource : IMutationSource, IDisposable
         {
             if (c.IsBulk)
             {
-                var full = new HashSet<string>(_store.SavedUris(_setId), StringComparer.Ordinal);
+                var full = BuildUnion(_store);
                 if (!full.SetEquals(_saved)) { _saved = full; toEmit = full; }
             }
             else
             {
-                bool now = _store.IsSaved(_setId, c.Uri);
+                bool now = _store.IsSaved(SetForUri(c.Uri), c.Uri);
                 bool was = _saved.Contains(c.Uri);
                 if (now != was)
                 {
@@ -74,6 +74,27 @@ public sealed class EngineMutationSource : IMutationSource, IDisposable
             }
         }
         if (toEmit is not null) _savedChanged.OnNext(toEmit);
+    }
+
+    static readonly string[] AllSets = { "liked", "albums", "artists", "shows", "episodes" };
+
+    // The save set is inferred from the uri kind (track→liked, album→albums, artist→artists, show→shows, episode→episodes),
+    // so ONE source covers every library type while Saved/IsSaved stay a single aggregated snapshot. Non-standard uris fall
+    // back to the configured set.
+    string SetForUri(string uri) =>
+        uri.StartsWith("spotify:track:", StringComparison.Ordinal) ? "liked" :
+        uri.StartsWith("spotify:album:", StringComparison.Ordinal) ? "albums" :
+        uri.StartsWith("spotify:artist:", StringComparison.Ordinal) ? "artists" :
+        uri.StartsWith("spotify:show:", StringComparison.Ordinal) ? "shows" :
+        uri.StartsWith("spotify:episode:", StringComparison.Ordinal) ? "episodes" :
+        _setId;
+
+    HashSet<string> BuildUnion(IStore store)
+    {
+        var set = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var s in AllSets) foreach (var u in store.SavedUris(s)) set.Add(u);
+        foreach (var u in store.SavedUris(_setId)) set.Add(u);   // include the fallback set
+        return set;
     }
 
     public void Dispose() => _sub.Dispose();

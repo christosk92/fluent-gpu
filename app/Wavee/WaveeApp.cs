@@ -14,7 +14,7 @@ sealed class WaveeApp : Component
 
     // The composition root passes the settings store created early (so the theme is seeded before the first frame);
     // null in tests falls back to the store Services creates itself.
-    public WaveeApp(IAppSettings? settings = null) => _services = Services.CreateFake(settings);
+    public WaveeApp(IAppSettings? settings = null) => _services = Services.UseRealBackend ? Services.CreateReal(settings) : Services.CreateFake(settings);
 
     public override Element Render()
     {

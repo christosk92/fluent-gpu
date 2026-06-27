@@ -127,6 +127,10 @@ static class Program
         Localization.DefaultCulture = "en-US";
         Localization.LoadFolder(Path.Combine(AppContext.BaseDirectory, "assets", "loc"));
 
+        // --real-backend: wire the persistent Store-backed catalog + durable mutations instead of the FakeData demo (the
+        // live sync — login → spclient fetchers → the hm:// dealer — is the bootstrap that fills it; an unsynced run is empty).
+        Services.UseRealBackend = Array.IndexOf(args, "--real-backend") >= 0;
+
         // Premium-only gate: Wavee requires a Spotify Premium account for now. A Free account is refused OUTRIGHT — we do
         // NOT bring up the window; we show a nice warning and exit. (No real login yet, so this defaults to Premium; pass
         // --free or set WAVEE_FORCE_FREE=1 to exercise the refusal.)
