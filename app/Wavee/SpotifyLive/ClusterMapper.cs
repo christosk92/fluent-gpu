@@ -37,6 +37,12 @@ public static class ClusterMapper
         if (ps?.NextTracks is { Count: > 0 } nt)
             foreach (var t in nt) if (!string.IsNullOrEmpty(t.Uri)) next.Add(MapTrack(t, 0));
 
+        var r = ps?.Restrictions;
+        bool noNext = r is not null && r.DisallowSkippingNextReasons.Count > 0;
+        bool noPrev = r is not null && r.DisallowSkippingPrevReasons.Count > 0;
+        bool noSeek = r is not null && r.DisallowSeekingReasons.Count > 0;
+        int ourVol = cluster.Device.TryGetValue(ourDeviceId, out var ourDev) ? (int)ourDev.Volume : -1;
+
         return new ClusterDelta(
             cluster.ActiveDeviceId ?? "",
             hasTrack, track,
@@ -44,7 +50,8 @@ public static class ClusterMapper
             ps?.IsPlaying ?? false, ps?.IsPaused ?? false, ps?.IsBuffering ?? false,
             ps?.PositionAsOfTimestamp ?? 0, ps?.Timestamp ?? 0, cluster.ServerTimestampMs, ps?.Duration ?? 0,
             opts?.ShufflingContext ?? false, repeat,
-            devices, next);
+            devices, next,
+            noPrev, noNext, noSeek, ourVol);
     }
 
     static RemoteTrack MapTrack(P.ProvidedTrack t, long fallbackDuration)

@@ -47,9 +47,11 @@ public interface IPlaybackState : System.ComponentModel.INotifyPropertyChanged
     bool IsLoading => false;
     /// <summary>A user-facing playback error (null = none); the player bar surfaces it + offers retry on the primary action.</summary>
     string? Error => null;
-    /// <summary>Whether skip-next / skip-prev are currently allowed (queue position / context restrictions).</summary>
+    /// <summary>Whether skip-next / skip-prev / seek are currently allowed (queue position / context restrictions — ads
+    /// typically disallow skip + seek).</summary>
     bool CanSkipNext => true;
     bool CanSkipPrev => true;
+    bool CanSeek => true;
     /// <summary>The Connect device currently active (null/empty = this device / nobody) — drives the "playing on X" label.</summary>
     string? ActiveDeviceId => null;
 

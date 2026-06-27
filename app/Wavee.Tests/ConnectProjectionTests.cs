@@ -103,4 +103,18 @@ public class ConnectProjectionTests
         Assert.Equal("Local", p.CurrentTrack!.Title);
         Assert.True(fired);
     }
+
+    [Fact]
+    public void OnCluster_Restrictions_GateSkipAndSeek_AndVolumeFollowsActiveDevice()
+    {
+        var p = new NowPlayingProjection("us", () => 0);
+        p.OnCluster(new ClusterDelta("other", true, Trk("spotify:ad:x", "Ad", 30000), "ctx",
+            true, false, false, 0, 0, 0, 30000, false, RepeatMode.Off,
+            Array.Empty<ConnectDeviceRow>(), Array.Empty<RemoteTrack>(),
+            DisallowSkipPrev: true, DisallowSkipNext: true, DisallowSeeking: true, OurVolume0_65535: 16384));
+        Assert.False(p.CanSkipNext);    // ad → skip disabled
+        Assert.False(p.CanSkipPrev);
+        Assert.False(p.CanSeek);
+        Assert.Equal(0.25, p.Volume, 2);   // 16384/65535 ≈ 0.25 (the active device's volume)
+    }
 }

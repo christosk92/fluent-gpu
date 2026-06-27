@@ -38,6 +38,7 @@ public sealed class PlaybackBridge
     // Stage G — skip gating + the active Connect device (drives the prev/next enable state + the "playing on X" label).
     public Signal<bool> CanSkipNext { get; } = new(true);
     public Signal<bool> CanSkipPrev { get; } = new(true);
+    public Signal<bool> CanSeek { get; } = new(true);
     public Signal<string?> ActiveDeviceId { get; } = new(null);
     public Signal<bool> IsShuffle { get; } = new(false);
     public Signal<RepeatMode> Repeat { get; } = new(RepeatMode.Off);
@@ -95,6 +96,7 @@ public sealed class PlaybackBridge
         Error.Value = s.Error;
         CanSkipNext.Value = s.CanSkipNext;
         CanSkipPrev.Value = s.CanSkipPrev;
+        CanSeek.Value = s.CanSeek;
         ActiveDeviceId.Value = s.ActiveDeviceId;
         PushPosition(s.PositionMs);
     }

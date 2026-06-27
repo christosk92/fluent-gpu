@@ -56,6 +56,7 @@ public sealed class SwitchableState : IPlaybackState, IDisposable
     public string? Error => Cur.Error;
     public bool CanSkipNext => Cur.CanSkipNext;
     public bool CanSkipPrev => Cur.CanSkipPrev;
+    public bool CanSeek => Cur.CanSeek;
     public string? ActiveDeviceId => Cur.ActiveDeviceId;
     public IObservable<IPlaybackState> Changes => _changes;
     public IObservable<long> PositionTicks => _ticks;

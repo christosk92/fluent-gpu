@@ -32,7 +32,10 @@ public sealed record ClusterDelta(
     long PositionAsOfMs, long TimestampMs, long ServerTimestampMs, long DurationMs,
     bool Shuffle, RepeatMode Repeat,
     IReadOnlyList<ConnectDeviceRow> Devices,
-    IReadOnlyList<RemoteTrack> NextTracks);
+    IReadOnlyList<RemoteTrack> NextTracks,
+    // Restrictions on the active track (ads / first-last) + our device's volume (0..65535, -1 = unknown). Trailing defaults
+    // so existing constructions are unaffected.
+    bool DisallowSkipPrev = false, bool DisallowSkipNext = false, bool DisallowSeeking = false, int OurVolume0_65535 = -1);
 
 public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, IDisposable
 {
@@ -57,6 +60,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     long _posMs, _posAnchorWall, _durMs;
     Palette? _palette;
     IReadOnlyList<QueueEntry> _queue = Array.Empty<QueueEntry>();
+    bool _canSkipNext = true, _canSkipPrev = true, _canSeek = true;   // from cluster restrictions (viewer); true when local
     // reconciliation
     long _lastLocalCmdWall = long.MinValue;
     int _inFlightSeq;
@@ -87,6 +91,9 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     public RepeatMode Repeat { get { lock (_gate) return _repeat; } }
     public Palette? Palette { get { lock (_gate) return _palette; } }
     public IReadOnlyList<QueueEntry> Queue { get { lock (_gate) return _queue; } }
+    public bool CanSkipNext { get { lock (_gate) return _canSkipNext; } }
+    public bool CanSkipPrev { get { lock (_gate) return _canSkipPrev; } }
+    public bool CanSeek { get { lock (_gate) return _canSeek; } }
     public IObservable<IPlaybackState> Changes => _changes;
     public IObservable<long> PositionTicks => _positionTicks;
 
@@ -123,6 +130,10 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
             }
             _shuffle = c.Shuffle;
             _repeat = c.Repeat;
+            _canSkipNext = !c.DisallowSkipNext;
+            _canSkipPrev = !c.DisallowSkipPrev;
+            _canSeek = !c.DisallowSeeking;
+            if (c.OurVolume0_65535 >= 0) _volume = c.OurVolume0_65535 / 65535.0;
             _posMs = c.PositionAsOfMs;
             _posAnchorWall = _now();
             _queue = MapQueue(c.NextTracks);
@@ -145,6 +156,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
                 case EvKind.Paused:
                 case EvKind.Ended: _isPlaying = false; break;
             }
+            _canSkipNext = _canSkipPrev = _canSeek = true;   // local playback → full local control
             _posMs = e.AtMs; _posAnchorWall = _now();
         }
         FireChanges();
