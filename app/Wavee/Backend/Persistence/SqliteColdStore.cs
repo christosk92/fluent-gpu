@@ -5,6 +5,7 @@ using Channels = System.Threading.Channels;   // alias: 'Channel' alone collides
 using Microsoft.Data.Sqlite;
 using Wavee.Backend;
 using Wavee.Backend.Metadata;
+using Wavee.Backend.Playlists;
 
 namespace Wavee.Backend.Persistence;
 
@@ -14,7 +15,7 @@ namespace Wavee.Backend.Persistence;
 // Schema is versioned through meta(schema_version) + an ordered migration runner that runs once on open, BEFORE the writer
 // task starts (so it never races the queue). The account column is carried on every per-account table for the (deferred)
 // per-account-DB-file split; until then a single file holds one logical account (DefaultAccount).
-public sealed class SqliteColdStore : IColdStore
+public sealed class SqliteColdStore : IColdStore, IMutationOutbox
 {
     public const string DefaultAccount = "default";
 
@@ -53,6 +54,9 @@ public sealed class SqliteColdStore : IColdStore
         Exec("CREATE TABLE IF NOT EXISTS playlist_items(playlist_uri TEXT NOT NULL, position INTEGER NOT NULL, item_id TEXT, " +
              "item_uri TEXT NOT NULL, added_by TEXT, added_at INTEGER, PRIMARY KEY(playlist_uri, position));");
         Exec("CREATE TABLE IF NOT EXISTS rootlist(account TEXT NOT NULL, position INTEGER NOT NULL, kind INTEGER, uri TEXT, group_name TEXT, depth INTEGER, PRIMARY KEY(account, position));");
+        // Durable mutation outbox: pending intents survive a restart. `op` holds the wire ListChanges body for oprebase edits.
+        Exec("CREATE TABLE IF NOT EXISTS outbox(id INTEGER PRIMARY KEY, type TEXT NOT NULL, entity_key TEXT NOT NULL, set_id TEXT, target_saved INTEGER, op BLOB, base_rev BLOB, attempts INTEGER NOT NULL DEFAULT 0);");
+        Exec("CREATE TABLE IF NOT EXISTS dead_letter(id INTEGER PRIMARY KEY, type TEXT, entity_key TEXT, reason TEXT, created_at INTEGER);");
         Migrate();
         _writer = Task.Run(WriteLoopAsync);
     }
@@ -334,6 +338,83 @@ public sealed class SqliteColdStore : IColdStore
                 }
             }
             tx.Commit();
+        }
+    }
+
+    // ── IMutationOutbox (durable, synchronous — pending intents must be on disk before the call returns) ──
+    public IReadOnlyList<OutboxOp> Load()
+    {
+        var list = new List<OutboxOp>();
+        lock (_connLock)
+        {
+            using var c = _conn.CreateCommand();
+            c.CommandText = "SELECT id, type, entity_key, set_id, target_saved, op, base_rev, attempts FROM outbox ORDER BY id;";
+            using var r = c.ExecuteReader();
+            while (r.Read())
+            {
+                long id = r.GetInt64(0);
+                string type = r.GetString(1);
+                string entityKey = r.GetString(2);
+                string setId = r.IsDBNull(3) ? "" : r.GetString(3);
+                bool targetSaved = !r.IsDBNull(4) && r.GetInt64(4) != 0;
+                byte[]? opBlob = r.IsDBNull(5) ? null : r.GetFieldValue<byte[]>(5);
+                byte[]? baseRev = r.IsDBNull(6) ? null : r.GetFieldValue<byte[]>(6);
+                int attempts = r.IsDBNull(7) ? 0 : r.GetInt32(7);
+                IReadOnlyList<PlaylistOp>? ops = null;
+                if (type == "oprebase" && opBlob is not null)
+                {
+                    var parsed = PlaylistWireMapper.ParseChanges(opBlob);
+                    ops = parsed.Ops;
+                    baseRev ??= parsed.BaseRev;
+                }
+                list.Add(new OutboxOp(id, type, entityKey, setId, targetSaved, id, attempts, ops, baseRev));
+            }
+        }
+        return list;
+    }
+
+    public void Save(OutboxOp op)
+    {
+        byte[]? opBlob = op.Type == "oprebase" && op.Ops is not null ? PlaylistWireMapper.BuildChanges(op.BaseRev, op.Ops) : null;
+        lock (_connLock)
+        {
+            using var c = _conn.CreateCommand();
+            c.CommandText = "INSERT INTO outbox(id,type,entity_key,set_id,target_saved,op,base_rev,attempts) VALUES($i,$t,$e,$s,$ts,$op,$br,$a) " +
+                            "ON CONFLICT(id) DO UPDATE SET attempts=excluded.attempts, target_saved=excluded.target_saved, op=excluded.op, base_rev=excluded.base_rev;";
+            c.Parameters.AddWithValue("$i", op.Id);
+            c.Parameters.AddWithValue("$t", op.Type);
+            c.Parameters.AddWithValue("$e", op.EntityKey);
+            c.Parameters.AddWithValue("$s", op.SetId);
+            c.Parameters.AddWithValue("$ts", op.TargetSaved ? 1 : 0);
+            c.Parameters.AddWithValue("$op", (object?)opBlob ?? DBNull.Value);
+            c.Parameters.AddWithValue("$br", (object?)op.BaseRev ?? DBNull.Value);
+            c.Parameters.AddWithValue("$a", op.Attempts);
+            c.ExecuteNonQuery();
+        }
+    }
+
+    public void Remove(long id)
+    {
+        lock (_connLock)
+        {
+            using var c = _conn.CreateCommand();
+            c.CommandText = "DELETE FROM outbox WHERE id=$i;";
+            c.Parameters.AddWithValue("$i", id);
+            c.ExecuteNonQuery();
+        }
+    }
+
+    public void DeadLetter(OutboxOp op, string reason)
+    {
+        lock (_connLock)
+        {
+            using var c = _conn.CreateCommand();
+            c.CommandText = "INSERT OR REPLACE INTO dead_letter(id,type,entity_key,reason,created_at) VALUES($i,$t,$e,$r,0);";
+            c.Parameters.AddWithValue("$i", op.Id);
+            c.Parameters.AddWithValue("$t", op.Type);
+            c.Parameters.AddWithValue("$e", op.EntityKey);
+            c.Parameters.AddWithValue("$r", reason);
+            c.ExecuteNonQuery();
         }
     }
 

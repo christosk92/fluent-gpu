@@ -27,6 +27,16 @@ public interface IMutationStrategy
     void Rollback(OutboxOp op, IStore store);
 }
 
+/// <summary>Durable backing for the outbox: pending intents persist here so a restart can replay them (offline-first).
+/// SQLite implements it; a null engine outbox keeps the in-memory-only behaviour.</summary>
+public interface IMutationOutbox
+{
+    IReadOnlyList<OutboxOp> Load();
+    void Save(OutboxOp op);                 // insert-or-replace by Id (also used to persist an attempts bump)
+    void Remove(long id);
+    void DeadLetter(OutboxOp op, string reason);
+}
+
 /// <summary>SetReplay: idempotent end-state writes (saved tracks/albums/artists, follows). Local-intent-wins: replay the
 /// desired state; a server no-op when already in that state. Rollback reverts on terminal failure.</summary>
 public sealed class SetReplayStrategy : IMutationStrategy
@@ -81,6 +91,7 @@ public sealed class MutationEngine
 
     readonly IStore _store;
     readonly Dictionary<string, IMutationStrategy> _strategies;
+    readonly IMutationOutbox? _durable;
     readonly object _gate = new();
     // "set" rows coalesce (one per (set, entity), latest end-state wins); "oprebase" rows append (keyed by unique id —
     // the server permits duplicate playlist items, so edits must NOT dedupe).
@@ -92,10 +103,14 @@ public sealed class MutationEngine
 
     public List<OutboxOp> DeadLetter { get; } = new();
 
-    public MutationEngine(IStore store, IEnumerable<IMutationStrategy> strategies)
+    public MutationEngine(IStore store, IEnumerable<IMutationStrategy> strategies, IMutationOutbox? durable = null)
     {
         _store = store;
         _strategies = strategies.ToDictionary(s => s.Type);
+        _durable = durable;
+        if (_durable is not null)
+            foreach (var op in _durable.Load())   // restore pending intents from disk (the optimistic store state already persisted)
+                if (_strategies.ContainsKey(op.Type)) { _outbox[KeyOf(op)] = op; if (op.Id > _seq) _seq = op.Id; }
     }
 
     public int Pending { get { lock (_gate) return _outbox.Count; } }
@@ -106,7 +121,9 @@ public sealed class MutationEngine
         if (!_strategies.TryGetValue("set", out var s)) return;
         var id = Interlocked.Increment(ref _seq);
         var op = new OutboxOp(id, "set", uri, setId, saved, id, 0);
-        lock (_gate) _outbox[KeyOf(op)] = op;   // coalesce to the latest end-state (per set, so two sets don't collide)
+        OutboxOp? replaced = null;
+        lock (_gate) { if (_outbox.TryGetValue(KeyOf(op), out var ex)) replaced = ex; _outbox[KeyOf(op)] = op; }   // coalesce
+        if (_durable is not null) { if (replaced is not null) _durable.Remove(replaced.Id); _durable.Save(op); }
         s.ApplyOptimistic(op, _store);
     }
 
@@ -119,6 +136,7 @@ public sealed class MutationEngine
         var id = Interlocked.Increment(ref _seq);
         var op = new OutboxOp(id, "oprebase", playlistUri, playlistUri, false, id, 0, ops, baseRev);
         lock (_gate) { _outbox[KeyOf(op)] = op; _editSnapshots[id] = _store.Membership(playlistUri); }   // snapshot BEFORE apply
+        _durable?.Save(op);
         s.ApplyOptimistic(op, _store);
     }
 
@@ -146,14 +164,18 @@ public sealed class MutationEngine
                     stillCurrent = _outbox.TryGetValue(key, out var cur) && cur.Id == op.Id;
                     if (stillCurrent) { _outbox.Remove(key); _editSnapshots.Remove(op.Id); }
                 }
-                // "set" reconciles to Confirmed; "oprebase" leaves the already-applied membership (the dealer echo / next /diff confirms).
-                if (stillCurrent && op.Type == "set") _store.SetSaved(op.SetId, op.EntityKey, op.TargetSaved, SyncState.Confirmed);
+                if (stillCurrent)
+                {
+                    _durable?.Remove(op.Id);
+                    // "set" reconciles to Confirmed; "oprebase" leaves the already-applied membership (the dealer echo / next /diff confirms).
+                    if (op.Type == "set") _store.SetSaved(op.SetId, op.EntityKey, op.TargetSaved, SyncState.Confirmed);
+                }
                 // else: a newer Save superseded this op mid-replay → leave it Pending for the next drain.
             }
             else
             {
                 var bumped = op with { Attempts = op.Attempts + 1 };
-                bool deadLetter = false;
+                bool deadLetter = false, bumpedDurable = false;
                 IReadOnlyList<PlaylistMember>? snapshot = null;
                 lock (_gate)
                 {
@@ -164,12 +186,15 @@ public sealed class MutationEngine
                             _outbox.Remove(key); DeadLetter.Add(op); deadLetter = true;
                             if (_editSnapshots.Remove(op.Id, out var snap)) snapshot = snap;
                         }
-                        else _outbox[key] = bumped;
+                        else { _outbox[key] = bumped; bumpedDurable = true; }
                     }
                     // else: a newer Save superseded this op → drop this stale attempt; the newer op drains next.
                 }
+                if (bumpedDurable) _durable?.Save(bumped);   // persist the attempts bump
                 if (deadLetter)   // revert the optimistic write OUTSIDE the lock (cardinal rule)
                 {
+                    _durable?.Remove(op.Id);
+                    _durable?.DeadLetter(op, "max replay attempts exceeded");
                     if (op.Type == "oprebase") { if (snapshot is not null) _store.SetMembership(op.EntityKey, snapshot, op.BaseRev); }
                     else s.Rollback(op, _store);
                 }

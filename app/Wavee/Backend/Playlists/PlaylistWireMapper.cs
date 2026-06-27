@@ -112,4 +112,15 @@ public static class PlaylistWireMapper
                 add.Items.Add(new Pl.Item { Uri = items[i].ItemUri });
         return add;
     }
+
+    /// <summary>Inverse of <see cref="BuildChanges"/> — parse a persisted ListChanges body back into (base revision, ops),
+    /// for reloading a durable outbox edit.</summary>
+    public static (byte[]? BaseRev, IReadOnlyList<PlaylistOp> Ops) ParseChanges(byte[] blob)
+    {
+        var changes = Pl.ListChanges.Parser.ParseFrom(blob);
+        byte[]? baseRev = changes.HasBaseRevision ? changes.BaseRevision.ToByteArray() : null;
+        var ops = new List<PlaylistOp>();
+        foreach (var delta in changes.Deltas) ops.AddRange(MapOps(delta.Ops));
+        return (baseRev, ops);
+    }
 }
