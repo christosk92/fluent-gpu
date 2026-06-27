@@ -48,6 +48,7 @@ public sealed class Resource<TKey, TValue> where TKey : notnull
         public bool HasVal;
         public DateTime FetchedAt;
         public Task? InFlight;
+        public bool NeedsRevalidate;   // set by the dealer route (MarkStale); the revision policies gate IsStale on it
     }
 
     public Resource(Func<TKey, SessionContext, Task<TValue>> fetch, FreshnessPolicy fresh, Func<SessionContext> ctx)
@@ -118,6 +119,19 @@ public sealed class Resource<TKey, TValue> where TKey : notnull
             e.Val = value;
             e.HasVal = true;
             e.FetchedAt = DateTime.UtcNow;
+            e.NeedsRevalidate = false;
+        }
+    }
+
+    /// <summary>Mark a key dirty — the dealer route calls this on a push. For the revision policies (RevisionDelta /
+    /// SnapshotRevision) the next <see cref="Use"/> serves the resident value stale and revalidates exactly once; keys
+    /// the dealer never touches stay fresh and never eager-refetch (the anti-herd).</summary>
+    public void MarkStale(TKey key)
+    {
+        lock (_gate)
+        {
+            if (!_cache.TryGetValue(key, out var e)) { e = new Entry(); _cache[key] = e; }
+            e.NeedsRevalidate = true;
         }
     }
 
@@ -127,7 +141,7 @@ public sealed class Resource<TKey, TValue> where TKey : notnull
         {
             Interlocked.Increment(ref _fetchCount);
             var v = await _fetch(key, _ctx()).ConfigureAwait(false);
-            lock (_gate) { e.Val = v; e.HasVal = true; e.FetchedAt = DateTime.UtcNow; }
+            lock (_gate) { e.Val = v; e.HasVal = true; e.FetchedAt = DateTime.UtcNow; e.NeedsRevalidate = false; }
         }
         catch
         {
@@ -146,6 +160,10 @@ public sealed class Resource<TKey, TValue> where TKey : notnull
         FreshnessPolicy.Etag et => DateTime.UtcNow - e.FetchedAt > et.Ttl,
         FreshnessPolicy.PollWhole pw => DateTime.UtcNow - e.FetchedAt > pw.Ttl,
         FreshnessPolicy.Immutable => false,
-        _ => true,   // RevisionDelta / SnapshotRevision revalidate on a dealer push (LiveTopic) — eager otherwise
+        // Revision-gated: stale ONLY when the dealer route marked the key dirty (or it was never fetched). A resident,
+        // un-pushed entry is served without a re-fetch — this is the bounded-work / anti-herd contract.
+        FreshnessPolicy.RevisionDelta => e.NeedsRevalidate,
+        FreshnessPolicy.SnapshotRevision => e.NeedsRevalidate,
+        _ => true,
     };
 }
