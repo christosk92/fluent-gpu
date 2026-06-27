@@ -359,8 +359,7 @@ sealed class PlayerBarContent : Component
             rightKids.Add(Transport(Icons.Queue, () => { /* TODO: queue panel not wired yet */ }, canTransport, false, accent, buttonBox, buttonGlyph)
                 with { Key = "queue", Animate = ItemMotion });
         if (showDevices)
-            rightKids.Add(Transport(Icons.Devices, () => { /* TODO: device picker not wired yet */ }, canTransport, false, accent, buttonBox, buttonGlyph)
-                with { Key = "devices", Animate = ItemMotion });
+            rightKids.Add(Embed.Comp(() => new DevicesButton(b, accent, buttonBox, buttonGlyph)) with { Key = "devices" });
         if (showExpand)
             rightKids.Add(Transport(Icons.ChevronUp, () => { /* TODO: now-playing expand panel not wired yet */ }, canTransport, false, accent, buttonBox, buttonGlyph)
                 with { Key = "expand", Animate = ItemMotion });
@@ -663,6 +662,51 @@ sealed class VolumeButton : Component
         float v = _b.Volume.Peek();
         float nv = v > 0.001f ? 0f : 0.7f;       // mute ⇄ restore (a fuller mute-with-memory is the device-panel pass)
         _b.Volume.Value = nv; _ = _b.Player.SetVolumeAsync(nv);
+    }
+}
+
+// The Connect device picker: opens a MenuFlyout of the live device roster (from the bridge) UPWARD out of the button.
+// Each row toggles active + transfers playback to that device on click. Re-renders when the roster / active device changes.
+sealed class DevicesButton : Component
+{
+    readonly PlaybackBridge _b; readonly ColorF _accent; readonly float _box, _glyph;
+    public DevicesButton(PlaybackBridge b, ColorF accent, float box = 36f, float glyph = 16f)
+    {
+        _b = b; _accent = accent; _box = box; _glyph = glyph;
+    }
+
+    public override Element Render()
+    {
+        var anchor = UseRef<NodeHandle>(default);
+        var handle = UseRef<OverlayHandle?>(null);
+        var svc = UseContext(Overlay.Service);
+        var devices = _b.Devices.Value;               // subscribe → re-render on roster change
+        string? activeId = _b.ActiveDeviceId.Value;   // subscribe → the active row shows a check + the glyph highlights
+        bool active = !string.IsNullOrEmpty(activeId);
+
+        void Toggle()
+        {
+            if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
+            var items = new List<MenuFlyoutItem>(Math.Max(1, devices.Count));
+            if (devices.Count == 0)
+                items.Add(new MenuFlyoutItem(Loc.Get(Strings.Player.Devices), null, false, () => { }));
+            else
+                foreach (var d in devices)
+                {
+                    var dev = d;
+                    bool isActive = dev.Id == activeId || dev.IsActive;
+                    items.Add(MenuFlyoutItem.Toggle(dev.Name, isActive,
+                        () => { _ = _b.DeviceControl.TransferAsync(dev.Id); }, Icons.Devices, enabled: true));
+                }
+            handle.Value = svc.Open(
+                () => anchor.Value,
+                () => MenuFlyout.Build(items, () => handle.Value?.Close()),
+                FlyoutPlacement.TopEdgeAlignedRight,
+                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
+            handle.Value.ClosedAction = () => handle.Value = null;
+        }
+
+        return PlayerBarContent.Transport(Icons.Devices, Toggle, true, active, _accent, _box, _glyph, h => anchor.Value = h);
     }
 }
 
