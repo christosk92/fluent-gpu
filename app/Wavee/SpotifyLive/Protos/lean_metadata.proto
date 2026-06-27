@@ -35,10 +35,10 @@ message LeanAlbumRef {           // a track's embedded album: gid + name + cover
     optional LeanImageGroup cover_group = 17;
 }
 
-message LeanCountStub { }        // empty — used only to COUNT a repeated field (disc.track) without parsing it
+message LeanCountStub { }        // empty — retained for any count-only repeated fields
 
 message LeanDisc {
-    repeated LeanCountStub track = 3;
+    repeated LeanTrack track = 3;   // the album's tracklist (parsed: gid/name/artist/duration via LeanTrack's field numbers)
 }
 
 message LeanTrack {

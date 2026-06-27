@@ -161,9 +161,30 @@ public sealed class ExtendedMetadataSource : IMetadataSource
         var artists = new List<ArtistRef>(al.Artist.Count);
         foreach (var a in al.Artist) artists.Add(proj.Artist(a.Gid, a.Name));
         int year = al.Date is { } d ? d.Year : 0;
-        int trackCount = 0;
-        foreach (var disc in al.Disc) trackCount += disc.Track.Count;
-        store.UpsertAlbum(new Album(id, "spotify:album:" + id, al.Name, PickImage(al.CoverGroup), artists, year, trackCount));
+        var albumRef = new AlbumRef(id, "spotify:album:" + id, al.Name);
+        Image? cover = PickImage(al.CoverGroup);
+
+        // The tracklist (disc[].track[] now parses via LeanTrack). Each row carries the album cover + (its own or the
+        // album's) artists; also upserted as a resident Track so playback / GetTrack resolve it.
+        var tracks = new List<Track>();
+        foreach (var disc in al.Disc)
+            foreach (var t in disc.Track)
+            {
+                if (t.Gid.Length == 0) continue;
+                string tid = Base62.Encode(t.Gid.Span);
+                IReadOnlyList<ArtistRef> tArtists = artists;
+                if (t.Artist.Count > 0)
+                {
+                    var list = new List<ArtistRef>(t.Artist.Count);
+                    foreach (var a in t.Artist) list.Add(proj.Artist(a.Gid, a.Name));
+                    tArtists = list;
+                }
+                var track = new Track(tid, "spotify:track:" + tid, t.Name, tArtists, albumRef, t.Duration, t.Explicit, cover);
+                tracks.Add(track);
+                store.UpsertTrack(track);
+            }
+
+        store.UpsertAlbum(new Album(id, albumRef.Uri, al.Name, cover, artists, year, tracks.Count, tracks));
     }
 
     static void ProjectArtist(Lean.LeanArtist ar, IStore store)
