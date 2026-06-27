@@ -47,11 +47,14 @@ public sealed class LiveSessionHost : IAsyncDisposable
                 new Wavee.Backend.Metadata.ExtendedMetadataSource(live.Pipeline, () => live.BaseUrl, () => live.Session),
                 store, () => live.Session);
             var fetcher = new PlaylistFetcher(live.Pipeline, () => live.BaseUrl, store, (uris, c) => metadata.SyncAllAsync(uris, c));
+            // Pathfinder (GraphQL) for rich catalog reads with no protobuf equivalent — the artist overview, on open.
+            var pathfinder = new PathfinderClient(live.TokenProvider, _ => Task.FromResult(live.ClientToken), log);
             if (svc.RealLibrarySource is { } libSrc)
                 libSrc.OnDemandFetch = async (uri, c) =>
                 {
                     if (uri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) await fetcher.FetchPlaylistAsync(uri, c).ConfigureAwait(false);
                     else if (uri.StartsWith("spotify:album:", StringComparison.Ordinal)) await metadata.SyncAllAsync(new[] { uri }, c).ConfigureAwait(false);
+                    else if (uri.StartsWith("spotify:artist:", StringComparison.Ordinal)) await FetchArtistAsync(pathfinder, store, uri, c).ConfigureAwait(false);
                 };
 
             // (b) hydrate playlist HEADERS (name/cover) so the home + sidebar show names; for cover-less playlists also
@@ -106,6 +109,18 @@ public sealed class LiveSessionHost : IAsyncDisposable
         catch (Exception ex) { log("playlist hydration: " + ex.Message); }
     }
 
+    // Fetch the rich artist overview via Pathfinder GraphQL → map (the export's artist-*.json IS this shape) → store.
+    // Best-effort: a stale persisted-query hash or error leaves the identity-only artist in place.
+    static async Task FetchArtistAsync(PathfinderClient pf, IStore store, string uri, CancellationToken ct)
+    {
+        using var doc = await pf.QueryAsync(PathfinderOps.QueryArtistOverview, PathfinderOps.QueryArtistOverviewHash,
+            w => { w.WriteString("uri", uri); w.WriteString("locale", ""); w.WriteBoolean("preReleaseV2", false); },
+            PathfinderClient.Platform.Desktop, ct).ConfigureAwait(false);
+        if (doc is null) return;
+        if (Wavee.Core.SpotifyExportMapper.ArtistFromOverview(doc.RootElement) is { Uri.Length: > 0 } artist)
+            store.UpsertArtist(artist);
+    }
+
     /// <summary>CLI demo (`--connect-live`): bring up the live session over a REAL Services and log the now-playing the
     /// bridge sees THROUGH the switchable backend, for ~25 s — proving the fake→live swap end-to-end, headlessly.</summary>
     public static async Task<int> RunAsync(Action<string> log, CancellationToken ct)
@@ -122,12 +137,13 @@ public sealed class LiveSessionHost : IAsyncDisposable
         }));
 
         // Stage 1 verification: open the first rootlist playlist + an album through the catalog (fires OnDemandFetch).
-        string? plUri = null, alUri = null;
+        string? plUri = null, alUri = null, arUri = null;
         if (svc.RealStore is { } st)
         {
             foreach (var e in st.Rootlist())
                 if (e.Kind == 0 && e.Uri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) { plUri = e.Uri; break; }
             foreach (var u in st.SavedUris("albums")) { alUri = u; break; }
+            foreach (var u in st.SavedUris("artists")) { arUri = u; break; }
         }
         if (plUri is not null)
         {
@@ -138,6 +154,11 @@ public sealed class LiveSessionHost : IAsyncDisposable
         {
             var al = await svc.Library.GetAlbumAsync(alUri, ct).ConfigureAwait(false);
             log($"  on-open album '{al?.Name}' → {al?.Tracks?.Count ?? 0} tracks");
+        }
+        if (arUri is not null)
+        {
+            var ar = await svc.Library.GetArtistAsync(arUri, ct).ConfigureAwait(false);
+            log($"  on-open artist '{ar?.Name}' → {ar?.TopTracks?.Count ?? 0} top tracks, {ar?.TopAlbums?.Count ?? 0} releases, {ar?.MonthlyListeners ?? 0} listeners (Pathfinder)");
         }
 
         log("Listening 25s (control Wavee from your phone's Connect picker to drive commands)...");

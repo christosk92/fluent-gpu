@@ -73,7 +73,11 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         return _store.GetAlbum(uri);
     }
 
-    public Task<Artist?> GetArtistAsync(string uri, CancellationToken ct = default) => Task.FromResult(_store.GetArtist(uri));
+    public async Task<Artist?> GetArtistAsync(string uri, CancellationToken ct = default)
+    {
+        await EnsureFetchedAsync(uri, ct).ConfigureAwait(false);
+        return _store.GetArtist(uri);
+    }
 
     // First open of a playlist/album fetches its tracks (the rootlist/collection sync stores headers only). No-op offline.
     async Task EnsureFetchedAsync(string uri, CancellationToken ct)
@@ -83,6 +87,7 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         bool need =
             uri.StartsWith("spotify:playlist:", StringComparison.Ordinal) ? _store.Membership(uri).Count == 0 :
             uri.StartsWith("spotify:album:", StringComparison.Ordinal) ? _store.GetAlbum(uri)?.Tracks is null or { Count: 0 } :
+            uri.StartsWith("spotify:artist:", StringComparison.Ordinal) ? _store.GetArtist(uri)?.TopTracks is null or { Count: 0 } :
             false;
         if (need) { try { await fetch(uri, ct).ConfigureAwait(false); } catch { } }
     }

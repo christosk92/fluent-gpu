@@ -6,10 +6,18 @@ namespace Wavee.Core;
 /// <summary>The Anti-Corruption Layer for the Spotify GraphQL export (docs/architecture.md §4.4): translates the raw
 /// JSON shapes (playlistV2 / libraryV3 / home) into clean domain records. No JsonElement / GraphQL shape escapes this
 /// file. All navigation is null-safe so a missing field degrades gracefully rather than throwing.</summary>
-internal static class SpotifyExportMapper
+public static class SpotifyExportMapper
 {
     // The export's owner — used to decide IsOwner on playlists.
     public const string CurrentUser = "Christos";
+
+    /// <summary>Map a LIVE Pathfinder <c>queryArtistOverview</c> response (root document element) → the domain Artist.
+    /// The export's <c>artist-*.json</c> files ARE these responses, so this reuses the same <see cref="MapArtist"/>.</summary>
+    public static Artist? ArtistFromOverview(JsonElement responseRoot)
+    {
+        var au = Dig(responseRoot, "data", "artistUnion");
+        return au.ValueKind == JsonValueKind.Object ? MapArtist(au) : null;
+    }
 
     // ── safe JSON navigation ───────────────────────────────────────────────────────────────────────────────
     public static JsonElement Dig(JsonElement e, params string[] path)
