@@ -17,8 +17,9 @@ public class MutationOpRebaseTests
     {
         public Task<Resp> Request(Channel ch, string route, ReadOnlyMemory<byte> body, CancellationToken ct = default) => Task.FromResult(respond(route));
         public IObservable<WireEvent> Events(string topicPrefix) => new SimpleSubject<WireEvent>();
-        public Task Reply(string requestId, ReadOnlyMemory<byte> body) => Task.CompletedTask;
-        public Task Publish(ReadOnlyMemory<byte> putState) => Task.CompletedTask;
+        public IObservable<WireRequest> Requests(string identPrefix) => new SimpleSubject<WireRequest>();
+        public Task Reply(string requestId, RequestResult result) => Task.CompletedTask;
+        public Task<Resp> Publish(string deviceId, string connectionId, ReadOnlyMemory<byte> putState, CancellationToken ct = default) => Task.FromResult(new Resp(true, Array.Empty<byte>(), 200));
     }
 
     static PlaylistMember M(string id) => new(id, "spotify:track:" + id, null, 0);

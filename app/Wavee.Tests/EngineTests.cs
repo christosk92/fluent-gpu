@@ -116,8 +116,9 @@ public class MutationTests
         public Task<Resp> Request(Channel ch, string route, ReadOnlyMemory<byte> body, CancellationToken ct = default)
             => Task.FromResult(new Resp(false, [], 500));
         public IObservable<WireEvent> Events(string p) => new SimpleSubject<WireEvent>();
-        public Task Reply(string id, ReadOnlyMemory<byte> b) => Task.CompletedTask;
-        public Task Publish(ReadOnlyMemory<byte> p) => Task.CompletedTask;
+        public IObservable<WireRequest> Requests(string p) => new SimpleSubject<WireRequest>();
+        public Task Reply(string id, RequestResult result) => Task.CompletedTask;
+        public Task<Resp> Publish(string deviceId, string connectionId, ReadOnlyMemory<byte> putState, CancellationToken ct = default) => Task.FromResult(new Resp(false, [], 500));
     }
 
     static MutationEngine Engine(IStore store) => new(store, [new SetReplayStrategy()]);
