@@ -26,7 +26,14 @@ public static class SpotifyConnection
 {
     const byte CmdLogin = 0xAB, CmdApWelcome = 0xAC, CmdAuthFailure = 0xAD, CmdCountryCode = 0x1b, CmdProductInfo = 0x50;
 
+    /// <summary>The original login (returns just the welcome; the caller owns + disposes the socket).</summary>
     public static async Task<SpotifyWelcome> HandshakeAndLoginAsync(IDuplexStream stream, Credential cred, string deviceId, CancellationToken ct)
+        => (await HandshakeRetainAsync(stream, cred, deviceId, ct).ConfigureAwait(false)).Welcome;
+
+    /// <summary>Handshake + login that ALSO returns the negotiated Shannon <see cref="ApCodec"/> so the caller can keep the
+    /// socket alive as a persistent AP channel (Mercury / audio-key / packets) — Stage F's key path. The caller owns the
+    /// socket lifetime (it is NOT disposed here).</summary>
+    public static async Task<(SpotifyWelcome Welcome, ApCodec Codec)> HandshakeRetainAsync(IDuplexStream stream, Credential cred, string deviceId, CancellationToken ct)
     {
         var dh = DiffieHellman.Generate();
         var acc = new List<byte>();
@@ -154,8 +161,9 @@ public static class SpotifyConnection
             // Timed out waiting for the trailing packets — proceed with whatever arrived (product/country may be null).
         }
         if (welcome is null) throw new InvalidOperationException("no APWelcome/AuthFailure after login");
-        return new SpotifyWelcome(welcome.CanonicalUsername, welcome.AccountTypeLoggedIn.ToString(),
+        var result = new SpotifyWelcome(welcome.CanonicalUsername, welcome.AccountTypeLoggedIn.ToString(),
             welcome.ReusableAuthCredentials.ToByteArray(), welcome.ReusableAuthCredentialsType.ToString(), product, country);
+        return (result, codec);
     }
 
     static async Task<(byte Cmd, byte[] Payload)> ReceivePacketAsync(IDuplexStream stream, ApCodec codec, CancellationToken ct)
