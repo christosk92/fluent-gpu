@@ -53,7 +53,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
                 libSrc.OnDemandFetch = async (uri, c) =>
                 {
                     if (uri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) await fetcher.FetchPlaylistAsync(uri, c).ConfigureAwait(false);
-                    else if (uri.StartsWith("spotify:album:", StringComparison.Ordinal)) await metadata.SyncAllAsync(new[] { uri }, c).ConfigureAwait(false);
+                    else if (uri.StartsWith("spotify:album:", StringComparison.Ordinal)) await FetchAlbumAsync(pathfinder, store, uri, c).ConfigureAwait(false);
                     else if (uri.StartsWith("spotify:artist:", StringComparison.Ordinal)) await FetchArtistAsync(pathfinder, store, uri, c).ConfigureAwait(false);
                 };
 
@@ -121,6 +121,18 @@ public sealed class LiveSessionHost : IAsyncDisposable
             store.UpsertArtist(artist);
     }
 
+    // Fetch the album (metadata + tracklist) via Pathfinder getAlbum → map (data.albumUnion.tracksV2) → store. The
+    // spclient extended-metadata path was unreliable for some albums; getAlbum returns the full tracklist consistently.
+    static async Task FetchAlbumAsync(PathfinderClient pf, IStore store, string uri, CancellationToken ct)
+    {
+        using var doc = await pf.QueryAsync(PathfinderOps.GetAlbum, PathfinderOps.GetAlbumHash,
+            w => { w.WriteString("uri", uri); w.WriteString("locale", ""); w.WriteNumber("offset", 0); w.WriteNumber("limit", 50); },
+            PathfinderClient.Platform.Desktop, ct).ConfigureAwait(false);
+        if (doc is null) return;
+        if (Wavee.Core.SpotifyExportMapper.AlbumFromUnion(doc.RootElement) is { } album)
+            store.UpsertAlbum(album);
+    }
+
     /// <summary>CLI demo (`--connect-live`): bring up the live session over a REAL Services and log the now-playing the
     /// bridge sees THROUGH the switchable backend, for ~25 s — proving the fake→live swap end-to-end, headlessly.</summary>
     public static async Task<int> RunAsync(Action<string> log, CancellationToken ct)
@@ -153,7 +165,8 @@ public sealed class LiveSessionHost : IAsyncDisposable
         if (alUri is not null)
         {
             var al = await svc.Library.GetAlbumAsync(alUri, ct).ConfigureAwait(false);
-            log($"  on-open album '{al?.Name}' → {al?.Tracks?.Count ?? 0} tracks");
+            var t0 = al?.Tracks is { Count: > 0 } tl ? $"{tl[0].Title} ({tl[0].DurationMs}ms)" : "—";
+            log($"  on-open album '{al?.Name}' → {al?.Tracks?.Count ?? 0} tracks (first: {t0})");
         }
         if (arUri is not null)
         {

@@ -100,4 +100,7 @@ public static class PathfinderOps
 {
     public const string QueryArtistOverview = "queryArtistOverview";
     public const string QueryArtistOverviewHash = "7f86ff63e38c24973a2842b672abe44c910c1973978dc8a4a0cb648edef34527";
+
+    public const string GetAlbum = "getAlbum";
+    public const string GetAlbumHash = "b9bfabef66ed756e5e13f68a942deb60bd4125ec1f1be8cc42769dc0259b4b10";
 }

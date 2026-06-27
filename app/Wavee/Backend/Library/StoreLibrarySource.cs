@@ -87,7 +87,7 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         bool need =
             uri.StartsWith("spotify:playlist:", StringComparison.Ordinal) ? _store.Membership(uri).Count == 0 :
             uri.StartsWith("spotify:album:", StringComparison.Ordinal) ? _store.GetAlbum(uri)?.Tracks is null or { Count: 0 } :
-            uri.StartsWith("spotify:artist:", StringComparison.Ordinal) ? true :   // overview is dynamic (stats / latest) → refresh live each open
+            uri.StartsWith("spotify:artist:", StringComparison.Ordinal) ? _store.GetArtist(uri)?.TopTracks is null or { Count: 0 } :   // cache: fetch once, then served from the store (the virtualized discography reads it many times)
             false;
         if (need) { try { await fetch(uri, ct).ConfigureAwait(false); } catch { } }
     }

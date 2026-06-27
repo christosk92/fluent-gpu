@@ -19,6 +19,58 @@ public static class SpotifyExportMapper
         return au.ValueKind == JsonValueKind.Object ? MapArtist(au) : null;
     }
 
+    /// <summary>Map a LIVE Pathfinder <c>getAlbum</c> response (data.albumUnion) → the domain Album WITH its tracklist
+    /// (tracksV2.items[].track). Cover from coverArt.sources, year from date.isoString.</summary>
+    public static Album? AlbumFromUnion(JsonElement responseRoot)
+    {
+        var au = Dig(responseRoot, "data", "albumUnion");
+        if (au.ValueKind != JsonValueKind.Object) return null;
+        var uri = Str(au, "uri") ?? "";
+        if (uri.Length == 0) return null;
+        var name = Str(au, "name") ?? "";
+        var cover = PickImage(Dig(au, "coverArt", "sources"));
+        int year = YearFromIso(Str(au, "date", "isoString"));
+        var kind = (Str(au, "type") ?? "ALBUM").ToUpperInvariant() switch
+        {
+            "SINGLE" => AlbumKind.Single, "EP" => AlbumKind.EP, "COMPILATION" => AlbumKind.Compilation, _ => AlbumKind.Album,
+        };
+        var albumArtists = MapUnionArtists(Dig(au, "artists", "items"));
+        var albumRef = new AlbumRef(IdFromUri(uri), uri, name);
+
+        var tracks = new List<Track>();
+        var items = Dig(au, "tracksV2", "items");
+        if (items.ValueKind == JsonValueKind.Array)
+            foreach (var it in items.EnumerateArray())
+            {
+                var t = Dig(it, "track");
+                if (t.ValueKind != JsonValueKind.Object) continue;
+                var turi = Str(t, "uri");
+                if (turi is null) continue;
+                var tArtists = MapUnionArtists(Dig(t, "artists", "items"));
+                tracks.Add(new Track(IdFromUri(turi), turi, Str(t, "name") ?? "",
+                    tArtists.Count > 0 ? tArtists : albumArtists, albumRef,
+                    Long(t, "duration", "totalMilliseconds"), false, cover, PlayCount: Long(t, "playcount")));
+            }
+
+        return new Album(IdFromUri(uri), uri, name, cover, albumArtists, year, tracks.Count, tracks, kind);
+    }
+
+    static List<ArtistRef> MapUnionArtists(JsonElement items)
+    {
+        var list = new List<ArtistRef>();
+        if (items.ValueKind != JsonValueKind.Array) return list;
+        foreach (var a in items.EnumerateArray())
+        {
+            var u = Str(a, "uri");
+            var n = Str(a, "profile", "name");
+            if (u is not null && n is not null) list.Add(new ArtistRef(IdFromUri(u), u, n));
+        }
+        return list;
+    }
+
+    static int YearFromIso(string? iso)
+        => iso is { Length: >= 4 } && int.TryParse(iso.AsSpan(0, 4), out var y) ? y : 0;
+
     // ── safe JSON navigation ───────────────────────────────────────────────────────────────────────────────
     public static JsonElement Dig(JsonElement e, params string[] path)
     {
