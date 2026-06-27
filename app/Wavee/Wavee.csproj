@@ -6,6 +6,11 @@
     <!-- NativeAOT is the publish target (single self-contained native exe). Scoped to THIS csproj so
          the net10 app build/run stay JIT; AOT/trim analyzers engage here, never on Wavee.Core's path. -->
     <PublishAot>true</PublishAot>
+    <!-- The Windows composition root references the Windows-only backend, so CA1416 is noise here: the Win32 paths are
+         intentional. The portable Backend/ subtree's cross-platform discipline is enforced by TerraFX-freedom (the
+         VerticalSlice guard), not by this analyzer — and Wavee.Tests, which builds Backend/ cross-platform, likewise
+         suppresses CA1416. The macOS/Linux credential paths (KeyringProtector) stay guarded by OperatingSystem checks. -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
   </PropertyGroup>
 
   <!-- Composition root: the Windows backend (D3D12 / Win32 / DirectWrite / WIC) wired into the
@@ -16,6 +21,27 @@
     <ProjectReference Include="..\..\src\FluentGpu.Windows\FluentGpu.Windows.csproj" />
     <ProjectReference Include="..\..\src\FluentGpu.WindowsApi\FluentGpu.WindowsApi.csproj" />
     <ProjectReference Include="..\Wavee.Core\Wavee.Core.csproj" />
+  </ItemGroup>
+
+  <!-- Real Spotify wire protocol (handshake + login). Vendored .proto compiled via Grpc.Tools → the Wavee.Protocol
+       namespace. Used ONLY by app/Wavee/SpotifyLive (the live-network layer); the unit-tested Backend stays protobuf-free. -->
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" Version="3.35.0" />
+    <!-- DPAPI (Windows) — the OPTIONAL at-rest protector swapped behind the portable ICredentialProtector seam. -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.0" />
+    <!-- STEP 4 — the persistent cold tier (offline-first source of truth). Portable native bundle (win/mac/linux). -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.8" />
+    <!-- NU1903: Microsoft.Data.Sqlite 10.0.8 pulls the transitive SQLitePCLRaw.lib.e_sqlite3 2.1.11, which ships a SQLite
+         build with a known vulnerability (GHSA-2m69-gcr7-jv3q). The first patched release is 3.0.0 (bundles SQLite 3.50.3) —
+         there is no 2.1.12. Pin the bundle directly to override the transitive one (the vulnerability scan is then clean). -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.0" />
+    <PackageReference Include="Grpc.Tools" Version="2.81.0">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <Protobuf Include="SpotifyLive\Protos\**\*.proto" GrpcServices="None" ProtoRoot="SpotifyLive\Protos" />
   </ItemGroup>
 
   <!-- Bundled fake-catalog cover art + the loc JSON: copied next to the exe (FakeData.Cover resolves

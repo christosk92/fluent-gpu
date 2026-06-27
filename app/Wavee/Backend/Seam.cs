@@ -1,0 +1,132 @@
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+using Wavee.Core;
+
+namespace Wavee.Backend;
+
+// ── §7 — the thin SEAM ADAPTERS (engines → Wavee.Core facets) ────────────────────────────────────────────────────────
+// The plan's "facet adapters present the engines as the seam." These wire the store + mutation/session engines behind the
+// existing Wavee.Core interfaces, so the UI/aggregate consume them unchanged. (Catalog/Remote adapters follow the same
+// shape over the Resource engine + Transport; Mutation + Session are the two wired here.)
+
+/// <summary>IMutationSource over the store + the Mutation engine: SetSavedAsync = optimistic Save + drain; the Saved set
+/// mirrors the store and emits on every change (the bridge mirrors it into an engine Signal).</summary>
+public sealed class EngineMutationSource : IMutationSource, IDisposable
+{
+    readonly IStore _store;
+    readonly MutationEngine _mut;
+    readonly ITransport _transport;
+    readonly Func<SessionContext> _ctx;
+    readonly string _setId;
+    readonly SimpleSubject<IReadOnlySet<string>> _savedChanged;
+    readonly IDisposable _sub;
+    readonly object _savedGate = new();
+    HashSet<string> _saved;   // immutable snapshot, swapped under _savedGate; readers (IsSaved/Saved) read the reference lock-free
+
+    public EngineMutationSource(IStore store, MutationEngine mut, ITransport transport, Func<SessionContext> ctx, string setId = "liked")
+    {
+        _store = store; _mut = mut; _transport = transport; _ctx = ctx; _setId = setId;
+        _saved = new HashSet<string>(store.SavedUris(setId), StringComparer.Ordinal);
+        _savedChanged = new SimpleSubject<IReadOnlySet<string>>(_saved);
+        _sub = store.Changes.Subscribe(Observers.From<StoreChange>(OnStoreChange));
+    }
+
+    public string Id => "spotify";
+    public bool Owns(string uri) => uri.StartsWith("spotify:", StringComparison.Ordinal);
+    public SourceCapabilities Capabilities => SourceCapabilities.Mutations;
+
+    public IReadOnlySet<string> Saved => _saved;
+    public bool IsSaved(string uri) => _saved.Contains(uri);
+    public IObservable<IReadOnlySet<string>> SavedChanged => _savedChanged;
+
+    public async Task SetSavedAsync(string uri, bool saved, CancellationToken ct = default)
+    {
+        // store.SetSaved → Bump → OnStoreChange updates _saved + emits, synchronously — no explicit recompute needed.
+        _mut.Save(_setId, uri, saved);                                     // optimistic + outbox (store shows Pending)
+        await _mut.Drain(_transport, _ctx(), ct).ConfigureAwait(false);    // replay + reconcile (stub transport = succeeds)
+    }
+
+    // Incremental: a single change costs an O(1) IsSaved lookup, not an O(saved-set) rebuild + SetEquals on EVERY store
+    // change. A bulk load (one StoreChange.Bulk) does a full re-read. The RMW on _saved is guarded; the emit is outside the lock.
+    void OnStoreChange(StoreChange c)
+    {
+        IReadOnlySet<string>? toEmit = null;
+        lock (_savedGate)
+        {
+            if (c.IsBulk)
+            {
+                var full = new HashSet<string>(_store.SavedUris(_setId), StringComparer.Ordinal);
+                if (!full.SetEquals(_saved)) { _saved = full; toEmit = full; }
+            }
+            else
+            {
+                bool now = _store.IsSaved(_setId, c.Uri);
+                bool was = _saved.Contains(c.Uri);
+                if (now != was)
+                {
+                    var next = new HashSet<string>(_saved, StringComparer.Ordinal);
+                    if (now) next.Add(c.Uri); else next.Remove(c.Uri);
+                    _saved = next;
+                    toEmit = next;
+                }
+            }
+        }
+        if (toEmit is not null) _savedChanged.OnNext(toEmit);
+    }
+
+    public void Dispose() => _sub.Dispose();
+}
+
+/// <summary>ISpotifySession over ⑤ SessionContext. ConnectAsync is STUBBED (real connect = the AP/Shannon handshake via
+/// the Transport); status/user are projected from the ambient session.</summary>
+public sealed class EngineSessionSource : ISpotifySession
+{
+    readonly SessionContextHost _session;
+    readonly SimpleSubject<AuthStatus> _status = new(AuthStatus.LoggedOut);
+    AuthStatus _cur = AuthStatus.LoggedOut;
+
+    public EngineSessionSource(SessionContextHost session) => _session = session;
+
+    public AuthStatus Status => _cur;
+    public WaveeUser? CurrentUser { get; private set; }
+    public IObservable<AuthStatus> StatusChanged => _status;
+
+    public Task<bool> ConnectAsync(CancellationToken ct = default)
+    {
+        var ctx = _session.Current;
+        // Premium-only gate: refuse a Free account outright (Wavee requires Premium for now).
+        if (!SessionGate.IsAllowed(ctx.Tier))
+        {
+            _cur = AuthStatus.Error;
+            CurrentUser = null;
+            _status.OnNext(_cur);
+            return Task.FromResult(false);
+        }
+        _cur = AuthStatus.Authenticated;   // STUB: real = AP connect + DH/Shannon handshake + APWelcome (Transport ③)
+        CurrentUser = new WaveeUser(ctx.Account, "Me", null, true);
+        _status.OnNext(_cur);
+        return Task.FromResult(true);
+    }
+
+    public Task LogoutAsync(CancellationToken ct = default)
+    {
+        _cur = AuthStatus.LoggedOut;
+        CurrentUser = null;
+        _status.OnNext(_cur);
+        return Task.CompletedTask;
+    }
+}
+
+static class Observers
+{
+    public static IObserver<T> From<T>(Action<T> onNext) => new Inline<T>(onNext);
+
+    sealed class Inline<T>(Action<T> onNext) : IObserver<T>
+    {
+        public void OnCompleted() { }
+        public void OnError(Exception error) { }
+        public void OnNext(T value) => onNext(value);
+    }
+}

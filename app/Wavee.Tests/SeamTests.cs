@@ -1,0 +1,84 @@
+using Wavee.Backend;
+using Wavee.Core;
+using Xunit;
+
+namespace Wavee.Tests;
+
+public class PremiumGateTests
+{
+    [Fact]
+    public void Premium_IsAllowed() => Assert.True(SessionGate.IsAllowed(Tier.Premium));
+
+    [Fact]
+    public void Free_IsRefused() => Assert.False(SessionGate.IsAllowed(Tier.Free));
+
+    [Fact]
+    public void WarningText_IsPresentable()
+    {
+        Assert.False(string.IsNullOrWhiteSpace(SessionGate.WarningTitle));
+        Assert.Contains("Premium", SessionGate.WarningBody);
+    }
+}
+
+public class SeamAdapterTests
+{
+    [Fact]
+    public async Task EngineMutationSource_SetSaved_FlowsThroughEngines()
+    {
+        var store = new InMemoryStore();
+        var mut = new MutationEngine(store, [new SetReplayStrategy()]);
+        var ctx = new SessionContext("me", "US", "premium", "en", Tier.Premium, false);
+        IMutationSource ims = new EngineMutationSource(store, mut, new StubTransport(), () => ctx, "liked");
+
+        Assert.True(ims.Capabilities.HasFlag(SourceCapabilities.Mutations));
+        Assert.True(ims.Owns("spotify:track:1"));
+        Assert.False(ims.Owns("local:file:x"));
+        Assert.False(ims.IsSaved("spotify:track:7"));
+
+        await ims.SetSavedAsync("spotify:track:7", true);
+
+        Assert.True(ims.IsSaved("spotify:track:7"));
+        Assert.Contains("spotify:track:7", ims.Saved);
+    }
+
+    [Fact]
+    public async Task EngineMutationSource_SavedChanged_Emits()
+    {
+        var store = new InMemoryStore();
+        var mut = new MutationEngine(store, [new SetReplayStrategy()]);
+        var ctx = new SessionContext("me", "US", "premium", "en", Tier.Premium, false);
+        var src = new EngineMutationSource(store, mut, new StubTransport(), () => ctx, "liked");
+
+        int emissions = 0;
+        using var sub = src.SavedChanged.Subscribe(new Obs(_ => emissions++));
+        emissions = 0;   // discard the initial replay
+        await src.SetSavedAsync("spotify:track:9", true);
+        Assert.True(emissions >= 1);
+    }
+
+    [Fact]
+    public async Task EngineSessionSource_Premium_Authenticates()
+    {
+        var host = new SessionContextHost(new SessionContext("me", "US", "premium", "en", Tier.Premium, false));
+        ISpotifySession sess = new EngineSessionSource(host);
+        Assert.Equal(AuthStatus.LoggedOut, sess.Status);
+        Assert.True(await sess.ConnectAsync());
+        Assert.Equal(AuthStatus.Authenticated, sess.Status);
+    }
+
+    [Fact]
+    public async Task EngineSessionSource_Free_Refused()
+    {
+        var host = new SessionContextHost(new SessionContext("me", "US", "premium", "en", Tier.Free, false));
+        ISpotifySession sess = new EngineSessionSource(host);
+        Assert.False(await sess.ConnectAsync());
+        Assert.Equal(AuthStatus.Error, sess.Status);
+    }
+
+    sealed class Obs(Action<IReadOnlySet<string>> on) : IObserver<IReadOnlySet<string>>
+    {
+        public void OnCompleted() { }
+        public void OnError(Exception e) { }
+        public void OnNext(IReadOnlySet<string> v) => on(v);
+    }
+}

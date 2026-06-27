@@ -9,7 +9,7 @@ namespace Wavee.Core;
 public sealed class SimpleSubject<T> : IObservable<T>
 {
     readonly object _gate = new();
-    readonly List<IObserver<T>> _observers = new();
+    IObserver<T>[] _observers = Array.Empty<IObserver<T>>();   // copy-on-write: OnNext just grabs the reference (zero-alloc)
     T _last;
     bool _hasLast;
 
@@ -17,13 +17,23 @@ public sealed class SimpleSubject<T> : IObservable<T>
     public SimpleSubject(T initial) { _last = initial; _hasLast = true; }
 
     /// <summary>The most recently published value, or <c>default</c> if nothing has been published.</summary>
-    public T? Current => _hasLast ? _last : default;
+    public T? Current { get { lock (_gate) return _hasLast ? _last : default; } }
 
     public IDisposable Subscribe(IObserver<T> observer)
     {
         ArgumentNullException.ThrowIfNull(observer);
-        lock (_gate) _observers.Add(observer);
-        if (_hasLast) observer.OnNext(_last);
+        bool hasLast;
+        T last;
+        lock (_gate)
+        {
+            var next = new IObserver<T>[_observers.Length + 1];
+            Array.Copy(_observers, next, _observers.Length);
+            next[_observers.Length] = observer;
+            _observers = next;
+            hasLast = _hasLast;   // capture under the lock — T may be a multi-field struct (StoreChange), so reading it
+            last = _last;          // unsynchronized could observe a torn value mid-write
+        }
+        if (hasLast) observer.OnNext(last);
         return new Subscription(this, observer);
     }
 
@@ -35,14 +45,23 @@ public sealed class SimpleSubject<T> : IObservable<T>
         {
             _last = value;
             _hasLast = true;
-            snapshot = _observers.ToArray();
+            snapshot = _observers;   // the array is immutable (replaced on sub/unsub) — grab the reference, no per-publish copy
         }
         foreach (var o in snapshot) o.OnNext(value);
     }
 
     void Remove(IObserver<T> observer)
     {
-        lock (_gate) _observers.Remove(observer);
+        lock (_gate)
+        {
+            int i = Array.IndexOf(_observers, observer);
+            if (i < 0) return;
+            if (_observers.Length == 1) { _observers = Array.Empty<IObserver<T>>(); return; }
+            var next = new IObserver<T>[_observers.Length - 1];
+            Array.Copy(_observers, 0, next, 0, i);
+            Array.Copy(_observers, i + 1, next, i, _observers.Length - i - 1);
+            _observers = next;
+        }
     }
 
     sealed class Subscription(SimpleSubject<T> parent, IObserver<T> observer) : IDisposable

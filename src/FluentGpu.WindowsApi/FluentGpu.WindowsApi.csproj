@@ -1,6 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <IsAotCompatible>true</IsAotCompatible>
+    <!-- Windows OS-services (Win32/WinRT P/Invoke) — Windows-only by design; CA1416 is a false positive on every call
+         here. Suppressed in this project only (the portable libraries keep the analyzer active). -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
   </PropertyGroup>
   <!-- Windows OS-services surface (WinAppSDK-shaped): runtime wrappers for toast notifications, credential
        vault, package identity, and activation. Scaffold today — grows as app needs land. MSIX packaging is

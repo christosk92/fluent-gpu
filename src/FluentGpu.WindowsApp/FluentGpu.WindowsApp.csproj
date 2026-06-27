@@ -12,6 +12,9 @@
          — so the netstandard2.0 SourceGen analyzer ref never sees it (NETSDK1207). AOT compilation only runs at PUBLISH;
          `dotnet build` / `dotnet run` stay fast JIT for iteration (the flag just turns on the trim/AOT analyzers there). -->
     <PublishAot>true</PublishAot>
+    <!-- The Windows gallery exe (Win32/D3D12 composition over the Windows backend) — Windows-only by design, so CA1416 is
+         a false positive here. Suppressed in this project only (the portable Engine/Controls keep the analyzer active). -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <!-- Bundled gallery assets (WinUI-Gallery control tile images, header art) copied next to the exe. -->

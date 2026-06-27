@@ -1,0 +1,89 @@
+syntax = "proto2";
+
+// A LEAN view of spotify.metadata Track/Album/Artist — only the fields the projection uses, with the SAME field numbers as
+// metadata.proto (wire format is field-number-based, so these parse the real Track/Album/Artist bytes). Parsed with
+// DiscardUnknownFields, so the many unused repeated fields (file[], restriction[], availability[], alternative[], …) are
+// SKIPPED without allocating their messages. This is the "custom field-skipping reader" — done as a schema, not hand-rolled.
+package wavee.lean;
+option csharp_namespace = "Wavee.Protocol.Lean";
+
+message LeanImage {
+    optional bytes file_id = 1;
+    optional int32 size = 2;     // Image.Size enum value read as int (0 = DEFAULT)
+    optional sint32 width = 3;
+    optional sint32 height = 4;
+}
+
+message LeanImageGroup {
+    repeated LeanImage image = 1;
+}
+
+message LeanDate {
+    optional sint32 year = 1;
+    optional sint32 month = 2;
+    optional sint32 day = 3;
+}
+
+message LeanArtistRef {          // an embedded artist: just gid + name
+    optional bytes gid = 1;
+    optional string name = 2;
+}
+
+message LeanAlbumRef {           // a track's embedded album: gid + name + cover
+    optional bytes gid = 1;
+    optional string name = 2;
+    optional LeanImageGroup cover_group = 17;
+}
+
+message LeanCountStub { }        // empty — used only to COUNT a repeated field (disc.track) without parsing it
+
+message LeanDisc {
+    repeated LeanCountStub track = 3;
+}
+
+message LeanTrack {
+    optional bytes gid = 1;
+    optional string name = 2;
+    optional LeanAlbumRef album = 3;
+    repeated LeanArtistRef artist = 4;
+    optional sint32 duration = 7;
+    optional bool explicit = 9;
+}
+
+message LeanAlbum {
+    optional bytes gid = 1;
+    optional string name = 2;
+    repeated LeanArtistRef artist = 3;
+    optional LeanDate date = 6;
+    repeated LeanDisc disc = 11;
+    optional LeanImageGroup cover_group = 17;
+}
+
+message LeanArtist {
+    optional bytes gid = 1;
+    optional string name = 2;
+    optional LeanImageGroup portrait_group = 17;
+}
+
+message LeanShowRef {            // an episode's embedded show: gid + name (for ShowName)
+    optional bytes gid = 1;
+    optional string name = 2;
+}
+
+message LeanShow {
+    optional bytes gid = 1;
+    optional string name = 2;
+    optional string description = 64;
+    optional string publisher = 66;
+    optional LeanImageGroup cover_image = 69;
+}
+
+message LeanEpisode {
+    optional bytes gid = 1;
+    optional string name = 2;
+    optional sint32 duration = 7;          // milliseconds
+    optional string description = 64;
+    optional LeanDate publish_time = 66;
+    optional LeanImageGroup cover_image = 68;
+    optional LeanShowRef show = 71;
+}

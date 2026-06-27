@@ -23,9 +23,12 @@
          only shows them after a design-time build). This makes every .g.cs a real file. -->
     <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
 
-    <!-- DocFX API reference: emit XML doc files; don't warn on members without doc comments. -->
+    <!-- DocFX API reference: emit XML doc files, but don't nag on doc-comment HYGIENE — missing docs (CS1591), a param
+         with no matching tag (CS1573), an unresolved/ambiguous cref (CS1574/CS0419), a paramref with no matching param
+         (CS1734), a misplaced (CS1587) or malformed (CS1570) comment. These are cosmetic doc warnings, not code signals
+         (code smells like CS0169/CS0108/CS8604 are deliberately NOT here, so they still surface). -->
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1574;CS0419;CS1734;CS1587;CS1570</NoWarn>
 
     <!-- NuGet packaging: only FluentGpu.Package ships a package; everything else is non-packable by default so a
          solution-wide `dotnet pack` never emits stray library/exe packages. -->
