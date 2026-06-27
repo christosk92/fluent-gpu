@@ -32,8 +32,9 @@ public sealed class LiveSessionHost : IAsyncDisposable
         var transport = new LiveDealerTransport(dealerHosts[0].Split(':')[0], live.TokenProvider, live.Pipeline, () => live.BaseUrl, log);
         var connect = new LiveConnect(transport, live.DeviceId, live.ApChannel, resolveContext: null, log: log);
         transport.Start();
-        svc.GoLive(connect.Controller, connect.Devices);
-        log("Live Connect session active — Wavee is a controllable device and mirrors now-playing.");
+        var liveSession = new LiveSpotifySession(live.Username, live.Session.Tier == Tier.Premium);
+        svc.GoLive(connect.Controller, connect.Devices, liveSession);
+        log("Live Connect session active — Wavee is a controllable device, mirrors now-playing, and shows the live account.");
         return new LiveSessionHost(transport, connect);
     }
 

@@ -116,3 +116,41 @@ public sealed class SwitchableDevices : IConnectDevices, IDisposable
 
     public void Dispose() => _sub?.Dispose();
 }
+
+public sealed class SwitchableSession : ISpotifySession, IDisposable
+{
+    readonly SimpleSubject<AuthStatus> _status;
+    readonly object _gate = new();
+    ISpotifySession _inner;
+    IDisposable? _sub;
+
+    public SwitchableSession(ISpotifySession inner) { _inner = inner; _status = new SimpleSubject<AuthStatus>(inner.Status); Wire(inner); }
+
+    public void SetInner(ISpotifySession inner)
+    {
+        lock (_gate) { _sub?.Dispose(); _inner = inner; Wire(inner); }
+        _status.OnNext(inner.Status);   // refresh the auth chip / user against the live session
+    }
+
+    void Wire(ISpotifySession s) => _sub = s.StatusChanged.Subscribe(Observers.From<AuthStatus>(st => _status.OnNext(st)));
+    ISpotifySession Cur { get { lock (_gate) return _inner; } }
+
+    public AuthStatus Status => Cur.Status;
+    public WaveeUser? CurrentUser => Cur.CurrentUser;
+    public IObservable<AuthStatus> StatusChanged => _status;
+    public Task<bool> ConnectAsync(CancellationToken ct = default) => Cur.ConnectAsync(ct);
+    public Task LogoutAsync(CancellationToken ct = default) => Cur.LogoutAsync(ct);
+    public void Dispose() => _sub?.Dispose();
+}
+
+/// <summary>An ISpotifySession reflecting a completed live login (Authenticated + the real account).</summary>
+public sealed class LiveSpotifySession : ISpotifySession
+{
+    readonly SimpleSubject<AuthStatus> _status = new(AuthStatus.Authenticated);
+    public LiveSpotifySession(string account, bool isPremium) => CurrentUser = new WaveeUser(account, account, null, isPremium);
+    public AuthStatus Status { get; private set; } = AuthStatus.Authenticated;
+    public WaveeUser? CurrentUser { get; private set; }
+    public IObservable<AuthStatus> StatusChanged => _status;
+    public Task<bool> ConnectAsync(CancellationToken ct = default) => Task.FromResult(true);
+    public Task LogoutAsync(CancellationToken ct = default) { Status = AuthStatus.LoggedOut; CurrentUser = null; _status.OnNext(AuthStatus.LoggedOut); return Task.CompletedTask; }
+}

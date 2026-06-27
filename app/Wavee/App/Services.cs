@@ -146,17 +146,19 @@ public sealed class Services
         // without rebuilding the UI — the PlaybackBridge binds to these stable facades.
         var swPlayer = new Wavee.Backend.SwitchablePlayer(player);
         var swDevices = new Wavee.Backend.SwitchableDevices(devices);
-        var svc = new Services(WaveeLog.Instance, session, library, swPlayer, swDevices, player, settings, mutations, userPlaylists);
+        var swSession = new Wavee.Backend.SwitchableSession(session);
+        var svc = new Services(WaveeLog.Instance, swSession, library, swPlayer, swDevices, player, settings, mutations, userPlaylists);
         svc.Log.Info("app", "Services created (REAL backend: persistent Store + StoreLibrarySource + durable multi-set mutations; live session/fetch/dealer connect on bootstrap)");
         return svc;
     }
 
     /// <summary>Swap the playback player + Connect device roster to a live backend at runtime. The PlaybackBridge bound to
     /// the switchable facades re-points without a rebuild (no-op if this Services wasn't built with switchables).</summary>
-    public void GoLive(IPlaybackPlayer player, IConnectDevices devices)
+    public void GoLive(IPlaybackPlayer player, IConnectDevices devices, ISpotifySession? session = null)
     {
         (Player as Wavee.Backend.SwitchablePlayer)?.SetInner(player);
         (Devices as Wavee.Backend.SwitchableDevices)?.SetInner(devices);
-        Log.Info("app", "playback backend swapped to LIVE (Connect device + now-playing + remote control active)");
+        if (session is not null) (Session as Wavee.Backend.SwitchableSession)?.SetInner(session);
+        Log.Info("app", "playback backend swapped to LIVE (Connect device + now-playing + remote control + account active)");
     }
 }
