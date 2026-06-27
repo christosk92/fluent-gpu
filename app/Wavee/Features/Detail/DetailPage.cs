@@ -155,19 +155,20 @@ sealed class DetailPage : Component
     static async Task<DetailModel> MapAlbumAsync(Services svc, Album a, CancellationToken ct)
     {
         var tracks = a.Tracks ?? Array.Empty<Track>();
-        // Best-effort trailing fetch (About-artist / Fans-also-like / Featured-on) — fired concurrently; a failure must
-        // not fail the page. (No related-artists / featured-on endpoints in the model, so we reuse the catalog lists.)
+        // Trailing sections from the REAL artist overview (already cached): About-the-artist + Fans-also-like (the
+        // artist's related artists). No fake library reuse. (Featured-on / discovered-on is a batched-extensions API —
+        // a follow-up; left empty rather than faked with the user's own playlists.)
         Artist? about = null;
         IReadOnlyList<Artist> fans = Array.Empty<Artist>();
-        IReadOnlyList<PlaylistSummary> featured = Array.Empty<PlaylistSummary>();
         try
         {
-            var aboutT = a.Artists.Count > 0 ? svc.Library.GetArtistAsync(a.Artists[0].Id, ct) : null;
-            var fansT = svc.Library.GetArtistsAsync(ct);
-            var featuredT = svc.Library.GetPlaylistsAsync(ct);
-            if (aboutT is not null) about = await aboutT;
-            fans = await fansT;
-            featured = await featuredT;
+            if (a.Artists.Count > 0) about = await svc.Library.GetArtistAsync(a.Artists[0].Uri, ct);
+            if (about?.Extras?.Related is { Count: > 0 } rel)
+            {
+                var list = new List<Artist>(rel.Count);
+                foreach (var r in rel) list.Add(new Artist(r.Id, r.Uri, r.Name, r.Image));
+                fans = list;
+            }
         }
         catch (OperationCanceledException) { throw; }
         catch { /* trailing degrades gracefully */ }
@@ -186,7 +187,7 @@ sealed class DetailPage : Component
             BadgeType: badge, Year: a.Year.ToString(), OwnerName: null, OwnerImage: null,
             Artists: a.Artists, Description: null, MetaLine: meta,
             Tracks: tracks, AboutArtist: about, Palette: null,
-            HasVideo: tracks.Any(t => t.HasVideo), ReleaseKind: a.Kind, Fans: fans, FeaturedOn: featured);
+            HasVideo: tracks.Any(t => t.HasVideo), ReleaseKind: a.Kind, Fans: fans, FeaturedOn: Array.Empty<PlaylistSummary>());
     }
 }
 
