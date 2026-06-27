@@ -7,7 +7,7 @@ namespace Wavee.SpotifyLive;
 // Shared live spclient bring-up: login (AP) -> client-token (attestation) -> login5 (spclient access token) -> resolve an
 // spclient host -> the middleware HttpPipeline (bearer + client-token + 429-backoff) + a SessionContext. The metadata and
 // library probes build on this. Needs creds + network — the USER runs the probes; only the wire shape is unverifiable here.
-public sealed record LiveSpclient(HttpPipeline Pipeline, string BaseUrl, SessionContext Session, string Username);
+public sealed record LiveSpclient(HttpPipeline Pipeline, string BaseUrl, SessionContext Session, string Username, string AccessToken);
 
 public static class SpotifyLiveSpclient
 {
@@ -54,6 +54,6 @@ public static class SpotifyLiveSpclient
         var tier = welcome.Product?.IsPremium == true ? Tier.Premium : Tier.Free;
         var session = new SessionContext(welcome.Username, welcome.Country ?? "US",
             tier == Tier.Premium ? "premium" : "free", "en", tier, false);
-        return new LiveSpclient(pipeline, baseUrl, session, welcome.Username);
+        return new LiveSpclient(pipeline, baseUrl, session, welcome.Username, accessToken);
     }
 }

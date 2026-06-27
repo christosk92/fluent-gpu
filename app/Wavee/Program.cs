@@ -115,6 +115,15 @@ static class Program
             Environment.Exit(code);
         }
 
+        // LIVE full library sync into the REAL persistent store (rootlist + all collections + hydrate + the dealer firehose).
+        // After this, `--real-backend` reads the library offline from disk. Usage: --spotify-sync
+        if (Array.IndexOf(args, "--spotify-sync") >= 0)
+        {
+            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(10));
+            int code = Wavee.SpotifyLive.SpotifyLibrarySync.RunAsync(Console.Error.WriteLine, cts.Token).GetAwaiter().GetResult();
+            Environment.Exit(code);
+        }
+
         // Seed the theme BEFORE the window comes up (no startup flash): honor the persisted preference, falling back to
         // the live OS theme for a fresh install (mode == System). FluentApp.Run then applies the matching Mica material
         // and the in-app surfaces mount with the right tokens; the store is reused by the app so there's one instance.
