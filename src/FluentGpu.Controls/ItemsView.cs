@@ -494,6 +494,10 @@ public sealed class ItemsView : Component
             // the -offset content transform now (the dispatcher's SetScrollOffset idiom, InputDispatcher.cs:388-433).
             if (animate)
             {
+                sc.ScrollMode = ScrollAnimator.ProgrammaticMode;
+                sc.FlingVelocity = 0f;
+                sc.FlingRetargeted = false;
+                sc.FlingSnapTarget = float.NaN;
                 if (horizontal) sc.TargetX = target; else sc.TargetY = target;
                 Context.ArmScroll?.Invoke(vp);
                 Context.RequestRerender();

@@ -105,4 +105,27 @@ public static class AcrylicBackdropMath
         while (b < px) b <<= 1;
         return b;
     }
+
+    /// <summary>The determinants of a layer's blurred backdrop: the inputs to the snapshot+blur passes. Two frames whose
+    /// stamps are equal produce a bit-identical blurred snapshot, so the compositor can REUSE a retained RT instead of
+    /// re-running passes A/B/C (design/subsystems/backdrop-effects-animation.md §2.3 "snapshot taken once on the
+    /// overlay's PushLayer"). Bit-exact float compare is correct here: the values come from the same layout/DPI/token
+    /// every frame, so a frame at rest reproduces them exactly; any real change (resize, re-anchor, sigma) trips it.</summary>
+    public readonly record struct BackdropStamp(float RectX, float RectY, float RectW, float RectH, float Sigma, float Scale, int CanvasW, int CanvasH);
+
+    /// <summary>Build the stamp for a layer rect (logical DIP) at the current scale + canvas size.</summary>
+    public static BackdropStamp Stamp(in RectF deviceRectDip, float sigma, float scale, int canvasW, int canvasH)
+        => new(deviceRectDip.X, deviceRectDip.Y, deviceRectDip.W, deviceRectDip.H, sigma, scale, canvasW, canvasH);
+
+    /// <summary>Can a retained blurred backdrop be reused this frame? True IFF the layer's determinants are unchanged
+    /// (<paramref name="cached"/> == <paramref name="now"/>) AND nothing behind it changed — i.e. this frame's damage
+    /// region (physical px; the union of changed nodes' device bounds, see SceneRecorder) does NOT overlap the layer's
+    /// snapshot region. An empty damage rect (W/H ≤ 0 ⇒ nothing changed) reuses unconditionally. This is the
+    /// region-aware "behind-region in the damage set" gate of §2.3, sampled headlessly by the VerticalSlice.</summary>
+    public static bool BackdropReusable(in BackdropStamp cached, in BackdropStamp now, in RectF snapshotRegionPhys, in RectF damagePhys)
+    {
+        if (!cached.Equals(now)) return false;                       // geometry / sigma / scale / canvas changed → re-blur
+        if (damagePhys.W <= 0f || damagePhys.H <= 0f) return true;   // nothing changed behind the overlay → reuse
+        return !snapshotRegionPhys.Overlaps(damagePhys);            // re-blur only when the change touches THIS region
+    }
 }

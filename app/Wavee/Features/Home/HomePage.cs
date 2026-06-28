@@ -1,6 +1,8 @@
 using System;
 using System.Linq;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
@@ -29,7 +31,20 @@ sealed class HomePage : Component
         var preview = UseContext(NavPreviewStore.Slot);    // pre-load: stash the card's known cover/title for the detail page
         if (svc is null) return new BoxEl { Grow = 1f };
 
-        var home = UseAsyncResource(ct => svc.Library.GetHomeAsync(ct), FakeData.HomeSeed);   // seed renders the loading shape; Skel.Region derives the shimmer from it
+        // Re-fetch the home when the library changes (e.g. the live-session playlist-header hydration lands) so playlist
+        // names/covers replace the initial URIs without a manual nav.
+        var home = UseLoadable(Loadable<HomeFeed>.Pending(FakeData.HomeSeed));   // seed renders the loading shape; later refreshes swap Ready->Ready in place
+        var post = UsePost();
+        var homeWorkerStarted = UseRef(false);
+        Context.UseEffect(() =>
+        {
+            if (homeWorkerStarted.Value) return;
+            homeWorkerStarted.Value = true;
+            StartHomeRefreshLoop(svc, home, post);
+
+            if (svc.Library is Wavee.Core.ICollectionEvents ev)
+                ev.CollectionsChanged.Subscribe(Wavee.Backend.Observers.From<Wavee.Core.CollectionKind>(__ => { _ = RefreshHomeOnce(svc, home, post, failIfInitial: false); }));
+        });
         string? name = bridge?.User.Value?.DisplayName;     // subscribe → greeting refreshes on login
 
         void Play(string uri) => _ = svc.Player.PlayAsync(uri, 0);
@@ -40,6 +55,9 @@ sealed class HomePage : Component
             {
                 case HomeCardKind.Liked:
                     go("liked", null);
+                    break;
+                case HomeCardKind.Track:
+                    _ = svc.Player.PlayTrackAsync(c.Uri);
                     break;
                 case HomeCardKind.Album:
                 {
@@ -61,29 +79,36 @@ sealed class HomePage : Component
             }
         }
 
-        Element Tile(HomeCard c) => MediaCard.QuickPick(c.Image, c.Title, c.Uri, () => NavCard(c), () => Play(c.Uri));
+        void PlayCard(HomeCard c)
+        {
+            if (c.Kind == HomeCardKind.Track) _ = svc.Player.PlayTrackAsync(c.Uri);
+            else Play(c.Uri);
+        }
+
+        Element Tile(HomeCard c) => MediaCard.QuickPick(c.Image, c.Title, c.Uri, () => NavCard(c), () => PlayCard(c));
 
         Element Shelf(HomeGroup g) => PagedShelf.Create(
             g.Cards.Count,
             cardAt: (i, w) =>
             {
                 var c = g.Cards[i];
-                return MediaCard.Shelf(c.Image, c.Title, c.Subtitle ?? "", c.Uri, () => NavCard(c), () => Play(c.Uri), w,
+                return MediaCard.Shelf(c.Image, c.Title, c.Subtitle ?? "", c.Uri, () => NavCard(c), () => PlayCard(c), w,
                     circular: c.Kind == HomeCardKind.Artist, morphKey: MorphKeyFor(c), onNavUri: NavUri);
             },
             measured: true,   // engine measures each card → row is exactly as tall as the tallest card (no reserved height)
-            header: g.Title is { } t ? WaveeType.RailHeader(t) : new BoxEl());
+            header: g.Title is { } t ? Surfaces.AccentHeader(t, GroupAccent(g)) : new BoxEl());
 
         Element Group(HomeGroup g) => g.Kind switch
         {
             HomeGroupKind.QuickGrid => QuickGrid(g.Cards.Take(8).Select(Tile)),
-            HomeGroupKind.Hero when g.Cards.Count > 0 => Responsive.Of(w => HeroBand(g.Cards[0], Play, NavCard, w), fallback: 560f),
-            HomeGroupKind.Shelf when g.Cards.Count > 0 => Shelf(g),
-            HomeGroupKind.CollapsedGrid => new BoxEl
+            HomeGroupKind.Hero when g.Cards.Count > 0 => Responsive.Of(w => HeroBand(g.Cards[0], GroupAccent(g), PlayCard, NavCard, w), fallback: 560f),
+            HomeGroupKind.Shelf when g.Cards.Count > 0 => Shelf(g),   // accent-bar header inside the shelf
+            // The "Made for you" region: an accent-bar header + the cards, behind a faintly tinted accent band.
+            HomeGroupKind.CollapsedGrid => Surfaces.SectionBand(new BoxEl
             {
                 Direction = 1, Gap = WaveeSpace.M,
-                Children = [ g.Title is { } t ? WaveeType.RailHeader(t) : new BoxEl(), QuickGrid(g.Cards.Select(Tile)) ],
-            },
+                Children = [ g.Title is { } t ? Surfaces.AccentHeader(t, GroupAccent(g)) : new BoxEl(), QuickGrid(g.Cards.Select(Tile)) ],
+            }, GroupAccent(g)),
             _ => new BoxEl(),
         };
 
@@ -120,19 +145,96 @@ sealed class HomePage : Component
         return ScrollView(page) with { Grow = 1f, ScrollKey = "home" };
     }
 
-    // Lightweight loading skeleton (finding #7): a few shelf placeholders (title bar + a row of card bars) so the pending
-    // edge doesn't build the full home feed just to derive a skeleton. Sized childless boxes → shimmer bars; SmoothResize
-    // eases the swap to the real groups on load.
+    static void StartHomeRefreshLoop(Services svc, Loadable<HomeFeed> home, Action<Action> post)
+    {
+        _ = Task.Run(async () =>
+        {
+            await RefreshHomeOnce(svc, home, post, failIfInitial: true).ConfigureAwait(false);
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(60));
+            while (await timer.WaitForNextTickAsync().ConfigureAwait(false))
+                await RefreshHomeOnce(svc, home, post, failIfInitial: false).ConfigureAwait(false);
+        });
+    }
+
+    static async Task RefreshHomeOnce(Services svc, Loadable<HomeFeed> home, Action<Action> post, bool failIfInitial)
+    {
+        try
+        {
+            var feed = await svc.Library.GetHomeAsync(default).ConfigureAwait(false);
+            post(() => home.SetReady(feed));
+        }
+        catch (Exception ex)
+        {
+            if (!failIfInitial) return;
+            post(() =>
+            {
+                if (home.State.Peek() != (byte)LoadState.Ready) home.SetFailed(ex);
+            });
+        }
+    }
+
+    // Lightweight loading skeleton: match the real home shelves (accent header + square media cards + text bars) instead
+    // of generic row rectangles. Sized childless boxes become shimmer bars through the skeleton deriver.
     static Element HomeShimmer()
     {
-        static Element TitleBar() => new BoxEl { Width = 180f, Height = 22f, Corners = CornerRadius4.All(WaveeRadius.Control) };
-        static Element Card() => new BoxEl { Width = 180f, Height = 56f, Corners = CornerRadius4.All(WaveeRadius.Card) };
-        static Element Shelf() => new BoxEl
+        const float cardW = 250f;
+        const float pad = WaveeSpace.S;
+        const float cover = cardW - 2f * pad;
+
+        static Element Bar(float w, float h, float r = 4f) =>
+            new BoxEl { Width = w, Height = h, Corners = CornerRadius4.All(r) };
+
+        Element Header(float titleW) => new BoxEl
         {
-            Direction = 1, Gap = WaveeSpace.M,
-            Children = [TitleBar(), new BoxEl { Direction = 0, Gap = WaveeSpace.M, Children = [Card(), Card(), Card(), Card(), Card()] }],
+            Direction = 0, Gap = 12f, AlignItems = FlexAlign.Center,
+            Children =
+            [
+                new BoxEl { Width = 3f, Height = 42f, Corners = CornerRadius4.All(1.5f) },
+                Bar(titleW, 28f, 6f),
+            ],
         };
-        return new BoxEl { Direction = 1, Gap = WaveeSpace.XL, Children = [Shelf(), Shelf(), Shelf()] };
+
+        Element ShelfCard() => new BoxEl
+        {
+            Width = cardW,
+            Direction = 1,
+            Gap = pad,
+            Shrink = 0f,
+            Padding = new Edges4(pad, pad, pad, WaveeSpace.M),
+            Corners = CornerRadius4.All(WaveeRadius.Card),
+            Children =
+            [
+                Bar(cover, cover, WaveeRadius.Card),
+                Bar(cover * 0.72f, 18f),
+                Bar(cover * 0.86f, 13f),
+                Bar(cover * 0.58f, 13f),
+            ],
+        };
+
+        Element Shelf(float titleW) => new BoxEl
+        {
+            Direction = 1,
+            Gap = WaveeSpace.M,
+            ClipToBounds = true,
+            Children =
+            [
+                Header(titleW),
+                new BoxEl
+                {
+                    Direction = 0,
+                    Gap = WaveeSpace.M,
+                    ClipToBounds = true,
+                    Children = [ShelfCard(), ShelfCard(), ShelfCard(), ShelfCard(), ShelfCard(), ShelfCard(), ShelfCard()],
+                },
+            ],
+        };
+
+        return new BoxEl
+        {
+            Direction = 1,
+            Gap = WaveeSpace.XL,
+            Children = [Shelf(260f), Shelf(320f), Shelf(240f)],
+        };
     }
 
     static string Id(string uri) { int i = uri.LastIndexOf(':'); return i >= 0 ? uri[(i + 1)..] : uri; }
@@ -143,6 +245,11 @@ sealed class HomePage : Component
         _ => null,
     };
 
+    // The group's lifted accent (renderer color): the composer-assigned tint (cover-extracted or semantic), or a
+    // per-kind fallback for groups with none (the offline/library home). Lift keeps a near-black cover color legible.
+    static ColorF GroupAccent(HomeGroup g) => WaveePalette.Lift(WaveePalette.ToColor(
+        g.Accent ?? (g.Kind == HomeGroupKind.CollapsedGrid ? 0xFF3B82F6u : 0xFF60CDFFu)));
+
     // ── greeting hero ────────────────────────────────────────────────────────────────────────────────
     static Element GreetingHero(string? name)
     {
@@ -151,7 +258,9 @@ sealed class HomePage : Component
                     : h < 12 ? Loc.Get(Strings.Home.GoodMorning)
                     : h < 18 ? Loc.Get(Strings.Home.GoodAfternoon)
                     : Loc.Get(Strings.Home.GoodEvening);
-        string greet = string.IsNullOrWhiteSpace(name) ? part : Strings.Home.Greeting(part, name);
+        // Omit a Spotify user-id handle (a long, space-less hash) — show the bare greeting until a real display name lands.
+        bool looksLikeHandle = name is { Length: >= 20 } && !name.Contains(' ');
+        string greet = (string.IsNullOrWhiteSpace(name) || looksLikeHandle) ? part : Strings.Home.Greeting(part, name);
         return new BoxEl
         {
             Direction = 1, Gap = WaveeSpace.XS, Padding = new Edges4(0f, WaveeSpace.S, 0f, 0f),
@@ -160,7 +269,7 @@ sealed class HomePage : Component
     }
 
     // ── featured spotlight (a Hero card — full-width band, the calm break) ──────────────────────────────
-    static Element HeroBand(HomeCard c, Action<string> play, Action<HomeCard> nav, float innerW)
+    static Element HeroBand(HomeCard c, ColorF accent, Action<HomeCard> play, Action<HomeCard> nav, float innerW)
     {
         float textMax = innerW > 1f ? MathF.Max(160f, innerW - 216f) : 560f;
         return new BoxEl
@@ -169,8 +278,12 @@ sealed class HomePage : Component
             Padding = new Edges4(WaveeSpace.L, WaveeSpace.L, WaveeSpace.L, WaveeSpace.L),
             Corners = CornerRadius4.All(WaveeRadius.Card), Shadow = Elevation.Card,
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-            Gradient = LinearGradient(110f,
-                new GradientStop(0f, Tok.AccentDefault with { A = 0.22f }),
+            // Spotlight glow: a soft accent radial pooled behind the cover (left-of-center), fading into the neutral
+            // card material toward the right — so the art appears to emit its own color (the WinUI hero treatment),
+            // rather than the whole band being painted. Opaque card-based stops keep it a material, not a wash.
+            Gradient = RadialGradient(
+                new Point2(0.16f, 0.5f), new Point2(0.78f, 1.05f),
+                new GradientStop(0f, ColorF.Lerp(Tok.FillCardSecondary, accent, 0.30f)),
                 new GradientStop(1f, Tok.FillCardSecondary)),
             Children =
             [
@@ -185,13 +298,13 @@ sealed class HomePage : Component
                     Direction = 1, Grow = 1f, Basis = 0f, Gap = WaveeSpace.S,
                     Children =
                     [
-                        Caption(Loc.Get(Strings.Home.FeaturedAlbum)) with { Color = Tok.AccentDefault, Weight = 700, CharSpacing = 80f, MaxWidth = textMax },
+                        Caption(Loc.Get(Strings.Home.FeaturedAlbum)) with { Color = accent, Weight = 700, CharSpacing = 80f, MaxWidth = textMax },
                         WaveeType.PageHero(c.Title) with { MaxWidth = textMax, Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis },
                         WaveeType.TrackMeta(c.Subtitle ?? "") with { MaxWidth = textMax, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                         new BoxEl
                         {
                             Direction = 0, Margin = new Edges4(0f, WaveeSpace.S, 0f, 0f),
-                            Children = [ Button.Accent(Loc.Get(Strings.Home.Play), () => play(c.Uri)) ],
+                            Children = [ Button.Accent(Loc.Get(Strings.Home.Play), () => play(c)) ],
                         },
                     ],
                 },

@@ -93,6 +93,16 @@ public sealed class AutoSuggestBox : Component
     public TemplateParts? Parts;
 
     public IReadOnlyList<string> Suggestions = [];
+    /// <summary>LIVE suggestions (overrides <see cref="Suggestions"/> when set). A Component freezes its ctor args at
+    /// mount, so a box whose suggestions change as the user types (an async/online provider) must feed them through a
+    /// signal — reading it in the popup body re-filters the dropdown when fresh results arrive.</summary>
+    public IReadSignal<IReadOnlyList<string>>? SuggestionsSignal;
+    /// <summary>The effective suggestion set — the live signal's value if present, else the static list. Reading it in a
+    /// render subscribes that component to suggestion updates.</summary>
+    internal IReadOnlyList<string> LiveSuggestions => SuggestionsSignal is { } s ? s.Value : Suggestions;
+    /// <summary>True while an async suggestion fetch is in flight: the popup shows an indeterminate bar at the top and
+    /// KEEPS the prior results (instead of flashing "No results found") until the fresh set lands.</summary>
+    public IReadSignal<bool>? LoadingSignal;
     public string Placeholder = "Search";
     public float Width = 280f;
     /// <summary>Flex-fill factor. When &gt; 0 the field fills its parent's WIDTH on its own — no wrapper, no external
@@ -130,6 +140,10 @@ public sealed class AutoSuggestBox : Component
     public float FieldMinHeight = 32f;
     /// <summary>Field corner radius (0 = ControlCornerRadius). Set ≈ half the height for a full pill.</summary>
     public float FieldRadius;
+    /// <summary>Bold the matched query substring in each suggestion row (the rest dims) — the Spotify omnibar look.</summary>
+    public bool BoldMatch;
+    /// <summary>Optional leading glyph per suggestion row (e.g. <see cref="Icons.Search"/>), like Spotify's dropdown.</summary>
+    public string? ItemGlyph;
 
     public static Element Create(
         IReadOnlyList<string> suggestions,
@@ -150,15 +164,20 @@ public sealed class AutoSuggestBox : Component
         float minHeight = 32f,
         float cornerRadius = 0f,
         float grow = 0f,
-        float maxFillWidth = 0f)
+        float maxFillWidth = 0f,
+        bool boldMatch = false,
+        string? itemGlyph = null,
+        IReadSignal<IReadOnlyList<string>>? suggestionsSignal = null,
+        IReadSignal<bool>? loadingSignal = null)
         => Embed.Comp(() => new AutoSuggestBox
         {
-            Suggestions = suggestions, Placeholder = placeholder, Width = width, Grow = grow, MaxFillWidth = maxFillWidth,
+            Suggestions = suggestions, SuggestionsSignal = suggestionsSignal, LoadingSignal = loadingSignal,
+            Placeholder = placeholder, Width = width, Grow = grow, MaxFillWidth = maxFillWidth,
             WidthSignal = widthSignal, Text = text,
             OnTextChanged = onTextChanged, OnSuggestionChosen = onSuggestionChosen,
             OnQuerySubmitted = onQuerySubmitted, QueryIcon = queryIcon, MaxHeight = maxPopupHeight, DebounceMs = debounceMs,
             TextChanged = textChanged, UpdateTextOnSelect = updateTextOnSelect, Parts = parts, Field = field,
-            FieldMinHeight = minHeight, FieldRadius = cornerRadius,
+            FieldMinHeight = minHeight, FieldRadius = cornerRadius, BoldMatch = boldMatch, ItemGlyph = itemGlyph,
         });
 
     // The rendered width — what sizes the inner editor and the popup. Reading it inside a Render subscribes THAT
@@ -217,7 +236,7 @@ public sealed class AutoSuggestBox : Component
         // The MATCH SET keys off the USER-TYPED text, not the live query: an arrow-preview write must not re-filter
         // the open list out from under the keyboard cursor (WinUI sets m_ignoreTextChanges around the preview writes
         // so the app's ItemsSource filter never re-runs for them — AutoSuggestBox_Partial.cpp:2347–2359 + :475).
-        List<string> Live() => Filter(Suggestions, userTyped.Peek());
+        List<string> Live() => Filter(LiveSuggestions, userTyped.Peek());
 
         void Close()
         {
@@ -556,29 +575,33 @@ internal sealed class SuggestionsList : Component
         var q = Query.Value;                           // subscribe → granular re-render of ONLY this popup subtree
         int hi = Highlight.Value;                      // subscribe → re-highlight on arrow nav
         float width = Owner.EffectiveWidth;            // subscribe → an open popup follows a live field resize
-        var matches = AutoSuggestBox.Filter(Owner.Suggestions, q);
+        var matches = AutoSuggestBox.Filter(Owner.LiveSuggestions, q);   // reads SuggestionsSignal → re-filters when async results arrive
 
-        // Mirror UpdateSuggestionListVisibility: no matches → close (deferred to an effect so render stays pure and
-        // doesn't write the overlay version signal mid-render).
+        bool loading = Owner.LoadingSignal?.Value ?? false;   // subscribe → the top bar + keep-prior-results behaviour
+
+        // No matches: while a fetch is IN FLIGHT show nothing here (the top indeterminate bar carries the state) so the
+        // popup never flashes "No results found" over a load — only a SETTLED empty set shows that message.
         if (matches.Count == 0)
-            return new BoxEl
-            {
-                Direction = 1,
-                Width = width,
-                MinWidth = width,
-                ClipToBounds = true,
-                Margin = new Edges4(-1, 0, -1, 0),
-                Children =
-                [
-                    new BoxEl
-                    {
-                        MinHeight = AutoSuggestBox.ItemMinHeight,
-                        AlignItems = FlexAlign.Center,
-                        Padding = new Edges4(24, 0, 24, 0),
-                        Children = [new TextEl("No results found") { Size = 14f, Color = Tok.TextPrimary, Grow = 1f }],
-                    },
-                ],
-            };
+            return WithBar(loading, width, loading
+                ? new BoxEl { Width = width, MinWidth = width, MinHeight = AutoSuggestBox.ItemMinHeight }
+                : new BoxEl
+                {
+                    Direction = 1,
+                    Width = width,
+                    MinWidth = width,
+                    ClipToBounds = true,
+                    Margin = new Edges4(-1, 0, -1, 0),
+                    Children =
+                    [
+                        new BoxEl
+                        {
+                            MinHeight = AutoSuggestBox.ItemMinHeight,
+                            AlignItems = FlexAlign.Center,
+                            Padding = new Edges4(24, 0, 24, 0),
+                            Children = [new TextEl("No results found") { Size = 14f, Color = Tok.TextPrimary, Grow = 1f }],
+                        },
+                    ],
+                });
 
         var parts = Owner.Parts;   // popup-local, NON-virtualized rows: per-row part modifiers are safe here
         var rows = new Element[matches.Count];
@@ -602,7 +625,7 @@ internal sealed class SuggestionsList : Component
                 HoverFill = Tok.FillSubtleSecondary,
                 PressedFill = Tok.FillSubtleTertiary,
                 OnClick = choose,
-                Children = [new TextEl(matches[idx]) { Size = 14f, Color = Tok.TextPrimary, Grow = 1f }],
+                Children = RowContent(Owner, matches[idx], q),
             };
             if (parts is not null)
                 row = parts.Apply(AutoSuggestBox.PartSuggestionItem, row) with { OnClick = choose, Role = AutomationRole.MenuItem };
@@ -629,7 +652,44 @@ internal sealed class SuggestionsList : Component
         };
         if (parts is not null)
             list = parts.Apply(AutoSuggestBox.PartSuggestionsList, list) with { Content = column, ContentSized = true };
-        return list;
+        return WithBar(loading, width, list);
+    }
+
+    // Prepend a thin indeterminate progress bar at the TOP while a fetch is in flight; the results (kept from the prior
+    // query until the fresh set lands) sit below it — so re-querying never blanks the list.
+    static Element WithBar(bool loading, float width, Element body)
+        => loading
+            ? new BoxEl { Direction = 1, Width = width, MinWidth = width, Children = [ProgressBar.Indeterminate(width), body] }
+            : body;
+
+    // Row content: an optional leading glyph + the suggestion text with the matched query substring brightened/bolded and
+    // the remainder dimmed (the Spotify omnibar look). Plain bright text when BoldMatch is off.
+    static Element[] RowContent(AutoSuggestBox owner, string text, string query)
+    {
+        var kids = new List<Element>(4);
+        if (owner.ItemGlyph is { } g)
+            kids.Add(new TextEl(g) { Size = 16f, FontFamily = Theme.IconFont, Color = Tok.TextSecondary, Margin = new Edges4(0, 0, 12, 0) });
+
+        int mi = owner.BoldMatch && query.Length > 0
+            ? text.ToLowerInvariant().IndexOf(query.ToLowerInvariant(), System.StringComparison.Ordinal) : -1;
+        if (mi < 0)
+        {
+            kids.Add(new TextEl(text) { Size = 14f, Color = Tok.TextPrimary, Grow = 1f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
+            return kids.ToArray();
+        }
+
+        if (mi > 0) kids.Add(Seg(text.Substring(0, mi), false, false));
+        kids.Add(Seg(text.Substring(mi, query.Length), true, false));
+        int after = mi + query.Length;
+        kids.Add(after < text.Length ? Seg(text.Substring(after), false, true) : new BoxEl { Grow = 1f });
+        return kids.ToArray();
+
+        static Element Seg(string s, bool match, bool grow) => new TextEl(s)
+        {
+            Size = 14f, Weight = (ushort)(match ? 700 : 400),
+            Color = match ? Tok.TextPrimary : Tok.TextSecondary,
+            Grow = grow ? 1f : 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+        };
     }
 }
 

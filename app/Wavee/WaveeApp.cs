@@ -14,7 +14,7 @@ sealed class WaveeApp : Component
 
     // The composition root passes the settings store created early (so the theme is seeded before the first frame);
     // null in tests falls back to the store Services creates itself.
-    public WaveeApp(IAppSettings? settings = null) => _services = Services.CreateFake(settings);
+    public WaveeApp(IAppSettings? settings = null) => _services = Services.UseRealBackend ? Services.CreateReal(settings) : Services.CreateFake(settings);
 
     public override Element Render()
     {
@@ -43,8 +43,26 @@ sealed class WaveeApp : Component
             libBridge.Activate(post);
             store.Activate(post);
             _ = _services.Session.ConnectAsync();
-            _ = _services.Player.ResumeAsync();
-            _services.Log.Info("app", "Shell online; playback started");
+            if (Services.UseRealBackend)
+            {
+                // Bring up the live Spotify Connect session in the background; on connect it swaps the live backend into the
+                // switchable facades (Services.GoLive) and the already-activated bridge starts reflecting live playback —
+                // Wavee registers as a Connect device, mirrors now-playing, and drives local/remote control. No UI rebuild.
+                // Off the UI thread entirely (the login/dealer/AP handshakes must not couple to the render loop).
+                _ = System.Threading.Tasks.Task.Run(async () =>
+                {
+                    try { await Wavee.SpotifyLive.LiveSessionHost.StartAsync(_services, m => _services.Log.Info("connect", m), System.Threading.CancellationToken.None); }
+                    catch (Exception ex) { _services.Log.Info("connect", "live session bootstrap failed: " + ex.Message); }
+                });
+                _services.Log.Info("app", "Shell online; connecting live Spotify Connect session...");
+            }
+            else
+            {
+                _ = _services.Player.ResumeAsync();   // in-memory demo playback
+                _services.Log.Info("app", "Shell online; demo playback started");
+            }
+            // Diagnostic: open the full now-playing view on launch (for --screenshot visual diffing of that surface).
+            if (Diag.EnvFlag("WAVEE_NOWPLAYING_OPEN")) _services.Playback.Expanded.Value = true;
         });
 
         this.UseSoftReveal(); // app entrance (compositor-only, reduced-motion-aware)

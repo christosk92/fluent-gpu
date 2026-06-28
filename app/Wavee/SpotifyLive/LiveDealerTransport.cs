@@ -1,0 +1,216 @@
+using System.Buffers;
+using System.Collections.Generic;
+using System.IO;
+using System.Net.WebSockets;
+using System.Text;
+using System.Text.Json;
+using Wavee.Backend;
+using Wavee.Backend.Realtime;
+using Wavee.Backend.Spotify;
+using Wavee.Core;
+
+namespace Wavee.SpotifyLive;
+
+// The REAL hm:// dealer transport behind Wavee.Backend.ITransport: ONE WebSocket firehose (Events + Requests) + spclient
+// HTTP (Request / Publish) over the shared pipeline. Connects wss://{dealer}/?access_token={token}, parses frames
+// (DealerFrameParser), emits MESSAGE pushes (with headers — the Spotify-Connection-Id rides there) and REQUEST commands to
+// subscribers, answers server pings + sends a 30s keepalive, and reconnects with a fresh token + exponential backoff on any
+// drop. The socket is live-only (the user's run verifies it); the frame decode + the routing it feeds are unit-tested.
+public sealed class LiveDealerTransport : ITransport, IDisposable
+{
+    readonly string _dealerHost;
+    readonly Func<CancellationToken, Task<string>> _accessToken;
+    readonly IHttpExchange _spclient;
+    readonly Func<string> _spclientBaseUrl;
+    readonly Action<string>? _log;
+    readonly SimpleSubject<WireEvent> _events = new();
+    readonly SimpleSubject<WireRequest> _requests = new();
+    readonly SemaphoreSlim _sendLock = new(1, 1);
+    readonly CancellationTokenSource _cts = new();
+    ClientWebSocket? _ws;
+    Task? _loop;
+
+    public LiveDealerTransport(string dealerHost, Func<CancellationToken, Task<string>> accessToken,
+        IHttpExchange spclient, Func<string> spclientBaseUrl, Action<string>? log = null)
+    {
+        _dealerHost = dealerHost;
+        _accessToken = accessToken;
+        _spclient = spclient;
+        _spclientBaseUrl = spclientBaseUrl;
+        _log = log;
+    }
+
+    /// <summary>Start the connect + receive loop (idempotent). Reconnects with a fresh token + exponential backoff.</summary>
+    public void Start() => _loop ??= Task.Run(() => RunAsync(_cts.Token));
+
+    public IObservable<WireEvent> Events(string topicPrefix) => new FilteredEvents(_events, topicPrefix);
+    public IObservable<WireRequest> Requests(string identPrefix) => new FilteredRequests(_requests, identPrefix);
+
+    public async Task<Resp> Request(Channel ch, string route, ReadOnlyMemory<byte> body, CancellationToken ct = default)
+    {
+        var url = _spclientBaseUrl() + route;
+        var method = body.IsEmpty ? "GET" : "POST";
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (!body.IsEmpty) headers["Content-Type"] = "application/protobuf";
+        using var resp = await _spclient.SendAsync(new HttpReq(method, url, headers, body.IsEmpty ? null : body.ToArray()), ct).ConfigureAwait(false);
+        using var ms = new MemoryStream();
+        await resp.Body.CopyToAsync(ms, ct).ConfigureAwait(false);
+        return new Resp(resp.Status is >= 200 and < 300, ms.ToArray(), resp.Status);
+    }
+
+    /// <summary>Ack a dealer REQUEST. The key is JSON-escaped by the writer (never concatenated raw). success=Success.</summary>
+    public Task Reply(string requestId, RequestResult result)
+    {
+        bool success = result == RequestResult.Success;
+        var buf = new ArrayBufferWriter<byte>(96);
+        using (var w = new Utf8JsonWriter(buf))
+        {
+            w.WriteStartObject();
+            w.WriteString("type", "reply");
+            w.WriteString("key", requestId);            // escaped
+            w.WriteStartObject("payload");
+            w.WriteBoolean("success", success);
+            w.WriteEndObject();
+            w.WriteEndObject();
+        }
+        return SendTextAsync(buf.WrittenMemory);
+    }
+
+    /// <summary>The Connect device-state announce: PUT /connect-state/v1/devices/{deviceId} with the connection-id header.
+    /// Returns the server's Cluster body (the announce response) so the announcer can fold it back into the projection.</summary>
+    public async Task<Resp> Publish(string deviceId, string connectionId, ReadOnlyMemory<byte> putState, CancellationToken ct = default)
+    {
+        var url = _spclientBaseUrl() + "/connect-state/v1/devices/" + deviceId;
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["X-Spotify-Connection-Id"] = connectionId,
+            ["Content-Type"] = "application/protobuf",
+        };
+        using var resp = await _spclient.SendAsync(new HttpReq("PUT", url, headers, putState.ToArray()), ct).ConfigureAwait(false);
+        using var ms = new MemoryStream();
+        await resp.Body.CopyToAsync(ms, ct).ConfigureAwait(false);
+        return new Resp(resp.Status is >= 200 and < 300, ms.ToArray(), resp.Status);
+    }
+
+    async Task RunAsync(CancellationToken ct)
+    {
+        int attempt = 0;
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                var token = await _accessToken(ct).ConfigureAwait(false);
+                using var ws = new ClientWebSocket();
+                _ws = ws;
+                await ws.ConnectAsync(new Uri($"wss://{_dealerHost}/?access_token={Uri.EscapeDataString(token)}"), ct).ConfigureAwait(false);
+                attempt = 0;   // a clean connect resets the backoff ladder
+                _log?.Invoke("dealer connected (" + _dealerHost + ")");
+                using var keepalive = StartKeepalive(ct);
+                await ReceiveLoop(ws, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
+            catch (Exception ex) { _log?.Invoke("dealer disconnected: " + ex.Message); }
+            // exponential backoff: 3, 6, 12, 24 → cap 30s (a fresh token is minted on the next loop via _accessToken).
+            int secs = System.Math.Min(30, 3 * (1 << System.Math.Min(attempt, 4)));
+            attempt++;
+            try { await Task.Delay(TimeSpan.FromSeconds(secs), ct).ConfigureAwait(false); } catch { return; }
+        }
+    }
+
+    async Task ReceiveLoop(ClientWebSocket ws, CancellationToken ct)
+    {
+        var buffer = new byte[64 * 1024];
+        using var frame = new MemoryStream();
+        while (ws.State == WebSocketState.Open && !ct.IsCancellationRequested)
+        {
+            frame.SetLength(0);
+            WebSocketReceiveResult result;
+            do
+            {
+                result = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), ct).ConfigureAwait(false);
+                if (result.MessageType == WebSocketMessageType.Close) return;
+                frame.Write(buffer, 0, result.Count);
+            } while (!result.EndOfMessage);
+
+            var f = DealerFrameParser.Parse(frame.GetBuffer().AsSpan(0, (int)frame.Length));
+            switch (f.Type)
+            {
+                case DealerFrameType.Ping:
+                    await SendTextAsync("{\"type\":\"pong\"}").ConfigureAwait(false);
+                    break;
+                case DealerFrameType.Message when f.Uri is { Length: > 0 } uri:
+                    _events.OnNext(new WireEvent(uri, f.Payload, f.Headers));
+                    break;
+                case DealerFrameType.Request when f.Key is { Length: > 0 } key:
+                    _requests.OnNext(new WireRequest(key, f.MessageIdent ?? "", f.Payload,
+                        f.Headers ?? EmptyHeaders));
+                    break;
+            }
+        }
+    }
+
+    static readonly IReadOnlyDictionary<string, string> EmptyHeaders = new Dictionary<string, string>();
+
+    IDisposable StartKeepalive(CancellationToken ct)
+    {
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                while (!cts.IsCancellationRequested)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(30), cts.Token).ConfigureAwait(false);
+                    await SendTextAsync("{\"type\":\"ping\"}").ConfigureAwait(false);
+                }
+            }
+            catch { /* loop ends on disconnect/cancel */ }
+        }, cts.Token);
+        return cts;
+    }
+
+    Task SendTextAsync(string json) => SendTextAsync((ReadOnlyMemory<byte>)Encoding.UTF8.GetBytes(json));
+
+    async Task SendTextAsync(ReadOnlyMemory<byte> utf8)
+    {
+        var ws = _ws;
+        if (ws is null || ws.State != WebSocketState.Open) return;
+        await _sendLock.WaitAsync().ConfigureAwait(false);
+        try { await ws.SendAsync(utf8, WebSocketMessageType.Text, true, _cts.Token).ConfigureAwait(false); }
+        catch { /* a failed send drops the connection → the receive loop exits and we reconnect */ }
+        finally { _sendLock.Release(); }
+    }
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        try { _ws?.Dispose(); } catch { }
+        _sendLock.Dispose();
+        _cts.Dispose();
+    }
+
+    // Forward only the hm:// MESSAGE topics matching the requested prefix (the library router subscribes "hm://").
+    sealed class FilteredEvents(IObservable<WireEvent> src, string prefix) : IObservable<WireEvent>
+    {
+        public IDisposable Subscribe(IObserver<WireEvent> observer) => src.Subscribe(new Obs(observer, prefix));
+        sealed class Obs(IObserver<WireEvent> inner, string prefix) : IObserver<WireEvent>
+        {
+            public void OnNext(WireEvent e) { if (e.Topic.StartsWith(prefix, StringComparison.Ordinal)) inner.OnNext(e); }
+            public void OnCompleted() => inner.OnCompleted();
+            public void OnError(Exception ex) => inner.OnError(ex);
+        }
+    }
+
+    // Forward only the REQUEST frames whose message_ident matches the requested prefix (the Connect router subscribes
+    // "hm://connect-state/v1/").
+    sealed class FilteredRequests(IObservable<WireRequest> src, string prefix) : IObservable<WireRequest>
+    {
+        public IDisposable Subscribe(IObserver<WireRequest> observer) => src.Subscribe(new Obs(observer, prefix));
+        sealed class Obs(IObserver<WireRequest> inner, string prefix) : IObserver<WireRequest>
+        {
+            public void OnNext(WireRequest r) { if (r.MessageIdent.StartsWith(prefix, StringComparison.Ordinal)) inner.OnNext(r); }
+            public void OnCompleted() => inner.OnCompleted();
+            public void OnError(Exception ex) => inner.OnError(ex);
+        }
+    }
+}

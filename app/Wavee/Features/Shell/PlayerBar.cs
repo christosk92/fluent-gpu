@@ -165,6 +165,7 @@ sealed class PlayerBarContent : Component
         // Hooks FIRST (stable call order — rule #7), before any early return.
         var b = UseContext(PlaybackBridge.Slot);
         var lib = UseContext(LibraryBridge.Slot);    // Mutations: the now-playing like reflects + toggles the saved-set
+        var go = UseContext(HistoryStore.NavCtx);    // navigate to the now-playing album / artist on click
         var titleHover = UseSignal(false);           // hover the now-playing text → BOTH lines scroll together (synced); idle = static + edge fade
         var L = _layout.Value;                       // coarse breakpoint signal; does NOT change for every resize pixel
         if (DiagEnabled)
@@ -228,23 +229,41 @@ sealed class PlayerBarContent : Component
         // Both lines scroll only on hover (TriggerMode.Hover) and share ONE gate (titleHover) driven by the meta column
         // below — so they start together and stay phase-locked (CycleMs), instead of each toggling under its own line.
         // The edge fade is unaffected: a right-edge "there's more" cue at rest, both edges while scrolling.
-        var metaKids = new List<Element>(2)
+        // Now-playing is clickable: art + title → the album; the subtitle splits into an artist link + an album link.
+        var npAlbum = track?.Album;
+        bool albumNav = npAlbum is { Uri.Length: > 0 };
+        void NavAlbum() { if (albumNav) go?.Invoke("album:" + npAlbum!.Uri, npAlbum.Name); }
+
+        var titleLinkHover = UseSignal(false);
+        bool titleHot = albumNav && titleLinkHover.Value;
+        Element titleEl = Marquee.Of(Prop.Of(() => NowPlaying(b).Title),
+            new Marquee.Style { FontSize = 14f, Weight = 700, Foreground = Prop.Of(() => titleHot ? Tok.AccentTextPrimary : NowPlaying(b).Color), CycleMs = MarqueeCycleMs, Trigger = Marquee.TriggerMode.Hover },
+            scrollWhen: titleHover);
+        if (albumNav)   // the title opens the album (click); hover still scrolls the marquee (the metaCol drives titleHover)
+            titleEl = new BoxEl
+            {
+                Cursor = CursorId.Hand, OnClick = NavAlbum,
+                OnHoverMove = _ => { if (!titleLinkHover.Peek()) titleLinkHover.Value = true; },
+                OnPointerExit = () => { if (titleLinkHover.Peek()) titleLinkHover.Value = false; },
+                Role = AutomationRole.Hyperlink, Focusable = true,
+                Children = [titleEl],
+            };
+
+        var metaKids = new List<Element>(2) { titleEl };
+        if (showSubtitle && track is not null && err is null)
         {
-            Marquee.Of(Prop.Of(() => NowPlaying(b).Title),
-                new Marquee.Style { FontSize = 14f, Weight = 700, Foreground = Prop.Of(() => NowPlaying(b).Color), CycleMs = MarqueeCycleMs, Trigger = Marquee.TriggerMode.Hover },
-                scrollWhen: titleHover),
-        };
-        if (showSubtitle)
-            metaKids.Add(Marquee.Of(Prop.Of(() => NowPlayingSubtitle(b)),
-                new Marquee.Style { FontSize = 12f, Foreground = Tok.TextSecondary, CycleMs = MarqueeCycleMs, Trigger = Marquee.TriggerMode.Hover },
-                scrollWhen: titleHover));
+            var subKids = new List<Element>(Math.Max(3, track.Artists.Count * 2 + 2));
+            AddArtistLinks(subKids, track.Artists, go);
+            if (subKids.Count > 0)
+                metaKids.Add(new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, ClipToBounds = true, Children = subKids.ToArray() });
+        }
 
         var metaCol = new BoxEl
         {
             Key = "meta", Animate = MoveMotion,
             Direction = 1, Grow = 1f, Shrink = 1f, Gap = 2f, Justify = FlexJustify.Center, ClipToBounds = true,
-            // The shared hover target: the inner marquees no longer self-hover (they read titleHover), so this column is
-            // the deepest pointer target over the now-playing text → hovering anywhere on it scrolls both lines.
+            // The shared hover target: the title marquee reads titleHover, so this column is the deepest pointer target
+            // over the now-playing text → hovering anywhere on it scrolls the title.
             OnHoverMove = _ => { if (!titleHover.Peek()) titleHover.Value = true; },
             OnPointerExit = () => { if (titleHover.Peek()) titleHover.Value = false; },
             Children = metaKids.ToArray(),
@@ -255,6 +274,8 @@ sealed class PlayerBarContent : Component
             leftKids.Add(new BoxEl
             {
                 Key = "art", Width = artSize, Height = artSize, Animate = ItemMotion,
+                Cursor = albumNav ? CursorId.Hand : (CursorId?)null,
+                OnClick = albumNav ? NavAlbum : null,   // album art → the album
                 Children = [Surfaces.Artwork(track?.Image, SeedOf(track), artSize, artSize, 6f)]
             });
         leftKids.Add(metaCol);
@@ -325,12 +346,14 @@ sealed class PlayerBarContent : Component
         }
         if (!showLike && active)
             overflowCommands.Add(new AppBarCommand(liked ? Mdl.HeartFill : Icons.Heart, Loc.Get(Strings.Player.Like), () => { if (track is { } lt) lib?.ToggleSaved(lt.Uri); }, AppBarCommandKind.ToggleButton, liked, true));
+        // In the small-window overflow, Queue / Devices / Now Playing all open the full now-playing view (where those
+        // controls live — the queue rail, the device picker, the big transport).
         if (!showQueue)
-            overflowCommands.Add(new AppBarCommand(Icons.Queue, Loc.Get(Strings.Player.Queue), () => { /* TODO: queue panel not wired yet */ }, Enabled: canTransport));
+            overflowCommands.Add(new AppBarCommand(Icons.Queue, Loc.Get(Strings.Player.Queue), () => { b.Expanded.Value = true; }, Enabled: canTransport));
         if (!showDevices)
-            overflowCommands.Add(new AppBarCommand(Icons.Devices, Loc.Get(Strings.Player.Devices), () => { /* TODO: device picker not wired yet */ }, Enabled: canTransport));
+            overflowCommands.Add(new AppBarCommand(Icons.Devices, Loc.Get(Strings.Player.Devices), () => { b.Expanded.Value = true; }, Enabled: canTransport));
         if (!showExpand)
-            overflowCommands.Add(new AppBarCommand(Icons.ChevronUp, Loc.Get(Strings.Player.NowPlaying), () => { /* TODO: now-playing expand panel not wired yet */ }, Enabled: canTransport));
+            overflowCommands.Add(new AppBarCommand(Icons.ChevronUp, Loc.Get(Strings.Player.NowPlaying), () => { b.Expanded.Value = true; }, Enabled: canTransport));
 
         var rightKids = new List<Element>(8);
         if (showShuffleRepeat)
@@ -356,13 +379,11 @@ sealed class PlayerBarContent : Component
         if (showVolumeSlider)
             rightKids.Add(Slider.Bind(b.Volume, v => { _ = b.Player.SetVolumeAsync(v); }, 96f, 16f, RailStyle) with { Key = "volume-slider", Animate = ItemMotion });
         if (showQueue)
-            rightKids.Add(Transport(Icons.Queue, () => { /* TODO: queue panel not wired yet */ }, canTransport, false, accent, buttonBox, buttonGlyph)
-                with { Key = "queue", Animate = ItemMotion });
+            rightKids.Add(Embed.Comp(() => new QueueButton(b, accent, buttonBox, buttonGlyph)) with { Key = "queue" });
         if (showDevices)
-            rightKids.Add(Transport(Icons.Devices, () => { /* TODO: device picker not wired yet */ }, canTransport, false, accent, buttonBox, buttonGlyph)
-                with { Key = "devices", Animate = ItemMotion });
+            rightKids.Add(Embed.Comp(() => new DevicesButton(b, accent, buttonBox, buttonGlyph)) with { Key = "devices" });
         if (showExpand)
-            rightKids.Add(Transport(Icons.ChevronUp, () => { /* TODO: now-playing expand panel not wired yet */ }, canTransport, false, accent, buttonBox, buttonGlyph)
+            rightKids.Add(Transport(Icons.ChevronUp, () => { b.Expanded.Value = true; }, canTransport, false, accent, buttonBox, buttonGlyph)
                 with { Key = "expand", Animate = ItemMotion });
         rightKids.Add(MoreButton(overflowCommands, buttonBox, buttonGlyph));
 
@@ -398,12 +419,12 @@ sealed class PlayerBarContent : Component
     }
 
     // ── intents (optimistic: write the signal first so the UI is instant, then the bridge reconciles) ──
-    static void ToggleShuffle(PlaybackBridge b)
+    internal static void ToggleShuffle(PlaybackBridge b)
     {
         bool s = b.IsShuffle.Peek(); b.IsShuffle.Value = !s; _ = b.Player.SetShuffleAsync(!s);
     }
 
-    static void CycleRepeat(PlaybackBridge b)
+    internal static void CycleRepeat(PlaybackBridge b)
     {
         var r = b.Repeat.Peek();
         var next = r == RepeatMode.Off ? RepeatMode.Context : r == RepeatMode.Context ? RepeatMode.Track : RepeatMode.Off;
@@ -440,25 +461,7 @@ sealed class PlayerBarContent : Component
         };
     }
 
-    // "artist · album" subtitle, derived live. NoTrack/Error carry no artist line (mirrors the title state machine).
-    static string NowPlayingSubtitle(PlaybackBridge b)
-    {
-        var track = b.CurrentTrack.Value;
-        bool hasErr = b.Error.Value is not null;
-        string artistText = (track is null || hasErr) ? "" : ArtistsOf(track);
-        return SubtitleOf(track, artistText);
-    }
-
     static string ArtistsOf(Track? t) => t is null ? "" : string.Join(", ", t.Artists.Select(a => a.Name));
-
-    // "artist · album" subtitle (falls back to just the artist when the album is empty/unknown).
-    static string SubtitleOf(Track? t, string artistText)
-    {
-        if (t is null) return artistText;
-        string album = t.Album?.Name ?? "";
-        if (string.IsNullOrEmpty(artistText)) return album;
-        return string.IsNullOrEmpty(album) ? artistText : artistText + " · " + album;
-    }
 
     static int SeedOf(Track? t) => t is null ? 11 : Math.Abs((t.Uri ?? t.Id).Length * 7 + t.Title.Length);
 
@@ -467,6 +470,52 @@ sealed class PlayerBarContent : Component
         if (ms < 0) ms = 0;
         long total = ms / 1000, m = total / 60, s = total % 60;
         return m.ToString() + ":" + (s < 10 ? "0" + s : s.ToString());
+    }
+
+    static void AddArtistLinks(List<Element> into, IReadOnlyList<ArtistRef> artists, Action<string, string?>? go)
+    {
+        for (int i = 0; i < artists.Count; i++)
+        {
+            var a = artists[i];
+            if (a.Name.Length == 0) continue;
+            if (into.Count > 0) into.Add(new TextEl(", ") { Size = 12f, Color = Tok.TextSecondary });
+            bool enabled = a.Uri.Length > 0;
+            into.Add(NavSpan(a.Name, () => { if (enabled) go?.Invoke("artist:" + a.Uri, a.Name); }, enabled));
+        }
+    }
+
+    // A clickable now-playing meta link (artist / album). It drives its own foreground because TextEl.HoverColor follows
+    // the engine's ancestor hover path too, which makes the album look hovered when the pointer is over the title line.
+    static Element NavSpan(string text, Action onClick, bool enabled)
+        => Embed.Comp(() => new NowPlayingMetaLink(text, onClick, enabled));
+
+    sealed class NowPlayingMetaLink : Component
+    {
+        readonly string _text;
+        readonly Action _onClick;
+        readonly bool _enabled;
+
+        public NowPlayingMetaLink(string text, Action onClick, bool enabled)
+        {
+            _text = text;
+            _onClick = onClick;
+            _enabled = enabled;
+        }
+
+        public override Element Render()
+        {
+            var hover = UseSignal(false);
+            return new BoxEl
+            {
+                Cursor = _enabled ? CursorId.Hand : (CursorId?)null,
+                OnClick = _enabled ? _onClick : null,
+                OnHoverMove = _enabled ? _ => { if (!hover.Peek()) hover.Value = true; } : null,
+                OnPointerExit = _enabled ? () => { if (hover.Peek()) hover.Value = false; } : null,
+                ClipToBounds = true,
+                Role = _enabled ? AutomationRole.Hyperlink : AutomationRole.Text,
+                Children = [new TextEl(_text) { Size = 12f, Color = hover.Value ? Tok.TextPrimary : Tok.TextSecondary }],
+            };
+        }
     }
 
     /// <summary>A transport TOGGLE/command glyph button. The active state is shown by an ACCENT glyph + a 3px accent dot
@@ -663,6 +712,103 @@ sealed class VolumeButton : Component
         float v = _b.Volume.Peek();
         float nv = v > 0.001f ? 0f : 0.7f;       // mute ⇄ restore (a fuller mute-with-memory is the device-panel pass)
         _b.Volume.Value = nv; _ = _b.Player.SetVolumeAsync(nv);
+    }
+}
+
+// The Connect device picker: opens a MenuFlyout of the live device roster (from the bridge) UPWARD out of the button.
+// Each row toggles active + transfers playback to that device on click. Re-renders when the roster / active device changes.
+sealed class DevicesButton : Component
+{
+    readonly PlaybackBridge _b; readonly ColorF _accent; readonly float _box, _glyph;
+    public DevicesButton(PlaybackBridge b, ColorF accent, float box = 36f, float glyph = 16f)
+    {
+        _b = b; _accent = accent; _box = box; _glyph = glyph;
+    }
+
+    public override Element Render()
+    {
+        var anchor = UseRef<NodeHandle>(default);
+        var handle = UseRef<OverlayHandle?>(null);
+        var svc = UseContext(Overlay.Service);
+        var devices = _b.Devices.Value;               // subscribe → re-render on roster change
+        string? activeId = _b.ActiveDeviceId.Value;   // subscribe → the active row shows a check + the glyph highlights
+        bool active = !string.IsNullOrEmpty(activeId);
+
+        void Toggle()
+        {
+            if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
+            var items = new List<MenuFlyoutItem>(Math.Max(1, devices.Count));
+            if (devices.Count == 0)
+                items.Add(new MenuFlyoutItem(Loc.Get(Strings.Player.Devices), null, false, () => { }));
+            else
+                foreach (var d in devices)
+                {
+                    var dev = d;
+                    bool isActive = dev.Id == activeId || dev.IsActive;
+                    items.Add(MenuFlyoutItem.Toggle(dev.Name, isActive,
+                        () => { _ = _b.DeviceControl.TransferAsync(dev.Id); }, Icons.Devices, enabled: true));
+                }
+            handle.Value = svc.Open(
+                () => anchor.Value,
+                () => MenuFlyout.Build(items, () => handle.Value?.Close()),
+                FlyoutPlacement.TopEdgeAlignedRight,
+                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
+            handle.Value.ClosedAction = () => handle.Value = null;
+        }
+
+        return PlayerBarContent.Transport(Icons.Devices, Toggle, true, active, _accent, _box, _glyph, h => anchor.Value = h);
+    }
+}
+
+// The up-next queue: opens a MenuFlyout peek of the live queue (now-playing checked, then "Next in queue" = user q#,
+// then "Next up" = the context tracks ahead). Clicking an up-next entry plays that track (best-effort; a true
+// skip-to-queue-item needs a seam addition). Re-renders when the queue changes.
+sealed class QueueButton : Component
+{
+    readonly PlaybackBridge _b; readonly ColorF _accent; readonly float _box, _glyph;
+    public QueueButton(PlaybackBridge b, ColorF accent, float box = 36f, float glyph = 16f)
+    {
+        _b = b; _accent = accent; _box = box; _glyph = glyph;
+    }
+
+    public override Element Render()
+    {
+        var anchor = UseRef<NodeHandle>(default);
+        var handle = UseRef<OverlayHandle?>(null);
+        var svc = UseContext(Overlay.Service);
+        var queue = _b.Queue.Value;   // subscribe → re-render when the queue changes
+
+        void Toggle()
+        {
+            if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
+            var items = new List<MenuFlyoutItem>(Math.Max(1, queue.Count));
+            if (queue.Count == 0)
+                items.Add(new MenuFlyoutItem(Loc.Get(Strings.Player.Queue), null, false, () => { }));
+            else
+            {
+                QueueBucket? last = null;
+                foreach (var e in queue)
+                {
+                    var entry = e;
+                    if (entry.Bucket != QueueBucket.NowPlaying && entry.Bucket != last)
+                        items.Add(new MenuFlyoutItem(entry.Bucket == QueueBucket.UserQueue ? "Next in queue" : "Next up", null, false, () => { }));
+                    last = entry.Bucket;
+                    string label = entry.Track.Artists.Count > 0 ? entry.Track.Title + "  ·  " + entry.Track.Artists[0].Name : entry.Track.Title;
+                    if (entry.Bucket == QueueBucket.NowPlaying)
+                        items.Add(MenuFlyoutItem.Toggle(label, true, () => { }, Icons.Queue, enabled: false));
+                    else
+                        items.Add(new MenuFlyoutItem(label, null, true, () => { _ = _b.Player.PlayTrackAsync(entry.Track.Uri); }));
+                }
+            }
+            handle.Value = svc.Open(
+                () => anchor.Value,
+                () => MenuFlyout.Build(items, () => handle.Value?.Close()),
+                FlyoutPlacement.TopEdgeAlignedRight,
+                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
+            handle.Value.ClosedAction = () => handle.Value = null;
+        }
+
+        return PlayerBarContent.Transport(Icons.Queue, Toggle, true, false, _accent, _box, _glyph, h => anchor.Value = h);
     }
 }
 

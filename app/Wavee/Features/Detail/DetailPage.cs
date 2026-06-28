@@ -101,7 +101,7 @@ sealed class DetailPage : Component
         DetailKind.Playlist => MapPlaylist(await svc.Library.GetPlaylistAsync(id ?? "", ct)),
         DetailKind.Liked => MapLiked(await svc.Library.GetLikedSongsAsync(ct)),
         DetailKind.Show => MapShow(await svc.Library.GetShowAsync(id ?? "", ct)),
-        _ => await MapAlbumAsync(svc, await svc.Library.GetAlbumAsync(id ?? "", ct), ct),
+        _ => MapAlbum(await svc.Library.GetAlbumAsync(id ?? "", ct)),
     };
 
     // A podcast show folds onto the shared detail surface: rail = cover + PODCAST pill + publisher/episode-count meta +
@@ -137,7 +137,7 @@ sealed class DetailPage : Component
             Title: p.Name, Cover: p.Cover, ContextUri: p.Uri,
             BadgeType: null, Year: null, OwnerName: p.OwnerName, OwnerImage: p.Owner?.Avatar,
             Artists: Array.Empty<ArtistRef>(), Description: p.Description, MetaLine: meta,
-            Tracks: tracks, AboutArtist: null, Palette: null,
+            Tracks: tracks, AboutArtist: null, Palette: p.Palette,
             HasDateAdded: hasDate, HasAddedBy: contributors.Count >= 2, HasVideo: hasVideo,
             Capabilities: p.Capabilities);
     }
@@ -152,26 +152,13 @@ sealed class DetailPage : Component
             Tracks: tracks, AboutArtist: null, Palette: null, HasVideo: tracks.Any(t => t.HasVideo));
     }
 
-    static async Task<DetailModel> MapAlbumAsync(Services svc, Album a, CancellationToken ct)
+    // The album model: hero + tracklist + the "More by" shelf the getAlbum payload carries. The below-the-fold
+    // enrichment (About-the-artist / Fans-also-like / Featured-on / Merch / Similar) is deliberately NOT awaited here —
+    // AlbumTrailing loads each section independently so the hero and track list render immediately and no slow or failed
+    // enrichment can block (or sink) them.
+    static DetailModel MapAlbum(Album a)
     {
         var tracks = a.Tracks ?? Array.Empty<Track>();
-        // Best-effort trailing fetch (About-artist / Fans-also-like / Featured-on) — fired concurrently; a failure must
-        // not fail the page. (No related-artists / featured-on endpoints in the model, so we reuse the catalog lists.)
-        Artist? about = null;
-        IReadOnlyList<Artist> fans = Array.Empty<Artist>();
-        IReadOnlyList<PlaylistSummary> featured = Array.Empty<PlaylistSummary>();
-        try
-        {
-            var aboutT = a.Artists.Count > 0 ? svc.Library.GetArtistAsync(a.Artists[0].Id, ct) : null;
-            var fansT = svc.Library.GetArtistsAsync(ct);
-            var featuredT = svc.Library.GetPlaylistsAsync(ct);
-            if (aboutT is not null) about = await aboutT;
-            fans = await fansT;
-            featured = await featuredT;
-        }
-        catch (OperationCanceledException) { throw; }
-        catch { /* trailing degrades gracefully */ }
-
         string badge = a.Kind switch
         {
             AlbumKind.Single => Loc.Get(Strings.Detail.Badge.Single),
@@ -185,8 +172,26 @@ sealed class DetailPage : Component
             Title: a.Name, Cover: a.Cover, ContextUri: a.Uri,
             BadgeType: badge, Year: a.Year.ToString(), OwnerName: null, OwnerImage: null,
             Artists: a.Artists, Description: null, MetaLine: meta,
-            Tracks: tracks, AboutArtist: about, Palette: null,
-            HasVideo: tracks.Any(t => t.HasVideo), ReleaseKind: a.Kind, Fans: fans, FeaturedOn: featured);
+            Tracks: tracks, AboutArtist: null, Palette: a.Palette,
+            HasVideo: tracks.Any(t => t.HasVideo), ReleaseKind: a.Kind, MoreByArtist: a.MoreByArtist,
+            Label: a.Label, Copyright: a.Copyright, ReleaseDate: FormatReleaseDate(a.ReleaseDate, a.ReleaseDatePrecision), AlbumArtists: a.ArtistsDetailed,
+            OtherVersions: a.OtherVersions, CourtesyLine: a.CourtesyLine, ReleaseDatePrecision: a.ReleaseDatePrecision,
+            DiscCount: a.DiscCount, ShareUrl: a.ShareUrl, IsPreRelease: a.IsPreRelease, PreReleaseEnd: a.PreReleaseEnd);
+    }
+
+    // ISO date + Spotify precision: YEAR → "2014"; MONTH → "November 2014"; DAY → "November 4, 2014".
+    static string? FormatReleaseDate(string? iso, string? precision)
+    {
+        if (string.IsNullOrWhiteSpace(iso)) return null;
+        if (!System.DateTimeOffset.TryParse(iso, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AssumeUniversal, out var d)
+            ) return iso;
+        return (precision ?? "").ToUpperInvariant() switch
+        {
+            "YEAR" => d.ToString("yyyy", System.Globalization.CultureInfo.InvariantCulture),
+            "MONTH" => d.ToString("MMMM yyyy", System.Globalization.CultureInfo.InvariantCulture),
+            _ => d.ToString("MMMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture),
+        };
     }
 }
 

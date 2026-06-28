@@ -21,6 +21,7 @@
     "watchOfficialVideo": "WATCH THE OFFICIAL VIDEO",
     "likedSongs": "Liked Songs",
     "moreBy": "More by {name}",
+    "similarAlbums": "Similar albums",
     "songCount": "{count, plural, one {# song} other {# songs}}",
     "selectedCount": "{count, plural, one {# selected} other {# selected}}",
     "daysAgo": "{count, plural, one {# day ago} other {# days ago}}",

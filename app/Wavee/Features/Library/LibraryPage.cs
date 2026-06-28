@@ -59,6 +59,13 @@ sealed class LibraryPage : Component
         this.UseSoftReveal(dy: 0f, blur: 0f);
 
         var shown = Filtered(Project(store));
+        // Warm the collection cover art at the kind-matched decode size the moment the list lands, so a first scroll
+        // reveals resident textures instead of decoding+uploading on the UI thread mid-scroll (the first-pass jank).
+        // Prefetch priority → background workers (visible cards still decode first); idempotent (a re-hit cache entry is a
+        // dictionary lookup), so a re-render costs nothing. The engine ImageCache + MemoryGovernor bound the residency.
+        int warmPx = _size.Value == 0 ? 64 : _size.Value == 2 ? 256 : 168;
+        foreach (var it in shown)
+            if (it.Cover?.Url is { Length: > 0 } warmUrl) PrefetchImage(warmUrl, warmPx);
         // Keep the ItemsView SelectionModel pointed at the selected item across load/filter/sort/view + auto-select first.
         UseEffect(() => SyncNav(shown), NavHash(shown) + "|" + _selectedKey.Value);
 

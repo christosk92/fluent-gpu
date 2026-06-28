@@ -18,6 +18,7 @@ namespace Wavee;
 sealed partial class ArtistPage : Component
 {
     readonly Signal<Route> _route;
+    ColorF _accent = Tok.AccentDefault;   // cover-extracted page accent (lifted); set per-render in Body, read by the hero + section-bar helpers
     public ArtistPage(Signal<Route> route) { _route = route; }
 
     internal static string? UriOf(Route r) =>
@@ -32,33 +33,39 @@ sealed partial class ArtistPage : Component
         if (svc is null || store is null) return new BoxEl { Grow = 1f };
 
         var route = _route.Value;                       // subscribe → reload on artist→artist nav (reused slot)
+        string routeKey = route.Name;
         string uri = UriOf(route) ?? "";
-        this.UseSoftReveal(dy: 0f, blur: 0f);
+        this.UseSoftReveal(key: routeKey, dy: 0f, blur: 0f);
 
-        // Keep one stable loadable and re-key it by URI. ContentHost retains one ArtistPage across artist navigation,
-        // so replacing the Loadable instance would leave the skeleton region's mounted thunks subscribed to the old artist.
-        // TEMP(debug): a 2s delay so the derived pending state is visible on load. Remove when done.
-        var artist = UseAsyncResource(async ct =>
-        {
-            await System.Threading.Tasks.Task.Delay(2000, ct);
-            return await svc.Library.GetArtistAsync(uri, ct);
-        }, PendingArtist(uri), uri);
+        // ContentHost keeps one ArtistPage alive for artist→artist hops. The data is cached per artist, while the
+        // scroll/skeleton subtree below is keyed by route so pending/ready branches and child components remount cleanly.
+        var artist = store.ArtistDetail(uri, ct => svc.Library.GetArtistAsync(uri, ct), PendingArtist(uri));
         store.EnsureArtists();
         var fansList = store.Artists.Value.Value;
 
         var pinned = UseSignal(false);
         var pageScroll = UseSignal(0f);   // live page scroll offset → published so the in-page virtualized discography grids window against it
+        UseEffect(() =>
+        {
+            pinned.Value = false;
+            pageScroll.Value = 0f;
+        }, routeKey);
         // One tree: the boundary renders Body with the resource's pending value, derives its loading paint, then fills
         // the same Body with the loaded artist. The page does not author or pass a separate skeleton subtree.
         var scroll = ScrollView(Skel.Region(artist,
             shimmerSource: ArtistShimmer,
             content: a => Body(a, fansList, svc, go, bridge, pinned),
-            onFailed: () => ErrorState.Build(artist.Error)))
+            onFailed: () => ErrorState.Build(artist.Error),
+            group: routeKey)
+            with
+            {
+                Key = "artist-region:" + routeKey,
+            })
             with
             {
                 // Scroll-position restoration keyed by the artist (route). One ScrollView serves successive artists in place,
                 // so without a key artist B would inherit A's scroll; with it, B starts at the top and a revisit to A restores it.
-                Grow = 1f, ScrollKey = route.Name,
+                Key = "artist-scroll:" + routeKey, Grow = 1f, ScrollKey = routeKey,
                 // Publish the live offset (coarse, ~per-row) so the LazyGrid discography sections window against the page scroll.
                 OnScrollGeometryChanged = (g => (long)(g.OffsetY / 24f), g => pageScroll.Value = g.OffsetY),
             };
@@ -66,7 +73,7 @@ sealed partial class ArtistPage : Component
         // Provide the page scroll to the discography LazyGrids deeper in the body (the SwiftUI LazyVGrid-in-ScrollView wiring).
         return Ctx.Provide(LazyScroll.Slot, (IReadSignal<float>)pageScroll, new BoxEl
         {
-            Grow = 1f, ZStack = true,
+            Key = "artist-page:" + routeKey, Grow = 1f, ZStack = true,
             Children =
             [
                 scroll,
@@ -75,7 +82,7 @@ sealed partial class ArtistPage : Component
                     Grow = 1f, HitTestPassThrough = true, Direction = 1,
                     AlignItems = FlexAlign.Center, Justify = FlexJustify.Start,
                     Padding = new Edges4(0f, WaveeSpace.M, 0f, 0f),
-                    Children = [ Embed.Comp(() => new ArtistShyPill(uri, artist, pinned, svc)) ],
+                    Children = [ Embed.Comp(() => new ArtistShyPill(uri, artist, pinned, svc)) with { Key = "artist-pill:" + routeKey } ],
                 },
             ],
         });
@@ -156,6 +163,10 @@ sealed partial class ArtistPage : Component
                  PlaybackBridge? bridge, Signal<bool> pinned)
     {
         string uri = a.Uri;
+        // Cover-extracted page accent, lifted so a near-black colorDark stays legible (matches album/playlist via
+        // DetailShell). Null palette ⇒ the neutral default. Set before the tree builds so every accent helper reads it.
+        _accent = a.Palette is { } pal ? WaveePalette.Lift(WaveePalette.Accent(pal)) : Tok.AccentDefault;
+        ColorF wash = Tok.Theme == ThemeKind.Light ? _accent : WaveePalette.BackgroundDark(a.Palette ?? WaveePalette.Neutral);
         var extras = a.Extras;
         var popular = a.TopTracks is { Count: > 0 } tt ? tt : FakeData.TopTracksOf(a);
         var albumsAll = a.TopAlbums ?? Array.Empty<Album>();
@@ -170,8 +181,8 @@ sealed partial class ArtistPage : Component
         var sections = new List<Element>(14);
         if (popular.Count > 0) sections.Add(TopBand(popular, uri, bridge, svc, albumsAll, go, PlayContext));
         // Discography facets: a capped grid + "See all N" that navigates to the dedicated facet page (breadcrumb + full grid).
-        if (albums.Length > 0) sections.Add(Embed.Comp(() => new DiscographySection(uri, a.Name, DiscographyKind.Albums, Loc.Get(Strings.Artist.Albums), svc, go, PlayContext)));
-        if (singles.Length > 0) sections.Add(Embed.Comp(() => new DiscographySection(uri, a.Name, DiscographyKind.Singles, Loc.Get(Strings.Artist.SinglesEps), svc, go, PlayContext)));
+        if (albums.Length > 0) sections.Add(Embed.Comp(() => new DiscographySection(uri, a.Name, DiscographyKind.Albums, Loc.Get(Strings.Artist.Albums), svc, go, PlayContext, _accent)));
+        if (singles.Length > 0) sections.Add(Embed.Comp(() => new DiscographySection(uri, a.Name, DiscographyKind.Singles, Loc.Get(Strings.Artist.SinglesEps), svc, go, PlayContext, _accent)));
         if (a.AppearsOn is { Count: > 0 } appears) sections.Add(AppearsOnShelf(appears, go, PlayContext));
         if (extras?.Tour is { } tour) sections.Add(TourBannerCard(tour,
             () => { if (extras.Concerts is { Count: > 0 } cs) PlayContext(cs[0].Uri); }));
@@ -195,7 +206,11 @@ sealed partial class ArtistPage : Component
         var sentinel = new BoxEl { Height = 0f, ScrollBinds = [ new() { PinTop = 40f, OnFlag = v => pinned.Value = v } ] };
         return new BoxEl
         {
-            Direction = 1,
+            // The accent wash spans the WHOLE page — behind the hero AND the content — so the hero photo's bottom
+            // edge-fade dissolves INTO the tint and the content continues the same gradient: one continuous wash, no
+            // seam at the hero↔content boundary. (Previously the wash was on `inner` only, which started the tint
+            // abruptly below the hero while the photo faded to bare Mica — a hard discrete edge.)
+            Direction = 1, Gradient = Surfaces.HeroWash(wash),
             Children =
             [
                 Banner(a, uri, Play, Shuffle, Play, go),

@@ -72,7 +72,7 @@ sealed partial class ArtistPage : Component
         }).ToArray(),
     };
 
-    static Element TopCitiesList(IReadOnlyList<TopCity> cities)
+    Element TopCitiesList(IReadOnlyList<TopCity> cities)
     {
         long max = 1;
         foreach (var c in cities) if (c.Listeners > max) max = c.Listeners;
@@ -81,7 +81,7 @@ sealed partial class ArtistPage : Component
         return new BoxEl { Direction = 1, Gap = WaveeSpace.S, Children = rows.ToArray() };
     }
 
-    static Element CityBarRow(TopCity c, long max)
+    Element CityBarRow(TopCity c, long max)
     {
         float frac = max > 0 ? (float)((double)c.Listeners / max) : 0f;
         return new BoxEl
@@ -98,7 +98,7 @@ sealed partial class ArtistPage : Component
                 new BoxEl { Direction = 0, Height = 4f,
                     Children =
                     [
-                        new BoxEl { Grow = MathF.Max(0.001f, frac), Height = 4f, Corners = CornerRadius4.All(2f), Fill = Tok.AccentDefault },
+                        new BoxEl { Grow = MathF.Max(0.001f, frac), Height = 4f, Corners = CornerRadius4.All(2f), Fill = _accent },
                         new BoxEl { Grow = MathF.Max(0.001f, 1f - frac), Height = 4f },
                     ] },
             ],

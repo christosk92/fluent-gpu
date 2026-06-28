@@ -20,8 +20,9 @@ sealed class ArtistPopular : Component
     readonly string _ctx, _title;
     readonly PlaybackBridge? _bridge;
     readonly Services _svc;
-    public ArtistPopular(IReadOnlyList<Track> tracks, string ctx, PlaybackBridge? bridge, Services svc, string title)
-    { _tracks = tracks; _ctx = ctx; _bridge = bridge; _svc = svc; _title = title; }
+    readonly ColorF _accent;
+    public ArtistPopular(IReadOnlyList<Track> tracks, string ctx, PlaybackBridge? bridge, Services svc, string title, ColorF accent)
+    { _tracks = tracks; _ctx = ctx; _bridge = bridge; _svc = svc; _title = title; _accent = accent; }
 
     const int Rows = 4;          // WinUI ColumnsFirstGridLayout MaxRows
     const int MaxTracks = 10;
@@ -80,7 +81,7 @@ sealed class ArtistPopular : Component
             Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
             Children =
             [
-                ArtistPage.AccentHeader(_title) with { Grow = 1f, Basis = 0f },
+                Surfaces.AccentHeader(_title, _accent) with { Grow = 1f, Basis = 0f },
                 pages > 1 ? Pager(pg, pages, page) : new BoxEl(),
             ],
         };
@@ -132,7 +133,7 @@ sealed class ArtistPopular : Component
             Children =
             [
                 new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-                            Children = [ ArtistPage.AccentHeader(title) with { Grow = 1f, Basis = 0f } ] },
+                            Children = [ Surfaces.AccentHeader(title, Tok.AccentDefault) with { Grow = 1f, Basis = 0f } ] },
                 new BoxEl { Direction = 1, Gap = RowGap, Children = rowEls },
             ],
         };

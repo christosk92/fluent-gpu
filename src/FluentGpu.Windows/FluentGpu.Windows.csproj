@@ -1,6 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <IsAotCompatible>true</IsAotCompatible>
+    <!-- This IS the Windows backend (TerraFX/D3D12/Win32/DirectWrite) — Windows-only by design (a macOS port is a parallel
+         backend library; the seam is interface-level). CA1416 (platform compatibility) is therefore a false positive on
+         every interop call here. Suppress it in THIS project only — never in the portable Engine/Controls, where CA1416
+         must keep catching accidental Windows-API leaks. -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
   </PropertyGroup>
   <!-- The swappable Windows backend behind the Engine's Rhi/Pal/Text/Media seams: Win32 interop (Interop/), the
        Win32 window/input pump (Pal/), the D3D12 renderer (D3D12/), DirectWrite text (DirectWrite/), the WIC image

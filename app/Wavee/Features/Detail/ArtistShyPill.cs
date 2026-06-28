@@ -60,6 +60,8 @@ sealed class ArtistShyPillSurface : Component
     public override Element Render()
     {
         var a = _artist.Value.Value;                     // Loadable.Value is a Signal<Artist>; read its value
+        // Match the page's cover-extracted accent (lifted) so the floating pill isn't default-blue over an accented page.
+        ColorF accent = a.Palette is { } pal ? WaveePalette.Lift(WaveePalette.Accent(pal)) : Tok.AccentDefault;
         return new BoxEl
         {
             Direction = 0, Gap = WaveeSpace.M, AlignItems = FlexAlign.Center,
@@ -80,9 +82,9 @@ sealed class ArtistShyPillSurface : Component
                 {
                     Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
                     Corners = CornerRadius4.All(18f), Padding = new Edges4(16f, 8f, 16f, 8f),
-                    Fill = Tok.AccentDefault, HoverScale = 1.04f, PressScale = 0.97f,
+                    Fill = accent, HoverScale = 1.04f, PressScale = 0.97f,
                     OnClick = () => _ = _svc.Player.PlayAsync(_uri, 0),
-                    Children = [ Icon(Icons.Play, 14f, Tok.TextOnAccentPrimary), new TextEl(Loc.Get(Strings.Artist.Play)) { Size = 13f, Weight = 700, Color = Tok.TextOnAccentPrimary } ],
+                    Children = [ Icon(Icons.Play, 14f, WaveePalette.OnAccent(accent)), new TextEl(Loc.Get(Strings.Artist.Play)) { Size = 13f, Weight = 700, Color = WaveePalette.OnAccent(accent) } ],
                 },
                 Embed.Comp(() => new FollowButton(_uri)),
             ],

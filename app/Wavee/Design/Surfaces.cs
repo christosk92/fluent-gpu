@@ -16,6 +16,11 @@ namespace Wavee;
 // hole. Used by cards, rows, the rail cover and the bar.
 public static class Surfaces
 {
+    // Artwork is opaque content. Dark FillCardDefault is translucent white, so forcing only its alpha to 1 turns a
+    // failed/loading cover pure white. Use an explicit neutral in dark mode and the already-opaque card fill in light.
+    internal static ColorF ArtworkPlaceholder =>
+        Tok.Theme == ThemeKind.Dark ? ColorF.FromRgba(0x2A, 0x2A, 0x2A) : Tok.FillCardDefault;
+
     /// <summary>A top-anchored accent → transparent wash for a page header, over Mica.</summary>
     public static GradientSpec HeroWash(ColorF accent) => new(
         GradientShape.Linear, 90f,
@@ -39,7 +44,7 @@ public static class Surfaces
             // sidebar/chrome, so a see-through placeholder lets the dark Mica bleed through — the cover reads as a
             // washed, low-contrast smear while it loads (or a dark hole when it has no art / fails). Album art is opaque
             // content; back it with an opaque neutral so it always reads as a solid tile, never the backdrop.
-            return new BoxEl { Width = width, Height = height, Corners = CornerRadius4.All(corners), Fill = Tok.FillCardDefault with { A = 1f } };
+            return new BoxEl { Width = width, Height = height, Corners = CornerRadius4.All(corners), Fill = ArtworkPlaceholder };
         // Covers/cards: the breathing shimmer. Keyed by url so a virtualized card that REBINDS to a new cover remounts
         // the tile (a Component freezes its ctor args at mount) — the breathe + load-state read then track the new item.
         // Skeletonized(false): inside a Skel.Region's derived skeleton this opaque component would otherwise map to the
@@ -54,7 +59,13 @@ public static class Surfaces
     /// to/from the like-tagged Home card. The tile shares ONE decode handle with the image (matched W×H, any aspect).</summary>
     public static Element Artwork(Image? image, int seed, float width, float height, float corners, string? morphKey = null, int decodePx = 0)
     {
-        string? url = image?.Url is { Length: > 0 } u ? u : null;
+        if (image?.MosaicTiles is { Count: > 0 } tiles)
+        {
+            if (tiles.Count >= 4) return Mosaic(tiles, width, height, corners);
+            image = new Image(tiles[0]);   // 1–3 distinct album covers → show the first as a single cover
+        }
+        string? url = image?.Url is { Length: > 0 } u ? ImageSource.Normalize(u) : null;
+        if (url is { Length: 0 }) url = null;
         // Decode target: the display size by default; when decodePx>0 decode at THAT square size and COVER-fit it into the
         // slot instead. A connected-animation dest (the detail cover) passes the SAME decodePx as the Home card (256) so it
         // resolves to the SAME cached texture — the Hero fly hands off pixel-identically with NO fresh decode (killing the
@@ -77,9 +88,81 @@ public static class Surfaces
     /// <see cref="Artwork"/>; pass a huge <paramref name="corners"/> (e.g. 9999) for a circular (artist) tile.</summary>
     public static Element ArtworkFill(Image? image, float corners, int decodePx = 256)
     {
-        string? url = image?.Url is { Length: > 0 } u ? u : null;
-        var placeholder = ColorF.FromRgba(0x2A, 0x2A, 0x2A);
-        return Ui.Image(url ?? "", ImageFit.Cover, 1f, decodePx, corners, placeholder, image?.BlurHash);
+        // A cover-less playlist in a fluid grid cell falls back to its first tile (the explicit-size Mosaic needs a known
+        // width, which a fill cell doesn't have); the home/sidebar/detail cover-less cases use Artwork/Shelf which mosaic.
+        if (image?.MosaicTiles is { Count: > 0 } tiles) image = new Image(tiles[0]);
+        string? url = image?.Url is { Length: > 0 } u ? ImageSource.Normalize(u) : null;
+        return Ui.Image(url ?? "", ImageFit.Cover, 1f, decodePx, corners, ArtworkPlaceholder, image?.BlurHash);
+    }
+
+    /// <summary>A 2×2 mosaic of 4 album covers at an EXPLICIT size — how Spotify renders a cover-less playlist. Each
+    /// quadrant is url-keyed, so when the playlist's tracklist changes the changed tile re-decodes + the rest stay.</summary>
+    public static Element Mosaic(System.Collections.Generic.IReadOnlyList<string> tiles, float width, float height, float corners)
+    {
+        int cell = (int)(width / 2);
+        Element Cell(string u) => new BoxEl { Grow = 1f, ClipToBounds = true, Children = [ Ui.Image(ImageSource.Normalize(u) ?? "", ImageFit.Cover, 1f, cell, 0f, ArtworkPlaceholder) ] };
+        return new BoxEl
+        {
+            Width = width, Height = height, ClipToBounds = true, Corners = CornerRadius4.All(corners), Direction = 1,
+            Children =
+            [
+                new BoxEl { Direction = 0, Grow = 1f, Children = [ Cell(tiles[0]), Cell(tiles[1]) ] },
+                new BoxEl { Direction = 0, Grow = 1f, Children = [ Cell(tiles[2]), Cell(tiles[3]) ] },
+            ],
+        };
+    }
+
+    // ── section accents (the WaveeMusic "region" look: an accent-bar header + a faintly tinted band) ─────────
+    /// <summary>A section header with a 3px colored accent bar (and an optional caps eyebrow above the title). The bar
+    /// and eyebrow take <paramref name="accent"/> — e.g. a <see cref="WaveePalette.Lift"/>-ed cover-extracted color, so a
+    /// shelf's bar matches its content. Returns a <see cref="BoxEl"/> so call sites can layout-tweak it via <c>with</c>.</summary>
+    public static BoxEl AccentHeader(string title, ColorF accent, string? eyebrow = null)
+    {
+        Element label = eyebrow is { Length: > 0 }
+            ? new BoxEl
+            {
+                Direction = 1, Gap = 2f, MinWidth = 0f, Grow = 1f, Basis = 0f,
+                Children =
+                [
+                    new TextEl(eyebrow) { Size = 11f, Weight = 700, CharSpacing = 40f, Color = accent, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                    WaveeType.RailHeader(title) with { MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                ],
+            }
+            : WaveeType.RailHeader(title) with { MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis };
+        return new BoxEl
+        {
+            Direction = 0, Gap = 10f, AlignItems = FlexAlign.Center,
+            Children =
+            [
+                new BoxEl { Width = 3f, MinHeight = 22f, AlignSelf = FlexAlign.Stretch, Corners = CornerRadius4.All(1.5f), Fill = accent },
+                label,
+            ],
+        };
+    }
+
+    /// <summary>A "section band" as a Fluent MATERIAL surface (the WinUI grouped-content look), not a painted color
+    /// region: a neutral rounded card (<see cref="Tok.FillCardSecondary"/> fill + hairline border + soft elevation) with
+    /// the accent layered as a soft glow that KISSES the top edge under the header and fades into the material by ~45%
+    /// down. So the color reads as a content-derived spark over material, the material leads, and it sits naturally next
+    /// to the rest of the Fluent surfaces. One opaque top→bottom gradient (no overlay) keeps it a single, cheap node.</summary>
+    public static BoxEl SectionBand(Element content, ColorF accent)
+    {
+        ColorF card = Tok.FillCardSecondary;
+        // Kiss the card fill toward the accent at the very top (heavier in dark, where a faint tint would vanish), but
+        // hold the card's own alpha so the surface's translucency stays uniform — only the HUE shifts at the top.
+        ColorF top = ColorF.Lerp(card, accent, Tok.Theme == ThemeKind.Dark ? 0.17f : 0.10f) with { A = card.A };
+        return new BoxEl
+        {
+            Direction = 1, Gap = WaveeSpace.M,
+            Padding = new Edges4(WaveeSpace.L, WaveeSpace.L, WaveeSpace.L, WaveeSpace.L),
+            Corners = CornerRadius4.All(WaveeRadius.Card),
+            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, Shadow = Elevation.Card,
+            Gradient = LinearGradient(90f,   // 90° = top→bottom
+                new GradientStop(0f, top),
+                new GradientStop(0.45f, card),
+                new GradientStop(1f, card)),
+            Children = [content],
+        };
     }
 }
 
@@ -117,6 +200,6 @@ sealed class CoverShimmer : Component
         // On the loading→settled edge `loading` flips, the dep changes, and the effect re-seeds a finite flat track
         // (loop:false) — the looping pulse is replaced in place and the loop-track count drops so the frame loop quiesces.
         UseKeyframes(AnimChannel.Opacity, loading ? Breathe : Flat, loading ? 1000f : 1f, loading, DepKey.From(loading));   // #9: DepKey, not a boxed object[]
-        return new BoxEl { Width = _w, Height = _h, Corners = CornerRadius4.All(_corners), Fill = Tok.FillCardDefault };
+        return new BoxEl { Width = _w, Height = _h, Corners = CornerRadius4.All(_corners), Fill = Surfaces.ArtworkPlaceholder };
     }
 }

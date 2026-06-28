@@ -280,12 +280,24 @@ sealed class WaveeShell : Component
             Children = [column],
         };
 
+        // The full-screen now-playing view is a TOP layer over the whole shell (inside the OverlayHost so its own flyouts —
+        // the device picker, the volume popup — still render above it). Gated on bridge.Expanded; zero-cost when closed.
+        // CRITICAL: the layer MUST sit under a PLAIN pass-through positioner (a bare Embed.Comp wrapper node is
+        // mirrored-but-NOT-passthrough and would swallow every hit, silently killing scrolling — same trap as the FPS HUD).
+        // When the now-playing is open its own opaque fill captures hits; when closed the pass-through lets scroll through.
+        var nowPlayingLayer = new BoxEl
+        {
+            Grow = 1f, HitTestPassThrough = true,
+            Children = [ Embed.Comp(() => new NowPlayingLayer()) ],
+        };
+        var shellWithNowPlaying = Ui.ZStack(tinted, nowPlayingLayer) with { Grow = 1f };
+
         return Ctx.Provide(ShellTint.Slot, _shellTint,
                Ctx.Provide(HistoryStore.NavCtx, (Action<string, string?>)GoNav,
                Ctx.Provide(HistoryStore.Slot, _historyStore,
                Ctx.Provide(NavPreviewStore.Slot, _navPreview,
                Ctx.Provide(SearchQuery.Slot, _searchText,
-               Embed.Comp(() => new OverlayHost { Child = tinted }))))));
+               Embed.Comp(() => new OverlayHost { Child = shellWithNowPlaying }))))));
     }
 
     TabStrip BuildTabStrip() => new TabStrip

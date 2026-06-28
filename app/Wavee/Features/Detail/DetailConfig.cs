@@ -62,10 +62,17 @@ public sealed record DetailModel(
     bool HasVideo = false,               // any track has a video → offer the "Videos only" filter + the row indicator
     AlbumKind ReleaseKind = AlbumKind.Album,   // album path: which release type (drives badge + config)
     IReadOnlyList<Artist>? Fans = null,        // album trailing: "Fans also like" artist chips
-    IReadOnlyList<PlaylistSummary>? FeaturedOn = null,   // album trailing: "Featured on" playlist shelf
+    IReadOnlyList<PlaylistSummary>? FeaturedOn = null,   // (legacy) album "Featured on"; AlbumTrailing now loads its own — kept for compat
+    IReadOnlyList<Album>? MoreByArtist = null,           // album trailing: "More by <artist>" shelf (carried by the getAlbum payload)
     PlaylistCapabilities Capabilities = default,   // playlist: what the user may do (drives read-only vs editable UI when edit lands)
     // Podcast show fields — the surface renders Episodes (not Tracks) when DetailConfig.Content == Episodes.
-    IReadOnlyList<Episode>? Episodes = null, string? Publisher = null, IReadOnlyList<string>? Topics = null, double? Rating = null)
+    IReadOnlyList<Episode>? Episodes = null, string? Publisher = null, IReadOnlyList<string>? Topics = null, double? Rating = null,
+    // "About this release" (album): label / copyright / formatted release date; + the album's primary artists WITH
+    // avatars for the stacked face-pile header (the count badge folds in the distinct track artists).
+    string? Label = null, string? Copyright = null, string? ReleaseDate = null, IReadOnlyList<Artist>? AlbumArtists = null,
+    IReadOnlyList<Album>? OtherVersions = null,   // alternate editions of this album (deluxe/remaster/…)
+    string? CourtesyLine = null, string? ReleaseDatePrecision = null, int DiscCount = 1,
+    string? ShareUrl = null, bool IsPreRelease = false, DateTimeOffset? PreReleaseEnd = null)
 {
     /// <summary>Shared-element (connected-animation) key for the cover art — set by <c>DetailPage</c> from the route
     /// ("album:"+uri / "pl:"+uri) so the cover flies to/from the like-tagged Home card. Null = no Hero.</summary>

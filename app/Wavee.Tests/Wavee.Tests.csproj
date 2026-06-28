@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Unit tests for the Wavee backend core. Source-includes app/Wavee/Backend (which is engine-independent: deps =
+       Wavee.Core + BCL only), so the test assembly stays lean — no FluentGpu/TerraFX/GPU. Honors "no separate backend
+       csproj": the Backend stays part of app/Wavee; this project just compiles the same sources for testing. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <Nullable>enable</Nullable>
+    <!-- CA1416: source-includes the cross-platform Backend, whose portability is guarded by TerraFX-freedom, not this
+         analyzer. xUnit1051: the v3 "pass TestContext.Current.CancellationToken" nag is noise for these deterministic,
+         non-cancellable unit tests. -->
+    <NoWarn>$(NoWarn);CA1416;xUnit1051</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit.v3" Version="3.0.0" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.3" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.8" />   <!-- the Backend source-include now contains SqliteColdStore -->
+    <!-- NU1903: pin the patched SQLite bundle 3.0.0 (overrides the transitive 2.1.11 carrying the known SQLite vulnerability). -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.0" />
+    <!-- the Backend source-include also contains ExtendedMetadataSource → compile the metadata protos here too -->
+    <PackageReference Include="Google.Protobuf" Version="3.35.0" />
+    <PackageReference Include="Grpc.Tools" Version="2.81.0">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\extended_metadata.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\entity_extension_data.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\extension_kind.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\metadata.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\lean_metadata.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <!-- feature extension payloads carried over the SAME extended-metadata transport (album recommended-playlist hydration) -->
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\recommended_playlists.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\list_metadata_v2.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <!-- playlist membership + collection delta wire types (the Backend mapping logic is unit-tested here) -->
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\playlist_permission.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\playlist4_external.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\collection2v2.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Wavee.Core\Wavee.Core.csproj" />
+    <Compile Include="..\Wavee\Backend\**\*.cs" />
+  </ItemGroup>
+
+</Project>

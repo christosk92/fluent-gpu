@@ -4,6 +4,24 @@ public enum LibraryItemKind { Track, Album, Artist, Playlist }
 
 public sealed record LibraryItem(string Uri, string Title, string? Subtitle, Image? Image, LibraryItemKind Kind);
 
+public enum SearchSuggestionKind { Track, Artist, Album, Playlist }
+
+public sealed record SearchSuggestionItem(
+    SearchSuggestionKind Kind,
+    string Uri,
+    string Title,
+    string? Subtitle,
+    Image? Image,
+    bool IsExplicit = false);
+
+public sealed record SearchSuggestions(
+    IReadOnlyList<string> Queries,
+    IReadOnlyList<SearchSuggestionItem> Items)
+{
+    public static readonly SearchSuggestions Empty = new(
+        System.Array.Empty<string>(), System.Array.Empty<SearchSuggestionItem>());
+}
+
 public sealed record SearchResults(
     IReadOnlyList<Track> Tracks,
     IReadOnlyList<Album> Albums,
@@ -39,6 +57,10 @@ public interface IMusicLibrary
     Task<DiscographyPage> GetDiscographyAsync(string artistUri, DiscographyKind kind, int offset, int limit, CancellationToken ct = default);
     Task<IReadOnlyList<LibraryItem>> GetLibraryAsync(CancellationToken ct = default);
     Task<SearchResults> SearchAsync(string query, CancellationToken ct = default);
+    /// <summary>As-you-type search suggestions for the omnibar dropdown (online catalog; empty offline).</summary>
+    Task<IReadOnlyList<string>> SuggestAsync(string query, CancellationToken ct = default);
+    /// <summary>As-you-type search suggestions with typed rich hits from the same online response.</summary>
+    Task<SearchSuggestions> SuggestRichAsync(string query, CancellationToken ct = default);
 
     // Per-collection read paths — the sidebar's "Your Library" rows route to their own page, each loading its own slice.
     Task<IReadOnlyList<Album>> GetAlbumsAsync(CancellationToken ct = default);

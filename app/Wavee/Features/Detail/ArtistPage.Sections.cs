@@ -11,21 +11,11 @@ namespace Wavee;
 sealed partial class ArtistPage : Component
 {
     // ── section scaffolding ──────────────────────────────────────────────────────────────────────────────
-    internal static BoxEl AccentHeader(string title) => new BoxEl
-    {
-        Direction = 0, Gap = 10f, AlignItems = FlexAlign.Center,
-        Children =
-        [
-            new BoxEl
-            {
-                Width = 3f, MinHeight = 22f, AlignSelf = FlexAlign.Stretch,
-                Corners = CornerRadius4.All(1.5f), Fill = Tok.AccentDefault,
-            },
-            WaveeType.RailHeader(title) with { MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-        ],
-    };
+    // The fixed-accent artist-page header now delegates to the shared, color-parameterized Surfaces.AccentHeader
+    // (same visual with Tok.AccentDefault) so the home accent bands and these stay one definition.
+    internal BoxEl AccentHeader(string title) => Surfaces.AccentHeader(title, _accent);
 
-    internal static BoxEl AccentHeader(string title, int count) => new BoxEl
+    internal BoxEl AccentHeader(string title, int count) => new BoxEl
     {
         Direction = 0, Gap = 10f, AlignItems = FlexAlign.Center,
         Children =
@@ -33,19 +23,19 @@ sealed partial class ArtistPage : Component
             new BoxEl
             {
                 Width = 3f, MinHeight = 22f, AlignSelf = FlexAlign.Stretch,
-                Corners = CornerRadius4.All(1.5f), Fill = Tok.AccentDefault,
+                Corners = CornerRadius4.All(1.5f), Fill = _accent,
             },
             WaveeType.RailHeader(title) with { MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
             new TextEl(count.ToString()) { Size = 15f, Weight = 600, Color = Tok.TextTertiary },
         ],
     };
 
-    static Element Section(string title, Element body) => new BoxEl
+    Element Section(string title, Element body) => new BoxEl
     {
         Direction = 1, Gap = WaveeSpace.M, Children = [AccentHeader(title), body],
     };
 
-    static Element SectionN(string title, int count, Element body) => new BoxEl
+    Element SectionN(string title, int count, Element body) => new BoxEl
     {
         Direction = 1, Gap = WaveeSpace.M,
         Children = [ AccentHeader(title, count), body ],

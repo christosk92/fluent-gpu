@@ -18,7 +18,7 @@ namespace Wavee;
 sealed partial class ArtistPage : Component
 {
     // ── on-tour banner ───────────────────────────────────────────────────────────────────────────────────
-    static Element TourBannerCard(TourBanner t, Action onClick) => new BoxEl
+    Element TourBannerCard(TourBanner t, Action onClick) => new BoxEl
     {
         Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.L,
         Padding = new Edges4(WaveeSpace.L, WaveeSpace.L, WaveeSpace.L, WaveeSpace.L),
@@ -28,7 +28,7 @@ sealed partial class ArtistPage : Component
         Children =
         [
             new BoxEl { Width = 44f, Height = 44f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                Corners = CornerRadius4.All(22f), Fill = Tok.AccentDefault,
+                Corners = CornerRadius4.All(22f), Fill = _accent,
                 Children = [ Icon(t.IsLive ? Mdl.RadioTower : Mdl.Calendar, 18f, Tok.TextOnAccentPrimary) ] },
             new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = 2f,
                 Children =
@@ -42,7 +42,7 @@ sealed partial class ArtistPage : Component
     };
 
     // ── music videos (16:9 shelf) ────────────────────────────────────────────────────────────────────────
-    static Element MusicVideosShelf(IReadOnlyList<MusicVideo> videos, Action<string> play) => new BoxEl
+    Element MusicVideosShelf(IReadOnlyList<MusicVideo> videos, Action<string> play) => new BoxEl
     {
         Direction = 1,
         Children =
@@ -56,7 +56,7 @@ sealed partial class ArtistPage : Component
     };
 
     // ── playlists and discovery ──────────────────────────────────────────────────────────────────────────
-    static Element PlaylistsShelf(IReadOnlyList<PlaylistRef> pls, Action<string, string?> go, Action<string> play) => new BoxEl
+    Element PlaylistsShelf(IReadOnlyList<PlaylistRef> pls, Action<string, string?> go, Action<string> play) => new BoxEl
     {
         Direction = 1,
         Children =
@@ -70,7 +70,7 @@ sealed partial class ArtistPage : Component
     };
 
     // ── upcoming concerts ────────────────────────────────────────────────────────────────────────────────
-    static Element ConcertsRow(IReadOnlyList<Concert> concerts) => new BoxEl
+    Element ConcertsRow(IReadOnlyList<Concert> concerts) => new BoxEl
     {
         Direction = 1,
         Children =
@@ -107,7 +107,7 @@ sealed partial class ArtistPage : Component
     };
 
     // ── merch ────────────────────────────────────────────────────────────────────────────────────────────
-    static Element MerchRow(IReadOnlyList<MerchItem> merch) => new BoxEl
+    Element MerchRow(IReadOnlyList<MerchItem> merch) => new BoxEl
     {
         Direction = 1,
         Children =
@@ -135,7 +135,7 @@ sealed partial class ArtistPage : Component
     };
 
     // ── gallery ──────────────────────────────────────────────────────────────────────────────────────────
-    static Element GalleryStrip(IReadOnlyList<Image> photos) => new BoxEl
+    Element GalleryStrip(IReadOnlyList<Image> photos) => new BoxEl
     {
         Direction = 1,
         Children =
@@ -149,7 +149,7 @@ sealed partial class ArtistPage : Component
     };
 
     // ── fans also like ───────────────────────────────────────────────────────────────────────────────────
-    static Element RelatedShelf(IReadOnlyList<RelatedArtist> related, Action<string, string?> go, Action<string> play) => new BoxEl
+    Element RelatedShelf(IReadOnlyList<RelatedArtist> related, Action<string, string?> go, Action<string> play) => new BoxEl
     {
         Direction = 1,
         Children =
@@ -162,7 +162,7 @@ sealed partial class ArtistPage : Component
         ],
     };
 
-    static Element FansShelf(IReadOnlyList<Artist> fans, Action<string, string?> go, Action<string> play) => new BoxEl
+    Element FansShelf(IReadOnlyList<Artist> fans, Action<string, string?> go, Action<string> play) => new BoxEl
     {
         Direction = 1,
         Children =

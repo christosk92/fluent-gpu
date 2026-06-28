@@ -8,7 +8,7 @@ namespace Wavee.Core;
 /// horizontal rows (docs/architecture.md §2). Rules: a QuickGrid of the user's playlists at the top; the Spotlight as a
 /// Hero; the substantial multi-item shelves (capped) as carousels; and ALL the single-item baseline sections folded
 /// into ONE "Made for you" grid.</summary>
-internal static class SpotifyHomeComposer
+public static class SpotifyHomeComposer
 {
     const int MaxShelves = 6;
     const int CardsPerShelf = 12;
@@ -39,7 +39,7 @@ internal static class SpotifyHomeComposer
                 {
                     case "HomeSpotlightSectionData":
                         if (hero is null && FirstCard(items) is { } hc)
-                            hero = new HomeGroup(HomeGroupKind.Hero, title, new[] { hc });
+                            hero = new HomeGroup(HomeGroupKind.Hero, title, new[] { hc }, GroupAccent(HomeGroupKind.Hero, new[] { hc }));
                         break;
                     case "HomeFeedBaselineSectionData":
                         if (FirstCard(items) is { } bc) collapsed.Add(bc);
@@ -48,7 +48,7 @@ internal static class SpotifyHomeComposer
                         if (shelves.Count < MaxShelves)
                         {
                             var cards = Cards(items, CardsPerShelf);
-                            if (cards.Count >= 2) shelves.Add(new HomeGroup(HomeGroupKind.Shelf, title, cards));
+                            if (cards.Count >= 2) shelves.Add(new HomeGroup(HomeGroupKind.Shelf, title, cards, GroupAccent(HomeGroupKind.Shelf, cards)));
                         }
                         break;
                     // HomeShortsSectionData / HomeRecentlyPlayedSectionData: skipped (not worth a card / uncertain shape).
@@ -59,8 +59,21 @@ internal static class SpotifyHomeComposer
         if (quick is not null) groups.Add(quick);
         if (hero is not null) groups.Add(hero);
         groups.AddRange(shelves);
-        if (collapsed.Count > 0) groups.Add(new HomeGroup(HomeGroupKind.CollapsedGrid, "Made for you", collapsed));
+        if (collapsed.Count > 0) groups.Add(new HomeGroup(HomeGroupKind.CollapsedGrid, "Made for you", collapsed, GroupAccent(HomeGroupKind.CollapsedGrid, collapsed)));
         return new HomeContribution(groups, Priority: 0);
+    }
+
+    // The group's section tint: the first card carrying an extracted cover color, else a semantic per-kind fallback
+    // (amber recents / blue made-for-you / the app accent for generic shelves) — ported from WaveeMusic's HomeRegion kinds.
+    static uint GroupAccent(HomeGroupKind kind, IReadOnlyList<HomeCard> cards)
+    {
+        foreach (var c in cards) if (c.Accent is { } a) return a;
+        return kind switch
+        {
+            HomeGroupKind.QuickGrid => 0xFFF59E0Bu,      // amber — your recents
+            HomeGroupKind.CollapsedGrid => 0xFF3B82F6u,  // blue — made for you
+            _ => 0xFF60CDFFu,                            // the app accent — generic shelves / hero
+        };
     }
 
     static string? Str(JsonElement e, params string[] path)

@@ -78,7 +78,8 @@ sealed class ExpandableAlbumGrid : Component
         // links to the full album page, so navigation stays reachable.
         return MediaCard.GridCard(al.Cover, al.Name, subtitle, al.Uri,
             onClick: () => _expanded.Value = _expanded.Peek() == al.Uri ? null : al.Uri,
-            onPlay: () => _play(al.Uri));
+            onPlay: () => _play(al.Uri),
+            onNavigate: () => _go("album:" + al.Uri, al.Name));
     }
 
     int IndexOf(string uri)
@@ -119,9 +120,17 @@ sealed class AlbumDrawer : Component
         var album = uri is not null ? Find(uri) : null;
         if (album is not null) _last = album;
         var show = album ?? _last;
+        // Fetch the full album (the discography album is thin — no tracklist). Unconditional hook (stable order); keyed by
+        // uri so it re-fetches per album. Cached by GetAlbumAsync, so a re-expand is instant.
+        var full = UseAsyncResource(
+            ct => show is null ? System.Threading.Tasks.Task.FromResult<Album?>(null) : _svc.Library.GetAlbumAsync(show.Uri, ct),
+            (Album?)null, show?.Uri ?? "");
         if (show is null) return new BoxEl();
 
-        Element body = show.Tracks is { Count: > 0 } tracks ? Rows(show, tracks) : EmptyNote();
+        var ts = (full.Value.Value?.Tracks ?? show.Tracks) ?? System.Array.Empty<Track>();
+        Element body = ts.Count > 0 ? Rows(show, ts)
+                     : full.State.Value == (byte)LoadState.Pending ? ShimmerRows(show.TrackCount)
+                     : EmptyNote();
         return new BoxEl
         {
             Direction = 1, Gap = WaveeSpace.S, Animate = Reveal,
@@ -155,6 +164,7 @@ sealed class AlbumDrawer : Component
                         { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                 ],
             },
+            AlbumNavAction.Create(() => _go("album:" + album.Uri, album.Name)),
         ],
     };
 
@@ -185,6 +195,26 @@ sealed class AlbumDrawer : Component
         Children = [ new TextEl(Loc.Get(Strings.Search.NoResults)) { Size = 13f, Color = Tok.TextTertiary } ],
     };
 
+    // Skeleton rows while the album's tracklist loads (the count from the thin album's TrackCount).
+    static Element ShimmerRows(int count)
+    {
+        int n = Math.Clamp(count, 3, 10);
+        var rows = new Element[n];
+        for (int i = 0; i < n; i++)
+            rows[i] = new BoxEl
+            {
+                Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Height = 40f,
+                Padding = new Edges4(WaveeSpace.S, 0f, WaveeSpace.S, 0f),
+                Children =
+                [
+                    new BoxEl { Width = 18f, Height = 12f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary },
+                    new BoxEl { Grow = 1f, Basis = 0f, Height = 12f, MaxWidth = 260f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary },
+                    new BoxEl { Width = 32f, Height = 12f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary },
+                ],
+            };
+        return new BoxEl { Direction = 1, Children = rows };
+    }
+
     Album? Find(string uri)
     {
         for (int i = 0; i < _albums.Count; i++) if (_albums[i].Uri == uri) return _albums[i];
@@ -198,6 +228,20 @@ sealed class AlbumDrawer : Component
 // The artist page shows a collapsible header + the first Cap items (DiscographySection → DiscoGrid), then a "See all N"
 // link that NAVIGATES to the full facet page (DiscographyPage). The grid is virtualized over a VirtualCollection<Album>
 // that pages in on scroll, with iTunes-style inline track drawers — shared by the section (capped) and the full page.
+
+static class AlbumNavAction
+{
+    public static Element Create(Action onClick, float size = 34f) => ToolTip.Wrap(new BoxEl
+    {
+        Width = size, Height = size, Shrink = 0f,
+        AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Corners = CornerRadius4.All(size / 2f),
+        Fill = ColorF.Transparent, HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+        BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault,
+        OnClick = onClick, Cursor = CursorId.Hand, Role = AutomationRole.Button, Focusable = true,
+        Children = [ Icon(Icons.OpenInNewWindow, size * 0.42f, Tok.TextSecondary) ],
+    }, "Go to album");
+}
 
 // Builds the paged data source for one (artist, facet): pages of 60; the source reports the facet total from page 0.
 static class DiscoVc
@@ -213,6 +257,77 @@ static class DiscoVc
 
 // The reusable, virtualized discography grid over a (host-owned) VirtualCollection<Album>, with iTunes-style inline track
 // drawers. cap > 0 limits the rendered count (artist page); cap == 0 renders the whole facet (the dedicated facet page).
+// The DiscoGrid expand drawer body: the discography album is THIN (no tracklist), so this FETCHES the full album on
+// expand (cached by GetAlbumAsync) and shimmers the right number of rows while it loads — then reveals the real rows.
+sealed class AlbumDrawerPanel : Component
+{
+    readonly Services _svc; readonly Album _thin; readonly float _panelH;
+    readonly Action<string> _play; readonly Action<string, string?> _go;
+    readonly ColorF _accent;
+    public AlbumDrawerPanel(Services svc, Album thin, float panelH, Action<string> play, Action<string, string?> go, ColorF accent)
+    { _svc = svc; _thin = thin; _panelH = panelH; _play = play; _go = go; _accent = accent; }
+
+    static string Dur(long ms) { var t = TimeSpan.FromMilliseconds(ms); return t.Hours > 0 ? $"{t.Hours}:{t.Minutes:D2}:{t.Seconds:D2}" : $"{t.Minutes}:{t.Seconds:D2}"; }
+
+    public override Element Render()
+    {
+        var full = UseAsyncResource(ct => _svc.Library.GetAlbumAsync(_thin.Uri, ct), (Album?)null, _thin.Uri);
+        var tracks = (full.Value.Value?.Tracks ?? _thin.Tracks) ?? System.Array.Empty<Track>();
+        bool loading = tracks.Count == 0 && full.State.Value == (byte)LoadState.Pending;
+        int n = loading ? Math.Clamp(_thin.TrackCount, 1, 10) : Math.Min(tracks.Count, 10);
+
+        var rows = new Element[n];
+        for (int i = 0; i < n; i++) rows[i] = loading ? ShimmerRow() : Row(i + 1, tracks[i]);
+
+        return new BoxEl
+        {
+            Direction = 1, Height = _panelH, ClipToBounds = true,
+            Padding = new Edges4(WaveeSpace.L, WaveeSpace.S, WaveeSpace.L, WaveeSpace.S),
+            Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
+            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+            Children = [ Head(), .. rows ],
+        };
+    }
+
+    Element Head() => new BoxEl
+    {
+        Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Height = 40f,
+        Children =
+        [
+            new BoxEl { Width = 30f, Height = 30f, Shrink = 0f, Corners = CornerRadius4.All(15f), Fill = _accent,
+                AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, OnClick = () => _play(_thin.Uri),
+                Children = [ Icon(Icons.Play, 12f, Tok.TextOnAccentPrimary) ] },
+            new BoxEl { Grow = 1f, Basis = 0f, OnClick = () => _go("album:" + _thin.Uri, _thin.Name),
+                Children = [ new TextEl(_thin.Name) { Size = 14f, Weight = 700, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis } ] },
+            AlbumNavAction.Create(() => _go("album:" + _thin.Uri, _thin.Name), 32f),
+        ],
+    };
+
+    Element Row(int num, Track t) => new BoxEl
+    {
+        Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Height = 34f,
+        Padding = new Edges4(WaveeSpace.S, 0f, WaveeSpace.S, 0f), Corners = CornerRadius4.All(6f), HoverFill = Tok.FillSubtleSecondary,
+        OnClick = () => _ = _svc.Player.PlayAsync(_thin.Uri, num - 1),
+        Children =
+        [
+            new TextEl(num.ToString()) { Width = 22f, Size = 12f, Color = Tok.TextTertiary },
+            new TextEl(t.Title) { Grow = 1f, Basis = 0f, Size = 13f, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+            new TextEl(Dur(t.DurationMs)) { Size = 11f, Color = Tok.TextSecondary },
+        ],
+    };
+
+    static Element ShimmerRow() => new BoxEl
+    {
+        Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Height = 34f, Padding = new Edges4(WaveeSpace.S, 0f, WaveeSpace.S, 0f),
+        Children =
+        [
+            new BoxEl { Width = 16f, Height = 11f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary },
+            new BoxEl { Grow = 1f, Basis = 0f, Height = 11f, MaxWidth = 240f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary },
+            new BoxEl { Width = 30f, Height = 11f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary },
+        ],
+    };
+}
+
 sealed class DiscoGrid : Component
 {
     readonly VirtualCollection<Album> _vc;
@@ -221,6 +336,7 @@ sealed class DiscoGrid : Component
     readonly Action<string> _play;
     readonly int _cap;
     readonly int _initialIndex;
+    readonly ColorF _accent;
     readonly Signal<int> _expanded = new(-1);
 
     const float MinCol = 180f;
@@ -245,8 +361,8 @@ sealed class DiscoGrid : Component
         Exit: new EnterExit(Dy: -8f, Opacity: 0f, Active: true),
         ExitDynamics: TransitionDynamics.Spring(0.24f, 1f));
 
-    public DiscoGrid(VirtualCollection<Album> vc, Services svc, Action<string, string?> go, Action<string> play, int cap, int initialIndex = 0)
-    { _vc = vc; _svc = svc; _go = go; _play = play; _cap = cap; _initialIndex = initialIndex; }
+    public DiscoGrid(VirtualCollection<Album> vc, Services svc, Action<string, string?> go, Action<string> play, int cap, int initialIndex = 0, ColorF? accent = null)
+    { _vc = vc; _svc = svc; _go = go; _play = play; _cap = cap; _initialIndex = initialIndex; _accent = accent ?? Tok.AccentDefault; }
 
     public override Element Render() => Embed.Comp(() => new LazyGrid(
         // Capped to _cap when >0 (the artist page); cap 0 → the full facet. The count delegate reads the live total.
@@ -266,7 +382,8 @@ sealed class DiscoGrid : Component
         string subtitle = al.Year > 0 ? al.Year + "  " + ArtistPage.KindLabel(al.Kind) : ArtistPage.KindLabel(al.Kind);
         Element card = MediaCard.GridCard(al.Cover, al.Name, subtitle, al.Uri,
             onClick: () => _expanded.Value = _expanded.Peek() == idx ? -1 : idx,
-            onPlay: () => _play(al.Uri));
+            onPlay: () => _play(al.Uri),
+            onNavigate: () => _go("album:" + al.Uri, al.Name));
         if (card is BoxEl b)
         {
             // Force ONE height (square cover + chrome) so every card is uniform → the drawer's hug spacing is exact.
@@ -274,7 +391,7 @@ sealed class DiscoGrid : Component
             // Highlight the expanded card (accent border + brighter fill) so it's unmistakably the drawer's owner —
             // pairs with the connector bar at the drawer's top edge.
             if (_expanded.Peek() == idx)
-                b = b with { BorderColor = Tok.AccentDefault, BorderWidth = 2f, Fill = Tok.FillCardDefault };
+                b = b with { BorderColor = _accent, BorderWidth = 2f, Fill = Tok.FillCardDefault };
             card = b;
         }
         return card;
@@ -307,49 +424,9 @@ sealed class DiscoGrid : Component
     {
         var al = _vc?[idx];
         if (al is null) return new BoxEl();
-        var ts = al.Tracks ?? System.Array.Empty<Track>();
-        int n = Math.Min(ts.Count, 10);
-        var rows = new Element[n];
-        for (int i = 0; i < n; i++)
-        {
-            var t = ts[i]; int num = i + 1; string uri = al.Uri;
-            rows[i] = new BoxEl
-            {
-                Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Height = 34f,
-                Padding = new Edges4(WaveeSpace.S, 0f, WaveeSpace.S, 0f), Corners = CornerRadius4.All(6f),
-                HoverFill = Tok.FillSubtleSecondary,
-                OnClick = () => _ = _svc.Player.PlayAsync(uri, num - 1),
-                Children =
-                [
-                    new TextEl(num.ToString()) { Width = 22f, Size = 12f, Color = Tok.TextTertiary },
-                    new TextEl(t.Title) { Grow = 1f, Basis = 0f, Size = 13f, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-                    new TextEl(Dur(t.DurationMs)) { Size = 11f, Color = Tok.TextSecondary },
-                ],
-            };
-        }
-        var panel = new BoxEl
-        {
-            Direction = 1, Height = PanelHeight(idx), ClipToBounds = true,
-            Padding = new Edges4(WaveeSpace.L, WaveeSpace.S, WaveeSpace.L, WaveeSpace.S),
-            Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
-            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-            Children =
-            [
-                new BoxEl
-                {
-                    Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Height = 40f,
-                    Children =
-                    [
-                        new BoxEl { Width = 30f, Height = 30f, Shrink = 0f, Corners = CornerRadius4.All(15f), Fill = Tok.AccentDefault,
-                            AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, OnClick = () => _play(al.Uri),
-                            Children = [ Icon(Icons.Play, 12f, Tok.TextOnAccentPrimary) ] },
-                        new BoxEl { Grow = 1f, Basis = 0f, OnClick = () => _go("album:" + al.Uri, al.Name),
-                            Children = [ new TextEl(al.Name) { Size = 14f, Weight = 700, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis } ] },
-                    ],
-                },
-                .. rows,
-            ],
-        };
+        // The discography album is THIN (Tracks null) — the drawer fetches the full album on expand + shimmers while it
+        // loads. Keyed by uri so each album gets its own fetch (the slot is reused across expands).
+        var panel = Embed.Comp(() => new AlbumDrawerPanel(_svc, al, PanelHeight(idx), _play, _go, _accent)) with { Key = "drawer:" + al.Uri };
 
         // Connector: a short accent bar at the panel's top edge, spanning exactly the expanded card's column → reads as
         // "this drawer belongs to THAT card" (paired with the card's accent border).
@@ -359,7 +436,7 @@ sealed class DiscoGrid : Component
             Children =
             [
                 new BoxEl { Width = MathF.Max(0f, info.Left), Height = 0f },
-                new BoxEl { Width = info.CellWidth, Height = 3f, Corners = CornerRadius4.All(1.5f), Fill = Tok.AccentDefault },
+                new BoxEl { Width = info.CellWidth, Height = 3f, Corners = CornerRadius4.All(1.5f), Fill = _accent },
             ],
         };
 
@@ -392,13 +469,14 @@ sealed class DiscographySection : Component
     readonly Services _svc;
     readonly Action<string, string?> _go;
     readonly Action<string> _play;
+    readonly ColorF _accent;
     readonly Signal<bool> _collapsed = new(false);
     VirtualCollection<Album>? _vc;
 
     const int Cap = DiscographyRoute.PreviewCap;
 
-    public DiscographySection(string artistUri, string artistName, DiscographyKind kind, string title, Services svc, Action<string, string?> go, Action<string> play)
-    { _artistUri = artistUri; _artistName = artistName; _kind = kind; _title = title; _svc = svc; _go = go; _play = play; }
+    public DiscographySection(string artistUri, string artistName, DiscographyKind kind, string title, Services svc, Action<string, string?> go, Action<string> play, ColorF accent)
+    { _artistUri = artistUri; _artistName = artistName; _kind = kind; _title = title; _svc = svc; _go = go; _play = play; _accent = accent; }
 
     public override Element Render()
     {
@@ -411,7 +489,7 @@ sealed class DiscographySection : Component
         var children = new List<Element>(3) { Header(total, collapsed) };
         if (!collapsed)
         {
-            children.Add(Embed.Comp(() => new DiscoGrid(_vc!, _svc, _go, _play, cap: Cap)));
+            children.Add(Embed.Comp(() => new DiscoGrid(_vc!, _svc, _go, _play, cap: Cap, accent: _accent)));
             if (total > Cap) children.Add(SeeAllButton(total));
         }
         return new BoxEl
@@ -430,7 +508,7 @@ sealed class DiscographySection : Component
         OnClick = () => _collapsed.Value = !_collapsed.Peek(),
         Children =
         [
-            new BoxEl { Width = 3f, MinHeight = 22f, AlignSelf = FlexAlign.Stretch, Corners = CornerRadius4.All(1.5f), Fill = Tok.AccentDefault },
+            new BoxEl { Width = 3f, MinHeight = 22f, AlignSelf = FlexAlign.Stretch, Corners = CornerRadius4.All(1.5f), Fill = _accent },
             WaveeType.RailHeader(_title) with { MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
             total > 0 ? new TextEl(total.ToString()) { Size = 15f, Weight = 600, Color = Tok.TextTertiary } : new BoxEl(),
             new BoxEl { Grow = 1f },

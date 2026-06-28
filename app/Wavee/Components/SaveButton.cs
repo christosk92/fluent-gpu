@@ -52,14 +52,18 @@ sealed class FollowButton : Component
         bool following = lib.IsSaved(_uri);                  // subscribe
         return new BoxEl
         {
-            Direction = 0, Height = 36f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Direction = 0, Height = 36f, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Padding = new Edges4(WaveeSpace.L, 0f, WaveeSpace.L, 0f), Corners = CornerRadius4.All(18f),
             BorderWidth = 1.5f, BorderColor = following ? Tok.AccentDefault : Tok.StrokeControlDefault,
             HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
-            Role = AutomationRole.Button,
+            Role = AutomationRole.Button, Cursor = CursorId.Hand,
             OnClick = () => lib.ToggleSaved(_uri),
-            Children = [new TextEl(Loc.Get(following ? Strings.Artist.Following : Strings.Artist.Follow))
-                { Size = 13f, Weight = 700, Color = following ? Tok.AccentTextPrimary : Tok.TextSecondary }],
+            Children =
+            [
+                Icon(following ? Mdl.HeartFill : Icons.Heart, 14f, following ? Tok.AccentTextPrimary : Tok.TextPrimary),
+                new TextEl(Loc.Get(following ? Strings.Artist.Following : Strings.Artist.Follow))
+                    { Size = 13f, Weight = 700, Color = following ? Tok.AccentTextPrimary : Tok.TextPrimary },
+            ],
         };
     }
 
@@ -67,9 +71,13 @@ sealed class FollowButton : Component
     // bordered pill, not a full-width default bar that would stretch across the actions row.
     public static Element SkeletonShape() => new BoxEl
     {
-        Direction = 0, Height = 36f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Direction = 0, Height = 36f, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Padding = new Edges4(WaveeSpace.L, 0f, WaveeSpace.L, 0f), Corners = CornerRadius4.All(18f),
         BorderWidth = 1.5f, BorderColor = Tok.StrokeControlDefault,
-        Children = [new TextEl(Loc.Get(Strings.Artist.Follow)) { Size = 13f, Weight = 700, Color = Tok.TextSecondary }],
+        Children =
+        [
+            Icon(Icons.Heart, 14f, Tok.TextPrimary),
+            new TextEl(Loc.Get(Strings.Artist.Follow)) { Size = 13f, Weight = 700, Color = Tok.TextPrimary },
+        ],
     };
 }

@@ -403,7 +403,7 @@ public sealed class AppHost : IDisposable
     // spring track is seeded yet, and only the skeleton's LOOP shimmer runs) reads as all-loop → throttles to the 30 Hz
     // ambient cap, so the detail page mounts at 30 Hz and the transition stalls before the spring starts — the residual
     // "connected animation is sometimes laggy." Keeping the whole transition at display rate mounts the dest ~4× faster.
-    private bool AnimIsAmbient() => !_connected.HasActive && (!_anim.HasActive || _anim.LoopTrackCount == _anim.TrackCount);
+    private bool AnimIsAmbient() => !_connected.HasActive && (!_anim.HasActive || (_anim.LoopTrackCount == _anim.TrackCount && !_anim.DisplayRateActive));
 
     /// <summary>Milliseconds to wait before the next AMBIENT-animation frame so the loop holds ~<see cref="AmbientAnimationFps"/>
     /// instead of free-running at the display refresh. = frame budget minus the time the just-finished frame took (this is
@@ -475,6 +475,7 @@ public sealed class AppHost : IDisposable
         if (_caretBlinker.HasActive) r |= WakeReasons.Caret;
         if (_scene.HasBrushAnims) r |= WakeReasons.BrushAnims;
         if (_images.PendingCount > 0) r |= WakeReasons.ImagesPending;
+        if (_device.HasPendingUploads) r |= WakeReasons.ImagesPending;
         if (_images.HasActiveCrossfades) r |= WakeReasons.ImageCrossfades;
         if (_scene.OrphanCount > 0) r |= WakeReasons.Orphans;
         if (_dispatcher.Drag.HasActiveWork || _dispatcher.DragDrop.HasActiveWork) r |= WakeReasons.DragDropWork;   // E5: ghost spring easing / edge auto-scroll
@@ -719,7 +720,7 @@ public sealed class AppHost : IDisposable
         _scene.OnFreeIndex = OnSceneSlotFreed;
         _reconciler.Images = _images;
         _reconciler.ImageEpoch = _imageEpoch;
-        _images.SetPixelSink(_device.UploadImage);
+        _images.SetPixelAttemptSink(_device.TryUploadImage);
         _images.SetEvictSink(_device.EvictImage);
         _images.ImageStatusChanged += (_, _, _, _) => { if (_imageEpoch.HasSubscribers) _imageEpoch.Value = _imageEpoch.Peek() + 1; WakeFrame(); };
 
@@ -1244,7 +1245,7 @@ public sealed class AppHost : IDisposable
             {
                 if (keepAlive) _device.SuppressVsyncOnce();
                 _device.SubmitDrawList(_drawList.Bytes, _drawList.SortKeys,
-                    new FrameInfo(_window.ClientSizePx, _window.Scale, Clear)); // 10 submit
+                    new FrameInfo(_window.ClientSizePx, _window.Scale, Clear, recordStats.Damage)); // 10 submit
                 tSubmitDone = Stopwatch.GetTimestamp();        // boundary: SubmitDrawList done, Present not yet called
                 _swapchain.Present();                          // 11 present
                 if (maybeUnchanged) _lastPresentedDrawListHash = dlHash;   // track the stream only across quiet runs (active frames don't hash)

@@ -295,14 +295,18 @@ sealed class TrackList : Component
         return displayIndex >= 0 && displayIndex < v.Length ? _tracks[v[displayIndex]] : null;
     }
 
-    // album / single: an outer scroller carries the (eager) rows + the trailing sections, under the fixed chrome.
+    // album / single: an outer scroller carries the eager rows + the trailing sections, under the fixed chrome. The
+    // trailing component owns one aggregate route-keyed async resource so the below-list content fades in as one block.
     Element TrailingBody(Element listKeyed)
     {
-        var trailing = DetailTrailing.Build(_model, _h);
-        var body = new Element[1 + trailing.Length];
-        body[0] = listKeyed;
-        Array.Copy(trailing, 0, body, 1, trailing.Length);
-        return ScrollView(new BoxEl { Direction = 1, Children = body }) with { Grow = 1f, AutoEdgeFade = true };
+        Element trailing = Embed.Comp(() => new AlbumTrailing(_full, _route, _h));
+        return ScrollView(new BoxEl
+        {
+            Direction = 1,
+            Grow = 1f,
+            AlignSelf = FlexAlign.Stretch,
+            Children = [listKeyed, trailing],
+        }) with { Grow = 1f, AutoEdgeFade = true };
     }
 
     // ── chrome (fixed) ───────────────────────────────────────────────────────────────────────────────────
@@ -608,7 +612,7 @@ sealed class TrackList : Component
                 new BoxEl
                 {
                     Key = "row-pill", Width = 3f, Height = 16f, Margin = new Edges4(2f, 0f, 0f, 0f),
-                    Corners = CornerRadius4.All(1.5f), Fill = Tok.AccentDefault, AlignSelf = FlexAlign.Center,
+                    Corners = CornerRadius4.All(1.5f), Fill = _h.Accent, AlignSelf = FlexAlign.Center,
                     HitTestVisible = false, PressScale = 10f / 16f,
                     Opacity = Prop.Of(() => isSel() ? 1f : 0f),
                 },
@@ -991,7 +995,7 @@ sealed class MoreButton : Component
     IReadOnlyList<MenuFlyoutItem> Items() =>
     [
         new(Loc.Get(Strings.Detail.Play), Icons.Play, Invoke: () => _h.PlayAll()),
-        new(Loc.Get(Strings.Detail.AddToQueue), Icons.Add, Invoke: () => { /* TODO: queue API */ }),
+        new(Loc.Get(Strings.Detail.AddToQueue), Icons.Add, Invoke: () => _h.AddToQueue()),
         MenuFlyoutItem.Separator,
         new(Loc.Get(Strings.Detail.GoToArtist), Enabled: _m.Artists.Count > 0,
             Invoke: () => { if (_m.Artists.Count > 0) _h.Go(_m.Artists[0].Uri, _m.Artists[0].Name); }),
