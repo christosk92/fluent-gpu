@@ -51,6 +51,9 @@ public sealed class PlaybackBridge
     public Signal<IReadOnlyList<PlaybackDevice>> Devices { get; } = new(Array.Empty<PlaybackDevice>());
     public Signal<AuthStatus> Auth { get; } = new(AuthStatus.LoggedOut);
     public Signal<WaveeUser?> User { get; } = new(null);
+    /// <summary>The rich login projection driving the full-screen login takeover (device-code / QR / phase). Fed by the
+    /// live bootstrap through <see cref="Progress"/>; the coarse <see cref="Auth"/> still gates shell ↔ takeover.</summary>
+    public Signal<LoginSnapshot> Login { get; } = new(new(LoginPhase.LoggedOut));
 
     /// <summary>UI-only: the full now-playing view is open. The player-bar expand button toggles it; the shell renders the
     /// panel as a top layer. Lives on the bridge so any component under the playback context can open/close it.</summary>
@@ -82,6 +85,15 @@ public sealed class PlaybackBridge
             Auth.Value = st;
             User.Value = _session.CurrentUser;            // profile chip (name/avatar) follows the session
         })));
+    }
+
+    /// <summary>An <see cref="ILoginProgress"/> the live-login bootstrap reports to off the UI thread; each snapshot is
+    /// marshalled onto the UI thread via <paramref name="post"/> and written to <see cref="Login"/>.</summary>
+    public ILoginProgress Progress(Action<Action> post) => new SignalProgress(this, post);
+
+    sealed class SignalProgress(PlaybackBridge bridge, Action<Action> post) : ILoginProgress
+    {
+        public void Report(LoginSnapshot snapshot) => post(() => bridge.Login.Value = snapshot);
     }
 
     void PushState(IPlaybackState s)

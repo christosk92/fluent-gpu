@@ -50,7 +50,7 @@ sealed class WaveeShell : Component
 
     // The pane's collapse-toggle animation (56↔expanded width eases). Snapped during a drag via Motion.ReducedMotion.
     static readonly LayoutTransition SidebarReflow = new(
-        TransitionChannels.Size, TransitionDynamics.Spring(0.30f, 1f), SizeMode.Reflow);
+        TransitionChannels.Size, TransitionDynamics.Tween(Motion.ControlFast, Easing.SmoothOut), SizeMode.Reflow);
 
     // The shell receives its persisted settings through the IAppSettings interface (provided by the composition root,
     // Services). It never sees the concrete store — no "ForUnpackaged"/registry/publisher detail leaks in here.
@@ -64,6 +64,9 @@ sealed class WaveeShell : Component
     internal static Action? ProbeBack, ProbeForward, ProbeTheme;
     internal static Action<string>? ProbeOpenTab;
     internal static Action<string, string?, bool>? ProbeCardNav;   // replicate a Home-card click: (key, arg, doMorph=Hero fly)
+    internal static Action<bool>? ProbeSidebarCompact;
+    internal static Action? ProbeSidebarDragBegin, ProbeSidebarDragEnd;
+    internal static Action<float>? ProbeSidebarDragWidth;
 
     public WaveeShell(IAppSettings settings)
     {
@@ -71,7 +74,7 @@ sealed class WaveeShell : Component
         _sidebarCompact = new(settings.Get(WaveeSettings.SidebarCollapsed));
         _sidebarWidth = new(settings.Get(WaveeSettings.SidebarWidth));
 
-        if (Diag.EnvFlag("WAVEE_NAV_PROBE") || Diag.EnvFlag("WAVEE_CONN_STRESS") || Diag.EnvFlag("WAVEE_TRACKLIST_SHOT") || Diag.EnvFlag("WAVEE_HERO_SHOT"))
+        if (Diag.EnvFlag("WAVEE_NAV_PROBE") || Diag.EnvFlag("WAVEE_CONN_STRESS") || Diag.EnvFlag("WAVEE_TRACKLIST_SHOT") || Diag.EnvFlag("WAVEE_HERO_SHOT") || Diag.EnvFlag("WAVEE_HOME_SCROLL_PROBE"))
         {
             ProbeNav = GoNav; ProbeBack = Back; ProbeForward = Forward; ProbeTheme = ToggleTheme; ProbeOpenTab = OpenNewTab;
             // Exactly the Home-card path: stash a preview (→ DetailShell mounts the PREVIEW path, not the skeleton path the
@@ -82,6 +85,29 @@ sealed class WaveeShell : Component
                     _navPreview.Set(key, DetailPreview.FromPlaylist(new Wavee.Core.PlaylistSummary(key.Substring(3), arg ?? "Playlist", "", 0, null)));
                 if (doMorph && !Diag.EnvFlag("WAVEE_PB_NOMORPH")) _morphBegin?.Invoke(key);   // the Hero cover fly
                 GoNav(key, arg);
+            };
+            ProbeSidebarCompact = compact =>
+            {
+                _sidebarCompact.Value = compact;
+                _sidebarFade.Value = 1f;
+                SaveSidebar();
+            };
+            ProbeSidebarDragBegin = () =>
+            {
+                Motion.ReducedMotion = true;   // mirror SidebarResizeGrip.OnDown: snap reflow on the first move frame
+                _sidebarDragging.Value = true;
+            };
+            ProbeSidebarDragWidth = width =>
+            {
+                _sidebarCompact.Value = false;
+                _sidebarWidth.Value = Math.Clamp(width, 240f, 460f);
+                _sidebarFade.Value = 1f;
+            };
+            ProbeSidebarDragEnd = () =>
+            {
+                _sidebarFade.Value = 1f;
+                SaveSidebar();
+                _sidebarDragging.Value = false;
             };
         }
 

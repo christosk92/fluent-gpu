@@ -63,6 +63,16 @@ static class Program
             Environment.Exit(code);
         }
 
+        // QR diagnostic: encode [text] with the REAL Qr encoder → ASCII + a crisp PNG (isolates the encoder from the GUI
+        // renderer). Usage: --qr-dump [text] [outpath.png]
+        int qrIdx = Array.IndexOf(args, "--qr-dump");
+        if (qrIdx >= 0)
+        {
+            string qtext = qrIdx + 1 < args.Length && !args[qrIdx + 1].StartsWith("--") ? args[qrIdx + 1] : "https://spotify.com/pair";
+            string qpath = qrIdx + 2 < args.Length && !args[qrIdx + 2].StartsWith("--") ? args[qrIdx + 2] : "qr.png";
+            Environment.Exit(QrDump.Run(qtext, qpath, Console.Error.WriteLine));
+        }
+
         // Headless LIVE Spotify login (real network): OAuth device-code → AP handshake + login → APWelcome.
         if (Array.IndexOf(args, "--spotify-login") >= 0)
         {

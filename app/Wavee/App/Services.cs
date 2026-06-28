@@ -26,6 +26,14 @@ public sealed class Services
     /// track hydration via <c>OnDemandFetch</c> (playlists/albums open empty otherwise).</summary>
     public Wavee.Backend.Library.StoreLibrarySource? RealLibrarySource { get; private set; }
 
+    /// <summary>The live Connect session host (REAL backend, after a successful login) — captured for logout teardown.
+    /// Set via <see cref="AttachLive"/> BEFORE <see cref="GoLive"/> so a logout in the go-live window still tears down the
+    /// live transport + dealer cleanly (not a no-op).</summary>
+    public Wavee.SpotifyLive.LiveSessionHost? LiveHost { get; private set; }
+    /// <summary>The persisted-credential store backing the live session — cleared on logout so the next launch can't
+    /// silently re-login.</summary>
+    public Wavee.Backend.Persistence.ICredentialStore? CredStore { get; private set; }
+
     public IWaveeLog Log { get; }
     public ISpotifySession Session { get; }
     public IMusicLibrary Library { get; }
@@ -174,5 +182,46 @@ public sealed class Services
         (Devices as Wavee.Backend.SwitchableDevices)?.SetInner(devices);
         if (session is not null) (Session as Wavee.Backend.SwitchableSession)?.SetInner(session);
         Log.Info("app", "playback backend swapped to LIVE (Connect device + now-playing + remote control + account active)");
+    }
+
+    /// <summary>Register the live-session teardown handles. MUST be called BEFORE <see cref="GoLive"/> (which flips the
+    /// shell on and makes logout reachable), so a logout fired in that window still clears credentials + disposes the host
+    /// instead of leaking the live transport/dealer.</summary>
+    internal void AttachLive(Wavee.SpotifyLive.LiveSessionHost host, Wavee.Backend.Persistence.ICredentialStore credStore)
+    {
+        LiveHost = host;
+        CredStore = credStore;
+    }
+
+    /// <summary>The inverse of <see cref="GoLive"/>: re-point the switchable facades back to fresh in-memory fakes so the
+    /// app returns to a clean logged-out state with no process restart (no-op if not built with switchables).</summary>
+    public void GoOffline()
+    {
+        (Player as Wavee.Backend.SwitchablePlayer)?.SetInner(new FakePlaybackProvider());
+        (Devices as Wavee.Backend.SwitchableDevices)?.SetInner(new FakeConnectDevices());
+        (Session as Wavee.Backend.SwitchableSession)?.SetInner(new FakeSpotifySession());
+        LiveHost = null;
+        CredStore = null;
+        Log.Info("app", "session torn down → offline (switchables back to fakes)");
+    }
+
+    /// <summary>Sign out without a restart: flip the session logged-out (gate → takeover), wipe the persisted reusable
+    /// credential (else the next launch silently re-logs-in), tear the live host down OFF the UI thread, then reset to the
+    /// fake backend.</summary>
+    public async System.Threading.Tasks.Task LogoutAsync()
+    {
+        // Wipe the persisted credential FIRST — BEFORE flipping the session — so the gate swap to the takeover (which
+        // auto-restarts the login) can't read the old credential and silently sign back in. Clear BOTH the captured store
+        // and a fresh open (robust even if no live session captured one / it was a silent resume).
+        CredStore?.Clear();
+        Wavee.SpotifyLive.SpotifyLiveLogin.ClearStoredCredential();
+        Playback.Login.Value = new Wavee.Core.LoginSnapshot(Wavee.Core.LoginPhase.LoggedOut);
+        await Session.LogoutAsync().ConfigureAwait(false);   // LiveSpotifySession → LoggedOut → gate swaps shell → takeover
+        if (LiveHost is { } h)
+        {
+            LiveHost = null;
+            await System.Threading.Tasks.Task.Run(async () => await h.DisposeAsync().ConfigureAwait(false)).ConfigureAwait(false);
+        }
+        GoOffline();
     }
 }

@@ -44,24 +44,28 @@ public static class SpotifyLiveLogin
     /// <summary>The credential chain (stored reusable creds → device-code) → AP handshake/login (with AP failover) → APWelcome,
     /// persisting the fresh reusable credentials. Returns null on any failure (already logged). Reused by RunAsync (the
     /// premium gate) and by the metadata probe (which continues to login5 + spclient).</summary>
-    public static async Task<LoginResult?> LoginAsync(Action<string> log, CancellationToken ct, bool retainChannel = false)
+    public static async Task<LoginResult?> LoginAsync(Action<string> log, CancellationToken ct, bool retainChannel = false,
+        bool allowDeviceCode = true, IObserver<AuthState>? authObserver = null, Action? onCredentialAcquired = null,
+        bool allowBrowser = false)
     {
-        // Step 1 - PORTABLE credential store. DPAPI on Windows, Keychain/libsecret on macOS/Linux, else NoOp - same seam.
-        ICredentialProtector protector = new NoOpProtector();
-        if (OperatingSystem.IsWindows()) protector = new DpapiProtector();
-        else if ((OperatingSystem.IsMacOS() || OperatingSystem.IsLinux()) && KeyringProtector.IsAvailable()) protector = new KeyringProtector();
-        var localStore = FileLocalStore.ForApp("Wavee");
-        var credStore = new LocalCredentialStore(localStore, protector);
-        var deviceId = GetOrCreateDeviceId(localStore);   // persisted → stable across launches (don't churn the device list)
+        // Step 1 - PORTABLE credential store (DPAPI / Keychain / libsecret / NoOp behind one seam) + the launch-stable device id.
+        var (credStore, deviceId) = OpenCredentialStore();
 
         try
         {
-            var device = new DeviceCodeProvider(new HttpClientPost(), ClientId, Scopes);
-            var flow = new AuthFlow([new StoredCredentialProvider(() => credStore.Load()), device]);
+            // Stored creds first (silent fast-path), then the chosen interactive method: browser-loopback (PKCE) and/or the
+            // device code. A SILENT resume passes neither → [stored] only.
+            var providers = new List<ICredentialProvider> { new StoredCredentialProvider(() => credStore.Load()) };
+            if (allowBrowser) providers.Add(new LoopbackOAuthProvider(new HttpClientPost(), ClientId, Scopes));
+            if (allowDeviceCode) providers.Add(new DeviceCodeProvider(new HttpClientPost(), ClientId, Scopes));
+            var flow = new AuthFlow(providers);
             using var challengeSub = flow.State.Subscribe(new ChallengeLogger(log));
-            log("Authenticating (stored credentials first, else device-code)...");
+            // The in-app UI observer rides the SAME reactive state (device-code challenge / QR / expiry); null for the CLI.
+            using var uiSub = authObserver is null ? (IDisposable?)null : flow.State.Subscribe(authObserver);
+            log("Authenticating (stored credentials first" + (allowDeviceCode ? ", else device-code)..." : ", silent)..."));
             var cred = await flow.AcquireAsync(ct).ConfigureAwait(false);
             if (cred is null) { log("No credential obtained."); return null; }
+            onCredentialAcquired?.Invoke();   // credential-acquired boundary → the bootstrap reports Finalizing (AP/login5/dealer ahead)
             bool usedStored = cred.Kind == CredentialKind.ReusableBlob;
             log(usedStored ? "Using stored credentials (no re-auth)." : "Authorized via device-code.");
 
@@ -117,8 +121,8 @@ public static class SpotifyLiveLogin
 
             // Persist the fresh reusable credentials (bytes never logged, only the count) — login5 + the next launch use them.
             credStore.Save(new Credential(CredentialKind.ReusableBlob, welcome.Username, Convert.ToBase64String(welcome.ReusableCredentials)));
-            log("Saved " + welcome.ReusableCredentials.Length + "-byte reusable credentials [" + protector.Scheme + "].");
-            return new LoginResult(welcome, deviceId, credStore, protector.Scheme, channel);
+            log("Saved " + welcome.ReusableCredentials.Length + "-byte reusable credentials [" + credStore.Scheme + "].");
+            return new LoginResult(welcome, deviceId, credStore, credStore.Scheme, channel);
         }
         catch (OperationCanceledException) { log("Live login timed out / cancelled."); return null; }
         catch (Exception ex) { log("Live login failed: " + ex.Message); return null; }
@@ -129,6 +133,34 @@ public static class SpotifyLiveLogin
         var id = store.Get("device.id");
         if (string.IsNullOrEmpty(id)) { id = Guid.NewGuid().ToString("N"); store.Set("device.id", id); }
         return id;
+    }
+
+    /// <summary>Open the portable credential store (DPAPI on Windows, Keychain/libsecret on macOS/Linux, else NoOp — the
+    /// same seam) together with the persisted, launch-stable device id. ONE source of truth for the protector selection,
+    /// shared by <see cref="LoginAsync"/> and the silent-resume pre-check.</summary>
+    public static (LocalCredentialStore Store, string DeviceId) OpenCredentialStore()
+    {
+        ICredentialProtector protector = new NoOpProtector();
+        if (OperatingSystem.IsWindows()) protector = new DpapiProtector();
+        else if ((OperatingSystem.IsMacOS() || OperatingSystem.IsLinux()) && KeyringProtector.IsAvailable()) protector = new KeyringProtector();
+        var localStore = FileLocalStore.ForApp("Wavee");
+        return (new LocalCredentialStore(localStore, protector), GetOrCreateDeviceId(localStore));
+    }
+
+    /// <summary>True iff a reusable credential for THIS machine/platform is on disk (scheme-matched). The takeover's silent
+    /// resume uses it to resolve "no stored credential" to Welcome instead of the Error card.</summary>
+    public static bool HasStoredCredential()
+    {
+        try { return OpenCredentialStore().Store.Load() is not null; }
+        catch { return false; }
+    }
+
+    /// <summary>Wipe the persisted reusable credential (logout). Opens the store FRESH so it works even when no live session
+    /// captured one, and persists the deletion to disk immediately (so the next login can't silently re-use it).</summary>
+    public static void ClearStoredCredential()
+    {
+        try { OpenCredentialStore().Store.Clear(); }
+        catch { }
     }
 
     // Redact an account identifier before it reaches a log (keep a short hint, hide the rest).

@@ -203,19 +203,11 @@ public sealed class ImageCache
         {
             var hit = _byId[id];
             hit.LastUsed = _clock++;
-            // Capacity rejection is retryable only after every prior visual released the handle. This makes a later
-            // remount recover after residency pressure subsides without a failed visible component entering a retry loop.
-            if (hit.State == ImageState.Failed && hit.Failure == ImageFailureKind.GpuResourceExhausted && hit.Refs == 0)
-            {
-                hit.State = ImageState.Pending;
-                hit.Failure = ImageFailureKind.None;
-                hit.Attempts = 0;
-                hit.W = hit.H = 0;
-                _pendingCount++;
-                _totalRequested++;
-                Diag.Set("media", "requested", _totalRequested);
-                _decoder.Begin(id, source, targetW, targetH, priority);
-            }
+            // Evicted entries keep their key as a tombstone so a retained ImageEl node can re-pin the same handle and
+            // recover without needing its original URL. Capacity rejection is likewise retryable after all owners release.
+            if (hit.State == ImageState.None ||
+                (hit.State == ImageState.Failed && hit.Failure == ImageFailureKind.GpuResourceExhausted && hit.Refs == 0))
+                RestartDecode(id, hit, priority);
             // A visible node arriving over a prefetch entry promotes the in-flight decode to the front of the queue.
             if (priority < ImagePriority.Prefetch) _decoder.Prioritize(id, priority);
             return new ImageHandle(id);
@@ -308,9 +300,31 @@ public sealed class ImageCache
     }
 
     /// <summary>Pin = "on screen" (a realized node holds it); never evicted while pinned. Unpin on recycle/unmount.</summary>
-    public void Pin(ImageHandle h) { if (_byId.TryGetValue(h.Id, out var e)) { e.Refs++; e.LastUsed = _clock++; } }
+    public void Pin(ImageHandle h)
+    {
+        if (!_byId.TryGetValue(h.Id, out var e)) return;
+        e.Refs++;
+        e.LastUsed = _clock++;
+        if (e.State == ImageState.None) RestartDecode(h.Id, e, ImagePriority.Visible);
+        else if (e.State == ImageState.Pending) _decoder.Prioritize(h.Id, ImagePriority.Visible);
+    }
     public void Unpin(ImageHandle h) { if (_byId.TryGetValue(h.Id, out var e) && e.Refs > 0) e.Refs--; }
     public int RefsOf(ImageHandle h) => _byId.TryGetValue(h.Id, out var e) ? e.Refs : 0;
+
+    private void RestartDecode(int id, Entry e, ImagePriority priority)
+    {
+        if (e.State == ImageState.Pending) { _decoder.Prioritize(id, priority); return; }
+        e.State = ImageState.Pending;
+        e.Failure = ImageFailureKind.None;
+        e.Attempts = 0;
+        e.W = e.H = 0;
+        e.Bytes = 0;
+        e.TextureMs = float.NaN;
+        _pendingCount++;
+        _totalRequested++;
+        Diag.Set("media", "requested", _totalRequested);
+        _decoder.Begin(id, e.Key.Source, e.Key.W, e.Key.H, priority);
+    }
 
     /// <summary>Apply finished decodes (UI thread, once per frame) then evict to budget. Returns completions this pump.
     /// Allocation-free when idle (cached callback; empty-queue Pump does nothing) — safe in the hot phase.</summary>
@@ -392,12 +406,18 @@ public sealed class ImageCache
             if (victim == 0) break;   // everything left is pinned (on screen) — never evict it
             var e2 = _byId[victim];
             UsedBytes -= e2.Bytes;
-            _byKey.Remove(e2.Key);
-            _byId.Remove(victim);
+            bool activeDeadline = e2.Transition.Enabled && !float.IsNaN(e2.TextureMs)
+                && e2.TextureMs + e2.Transition.DurationMs >= _clockMs;
+            e2.State = ImageState.None;
+            e2.Failure = ImageFailureKind.None;
+            e2.Attempts = 0;
+            e2.W = e2.H = 0;
+            e2.Bytes = 0;
+            e2.TextureMs = float.NaN;
             // If the evicted entry could still be the crossfade-deadline high-water (an unpinned image whose fade hasn't
             // elapsed), recompute the max so HasActiveCrossfades can't report a stale future deadline. Settled entries
             // (deadline < clock — the overwhelming evict case) skip the recompute, so the steady path stays scan-free.
-            if (e2.Transition.Enabled && !float.IsNaN(e2.TextureMs) && e2.TextureMs + e2.Transition.DurationMs >= _clockMs)
+            if (activeDeadline)
                 RecomputeCrossfadeDeadline();
             _totalEvicted++;
             Diag.Set("media", "evicted", _totalEvicted);

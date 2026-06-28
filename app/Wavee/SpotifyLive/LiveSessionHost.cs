@@ -18,27 +18,83 @@ public sealed class LiveSessionHost : IAsyncDisposable
 {
     readonly LiveDealerTransport _transport;
     readonly LiveConnect _connect;
+    readonly CancellationTokenSource _cts;
 
-    LiveSessionHost(LiveDealerTransport transport, LiveConnect connect) { _transport = transport; _connect = connect; }
+    LiveSessionHost(LiveDealerTransport transport, LiveConnect connect, CancellationTokenSource cts)
+    { _transport = transport; _connect = connect; _cts = cts; }
 
     public LiveConnect Connect => _connect;
 
-    public static async Task<LiveSessionHost?> StartAsync(Services svc, Action<string> log, CancellationToken ct)
+    /// <summary>Cancelled on dispose (logout) — gates the background hydration / fetch tasks so they stop instead of
+    /// running against the store after the user signed out.</summary>
+    public CancellationToken Token => _cts.Token;
+
+    public static async Task<LiveSessionHost?> StartAsync(Services svc, Action<string> log, CancellationToken ct,
+        ILoginProgress? progress = null, bool interactive = true, bool useBrowser = false, bool quietPhases = false)
     {
-        var live = await SpotifyLiveSpclient.ConnectAsync(log, ct, retainApChannel: true).ConfigureAwait(false);
-        if (live is null) return null;
+        var report = progress ?? NullLoginProgress.Instance;
+        var adapter = new AuthStateAdapter(report, interactive, useBrowser, quietPhases);
+
+        // Silent resume with NO stored credential → Welcome, never the Error card (a null login is ambiguous between "no
+        // credential" and "handshake failed"; this pre-check disambiguates the common first-run path).
+        if (!interactive && !SpotifyLiveLogin.HasStoredCredential())
+        {
+            report.Report(new LoginSnapshot(LoginPhase.LoggedOut));
+            return null;
+        }
+        // quietPhases: a racing sibling (the browser button alongside the device code) stays silent on the intermediate
+        // states so it can't replace the two-pane — it surfaces only Finalizing/Authenticated/PremiumRequired on success.
+        if (!quietPhases) report.Report(new LoginSnapshot(!interactive ? LoginPhase.SilentResume : useBrowser ? LoginPhase.AwaitingBrowser : LoginPhase.RequestingCode));
+
+        var live = await SpotifyLiveSpclient.ConnectAsync(log, ct, retainApChannel: true,
+            allowDeviceCode: interactive && !useBrowser, authObserver: adapter,
+            onCredentialAcquired: () => report.Report(new LoginSnapshot(LoginPhase.Finalizing)),
+            allowBrowser: interactive && useBrowser).ConfigureAwait(false);
+        if (live is null)
+        {
+            if (ct.IsCancellationRequested || quietPhases) return null;   // superseded / cancelled / a quiet racing sibling → stay silent
+            // Welcome on a silent miss (no / rejected-and-cleared credential); Failed/Expired on a genuine error or lapsed code.
+            report.Report(adapter.Terminal(credExisted: SpotifyLiveLogin.HasStoredCredential()));
+            return null;
+        }
+
+        // Premium gate IN-APP (replaces the pre-window MessageBox): refuse a Free account here, and wipe the reusable blob
+        // LoginAsync already persisted so the next launch can't silent-resume straight back into the wall.
+        if (live.Session.Tier != Tier.Premium)
+        {
+            live.CredStore?.Clear();
+            report.Report(new LoginSnapshot(LoginPhase.PremiumRequired));
+            live.ApChannel?.Dispose();
+            return null;
+        }
 
         var dealerJson = await SharedHttp.Client.GetStringAsync("https://apresolve.spotify.com/?type=dealer", ct).ConfigureAwait(false);
         var dealerHosts = ApResolver.ParseHosts(dealerJson, "dealer");
-        if (dealerHosts.Count == 0) { log("no dealer host — live session not started"); live.ApChannel?.Dispose(); return null; }
+        if (dealerHosts.Count == 0) { log("no dealer host — live session not started"); if (!ct.IsCancellationRequested) report.Report(adapter.Terminal(credExisted: true)); live.ApChannel?.Dispose(); return null; }
 
         // The transport's token provider RE-MINTS on reconnect/expiry (not a captured constant).
         var transport = new LiveDealerTransport(dealerHosts[0].Split(':')[0], live.TokenProvider, live.Pipeline, () => live.BaseUrl, log);
         var connect = new LiveConnect(transport, live.DeviceId, live.ApChannel, resolveContext: null, log: log);
         transport.Start();
-        var (displayName, avatarUrl) = await FetchProfileAsync(live.Pipeline, live.BaseUrl, live.Username, ct).ConfigureAwait(false);
-        var liveSession = new LiveSpotifySession(live.Username, displayName, avatarUrl, live.Session.Tier == Tier.Premium);
+        // Profile (name + avatar) and the account email fetched in PARALLEL before go-live, so CurrentUser is complete on
+        // the first render (no refresh hook). Both are best-effort — a failure just omits that field.
+        var profileTask = FetchProfileAsync(live.Pipeline, live.BaseUrl, live.Username, ct);
+        var emailTask = FetchEmailAsync(live.AccessToken, ct);
+        var (displayName, avatarUrl) = await profileTask.ConfigureAwait(false);
+        var email = await emailTask.ConfigureAwait(false);
+        var liveSession = new LiveSpotifySession(live.Username, displayName, avatarUrl, live.Session.Tier == Tier.Premium, email);
+
+        // Owned CTS — INDEPENDENT of the bootstrap ct (a racing-sibling cancel must not kill hydration); cancelled on logout.
+        var cts = new CancellationTokenSource();
+        var host = new LiveSessionHost(transport, connect, cts);
+
+        // Supersede check: a newer login cancels THIS bootstrap's ct. Bail (disposing what we built) so a stale flow can't
+        // AttachLive/GoLive over the winner. No await between here and GoLive → effectively atomic. AttachLive runs BEFORE
+        // GoLive so a logout fired in the go-live window still tears the host down (not a no-op).
+        if (ct.IsCancellationRequested) { await host.DisposeAsync().ConfigureAwait(false); return null; }
+        svc.AttachLive(host, live.CredStore!);
         svc.GoLive(connect.Controller, connect.Devices, liveSession);
+        report.Report(new LoginSnapshot(LoginPhase.Authenticated, User: liveSession.CurrentUser));
         log("Live Connect session active — Wavee is a controllable device, mirrors now-playing, and shows the live account.");
 
         // Live data wiring into the SAME store the catalog reads (InMemoryStore is lock-guarded → safe off-thread):
@@ -79,17 +135,63 @@ public sealed class LiveSessionHost : IAsyncDisposable
 
             // (b) hydrate playlist HEADERS (name/cover) so the home + sidebar show names; for cover-less playlists also
             //     pull the tracklist so they render a 2×2 album mosaic.
-            _ = Task.Run(() => HydratePlaylistHeadersAsync(fetcher, store, log, ct));
+            _ = Task.Run(() => HydratePlaylistHeadersAsync(fetcher, store, log, cts.Token));
         }
 
-        return new LiveSessionHost(transport, connect);
+        return host;
     }
 
     public ValueTask DisposeAsync()
     {
+        _cts.Cancel();           // stop background hydration / in-flight fetches before tearing the transport down
         _connect.Dispose();
         _transport.Dispose();
+        _cts.Dispose();
         return ValueTask.CompletedTask;
+    }
+
+    // ── AuthState → LoginSnapshot projection ─────────────────────────────────────────────────────────────────────────
+    /// <summary>Maps the backend reactive <see cref="AuthState"/> stream to UI <see cref="LoginSnapshot"/>s. The live
+    /// AuthFlow only emits LoggedOut → AwaitingCredential → AwaitingUser(challenge) → ChallengeExpired; Finalizing /
+    /// Authenticated / Failed / PremiumRequired are reported by the bootstrap (the AuthFlow never calls Connecting()).</summary>
+    sealed class AuthStateAdapter(ILoginProgress progress, bool interactive, bool useBrowser, bool quiet = false) : IObserver<AuthState>
+    {
+        AuthPhase _last = AuthPhase.LoggedOut;
+
+        public void OnNext(AuthState s)
+        {
+            _last = s.Phase;
+            if (quiet) return;   // a racing sibling stays silent on the intermediate states (the two-pane owns them)
+            switch (s.Phase)
+            {
+                case AuthPhase.AwaitingCredential:
+                    progress.Report(new LoginSnapshot(!interactive ? LoginPhase.SilentResume : useBrowser ? LoginPhase.AwaitingBrowser : LoginPhase.RequestingCode));
+                    break;
+                case AuthPhase.AwaitingUser when s.Challenge is { } c:
+                    progress.Report(new LoginSnapshot(LoginPhase.AwaitingApproval,
+                        new LoginChallenge(c.UserCode, c.VerificationUri, c.VerificationUriComplete, c.Expiry)));
+                    break;
+                case AuthPhase.ChallengeExpired:
+                    progress.Report(new LoginSnapshot(LoginPhase.ChallengeExpired));
+                    break;
+            }
+        }
+
+        public void OnError(Exception error) { }
+        public void OnCompleted() { }
+
+        /// <summary>The phase to show when LoginAsync returned null: a lapsed code → ChallengeExpired; a silent resume that
+        /// found no usable credential → Welcome (LoggedOut); otherwise a genuine network/AP failure → Failed.</summary>
+        public LoginSnapshot Terminal(bool credExisted) =>
+            _last == AuthPhase.ChallengeExpired ? new LoginSnapshot(LoginPhase.ChallengeExpired)
+          : (!interactive && !credExisted)      ? new LoginSnapshot(LoginPhase.LoggedOut)
+          :                                       new LoginSnapshot(LoginPhase.Failed, Error: "We couldn't reach Spotify. Check your connection and try again.");
+    }
+
+    sealed class NullLoginProgress : ILoginProgress
+    {
+        public static readonly NullLoginProgress Instance = new();
+        public void Report(LoginSnapshot snapshot) { }
     }
 
     // Phase 1: hydrate each rootlist playlist's HEADER (name/cover) — fast, coalesced into one refresh. Phase 2: for the
@@ -196,6 +298,25 @@ public sealed class LiveSessionHost : IAsyncDisposable
             return (name, avatar);
         }
         catch { return (username, null); }
+    }
+
+    // The account email via the Web API /v1/me (the user-read-email scope is requested). Best-effort: null on any failure
+    // (the account chip just omits the email line). Bearer = the login5 access token — the same token the spclient calls use.
+    static async Task<string?> FetchEmailAsync(string accessToken, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(accessToken)) return null;
+        try
+        {
+            using var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, "https://api.spotify.com/v1/me");
+            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+            using var resp = await SharedHttp.Client.SendAsync(req, ct).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode) return null;
+            using var s = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            using var doc = await JsonDocument.ParseAsync(s, default, ct).ConfigureAwait(false);
+            return doc.RootElement.TryGetProperty("email", out var e) && e.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(e.GetString())
+                ? e.GetString() : null;
+        }
+        catch { return null; }
     }
 
     // As-you-type omnibar suggestions via Pathfinder searchSuggestions (variable "query", not "searchTerm").

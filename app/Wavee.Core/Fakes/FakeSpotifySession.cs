@@ -18,7 +18,7 @@ public sealed class FakeSpotifySession : ISpotifySession, ISessionSource
     {
         Set(AuthStatus.Authenticating);
         await Task.Delay(250, ct).ConfigureAwait(false);
-        CurrentUser = new WaveeUser("u_wavee", "Wavee Listener", null, IsPremium: true);
+        CurrentUser = new WaveeUser("u_wavee", "Wavee Listener", null, IsPremium: true, Email: "listener@wavee.app");
         Set(AuthStatus.Authenticated);
         return true;
     }

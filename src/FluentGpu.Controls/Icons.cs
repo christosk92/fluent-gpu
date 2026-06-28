@@ -56,6 +56,8 @@ public static class Icons
     public const string Link = "\uE71B";
     public const string Globe = "\uE774";
     public const string OpenInNewWindow = "\uE8A7";
+    public const string Contact = "\uE77B";          // person / account (Segoe Fluent Icons)
+    public const string SignOut = "\uF3B1";          // log out \u2014 exit door + arrow (Segoe Fluent Icons)
     public const string Font = "\uE8D2";
     public const string Brush = "\uE790";
     public const string Movie = "\uE8B2";

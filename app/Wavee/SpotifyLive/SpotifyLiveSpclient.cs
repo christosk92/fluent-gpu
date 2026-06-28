@@ -7,17 +7,20 @@ namespace Wavee.SpotifyLive;
 // Shared live spclient bring-up: login (AP) -> client-token (attestation) -> login5 (spclient access token) -> resolve an
 // spclient host -> the middleware HttpPipeline (bearer + client-token + 429-backoff) + a SessionContext. The metadata and
 // library probes build on this. Needs creds + network — the USER runs the probes; only the wire shape is unverifiable here.
-public sealed record LiveSpclient(HttpPipeline Pipeline, string BaseUrl, SessionContext Session, string Username, string AccessToken, string DeviceId, Credential ReusableCredential, Func<CancellationToken, Task<string>> TokenProvider, string? ClientToken = null, ApConnection? ApChannel = null);
+public sealed record LiveSpclient(HttpPipeline Pipeline, string BaseUrl, SessionContext Session, string Username, string AccessToken, string DeviceId, Credential ReusableCredential, Func<CancellationToken, Task<string>> TokenProvider, string? ClientToken = null, ApConnection? ApChannel = null, Wavee.Backend.Persistence.ICredentialStore? CredStore = null);
 
 public static class SpotifyLiveSpclient
 {
     const string ClientId = "65b708073fc0480ea92a077233ca87bd";
 
-    public static async Task<LiveSpclient?> ConnectAsync(Action<string> log, CancellationToken ct, bool retainApChannel = false)
+    public static async Task<LiveSpclient?> ConnectAsync(Action<string> log, CancellationToken ct, bool retainApChannel = false,
+        bool allowDeviceCode = true, IObserver<AuthState>? authObserver = null, Action? onCredentialAcquired = null,
+        bool allowBrowser = false)
     {
         // retainApChannel: keep the login AP socket alive as the ONE persistent channel (login + audio-key share it). The
-        // probes/premium-gate leave it false (the socket is disposed after login).
-        var login = await SpotifyLiveLogin.LoginAsync(log, ct, retainApChannel).ConfigureAwait(false);
+        // probes/premium-gate leave it false (the socket is disposed after login). allowDeviceCode/allowBrowser/authObserver/
+        // onCredentialAcquired thread the in-app login UI: silent-vs-interactive, the method (browser/device), the challenge, Finalizing.
+        var login = await SpotifyLiveLogin.LoginAsync(log, ct, retainApChannel, allowDeviceCode, authObserver, onCredentialAcquired, allowBrowser).ConfigureAwait(false);
         if (login is null) return null;
         var welcome = login.Welcome;
         var deviceId = login.DeviceId;
@@ -73,6 +76,6 @@ public static class SpotifyLiveSpclient
         var session = new SessionContext(welcome.Username, welcome.Country ?? "US",
             tier == Tier.Premium ? "premium" : "free", "en", tier, false);
         var reusable = new Credential(CredentialKind.ReusableBlob, welcome.Username, System.Convert.ToBase64String(welcome.ReusableCredentials));
-        return new LiveSpclient(pipeline, baseUrl, session, welcome.Username, accessToken, deviceId, reusable, c => Provider(false, c), clientToken, login.Channel);
+        return new LiveSpclient(pipeline, baseUrl, session, welcome.Username, accessToken, deviceId, reusable, c => Provider(false, c), clientToken, login.Channel, login.CredStore);
     }
 }

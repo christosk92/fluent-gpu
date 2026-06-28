@@ -47,7 +47,8 @@ internal static class WaveeNavProbe
         bool connStress = Diag.EnvFlag("WAVEE_CONN_STRESS");
         bool trackShot = Diag.EnvFlag("WAVEE_TRACKLIST_SHOT");
         bool heroShot = Diag.EnvFlag("WAVEE_HERO_SHOT");
-        if (!Diag.EnvFlag("WAVEE_NAV_PROBE") && !connStress && !trackShot && !heroShot) return false;
+        bool homeScroll = Diag.EnvFlag("WAVEE_HOME_SCROLL_PROBE");
+        if (!Diag.EnvFlag("WAVEE_NAV_PROBE") && !connStress && !trackShot && !heroShot && !homeScroll) return false;
         if (window is not Win32Window w || device is not D3D12Device gpu)
         {
             Console.Error.WriteLine("[wavee-nav-probe] unavailable: requires Win32Window + D3D12Device");
@@ -66,6 +67,7 @@ internal static class WaveeNavProbe
         if (heroShot) RunHeroCollapseShot(host, w, gpu);
         else if (trackShot) RunTrackListShot(host, w, gpu);
         else if (connStress) RunConnStress(host, w, gpu);
+        else if (homeScroll) RunHomeScrollProbe(host, w, gpu);
         else Run(host, w, gpu);
         return true;
     }
@@ -333,6 +335,202 @@ internal static class WaveeNavProbe
         public readonly List<double> Ms = new(4096);
         public int OverBudget;       // frames whose WORK exceeded one vblank (would drop a frame in vsync-paced use)
         public int OverBudgetGc;     // ...of those, frames on which a Gen0+ GC fired (a GC spike, not a work spike)
+    }
+
+    // WAVEE_HOME_SCROLL_PROBE=1: the screenshot repro path, isolated from the full nav stress suite. It warms Home,
+    // toggles compact/expanded sidebar state, simulates a drag-resize sequence through the same shell signals, then
+    // scrolls the Home viewport with real wheel input. Output defaults to .wavee-diagnostics under the current dir; override
+    // with WAVEE_PROBE_OUT.
+    static void RunHomeScrollProbe(AppHost host, Win32Window window, D3D12Device gpu)
+    {
+        string? outDir = ProbeOutputDir();
+        string? csvPath = outDir is null ? null : Path.Combine(outDir, "wavee-home-scroll-probe.csv");
+        string? summaryPath = outDir is null ? null : Path.Combine(outDir, "wavee-home-scroll-probe-summary.txt");
+        var csv = new StringBuilder(1 << 15);
+        csv.AppendLine("phase,frame,label,frameMs,flushMs,layoutMs,animMs,recordMs,submitMs,gen0,gen1,comps,nodes,draws,overBudget");
+        bool keepVsync = Diag.EnvFlag("WAVEE_PROBE_VSYNC");
+
+        FrameStats Measure(Phase phase, string label)
+        {
+            int g0 = GC.CollectionCount(0), g1 = GC.CollectionCount(1);
+            if (!keepVsync) { gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce(); }
+            var s = host.RunFrame();
+            int dg0 = GC.CollectionCount(0) - g0, dg1 = GC.CollectionCount(1) - g1;
+            if (s.Rendered || s.DrawCommandCount > 0)
+            {
+                phase.Ms.Add(s.FrameMs);
+                bool over = s.FrameMs > BudgetMs;
+                if (over) { phase.OverBudget++; if (dg0 > 0) phase.OverBudgetGc++; }
+                static string F(double v) => v.ToString("0.00", CultureInfo.InvariantCulture);
+                csv.Append(phase.Name).Append(',').Append(phase.Ms.Count.ToString(CultureInfo.InvariantCulture)).Append(',')
+                   .Append(label).Append(',')
+                   .Append(s.FrameMs.ToString("0.000", CultureInfo.InvariantCulture)).Append(',')
+                   .Append(F(s.FlushMs)).Append(',').Append(F(s.LayoutMs)).Append(',').Append(F(s.AnimMs)).Append(',')
+                   .Append(F(s.RecordMs)).Append(',').Append(F(s.SubmitMs)).Append(',')
+                   .Append(dg0).Append(',').Append(dg1).Append(',')
+                   .Append(s.ComponentsRendered).Append(',').Append(s.NodesVisited).Append(',').Append(s.DrawCommandCount).Append(',')
+                   .Append(over ? '1' : '0').AppendLine();
+            }
+            return s;
+        }
+
+        void Nav(string key, string? arg) => WaveeShell.ProbeNav!(key, arg);
+        void Settle(int n) { for (int i = 0; i < n && !window.IsClosed; i++) host.RunFrame(); }
+
+        Console.Error.WriteLine("[home-scroll-probe] warmup");
+        for (int i = 0; i < 80 && !window.IsClosed; i++) { gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce(); host.RunFrame(); }
+        GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+
+        var sidebar = new Phase("sidebar-home");
+        var scroll = new Phase("home-scroll");
+
+        Nav("home", null);
+        Settle(40);
+        System.Threading.Thread.Sleep(700);     // let the Home feed and visible art settle before the sidebar scenario
+        Settle(30);
+
+        if (WaveeShell.ProbeSidebarCompact is null || WaveeShell.ProbeSidebarDragBegin is null ||
+            WaveeShell.ProbeSidebarDragWidth is null || WaveeShell.ProbeSidebarDragEnd is null)
+        {
+            Console.Error.WriteLine("[home-scroll-probe] sidebar hooks unavailable; skipping sidebar state phase");
+        }
+        else
+        {
+            Console.Error.WriteLine("[home-scroll-probe] sidebar compact -> expanded -> drag-resize");
+            WaveeShell.ProbeSidebarCompact(true);
+            for (int f = 0; f < 18 && !window.IsClosed; f++) Measure(sidebar, "compact");
+            WaveeShell.ProbeSidebarCompact(false);
+            for (int f = 0; f < 26 && !window.IsClosed; f++) Measure(sidebar, "expand");
+
+            WaveeShell.ProbeSidebarDragBegin();
+            foreach (float w in new[] { 300f, 340f, 380f, 420f, 360f, 300f, 260f, 330f })
+            {
+                WaveeShell.ProbeSidebarDragWidth(w);
+                Measure(sidebar, "drag");
+            }
+            WaveeShell.ProbeSidebarDragEnd();
+            for (int f = 0; f < 12 && !window.IsClosed; f++) Measure(sidebar, "drag-end");
+        }
+
+        var viewport = FindLargestScrollViewport(host.Scene);
+        if (viewport.IsNull)
+        {
+            Console.Error.WriteLine("[home-scroll-probe] no Home scroll viewport found");
+        }
+        else
+        {
+            var vr = host.Scene.AbsoluteRect(viewport);
+            host.Scene.TryGetScroll(viewport, out var s0);
+            float vh = s0.ViewportH > 20f ? s0.ViewportH : (vr.H > 20f ? vr.H : 400f);
+            var pos = new Point2(vr.X + vr.W * 0.5f, vr.Y + vh * 0.5f);
+            window.QueueInput(new InputEvent(InputKind.PointerMove, pos, 0, 0));
+            Settle(2);
+            Console.Error.WriteLine($"[home-scroll-probe] wheel @ ({pos.X:0},{pos.Y:0}) viewport x={vr.X:0} w={vr.W:0} content {s0.ContentH:0} viewH {s0.ViewportH:0}");
+
+            for (int i = 0; i < 180 && !window.IsClosed; i++)
+            {
+                window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, ((i / 30) & 1) == 0 ? +60f : -60f));
+                Measure(scroll, "wheel");
+            }
+            for (int rep = 0; rep < 4 && !window.IsClosed; rep++)
+            {
+                for (int k = 0; k < 6 && !window.IsClosed; k++) { window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, +60f)); Measure(scroll, "flick"); }
+                for (int st = 0; st < 16 && !window.IsClosed; st++) Measure(scroll, "coast");
+            }
+            host.Scene.TryGetScroll(viewport, out var s1);
+            bool moved = MathF.Abs(s1.OffsetY - s0.OffsetY) > 1f;
+            Console.Error.WriteLine($"[home-scroll-probe] endOff {s1.OffsetY:0} - wheel input {(moved ? "took effect" : "did not move")}");
+
+            // Real app-loop cadence: present at vsync and ask RecommendedWaitMs before each frame so accidental ambient
+            // throttling during scroll shows up as wait>0.
+            var iv = new List<double>(220);
+            long prev = Stopwatch.GetTimestamp();
+            int throttled = 0, maxWait = 0;
+            for (int i = 0; i < 200 && !window.IsClosed; i++)
+            {
+                window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, ((i / 20) & 1) == 0 ? +60f : -60f));
+                int wait = host.RecommendedWaitMs();
+                if (wait > 0) { throttled++; if (wait > maxWait) maxWait = wait; System.Threading.Thread.Sleep(Math.Min(wait, 40)); }
+                host.RunFrame();
+                long now = Stopwatch.GetTimestamp();
+                iv.Add((now - prev) * 1000.0 / Stopwatch.Frequency);
+                prev = now;
+            }
+            var a = iv.ToArray();
+            double tot = 0, worst = 0;
+            foreach (var v in a) { tot += v; if (v > worst) worst = v; }
+            double mean = a.Length > 0 ? tot / a.Length : 0;
+            int o16 = 0;
+            foreach (var v in a) if (v > 16.7) o16++;
+            Console.Error.WriteLine($"[home-scroll-fps] REAL app-loop wheel scroll: {a.Length} frames mean {mean:0.0}ms ({(mean > 0 ? 1000.0 / mean : 0):0} fps) worst {worst:0.0}ms ({(worst > 0 ? 1000.0 / worst : 0):0} fps) >16.7ms(<60fps)={o16} throttledWaitFrames={throttled} maxWait={maxWait}ms");
+        }
+
+        var phases = new[] { sidebar, scroll };
+        var all = new Phase("ALL");
+        foreach (var p in phases) { all.Ms.AddRange(p.Ms); all.OverBudget += p.OverBudget; all.OverBudgetGc += p.OverBudgetGc; }
+
+        var sb = new StringBuilder(4096);
+        sb.AppendLine();
+        sb.AppendLine("=== WAVEE HOME SCROLL PROBE - per-frame production time (ms); target < 8.33 ms at 120 Hz ===");
+        sb.AppendLine(keepVsync ? "(WAVEE_PROBE_VSYNC: vblank-paced)" : "(vsync/latency throttle removed -> pure work cost)");
+        sb.AppendLine();
+        sb.AppendLine($"{"phase",-14} {"n",5} {"p50",6} {"p90",6} {"p99",7} {"p99.9",7} {"max",8}   {"over8.3ms",10} {"(ofwhich GC)",12}");
+        foreach (var p in phases) sb.AppendLine(Format(p));
+        sb.AppendLine(new string('-', 96));
+        sb.AppendLine(Format(all));
+
+        var rows = new List<(string Tag, double Ms, double Flush, double Layout, double Anim, double Record, double Submit, int G0)>();
+        foreach (var line in csv.ToString().Split('\n'))
+        {
+            var c = line.Split(',');
+            if (c.Length < 15 || c[0] == "phase") continue;
+            double D(int i) => double.TryParse(c[i], NumberStyles.Float, CultureInfo.InvariantCulture, out double v) ? v : 0;
+            int.TryParse(c[9], out int g0);
+            rows.Add((c[0] + ":" + c[2], D(3), D(4), D(5), D(6), D(7), D(8), g0));
+        }
+        rows.Sort((a, b) => b.Ms.CompareTo(a.Ms));
+        sb.AppendLine();
+        sb.AppendLine($"Worst 12 frames - {"total",7} = {"flush",6} + {"layout",6} + {"anim",5} + {"record",6} + {"submit",6}  (gc=Gen0)  transition");
+        for (int i = 0; i < Math.Min(12, rows.Count); i++)
+        {
+            var r = rows[i];
+            sb.AppendLine($"  {r.Ms,7:0.00} = {r.Flush,6:0.00} + {r.Layout,6:0.00} + {r.Anim,5:0.00} + {r.Record,6:0.00} + {r.Submit,6:0.00}  gc={r.G0}  {r.Tag}");
+        }
+
+        string report = sb.ToString();
+        Console.Error.Write(report);
+        if (csvPath is not null) WriteProbeFile(csvPath, csv.ToString(), "home-scroll-probe");
+        if (summaryPath is not null) WriteProbeFile(summaryPath, report, "home-scroll-probe");
+    }
+
+    static string? ProbeOutputDir()
+    {
+        string? dir = Environment.GetEnvironmentVariable("WAVEE_PROBE_OUT");
+        if (string.IsNullOrWhiteSpace(dir))
+            dir = Path.Combine(Environment.CurrentDirectory, ".wavee-diagnostics");
+        try
+        {
+            Directory.CreateDirectory(dir);
+            return dir;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[home-scroll-probe] file output disabled: cannot create {dir}: {ex.Message}");
+            return null;
+        }
+    }
+
+    static void WriteProbeFile(string path, string text, string tag)
+    {
+        try
+        {
+            File.WriteAllText(path, text);
+            Console.Error.WriteLine($"[{tag}] wrote {path}");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[{tag}] failed to write {path}: {ex.Message}");
+        }
     }
 
     static void Run(AppHost host, Win32Window window, D3D12Device gpu)

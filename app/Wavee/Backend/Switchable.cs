@@ -148,8 +148,8 @@ public sealed class LiveSpotifySession : ISpotifySession
 {
     readonly SimpleSubject<AuthStatus> _status = new(AuthStatus.Authenticated);
     public LiveSpotifySession(string account, bool isPremium) : this(account, account, null, isPremium) { }
-    public LiveSpotifySession(string account, string displayName, string? avatarUrl, bool isPremium)
-        => CurrentUser = new WaveeUser(account, string.IsNullOrWhiteSpace(displayName) ? account : displayName, avatarUrl, isPremium);
+    public LiveSpotifySession(string account, string displayName, string? avatarUrl, bool isPremium, string? email = null)
+        => CurrentUser = new WaveeUser(account, string.IsNullOrWhiteSpace(displayName) ? account : displayName, avatarUrl, isPremium, email);
     public AuthStatus Status { get; private set; } = AuthStatus.Authenticated;
     public WaveeUser? CurrentUser { get; private set; }
     public IObservable<AuthStatus> StatusChanged => _status;

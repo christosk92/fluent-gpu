@@ -47,6 +47,9 @@ public sealed class LocalCredentialStore : ICredentialStore
         _protector = protector;
     }
 
+    /// <summary>The at-rest protector's scheme tag (e.g. "dpapi" / "none"), surfaced for logging + the LoginResult.</summary>
+    public string Scheme => _protector.Scheme;
+
     public void Save(Credential c)
     {
         var dto = new CredentialDto(c.Kind.ToString(), c.Username, c.Secret, c.Refresh);

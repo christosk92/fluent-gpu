@@ -2475,7 +2475,7 @@ sealed class ResizeSidebarProbe : Component
     // SNAP it via the global reduced-motion gate; reproducing that exact path is what makes a "subsequent drag" state
     // regression observable headlessly (a stale/un-restored reflow track, or the gate not re-arming after drag #1).
     static readonly LayoutTransition SidebarReflow = new(
-        TransitionChannels.Size, TransitionDynamics.Spring(0.30f, 1f), SizeMode.Reflow);
+        TransitionChannels.Size, TransitionDynamics.Tween(Motion.ControlFast, Easing.SmoothOut), SizeMode.Reflow);
 
     public void BeginDrag()
     {
@@ -8901,8 +8901,14 @@ static class Slice
         cache.Pump();                                                           // a+b+c = 1200 > 1000 → evict LRU unpinned (b)
         bool keptPinned = cache.StateOf(a) == ImageState.Ready;                  // pinned survived eviction
         bool withinBudget = cache.UsedBytes <= 1000;
-        Check("45. ImageCache: states, dedup, liveness-pinned LRU evict", pending && ready && dedup && keptPinned && withinBudget,
-            $"used={cache.UsedBytes} ready={cache.ReadyCount} aRefs={cache.RefsOf(a)}");
+        bool evictedTombstone = cache.StateOf(b) == ImageState.None;
+        cache.Pin(b);                                                            // retained ImageEl re-enters with the old handle
+        bool rehydratePending = cache.StateOf(b) == ImageState.Pending;
+        cache.Pump();
+        bool rehydrated = cache.StateOf(b) == ImageState.Ready && cache.RefsOf(b) == 1;
+        Check("45. ImageCache: states, dedup, liveness-pinned LRU evict, re-pin rehydrates evicted handles",
+            pending && ready && dedup && keptPinned && withinBudget && evictedTombstone && rehydratePending && rehydrated,
+            $"used={cache.UsedBytes} ready={cache.ReadyCount} aRefs={cache.RefsOf(a)} b={cache.StateOf(b)} bRefs={cache.RefsOf(b)}");
 
         // GPU admission is part of readiness: a decoded image rejected by the backend must be Failed with zero
         // residency bytes, not a texture-less Ready handle. It retries only after the visible owner unpins it.
@@ -9299,7 +9305,8 @@ static class Slice
         var device = new HeadlessGpuDevice();
         var fonts = new HeadlessFontSystem(strings);
         var probe = new KeepAliveProbe { MaxEntries = 2 };
-        using var host = new AppHost(app, window, device, fonts, strings, probe);
+        var imageCache = new ImageCache(new FakeImageDecoder(), budgetBytes: 24 * 24 * 4);
+        using var host = new AppHost(app, window, device, fonts, strings, probe, images: imageCache);
 
         host.RunFrame();
         var imgA = host.Images.Request("keepalive-a", 24, 24);
@@ -9322,11 +9329,17 @@ static class Slice
                         && FocusedNode(host.Scene, host.Scene.Root).IsNull
                         && host.Images.RefsOf(imgA) == 0;
 
+        var pressure = host.Images.Request("keepalive-pressure", 64, 64);
+        host.Images.Pump();   // evicts inactive A's decoded payload while its retained scene node still holds ImageId
+        bool inactiveImageEvicted = host.Images.StateOf(imgA) == ImageState.None
+                                    && host.Images.StateOf(pressure) == ImageState.None;
+
         probe.Route.Value = "a";
         host.RunFrame();
         var scrollA2 = FindScrollable(host.Scene, host.Scene.Root);
         host.Scene.TryGetScroll(scrollA2, out var scA2);
-        bool restored = HasGlyph(device, strings, "a:1") && scA2.OffsetY > offsetA - 0.5f && host.Images.RefsOf(imgA) == 1;
+        bool restored = HasGlyph(device, strings, "a:1") && scA2.OffsetY > offsetA - 0.5f
+                        && host.Images.RefsOf(imgA) == 1 && host.Images.StateOf(imgA) == ImageState.Ready;
 
         probe.Route.Value = "b"; host.RunFrame();
         probe.Route.Value = "c"; host.RunFrame();   // with MaxEntries=2, inactive A is the LRU victim
@@ -9334,8 +9347,8 @@ static class Slice
         bool evictedFresh = HasGlyph(device, strings, "a:0") && !HasGlyph(device, strings, "a:1");
 
         Check("50a. KeepAlive opt-in caches page state/scroll, detaches inactive input/draw, releases image pins, and LRU-evicts inactive pages",
-            initial && clicked && offsetA > 1f && detached && restored && evictedFresh,
-            $"initial={initial} clicked={clicked} off={offsetA:0.#}->{scA2.OffsetY:0.#} detached={detached} restored={restored} evictedFresh={evictedFresh} refsA={host.Images.RefsOf(imgA)}");
+            initial && clicked && offsetA > 1f && detached && inactiveImageEvicted && restored && evictedFresh,
+            $"initial={initial} clicked={clicked} off={offsetA:0.#}->{scA2.OffsetY:0.#} detached={detached} imgEvicted={inactiveImageEvicted} restored={restored} evictedFresh={evictedFresh} refsA={host.Images.RefsOf(imgA)} stateA={host.Images.StateOf(imgA)}");
 
         using var presenceApp = new HeadlessPlatformApp();
         var presenceWindow = new HeadlessWindow(new WindowDesc("keepalive-presence", new Size2(260, 220), 1f));

@@ -160,6 +160,11 @@ public sealed class InputHooks
     /// host-less tree → element construction/clicks never launch.</summary>
     public Action<string>? OpenUri;
 
+    /// <summary>Raise a screen-reader announcement (a UIA "live region" notification) — <c>(text, assertive)</c>. The
+    /// Windows backend wires this to <c>UiaRaiseNotificationEvent</c> on the window's UIA provider; assertive interrupts
+    /// (errors), else polite (status / "Copied"). Null in a host-less / no-AT tree ⇒ a silent no-op.</summary>
+    public Action<string, bool>? Announce;
+
     // ── OS file/folder drop seam (host → tree; the INBOUND twin of OpenUri) ──────────────────────────────────────────
     // Host-wired in the AppHost ctor onto BOTH this host instance and the Current.Default channel-default (so the
     // Windows backend's WM_DROPFILES handler — which has no component scope — reaches them through the default). The host
