@@ -51,8 +51,58 @@ internal struct ShapedRun { public ShapedGlyph[] Glyphs; public ColorF[]? Colors
 /// change mints a fresh id upstream, so the key self-invalidates), so two runs differing only in weight or tracking
 /// can never alias. Excludes color/transform/opacity (replayed). Bounds origin and width are layout-stable for a given
 /// element (scroll rides the world transform, not the bounds), so they can key safely.</summary>
-internal readonly record struct RunKey(int TextId, int FamId, int SizeQ, int Weight, int Wrap, int Trim, int MaxLines, int WidthQ, int OriginXQ, int OriginYQ, int ScaleQ,
-    int SpacingQ, int LineHQ, int LineFlags, int SpanId);
+internal readonly struct RunKey : IEquatable<RunKey>
+{
+    private readonly int _textId, _famId, _sizeQ, _weight, _wrap, _trim, _maxLines, _widthQ, _originXQ, _originYQ, _scaleQ;
+    private readonly int _spacingQ, _lineHQ, _lineFlags, _spanId, _hash;
+
+    public int TextId => _textId;
+
+    public RunKey(int textId, int famId, int sizeQ, int weight, int wrap, int trim, int maxLines, int widthQ, int originXQ, int originYQ, int scaleQ,
+        int spacingQ, int lineHQ, int lineFlags, int spanId)
+    {
+        _textId = textId; _famId = famId; _sizeQ = sizeQ; _weight = weight; _wrap = wrap; _trim = trim; _maxLines = maxLines;
+        _widthQ = widthQ; _originXQ = originXQ; _originYQ = originYQ; _scaleQ = scaleQ; _spacingQ = spacingQ; _lineHQ = lineHQ;
+        _lineFlags = lineFlags; _spanId = spanId;
+        _hash = Hash(textId, famId, sizeQ, weight, wrap, trim, maxLines, widthQ, originXQ, originYQ, scaleQ, spacingQ, lineHQ, lineFlags, spanId);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool Equals(RunKey other)
+        => _hash == other._hash
+           && _textId == other._textId && _famId == other._famId && _sizeQ == other._sizeQ && _weight == other._weight
+           && _wrap == other._wrap && _trim == other._trim && _maxLines == other._maxLines && _widthQ == other._widthQ
+           && _originXQ == other._originXQ && _originYQ == other._originYQ && _scaleQ == other._scaleQ
+           && _spacingQ == other._spacingQ && _lineHQ == other._lineHQ && _lineFlags == other._lineFlags && _spanId == other._spanId;
+
+    public override bool Equals(object? obj) => obj is RunKey other && Equals(other);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public override int GetHashCode() => _hash;
+
+    private static int Hash(int textId, int famId, int sizeQ, int weight, int wrap, int trim, int maxLines, int widthQ, int originXQ, int originYQ, int scaleQ,
+        int spacingQ, int lineHQ, int lineFlags, int spanId)
+    {
+        unchecked
+        {
+            int h = textId;
+            h = (h * 397) ^ famId;
+            h = (h * 397) ^ sizeQ;
+            h = (h * 397) ^ weight;
+            h = (h * 397) ^ wrap;
+            h = (h * 397) ^ trim;
+            h = (h * 397) ^ maxLines;
+            h = (h * 397) ^ widthQ;
+            h = (h * 397) ^ originXQ;
+            h = (h * 397) ^ originYQ;
+            h = (h * 397) ^ scaleQ;
+            h = (h * 397) ^ spacingQ;
+            h = (h * 397) ^ lineHQ;
+            h = (h * 397) ^ lineFlags;
+            return (h * 397) ^ spanId;
+        }
+    }
+}
 
 /// <summary>
 /// DirectWrite glyph atlas + textured-quad pipeline (design/subsystems/text.md, gpu-renderer.md DrawGlyphRun). Glyphs are

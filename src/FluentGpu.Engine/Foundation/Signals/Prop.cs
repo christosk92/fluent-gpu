@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace FluentGpu.Signals;
 
@@ -22,7 +23,7 @@ public static class Prop
     public static Prop<T> Of<T>(Func<T> thunk) => thunk;
 }
 
-public readonly struct Prop<T>
+public readonly struct Prop<T> : IEquatable<Prop<T>>
 {
     private readonly T _value;        // static value, stored inline (never boxed)
     private readonly object? _ref;    // null = static | Func<T> = thunk | IReadSignal<T> = signal-direct
@@ -51,4 +52,21 @@ public readonly struct Prop<T>
     /// <summary>Bind from any concrete <see cref="IReadSignal{T}"/> implementation (used by sibling-declared
     /// operators like <c>FloatSignal → Prop&lt;float&gt;</c>, and by callers holding the interface).</summary>
     public static Prop<T> FromSignal(IReadSignal<T> signal) => new(default!, signal);
+
+    // Value equality WITHOUT boxing or reflection. The generated {T}Diff.AnyChanged compares EVERY channel via
+    // EqualityComparer<Prop<T>>.Default; absent IEquatable<Prop<T>> that resolves to ObjectEqualityComparer, which boxes
+    // BOTH operands and runs reflection-based ValueType.Equals on every node's every channel on every reconcile — the
+    // dominant cost of a large-tree diff (a route swap) AND a major reconcile-phase allocation source (→ GC pauses).
+    // Implementing IEquatable flips the comparer to the no-box GenericEqualityComparer. Semantics MATCH the prior
+    // ValueType.Equals field-wise compare exactly: the inline value (via T's own default comparer) AND the bind payload
+    // (reference/delegate equality, null-safe) — so a static prop diffs by value, a bound prop by payload identity.
+    public bool Equals(Prop<T> other)
+        => EqualityComparer<T>.Default.Equals(_value, other._value) && object.Equals(_ref, other._ref);
+
+    public override bool Equals(object? obj) => obj is Prop<T> other && Equals(other);
+
+    public override int GetHashCode() => HashCode.Combine(_value, _ref);
+
+    public static bool operator ==(Prop<T> a, Prop<T> b) => a.Equals(b);
+    public static bool operator !=(Prop<T> a, Prop<T> b) => !a.Equals(b);
 }

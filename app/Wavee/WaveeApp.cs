@@ -168,7 +168,8 @@ sealed class WaveeApp : Component
         // pinned top-right by a full-bleed PASS-THROUGH positioner (a PLAIN BoxEl — its HitTestPassThrough IS honoured, unlike
         // a component wrapper's mirrored-but-not-passthrough node, which would swallow every hit and silently kill scrolling).
         // ZStack carries Grow=1 to fill the window + stretch the shell exactly like the OverlayHost stack.
-        if (!Diag.CompiledIn || Diag.EnvFlag("WAVEE_NO_FPS")) return root;
+        // FPS HUD is OPT-IN now (hidden by default in every build); set WAVEE_FPS=1 to show it.
+        if (!Diag.EnvFlag("WAVEE_FPS")) return root;
         var hud = new BoxEl
         {
             Grow = 1f, HitTestPassThrough = true,

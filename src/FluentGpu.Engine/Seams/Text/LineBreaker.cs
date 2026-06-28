@@ -48,7 +48,7 @@ public static class LineBreaker
 
             if (!doWrap)
             {
-                end = n; for (int k = i; k < n; k++) if (text[k] == '\n') { end = k; break; }
+                end = n; for (int k = i; k < n; k++) if (IsHardBreak(text[k])) { end = k; break; }
                 if (doTrim && MeasureRange(text, lineStart, end, in adv) > maxWidth)
                 { end = FitEllipsis(text, lineStart, end, maxWidth, ellipsisW, in adv); ellipsize = true; }
             }
@@ -63,7 +63,8 @@ public static class LineBreaker
             if (lw > maxLineW) maxLineW = lw;
 
             i = end;
-            if (i < n && text[i] == '\n') i++;
+            int afterBreak = SkipHardBreak(text, i);   // consume the LF / CR / CRLF terminator (zero-width)
+            if (afterBreak > i) i = afterBreak;
             else if (doWrap) i = SkipSpaces(text, i);
             line++;
             if (ellipsize) break;
@@ -81,9 +82,9 @@ public static class LineBreaker
         float pen = 0f; int i = start;
         while (i < n)
         {
-            if (text[i] == '\n') return i;
+            if (IsHardBreak(text[i])) return i;
             int ws = i; float wordW = 0f;
-            while (i < n && text[i] != ' ' && text[i] != '\n') { wordW += adv.Advance(text[i]); i++; }
+            while (i < n && text[i] != ' ' && !IsHardBreak(text[i])) { wordW += adv.Advance(text[i]); i++; }
             if (pen > 0f && pen + wordW > maxWidth) return ws;          // break before this word
             if (wordW > maxWidth && pen == 0f && wrap == 1)             // a single word longer than the line → break inside (Wrap only)
             {
@@ -106,12 +107,26 @@ public static class LineBreaker
         return k;
     }
 
-    /// <summary>Sum of advances over [s,e).</summary>
+    /// <summary>Sum of advances over [s,e). Hard-break characters contribute nothing (zero-width) — a stray '\r' inside a
+    /// CRLF line would otherwise add a .notdef advance and over-measure the line.</summary>
     public static float MeasureRange<TAdv>(ReadOnlySpan<char> text, int s, int e, in TAdv adv)
         where TAdv : struct, IAdvanceSource
     {
-        float p = 0f; for (int k = s; k < e; k++) p += adv.Advance(text[k]); return p;
+        float p = 0f; for (int k = s; k < e; k++) { char c = text[k]; if (!IsHardBreak(c)) p += adv.Advance(c); } return p;
     }
 
     public static int SkipSpaces(ReadOnlySpan<char> text, int i) { while (i < text.Length && text[i] == ' ') i++; return i; }
+
+    /// <summary>A mandatory line-break character (LF or CR — incl. the CR of a CRLF pair): a hard break that carries NO ink.
+    /// The shaper still returns a .notdef glyph for it, so it must be a ZERO-WIDTH break, never measured or drawn (else a
+    /// [] tofu box paints at every line break).</summary>
+    public static bool IsHardBreak(char c) => c is '\n' or '\r';
+
+    /// <summary>If <paramref name="i"/> sits on a hard break, the index just past it (CRLF counts as one); else <paramref name="i"/>.</summary>
+    public static int SkipHardBreak(ReadOnlySpan<char> text, int i)
+    {
+        if (i >= text.Length) return i;
+        if (text[i] == '\r') { i++; return i < text.Length && text[i] == '\n' ? i + 1 : i; }   // CRLF or lone CR
+        return IsHardBreak(text[i]) ? i + 1 : i;
+    }
 }

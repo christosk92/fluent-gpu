@@ -8957,6 +8957,20 @@ static class Slice
         Check("45b. ImageCache: GPU rejection never becomes Ready; unpinned remount retries",
             rejectedClean && noPinnedRetry && retryPending && retryReady,
             $"state={admission.StateOf(retried)} fail={admission.FailureOf(retried)} used={admission.UsedBytes} pending={admission.PendingCount}");
+
+        // A saturated prefetch lane must not poison the real visible image. The scheduler reports "not accepted";
+        // ImageCache leaves a non-pending tombstone under the same key, so the following Visible request restarts it.
+        var droppedPrefetch = new ImageCache(new DropPrefetchDecoder());
+        var warm = droppedPrefetch.Prefetch("warm", 64, 64);
+        bool dropDidNotStick = droppedPrefetch.StateOf(warm) == ImageState.None && droppedPrefetch.PendingCount == 0;
+        var visible = droppedPrefetch.Request("warm", 64, 64, ImagePriority.Visible);
+        bool visibleRestarted = visible == warm && droppedPrefetch.StateOf(visible) == ImageState.Pending
+            && droppedPrefetch.PendingCount == 1;
+        droppedPrefetch.Pump();
+        bool visibleReady = droppedPrefetch.StateOf(visible) == ImageState.Ready && droppedPrefetch.SizeOf(visible) == (64, 64);
+        Check("45c. ImageCache: dropped prefetch does not leave a forever-pending handle; visible request restarts it",
+            dropDidNotStick && visibleRestarted && visibleReady,
+            $"afterDrop={droppedPrefetch.StateOf(warm)} pending={droppedPrefetch.PendingCount} ready={visibleReady}");
     }
 
     // ImageEl end-to-end: the reconciler requests the decode + pins residency, the cache completes it (Pump), and the
@@ -9062,6 +9076,32 @@ static class Slice
         {
             if (_map != null) return Task.FromResult(_map(source));
             return Task.FromResult(FetchResult.Pooled(ArrayPool<byte>.Shared.Rent(16), 16));
+        }
+    }
+
+    sealed class DropPrefetchDecoder : IImageDecoder
+    {
+        readonly Queue<(int id, int w, int h)> _pending = new();
+        byte[] _scratch = Array.Empty<byte>();
+
+        public bool Begin(int id, string source, int targetW, int targetH, ImagePriority priority = ImagePriority.Visible)
+        {
+            if (priority != ImagePriority.Visible) return false;
+            _pending.Enqueue((id, targetW <= 0 ? 1 : targetW, targetH <= 0 ? 1 : targetH));
+            return true;
+        }
+
+        public void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels)
+        {
+            while (_pending.Count > 0)
+            {
+                var (id, w, h) = _pending.Dequeue();
+                int bytes = w * h * 4;
+                if (_scratch.Length < bytes) _scratch = new byte[bytes];
+                _scratch.AsSpan(0, bytes).Fill(0xFF);
+                onPixels(id, _scratch.AsSpan(0, bytes), w, h);
+                onComplete(id, true, w, h, ImageFailureKind.None, 1);
+            }
         }
     }
 

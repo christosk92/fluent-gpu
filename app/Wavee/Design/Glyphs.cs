@@ -39,4 +39,5 @@ internal static class Mdl
     public static readonly string Share = Of(0xE72D);          // hero share action
     public static readonly string Play = Of(0xE768);           // play (hero/pinned/radio actions)
     public static readonly string MapPin = Of(0xE707);         // concert location
+    public static readonly string Globe = Of(0xE774);          // world rank ("#N in the world")
 }

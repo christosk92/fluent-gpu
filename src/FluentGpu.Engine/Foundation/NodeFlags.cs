@@ -46,6 +46,7 @@ public enum NodeFlags : uint
                                   // hovered while the pointer crosses its interactive children (links / buttons): the
                                   // recorder keeps its HoverFill + any descendant hover-reveal (inherited progress) lit,
                                   // instead of flickering off whenever the hovered leaf is an interactive child.
+    SparsePaint = 1u << 6,        // node has carried at least one rich-paint side-table row in this slot lifetime.
     Pressed = 1u << 16,
     FocusVisual = 1u << 22,   // focus arrived via keyboard (Tab/arrows) → draw the focus ring; pointer focus does NOT set it
 
@@ -53,8 +54,6 @@ public enum NodeFlags : uint
     // (The virtualization spec names VirtualRangeDirty=1<<13 / StickyPinned=1<<14, but those bits are already
     //  taken by Focusable/Focused in this map — see architecture-spec §2 vs the live NodeFlags column. We honor
     //  the *semantics* (distinct bits, NOT the Realized bit) at free positions in the live map.)
-    // 1u << 6 is FREE — formerly ScrollStretchHeader; overscroll-stretch is now a generic ScrollBind closed-form op
-    // (the bind targets the hero node by handle, so no per-node flag is needed).
     Scrollable = 1u << 17,        // node is a scroll viewport (carries a ScrollState row; Input may scroll it)
     VirtualRangeDirty = 1u << 18, // virtual list crossed an item boundary → re-realize the window next render
     StickyPinned = 1u << 19,      // a sticky header pinned by a phase-7 transform (excluded from clean-span reuse)
@@ -72,6 +71,7 @@ public enum NodeFlags : uint
                                   // from the clipped main + orphan passes and re-walked in an UNCLIPPED top band ABOVE
                                   // the drag ghost, so a card art flying into a clipped rail is never cut off. Set/
                                   // cleared by FluentGpu.Animation.ConnectedAnimation, tracked in SceneStore overlays.
+    InteractionAnim = 1u << 31,   // node has an eased interaction row; gates recorder hover/press slab probes.
 
     // lifecycle
     NewThisFrame = 1u << 29,

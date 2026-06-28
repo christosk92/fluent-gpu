@@ -38,7 +38,10 @@ sealed partial class ArtistPage : Component
             };
             // Profile-facts tiles — a zero/absent stat drops its WHOLE tile (never "0 Albums" / "0 Upcoming concerts"); if
             // none survive, the whole column is dropped so the biography takes the full width.
-            var tiles = new List<Element>(6);
+            var tiles = new List<Element>(7);
+            // World rank leads with a SPECIAL accent tile (globe glyph + accent-tinted card + accent label) so a ranked
+            // artist's standing reads at a glance, instead of only living in the small hero eyebrow pill.
+            if (a.WorldRank > 0) tiles.Add(RankTile(a.WorldRank));
             void Tile(long value, string label) { if (value > 0) tiles.Add(StatTile(Count(value), label)); }
             Tile(a.MonthlyListeners, Loc.Get(Strings.Artist.Stat.Monthly));
             Tile(a.Followers, Loc.Get(Strings.Artist.Stat.Followers));
@@ -114,5 +117,30 @@ sealed partial class ArtistPage : Component
         Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
         BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
         Children = [new TextEl(value) { Size = 26f, Weight = 800, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }, new TextEl(label) { Size = 12f, Color = Tok.TextSecondary }],
+    };
+
+    // The world-rank tile: same shape as a StatTile but ACCENT-skinned — a globe glyph beside the rank, an accent-tinted
+    // card (the cover-extracted _accent kissed into the surface) + a hairline accent edge, and the label in the accent —
+    // so the "#N in the world" standing stands apart from the neutral count tiles.
+    Element RankTile(int rank) => new BoxEl
+    {
+        Direction = 1, Gap = WaveeSpace.XS, Grow = 1f, Basis = 140f, MinWidth = 0f,
+        Padding = new Edges4(WaveeSpace.L, WaveeSpace.L, WaveeSpace.L, WaveeSpace.L),
+        Corners = CornerRadius4.All(WaveeRadius.Card),
+        Fill = ColorF.Lerp(Tok.FillCardSecondary, _accent, 0.20f) with { A = Tok.FillCardSecondary.A },
+        BorderWidth = 1f, BorderColor = _accent with { A = 0.45f },
+        Children =
+        [
+            new BoxEl
+            {
+                Direction = 0, AlignItems = FlexAlign.Center, Gap = 7f,
+                Children =
+                [
+                    Icon(Mdl.Globe, 18f, _accent),
+                    new TextEl("#" + rank.ToString()) { Size = 26f, Weight = 800, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                ],
+            },
+            new TextEl(Loc.Get(Strings.Artist.Stat.WorldRank)) { Size = 12f, Weight = 600, Color = _accent, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+        ],
     };
 }

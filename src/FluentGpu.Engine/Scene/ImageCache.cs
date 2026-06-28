@@ -68,7 +68,7 @@ public delegate ImageUploadResult ImageUploadAttemptHandler(int id, System.ReadO
 /// <paramref name="onPixels"/> with the bucket pixels then <paramref name="onComplete"/> with the state transition.</summary>
 public interface IImageDecoder
 {
-    void Begin(int id, string source, int targetW, int targetH, ImagePriority priority = ImagePriority.Visible);
+    bool Begin(int id, string source, int targetW, int targetH, ImagePriority priority = ImagePriority.Visible);
     /// <summary>Drain finished decodes. <paramref name="onPixels"/> gets the bucket pixels (transient span);
     /// <paramref name="onComplete"/> gets the final state transition incl. <see cref="ImageFailureKind"/> + attempt count
     /// (after any transient retries the decoder performed internally).</summary>
@@ -206,6 +206,7 @@ public sealed class ImageCache
             // Evicted entries keep their key as a tombstone so a retained ImageEl node can re-pin the same handle and
             // recover without needing its original URL. Capacity rejection is likewise retryable after all owners release.
             if (hit.State == ImageState.None ||
+                (hit.State == ImageState.Failed && hit.Failure == ImageFailureKind.Canceled) ||
                 (hit.State == ImageState.Failed && hit.Failure == ImageFailureKind.GpuResourceExhausted && hit.Refs == 0))
                 RestartDecode(id, hit, priority);
             // A visible node arriving over a prefetch entry promotes the in-flight decode to the front of the queue.
@@ -236,7 +237,12 @@ public sealed class ImageCache
             }
         }
 
-        _decoder.Begin(id, source, targetW, targetH, priority);
+        if (!_decoder.Begin(id, source, targetW, targetH, priority))
+        {
+            _pendingCount--;
+            entry.State = ImageState.None;
+            entry.Failure = ImageFailureKind.Canceled;
+        }
         return new ImageHandle(id);
     }
 
@@ -323,7 +329,12 @@ public sealed class ImageCache
         _pendingCount++;
         _totalRequested++;
         Diag.Set("media", "requested", _totalRequested);
-        _decoder.Begin(id, e.Key.Source, e.Key.W, e.Key.H, priority);
+        if (!_decoder.Begin(id, e.Key.Source, e.Key.W, e.Key.H, priority))
+        {
+            _pendingCount--;
+            e.State = ImageState.None;
+            e.Failure = ImageFailureKind.Canceled;
+        }
     }
 
     /// <summary>Apply finished decodes (UI thread, once per frame) then evict to budget. Returns completions this pump.
@@ -434,8 +445,11 @@ public sealed class FakeImageDecoder : IImageDecoder
     private readonly Queue<(int id, int w, int h)> _pending = new();
     private byte[] _scratch = System.Array.Empty<byte>();
 
-    public void Begin(int id, string source, int targetW, int targetH, ImagePriority priority = ImagePriority.Visible)
-        => _pending.Enqueue((id, targetW <= 0 ? 1 : targetW, targetH <= 0 ? 1 : targetH));
+    public bool Begin(int id, string source, int targetW, int targetH, ImagePriority priority = ImagePriority.Visible)
+    {
+        _pending.Enqueue((id, targetW <= 0 ? 1 : targetW, targetH <= 0 ? 1 : targetH));
+        return true;
+    }
 
     public void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels)
     {

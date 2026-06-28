@@ -72,18 +72,19 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     }
 
     // UI thread: non-blocking enqueue into the priority lane. Visible is never dropped; off-screen lanes drop under load.
-    public void Begin(int id, string source, int targetW, int targetH, ImagePriority priority = ImagePriority.Visible)
+    public bool Begin(int id, string source, int targetW, int targetH, ImagePriority priority = ImagePriority.Visible)
     {
         _canceled.TryRemove(id, out _);
         if (priority != ImagePriority.Visible && Volatile.Read(ref _queued) >= _opt.QueueCapacity)
         {
             Diag.Count("media", "dropped");
-            return;   // backpressure: drop the off-screen request rather than block or grow unbounded
+            return false;   // backpressure: drop the off-screen request rather than block or grow unbounded
         }
         _reqs[id] = new Req(id, source ?? "", Math.Max(1, targetW), Math.Max(1, targetH), priority);
         Interlocked.Increment(ref _queued);
         _lanes[(int)priority].Enqueue(id);
         _signal.Release();
+        return true;
     }
 
     // Cancel a queued/in-flight decode. If the request is still queued (TryRemove succeeds) the _reqs removal alone

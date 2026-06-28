@@ -23,11 +23,18 @@ public enum IntegrationMode : byte { Eased, Spring }
 public enum CompositeOp : byte { Replace, Add, Accumulate }
 
 /// <summary>A spring (stateful ODE) — no duration; integrates toward Target, carrying velocity across retargets.</summary>
-public readonly struct SpringParams
+public readonly struct SpringParams : IEquatable<SpringParams>
 {
     public readonly float Stiffness, Damping, Mass, RestEps;
     public SpringParams(float stiffness, float damping, float mass = 1f, float restEps = 0.001f)
         => (Stiffness, Damping, Mass, RestEps) = (stiffness, damping, mass, restEps);
+
+    // IEquatable so EqualityComparer<SpringParams>.Default (and any MotionTokenDef diff that nests one) takes the no-box
+    // GenericEqualityComparer path instead of boxing + reflection ValueType.Equals. Field-wise, matching ValueType.Equals.
+    public bool Equals(SpringParams other)
+        => Stiffness == other.Stiffness && Damping == other.Damping && Mass == other.Mass && RestEps == other.RestEps;
+    public override bool Equals(object? obj) => obj is SpringParams o && Equals(o);
+    public override int GetHashCode() => HashCode.Combine(Stiffness, Damping, Mass, RestEps);
 
     /// <summary>response = approx settle time (s); dampingRatio 1 = critical (no overshoot), &lt;1 = bouncy.</summary>
     public static SpringParams FromResponse(float responseSec, float dampingRatio = 1f, float mass = 1f)

@@ -116,7 +116,8 @@
       "albums": "Albums",
       "singles": "Singles & EPs",
       "concerts": "Upcoming concerts",
-      "related": "Related artists"
+      "related": "Related artists",
+      "worldRank": "World rank"
     }
   },
 
@@ -284,7 +285,8 @@
     "like": "Like",
     "queue": "Queue",
     "devices": "Devices",
-    "nowPlaying": "Now playing"
+    "nowPlaying": "Now playing",
+    "playingOn": "Playing on {device}"
   },
 
   "nav": {

@@ -192,6 +192,7 @@ sealed class PlayerBarContent : Component
                             PlayerState.Active;
         bool active = st == PlayerState.Active;
         bool canTransport = active || buffering;     // buffering still lets you pause / skip
+        var remoteDevice = active ? RemoteDevice(b) : null;
         // Primary is live for Active/Buffering and for Error (a retry); dead only for NoTrack/Loading.
         bool primaryEnabled = st != PlayerState.NoTrack && st != PlayerState.Loading;
         // (SeekBar derives its own enabled state reactively from the bridge signals — see SeekBar.Render.)
@@ -254,7 +255,14 @@ sealed class PlayerBarContent : Component
                 Children = [titleEl],
             };
 
-        var metaKids = new List<Element>(2) { titleEl };
+        var metaKids = new List<Element>(remoteDevice is null ? 2 : 3);
+        if (remoteDevice is not null)
+            metaKids.Add(new BoxEl
+            {
+                Key = "remote-device-line", Animate = ItemMotion,
+                Children = [Embed.Comp(() => new RemoteDeviceLine(b))],
+            });
+        metaKids.Add(titleEl);
         if (showSubtitle && track is not null && err is null)
         {
             var subKids = new List<Element>(Math.Max(3, track.Artists.Count * 2 + 2));
@@ -470,6 +478,38 @@ sealed class PlayerBarContent : Component
 
     static int SeedOf(Track? t) => t is null ? 11 : Math.Abs((t.Uri ?? t.Id).Length * 7 + t.Title.Length);
 
+    internal static PlaybackDevice? RemoteDevice(PlaybackBridge b)
+    {
+        var devices = b.Devices.Value;
+        string? activeId = b.ActiveDeviceId.Value;
+        PlaybackDevice? active = null;
+
+        if (!string.IsNullOrEmpty(activeId))
+            active = devices.FirstOrDefault(d => d.Id == activeId);
+        active ??= devices.FirstOrDefault(d => d.IsActive);
+
+        return active is { Kind: not DeviceKind.ThisDevice } ? active : null;
+    }
+
+    internal static List<MenuFlyoutItem> DeviceMenuItems(PlaybackBridge b, IReadOnlyList<PlaybackDevice> devices, string? activeId)
+    {
+        var items = new List<MenuFlyoutItem>(Math.Max(1, devices.Count));
+        if (devices.Count == 0)
+        {
+            items.Add(new MenuFlyoutItem(Loc.Get(Strings.Player.Devices), null, false, () => { }));
+            return items;
+        }
+
+        foreach (var d in devices)
+        {
+            var dev = d;
+            bool isActive = dev.Id == activeId || dev.IsActive;
+            items.Add(MenuFlyoutItem.Toggle(dev.Name, isActive,
+                () => { _ = b.DeviceControl.TransferAsync(dev.Id); }, Icons.Devices, enabled: true));
+        }
+        return items;
+    }
+
     internal static string Fmt(long ms)
     {
         if (ms < 0) ms = 0;
@@ -485,7 +525,8 @@ sealed class PlayerBarContent : Component
             if (a.Name.Length == 0) continue;
             if (into.Count > 0) into.Add(new TextEl(", ") { Size = 12f, Color = Tok.TextSecondary });
             bool enabled = a.Uri.Length > 0;
-            into.Add(NavSpan(a.Name, () => { if (enabled) go?.Invoke("artist:" + a.Uri, a.Name); }, enabled));
+            into.Add(NavSpan(a.Name, () => { if (enabled) go?.Invoke("artist:" + a.Uri, a.Name); }, enabled)
+                with { Key = "artist:" + (a.Uri.Length > 0 ? a.Uri : a.Id + ":" + a.Name) });
         }
     }
 
@@ -720,6 +761,62 @@ sealed class VolumeButton : Component
     }
 }
 
+sealed class RemoteDeviceLine : Component
+{
+    readonly PlaybackBridge _b;
+
+    public RemoteDeviceLine(PlaybackBridge b) => _b = b;
+
+    public override Element Render()
+    {
+        var anchor = UseRef<NodeHandle>(default);
+        var handle = UseRef<OverlayHandle?>(null);
+        var svc = UseContext(Overlay.Service);
+        var devices = _b.Devices.Value;
+        string? activeId = _b.ActiveDeviceId.Value;
+        var remote = PlayerBarContent.RemoteDevice(_b);
+        if (remote is null) return new BoxEl { Height = 0f, HitTestVisible = false };
+
+        void Toggle()
+        {
+            if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
+            var items = PlayerBarContent.DeviceMenuItems(_b, devices, activeId);
+            handle.Value = svc.Open(
+                () => anchor.Value,
+                () => MenuFlyout.Build(items, () => handle.Value?.Close()),
+                FlyoutPlacement.TopEdgeAlignedRight,
+                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
+            handle.Value.ClosedAction = () => handle.Value = null;
+        }
+
+        ColorF accent = Tok.AccentDefault;
+        return new BoxEl
+        {
+            Height = 13f, Direction = 0, AlignItems = FlexAlign.Center, Gap = 4f,
+            MinWidth = 0f, AlignSelf = FlexAlign.Stretch,
+            Fill = ColorF.Transparent, HoverFill = ColorF.Transparent, PressedFill = ColorF.Transparent,
+            Cursor = CursorId.Hand, Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
+            OnClick = Toggle, OnRealized = h => anchor.Value = h, ClipToBounds = true,
+            Children =
+            [
+                new TextEl(Icons.Devices) { Size = 10f, FontFamily = Theme.IconFont, Color = accent with { A = 0.88f }, HoverColor = accent },
+                new BoxEl
+                {
+                    Shrink = 1f, MinWidth = 0f, ClipToBounds = true,
+                    Children =
+                    [
+                        new TextEl(Strings.Player.PlayingOn(remote.Name))
+                        {
+                            Size = 10.5f, Weight = 700, Color = accent with { A = 0.88f }, HoverColor = accent,
+                            MaxLines = 1, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis,
+                        },
+                    ],
+                },
+            ],
+        };
+    }
+}
+
 // The Connect device picker: opens a MenuFlyout of the live device roster (from the bridge) UPWARD out of the button.
 // Each row toggles active + transfers playback to that device on click. Re-renders when the roster / active device changes.
 sealed class DevicesButton : Component
@@ -742,17 +839,7 @@ sealed class DevicesButton : Component
         void Toggle()
         {
             if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
-            var items = new List<MenuFlyoutItem>(Math.Max(1, devices.Count));
-            if (devices.Count == 0)
-                items.Add(new MenuFlyoutItem(Loc.Get(Strings.Player.Devices), null, false, () => { }));
-            else
-                foreach (var d in devices)
-                {
-                    var dev = d;
-                    bool isActive = dev.Id == activeId || dev.IsActive;
-                    items.Add(MenuFlyoutItem.Toggle(dev.Name, isActive,
-                        () => { _ = _b.DeviceControl.TransferAsync(dev.Id); }, Icons.Devices, enabled: true));
-                }
+            var items = PlayerBarContent.DeviceMenuItems(_b, devices, activeId);
             handle.Value = svc.Open(
                 () => anchor.Value,
                 () => MenuFlyout.Build(items, () => handle.Value?.Close()),
