@@ -21,11 +21,22 @@ public class ExtendedMetadataSourceTests
     static byte[] Bytes(byte fill) { var a = new byte[16]; Array.Fill(a, fill); return a; }
     static ByteString Gid(byte fill) => ByteString.CopyFrom(Bytes(fill));
 
-    static byte[] CraftTrackResponse(string name, int durationMs, bool isExplicit)
+    static byte[] CraftTrackResponse(string name, int durationMs, bool isExplicit, bool includeAlbumCover = false)
     {
         var track = new Pb.Track { Gid = Gid(0x11), Name = name, Duration = durationMs, Explicit = isExplicit };
         track.Artist.Add(new Pb.Artist { Gid = Gid(0xAA), Name = "Artist One" });
         track.Album = new Pb.Album { Gid = Gid(0xBB), Name = "Album One" };
+        if (includeAlbumCover)
+        {
+            track.Album.CoverGroup = new Pb.ImageGroup();
+            track.Album.CoverGroup.Image.Add(new Pb.Image
+            {
+                FileId = Gid(0xCC),
+                Size = Pb.Image.Types.Size.Default,
+                Width = 300,
+                Height = 300,
+            });
+        }
 
         var array = new Xm.EntityExtensionDataArray { ExtensionKind = Xm.ExtensionKind.TrackV4 };
         array.ExtensionData.Add(new Xm.EntityExtensionData { EntityUri = "spotify:track:x", ExtensionData = Any.Pack(track) });
@@ -48,6 +59,19 @@ public class ExtendedMetadataSourceTests
         Assert.StartsWith("spotify:artist:", t.Artists[0].Uri);
         Assert.Equal("Album One", t.Album.Name);
         Assert.StartsWith("spotify:track:", t.Uri);
+    }
+
+    [Fact]
+    public void ProjectResponse_ProjectsTrackAlbumCover()
+    {
+        var store = new InMemoryStore();
+        ExtendedMetadataSource.ProjectResponse(CraftTrackResponse("Cover Song", 234000, false, includeAlbumCover: true), store);
+
+        var t = Assert.Single(store.QueryTracks());
+        Assert.NotNull(t.Image);
+        Assert.StartsWith("https://i.scdn.co/image/", t.Image!.Url);
+        Assert.Equal(300, t.Image.Width);
+        Assert.Equal(300, t.Image.Height);
     }
 
     [Fact]

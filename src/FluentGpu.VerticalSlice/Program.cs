@@ -259,6 +259,33 @@ sealed class NestedScrollProbe : Component
 }
 
 // A 10,000-row virtualized list (40px uniform rows) in a 400px viewport → proves windowing + recycle at scale.
+sealed class PagedShelfMeasuredProbe : Component
+{
+    public readonly Signal<float> Width = new(320f);
+    public ShelfPagerContext Pager;
+
+    public override Element Render() => new BoxEl
+    {
+        Width = Width.Value,
+        Direction = 1,
+        AlignItems = FlexAlign.Stretch,
+        Children =
+        [
+            PagedShelf.Create(10,
+                (i, w) => new BoxEl { Width = w, Height = 44f, Fill = ColorF.FromRgba(30, 30, 30) },
+                pager: ShelfPager.None,
+                customPager: ctx => { Pager = ctx; return new BoxEl { Width = 0f, Height = 0f }; },
+                minCardW: 100f,
+                maxCardW: 100f,
+                gap: 10f,
+                fixedCardW: 100f,
+                headerGap: 0f,
+                edgeFade: 0f,
+                measured: true),
+        ],
+    };
+}
+
 sealed class VirtualProbe : Component
 {
     public const int N = 10_000;
@@ -8876,6 +8903,30 @@ static class Slice
         bool withinBudget = cache.UsedBytes <= 1000;
         Check("45. ImageCache: states, dedup, liveness-pinned LRU evict", pending && ready && dedup && keptPinned && withinBudget,
             $"used={cache.UsedBytes} ready={cache.ReadyCount} aRefs={cache.RefsOf(a)}");
+
+        // GPU admission is part of readiness: a decoded image rejected by the backend must be Failed with zero
+        // residency bytes, not a texture-less Ready handle. It retries only after the visible owner unpins it.
+        bool admit = false;
+        var admission = new ImageCache(new FakeImageDecoder());
+        admission.SetPixelAttemptSink((_, _, _, _) =>
+            admit ? ImageUploadResult.Accepted : ImageUploadResult.ResourceExhausted);
+        var rejected = admission.Request("capacity", 32, 32);
+        admission.Pin(rejected);
+        admission.Pump();
+        bool rejectedClean = admission.StateOf(rejected) == ImageState.Failed
+            && admission.FailureOf(rejected) == ImageFailureKind.GpuResourceExhausted
+            && admission.UsedBytes == 0 && admission.ReadyCount == 0;
+        admission.Request("capacity", 32, 32);                                  // still pinned: no retry loop
+        bool noPinnedRetry = admission.PendingCount == 0;
+        admission.Unpin(rejected);
+        admit = true;
+        var retried = admission.Request("capacity", 32, 32);                    // later remount: retry same handle
+        bool retryPending = retried == rejected && admission.StateOf(retried) == ImageState.Pending;
+        admission.Pump();
+        bool retryReady = admission.StateOf(retried) == ImageState.Ready && admission.UsedBytes == 32 * 32 * 4;
+        Check("45b. ImageCache: GPU rejection never becomes Ready; unpinned remount retries",
+            rejectedClean && noPinnedRetry && retryPending && retryReady,
+            $"state={admission.StateOf(retried)} fail={admission.FailureOf(retried)} used={admission.UsedBytes} pending={admission.PendingCount}");
     }
 
     // ImageEl end-to-end: the reconciler requests the decode + pins residency, the cache completes it (Pump), and the
@@ -13973,6 +14024,22 @@ static class Slice
         Check("64n4. acrylic LayerPool buckets: next-pow2 (floor 64) so pooled RTs reuse across layers and frames",
             bucketOk,
             $"b(1)={AcrylicBackdropMath.BucketDim(1)} b(65)={AcrylicBackdropMath.BucketDim(65)} b(960)={AcrylicBackdropMath.BucketDim(960)}");
+
+        // 64n5 — retained-backdrop cache decision (AcrylicBackdropMath.BackdropReusable): the §2.3 region-aware reuse
+        // gate (headless half of the AcrylicCompositor pinned-RT cache). A stationary layer reuses its blurred snapshot
+        // when nothing behind it moved; a geometry change OR a damage rect touching its snapshot region forces a re-blur.
+        var stampA = AcrylicBackdropMath.Stamp(new RectF(100f, 80f, 300f, 200f), 30f, 1f, 1920, 1080);
+        var stampSame = AcrylicBackdropMath.Stamp(new RectF(100f, 80f, 300f, 200f), 30f, 1f, 1920, 1080);
+        var stampMoved = AcrylicBackdropMath.Stamp(new RectF(100f, 90f, 300f, 200f), 30f, 1f, 1920, 1080);   // rect moved 10 DIP
+        AcrylicBackdropMath.SnapshotRegion(new RectF(100f, 80f, 300f, 200f), 1f, 4, 1920, 1080, out int qx, out int qy, out int qw, out int qh);
+        var region = new RectF(qx, qy, qw, qh);
+        bool reuseNone = AcrylicBackdropMath.BackdropReusable(stampA, stampSame, region, default);                                 // nothing moved → reuse
+        bool reuseFar  = AcrylicBackdropMath.BackdropReusable(stampA, stampSame, region, new RectF(1500f, 900f, 100f, 80f));       // damage elsewhere (e.g. bottom player bar) → reuse
+        bool reblurHit = !AcrylicBackdropMath.BackdropReusable(stampA, stampSame, region, new RectF(150f, 120f, 40f, 40f));        // damage inside the snapshot region → re-blur
+        bool reblurGeo = !AcrylicBackdropMath.BackdropReusable(stampA, stampMoved, region, default);                               // geometry changed → re-blur
+        Check("64n5. acrylic retained-backdrop cache: reuse when unchanged + damage misses the region; re-blur on geometry change or a damage hit (design §2.3)",
+            reuseNone && reuseFar && reblurHit && reblurGeo,
+            $"reuse(none)={reuseNone} reuse(far)={reuseFar} reblur(hit)={reblurHit} reblur(geo)={reblurGeo}");
     }
 
     static void ContentDialogChromeChecks(StringTable strings)

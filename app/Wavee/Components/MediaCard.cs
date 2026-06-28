@@ -86,7 +86,7 @@ public static class MediaCard
     // and the labels truncate to the engine-measured slot width (the proven NavCardContent pattern) — so it drops into a
     // responsive grid whose track width isn't known at template time.
     public static Element GridCard(Image? cover, string title, string subtitle, string uri,
-                                   Action onClick, Action onPlay, bool circular = false)
+                                   Action onClick, Action onPlay, bool circular = false, Action? onNavigate = null)
     {
         float r = circular ? 9999f : WaveeRadius.Card;
         var coverStack = new BoxEl
@@ -95,7 +95,7 @@ public static class MediaCard
             Children =
             [
                 Surfaces.ArtworkFill(cover, r),
-                Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, FabSize, cover: true, 0f)).Skeletonized(false),
+                Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, FabSize, cover: true, 0f, onNavigate)).Skeletonized(false),
             ],
         };
         return new BoxEl
@@ -194,6 +194,19 @@ public static class MediaCard
         Children = [ Icon(glyph, size * 0.42f, Tok.TextOnAccentPrimary) ],
     };
 
+    internal static Element CoverActionFab(Action onClick, string glyph, string tooltip, float size) => ToolTip.Wrap(new BoxEl
+    {
+        Width = size, Height = size, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Corners = CornerRadius4.All(size / 2f),
+        Fill = ColorF.FromRgba(0, 0, 0, 185),
+        HoverFill = ColorF.FromRgba(20, 20, 20, 225),
+        PressedFill = ColorF.FromRgba(0, 0, 0, 245),
+        BorderWidth = 1f, BorderColor = ColorF.FromRgba(255, 255, 255, 70),
+        Shadow = Elevation.Card, HoverScale = 1.07f, PressScale = 0.92f,
+        OnClick = onClick, Cursor = CursorId.Hand, Role = AutomationRole.Button, Focusable = true,
+        Children = [ Icon(glyph, size * 0.40f, ColorF.FromRgba(255, 255, 255)) ],
+    }, tooltip);
+
 }
 
 // The reactive now-playing / play affordance on a content card (mirrors WaveeMusic's ContentCard state model):
@@ -206,11 +219,12 @@ sealed class NowPlayingOverlay : Component
 {
     readonly string _uri;
     readonly Action _onPlay;
+    readonly Action? _onNavigate;
     readonly float _fab;
     readonly bool _cover;
     readonly float _inner;
-    public NowPlayingOverlay(string uri, Action onPlay, float fab, bool cover, float inner)
-    { _uri = uri; _onPlay = onPlay; _fab = fab; _cover = cover; _inner = inner; }
+    public NowPlayingOverlay(string uri, Action onPlay, float fab, bool cover, float inner, Action? onNavigate = null)
+    { _uri = uri; _onPlay = onPlay; _fab = fab; _cover = cover; _inner = inner; _onNavigate = onNavigate; }
 
     public override Element Render()
     {
@@ -251,7 +265,13 @@ sealed class NowPlayingOverlay : Component
         Element reveal = new BoxEl
         {
             Opacity = 0f, HoverOpacity = 1f, HoverDurationMs = 180f, HoverEasing = Easing.FluentDecelerate,
-            Children = [ MediaCard.PlayFab(Toggle, playingHere ? Icons.Pause : Icons.Play, _fab) ],
+            Direction = 1, AlignItems = FlexAlign.End, Gap = 7f,
+            Children = _onNavigate is null
+                ? [ MediaCard.PlayFab(Toggle, playingHere ? Icons.Pause : Icons.Play, _fab) ]
+                : [
+                    MediaCard.CoverActionFab(_onNavigate, Icons.OpenInNewWindow, "Go to album", MathF.Max(34f, _fab - 8f)),
+                    MediaCard.PlayFab(Toggle, playingHere ? Icons.Pause : Icons.Play, _fab)
+                  ],
         };
         Element EqPill() => new BoxEl
         {

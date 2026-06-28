@@ -673,4 +673,7 @@ public sealed record ScrollEl : Element
     /// <summary>Never draw the conscious scrollbar for this viewport (parity with <see cref="VirtualListEl"/>); the offset
     /// is still programmatically scrollable. Used to hide the rail while a region is loading its skeleton.</summary>
     public bool SuppressScrollBar { get; init; }
+    /// <summary>Called once when this viewport is realized into the scene, with its node handle. Lets composing controls
+    /// drive the viewport programmatically while still using the engine's scroll animator.</summary>
+    public Action<NodeHandle>? OnRealized { get; init; }
 }

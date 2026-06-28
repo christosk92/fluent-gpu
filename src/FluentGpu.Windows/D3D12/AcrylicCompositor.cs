@@ -7,6 +7,7 @@ using TerraFX.Interop.Windows;
 using static TerraFX.Interop.DirectX.DirectX;
 using static TerraFX.Interop.Windows.Windows;
 using ColorF = FluentGpu.Foundation.ColorF;
+using RectF = FluentGpu.Foundation.RectF;
 
 namespace FluentGpu.Rhi.D3D12;
 
@@ -57,6 +58,11 @@ internal sealed unsafe class AcrylicCompositor : IDisposable
         public ulong LastUseFence;             // frame fence value covering the entry's most recent GPU use
         public int IdleFrames;                 // consecutive layered frames without an acquire (trim heuristic)
         public bool InUse;                     // held by an in-progress BlurAndComposite this frame
+        // Retained-backdrop cache (design §2.3): when PinLayer != 0 this entry holds a layer's blurred snapshot RETAINED
+        // across frames (not released after the composite); Stamp is the geometry it was blurred for, so a frame at rest
+        // reuses it (passes A/B/C skipped) until the geometry changes or the damage region touches its snapshot region.
+        public ulong PinLayer;
+        public AcrylicBackdropMath.BackdropStamp Stamp;
     }
     private readonly PoolEntry[] _pool = new PoolEntry[MaxPool];
 
@@ -77,6 +83,10 @@ internal sealed unsafe class AcrylicCompositor : IDisposable
 
     /// <summary>Acrylic layers composited this frame (diagnostics).</summary>
     public int LayersThisFrame { get; private set; }
+
+    /// <summary>Of <see cref="LayersThisFrame"/>, how many REUSED a retained blurred backdrop (cache hit — passes A/B/C
+    /// skipped) instead of re-blurring. A stationary acrylic surface being scrolled should read all-hits (diagnostics).</summary>
+    public int CacheHitsThisFrame { get; private set; }
 
     /// <summary>Live pooled RTs (diagnostics; steady state = 2 while any acrylic surface is open).</summary>
     public int PooledRtCount
@@ -434,7 +444,7 @@ float4 PSMain(V i) : SV_Target
     public void TickIdle(ulong completedFence)
     {
         if (_retired.Count > 0 || PooledRtCount > 0) TickPool(completedFence);
-        LayersThisFrame = 0;
+        LayersThisFrame = 0; CacheHitsThisFrame = 0;
     }
 
     /// <summary>Lease a pooled RT at least (w,h) texels (bucket-quantized). Steady state hits the free-list "fits"
@@ -448,7 +458,7 @@ float4 PSMain(V i) : SV_Target
         for (int i = 0; i < MaxPool; i++)
         {
             ref var e = ref _pool[i];
-            if (e.Res == null || e.InUse || e.W < bw || e.H < bh) continue;
+            if (e.Res == null || e.InUse || e.PinLayer != 0 || e.W < bw || e.H < bh) continue;   // never reuse a retained cache RT as scratch
             if (best < 0 || (long)e.W * e.H < (long)_pool[best].W * _pool[best].H) best = i;
         }
         if (best < 0)
@@ -487,6 +497,86 @@ float4 PSMain(V i) : SV_Target
 
     private void Release(int idx) => _pool[idx].InUse = false;
 
+    /// <summary>Find the pooled slot holding <paramref name="layerId"/>'s retained blurred backdrop, or -1.</summary>
+    private int FindPinned(ulong layerId)
+    {
+        for (int i = 0; i < MaxPool; i++) if (_pool[i].Res != null && _pool[i].PinLayer == layerId) return i;
+        return -1;
+    }
+
+    /// <summary>Lease the RETAINED cache slot for <paramref name="layerId"/> at ≥ (w,h): reuse its existing RT if it
+    /// still fits, else (re)allocate. Unlike <see cref="Acquire"/> the slot is NOT released after the composite — it
+    /// survives across frames so a stationary acrylic surface skips passes A/B/C. Its SRV is refreshed in this frame's
+    /// parity bank; eviction of any displaced RT is fence-gated (deferred-reclaim), same as the transient pool.</summary>
+    private int AcquirePinned(ulong layerId, int w, int h, ulong frameFence)
+    {
+        int bw = AcrylicBackdropMath.BucketDim(w), bh = AcrylicBackdropMath.BucketDim(h);
+        int slot = FindPinned(layerId);
+        if (slot >= 0 && (_pool[slot].W < bw || _pool[slot].H < bh))   // existing cache RT too small → retire + reallocate
+        {
+            _retired.Add(new Retired { Res = _pool[slot].Res, Fence = _pool[slot].LastUseFence });
+            _pool[slot] = default;
+            slot = -1;
+        }
+        if (slot < 0)
+        {
+            for (int i = 0; i < MaxPool; i++) if (_pool[i].Res == null) { slot = i; break; }   // empty slot → cold growth
+            if (slot < 0)
+            {
+                // No empty slot → evict the LRU NON-leased entry, preferring an unpinned (transient) victim over a
+                // pinned cache entry (a displaced cache entry merely re-blurs next time it is needed).
+                for (int i = 0; i < MaxPool; i++)
+                {
+                    if (_pool[i].InUse) continue;
+                    if (slot < 0) { slot = i; continue; }
+                    bool iUn = _pool[i].PinLayer == 0, sUn = _pool[slot].PinLayer == 0;
+                    if (iUn != sUn) { if (iUn) slot = i; continue; }
+                    if (_pool[i].LastUseFence < _pool[slot].LastUseFence) slot = i;
+                }
+                if (slot < 0) throw new InvalidOperationException("acrylic LayerPool exhausted (more concurrent leases than slots)");
+                _retired.Add(new Retired { Res = _pool[slot].Res, Fence = _pool[slot].LastUseFence });
+                _pool[slot] = default;
+            }
+            _pool[slot].Res = CreateTarget((uint)bw, (uint)bh, $"Acrylic.Cache[{slot}]", optimizedClear: false);
+            _pool[slot].State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            _pool[slot].W = bw; _pool[slot].H = bh;
+            _device->CreateRenderTargetView(_pool[slot].Res, null, Rtv(1 + slot));
+        }
+        ref var e = ref _pool[slot];
+        e.PinLayer = layerId;
+        e.InUse = true;
+        e.IdleFrames = 0;
+        e.LastUseFence = frameFence;
+        CreateSrv(e.Res, SrvCpu(PoolSrvSlot(slot)));   // refresh THIS frame's SRV bank
+        return slot;
+    }
+
+    /// <summary>Pass D: composite the WinUI acrylic recipe into the canvas at the rounded layer rect, sampling the
+    /// blurred snapshot in pool entry <paramref name="ia"/> — shared by the re-blur and the cache-hit paths.</summary>
+    private void Composite(ID3D12GraphicsCommandList* cmd, in PushLayerCmd L, float lw, float lh, int rx, int ry, int rw, int rh, int ia, int dw, int dh)
+    {
+        float aw = _pool[ia].W, ah = _pool[ia].H;
+        Barrier(cmd, _pool[ia].Res, ref _pool[ia].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        Barrier(cmd, _canvas, ref _canvasState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
+        var crt = Rtv(0); cmd->OMSetRenderTargets(1, &crt, BOOL.FALSE, null); SetViewport(cmd, _w, _h);
+        cmd->SetGraphicsRootSignature(_compRoot);
+        cmd->SetPipelineState(_compPso);
+        Span<float> cc = stackalloc float[28]
+        {
+            L.DeviceRect.X, L.DeviceRect.Y, L.DeviceRect.W, L.DeviceRect.H,
+            lw, lh, rx, ry,                                  // logical viewport (VS NDC) + region origin (PS phys px)
+            rw, rh, dw / aw, dh / ah,                        // region size (phys px) + used-uv fraction of pool ia
+            L.Tint.R, L.Tint.G, L.Tint.B, L.Tint.A,
+            L.Fallback.R, L.Fallback.G, L.Fallback.B, L.Fallback.A,
+            L.Radii.TopLeft, L.TintOpacity, L.LuminosityOpacity, L.NoiseOpacity,
+            1f / aw, 1f / ah, 0f, 0f,                        // pool-ia texel size (half-texel edge clamp)
+        };
+        fixed (float* c = cc) cmd->SetGraphicsRoot32BitConstants(0, 28, c, 0);
+        cmd->SetGraphicsRootDescriptorTable(1, SrvGpu(PoolSrvSlot(ia)));
+        cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+        cmd->DrawInstanced(4, 1, 0, 0);
+    }
+
     // ── frame passes ────────────────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>Bind the canvas as the render target, clear it, set the full viewport, and run pool upkeep.
@@ -494,7 +584,7 @@ float4 PSMain(V i) : SV_Target
     public void BeginCanvas(ID3D12GraphicsCommandList* cmd, in ColorF clear, ulong completedFence, int parity)
     {
         _parity = parity & 1;
-        LayersThisFrame = 0;
+        LayersThisFrame = 0; CacheHitsThisFrame = 0;
         TickPool(completedFence);
         Barrier(cmd, _canvas, ref _canvasState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
         var rtv = Rtv(0);
@@ -524,28 +614,56 @@ float4 PSMain(V i) : SV_Target
         cmd->DrawInstanced(3, 1, 0, 0);
     }
 
-    /// <summary>The PushLayer{Acrylic} schedule: snapshot+downsample the canvas region beneath the layer rect into a
-    /// pooled RT, two-pass separable gaussian (fixed kernel), then composite the WinUI acrylic recipe into the canvas
-    /// clipped to the rounded layer rect. Leaves the canvas bound for continued scene drawing.</summary>
-    public void BlurAndComposite(ID3D12GraphicsCommandList* cmd, in PushLayerCmd L, float lw, float lh, float scale, ulong frameFence)
+    /// <summary>The PushLayer{Acrylic} schedule WITH the retained-backdrop cache (design §2.3): on a cache HIT (the
+    /// layer is stationary and nothing behind it moved this frame) skip the snapshot+blur and composite the retained
+    /// snapshot; else snapshot+downsample the canvas region, two-pass separable gaussian, and composite — RETAINING the
+    /// result for a keyed (<see cref="PushLayerCmd.LayerId"/> != 0) layer. Leaves the canvas bound for continued drawing.
+    /// The damage rect (physical px) is this frame's union of moved-node bounds (SceneRecorder) — empty ⇒ reuse.</summary>
+    public void BlurAndComposite(ID3D12GraphicsCommandList* cmd, in PushLayerCmd L, float lw, float lh, float scale, ulong frameFence,
+        float dmgX, float dmgY, float dmgW, float dmgH)
     {
         if (scale <= 0f) scale = 1f;
         int down = AcrylicBackdropMath.DownsampleFactor(L.BlurSigma, scale);
         AcrylicBackdropMath.SnapshotRegion(L.DeviceRect, scale, down, (int)_w, (int)_h, out int rx, out int ry, out int rw, out int rh);
         int dw = Math.Max(1, (rw + down - 1) / down), dh = Math.Max(1, (rh + down - 1) / down);
 
-        int ia = Acquire(dw, dh, frameFence);
-        int ib = Acquire(dw, dh, frameFence);
-
         SetHeap(cmd);
 
-        // pass A: snapshot + downsample the backdrop region (canvas sub-rect) → pool A at 1/down resolution
+        // ── retained-backdrop cache: a stationary acrylic surface reuses its blurred snapshot across frames — re-blur
+        // ONLY when its geometry changed OR this frame's damage region touches its snapshot region. So scrolling INSIDE
+        // a popup (the backdrop behind it is static) composites the cached blur with passes A/B/C skipped. ──
+        var nowStamp = AcrylicBackdropMath.Stamp(L.DeviceRect, L.BlurSigma, scale, (int)_w, (int)_h);
+        var regionPhys = new RectF(rx, ry, rw, rh);
+        var damagePhys = new RectF(dmgX, dmgY, dmgW, dmgH);
+        if (L.LayerId != 0)
+        {
+            int pin = FindPinned(L.LayerId);
+            if (pin >= 0 && AcrylicBackdropMath.BackdropReusable(_pool[pin].Stamp, nowStamp, regionPhys, damagePhys))
+            {
+                ref var hit = ref _pool[pin];
+                hit.InUse = true; hit.IdleFrames = 0; hit.LastUseFence = frameFence;
+                CreateSrv(hit.Res, SrvCpu(PoolSrvSlot(pin)));     // refresh THIS frame's parity bank for the composite sample
+                Composite(cmd, in L, lw, lh, rx, ry, rw, rh, pin, dw, dh);
+                hit.InUse = false;
+                LayersThisFrame++; CacheHitsThisFrame++;
+                BindCanvas(cmd);
+                return;
+            }
+        }
+
+        // ── (re)blur, passes A/B/C. For a keyed layer the result lands in a PINNED entry retained for reuse; for
+        // LayerId == 0 it lands in a transient entry released at the end (the prior re-blur-every-frame behavior). ──
+        bool cache = L.LayerId != 0;
+        int ia = cache ? AcquirePinned(L.LayerId, dw, dh, frameFence) : Acquire(dw, dh, frameFence);
+        int ib = Acquire(dw, dh, frameFence);   // ping-pong intermediate (always transient)
+
+        // pass A: snapshot + downsample the backdrop region (canvas sub-rect) → ia at 1/down resolution
         Barrier(cmd, _canvas, ref _canvasState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         Barrier(cmd, _pool[ia].Res, ref _pool[ia].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
         var rt = Rtv(1 + ia); cmd->OMSetRenderTargets(1, &rt, BOOL.FALSE, null); SetViewport(cmd, (uint)dw, (uint)dh);
         FullScreen(cmd, _copyPso, 0, stackalloc float[4] { (float)rx / _w, (float)ry / _h, (float)rw / _w, (float)rh / _h });
 
-        // pass B: blur H, A → B (fixed σ=KernelSigma kernel in snapshot texels ⇒ effective σ = BlurSigma DIP full-res)
+        // pass B: blur H, ia → ib (fixed σ=KernelSigma kernel in snapshot texels ⇒ effective σ = BlurSigma DIP full-res)
         float aw = _pool[ia].W, ah = _pool[ia].H, bw = _pool[ib].W, bh = _pool[ib].H;
         Barrier(cmd, _pool[ia].Res, ref _pool[ia].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         Barrier(cmd, _pool[ib].Res, ref _pool[ib].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -553,35 +671,19 @@ float4 PSMain(V i) : SV_Target
         FullScreen(cmd, _blurPso, PoolSrvSlot(ia), stackalloc float[8]
             { 1f / aw, 1f / ah, 1f, 0f, dw / aw, dh / ah, (dw - 0.5f) / aw, (dh - 0.5f) / ah });
 
-        // pass C: blur V, B → A (the final blurred snapshot lands back in A)
+        // pass C: blur V, ib → ia (the final blurred snapshot lands back in ia)
         Barrier(cmd, _pool[ib].Res, ref _pool[ib].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         Barrier(cmd, _pool[ia].Res, ref _pool[ia].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
         rt = Rtv(1 + ia); cmd->OMSetRenderTargets(1, &rt, BOOL.FALSE, null); SetViewport(cmd, (uint)dw, (uint)dh);
         FullScreen(cmd, _blurPso, PoolSrvSlot(ib), stackalloc float[8]
             { 1f / bw, 1f / bh, 0f, 1f, dw / bw, dh / bh, (dw - 0.5f) / bw, (dh - 0.5f) / bh });
 
-        // pass D: composite the acrylic recipe into the canvas at the rounded layer rect (samples blurred A)
-        Barrier(cmd, _pool[ia].Res, ref _pool[ia].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        Barrier(cmd, _canvas, ref _canvasState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
-        var crt = Rtv(0); cmd->OMSetRenderTargets(1, &crt, BOOL.FALSE, null); SetViewport(cmd, _w, _h);
-        cmd->SetGraphicsRootSignature(_compRoot);
-        cmd->SetPipelineState(_compPso);
-        Span<float> cc = stackalloc float[28]
-        {
-            L.DeviceRect.X, L.DeviceRect.Y, L.DeviceRect.W, L.DeviceRect.H,
-            lw, lh, rx, ry,                                  // logical viewport (VS NDC) + region origin (PS phys px)
-            rw, rh, dw / aw, dh / ah,                        // region size (phys px) + used-uv fraction of pool A
-            L.Tint.R, L.Tint.G, L.Tint.B, L.Tint.A,
-            L.Fallback.R, L.Fallback.G, L.Fallback.B, L.Fallback.A,
-            L.Radii.TopLeft, L.TintOpacity, L.LuminosityOpacity, L.NoiseOpacity,
-            1f / aw, 1f / ah, 0f, 0f,                        // pool-A texel size (half-texel edge clamp)
-        };
-        fixed (float* c = cc) cmd->SetGraphicsRoot32BitConstants(0, 28, c, 0);
-        cmd->SetGraphicsRootDescriptorTable(1, SrvGpu(PoolSrvSlot(ia)));
-        cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-        cmd->DrawInstanced(4, 1, 0, 0);
+        // pass D: composite the acrylic recipe into the canvas (samples blurred ia)
+        Composite(cmd, in L, lw, lh, rx, ry, rw, rh, ia, dw, dh);
 
-        Release(ia); Release(ib);   // back to the free list — the NEXT layer this frame reuses the same two RTs
+        if (cache) { _pool[ia].Stamp = nowStamp; _pool[ia].InUse = false; }   // KEEP ia pinned; record what it blurred
+        else Release(ia);
+        Release(ib);                                                          // ping-pong scratch → free list
         LayersThisFrame++;
 
         BindCanvas(cmd);   // leave canvas bound + full viewport for continued scene drawing

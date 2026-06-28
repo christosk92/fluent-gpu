@@ -117,6 +117,23 @@ public sealed class AggregateCatalog : IMusicLibrary, ICollectionEvents
         return new SearchResults(t, al, ar, pl);
     }
 
+    public async Task<IReadOnlyList<string>> SuggestAsync(string query, CancellationToken ct = default)
+    {
+        var x = await SuggestRichAsync(query, ct).ConfigureAwait(false);
+        return x.Queries;
+    }
+
+    public async Task<SearchSuggestions> SuggestRichAsync(string query, CancellationToken ct = default)
+    {
+        // First source that returns suggestions wins (the online source); offline sources default to empty.
+        foreach (var s in _reg.CatalogSources)
+        {
+            var x = await s.SuggestRichAsync(query, ct).ConfigureAwait(false);
+            if (x.Queries.Count + x.Items.Count > 0) return x;
+        }
+        return SearchSuggestions.Empty;
+    }
+
     public async Task<LibraryStats> GetStatsAsync(CancellationToken ct = default)
     {
         int al = 0, ar = 0, lk = 0, pod = 0;

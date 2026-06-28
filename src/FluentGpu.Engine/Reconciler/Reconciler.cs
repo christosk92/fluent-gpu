@@ -1057,6 +1057,7 @@ public sealed class TreeReconciler
         _scene.AppendChild(node, content);
         Mount(content, se.Content);
         _scene.ScrollRef(node).ContentNode = content;
+        se.OnRealized?.Invoke(node);
     }
 
     // ── Scroll-position restoration (ScrollKey → ScrollMemory). Wired through WriteColumns (mount + content-identity

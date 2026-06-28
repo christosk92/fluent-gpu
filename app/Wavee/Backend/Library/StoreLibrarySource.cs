@@ -32,6 +32,10 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     /// store track search is the fallback. Returns null on failure → caller degrades to offline.</summary>
     public Func<string, CancellationToken, Task<SearchResults?>>? LiveSearch { get; set; }
 
+    /// <summary>Set by the live bootstrap: as-you-type search suggestions (Pathfinder searchSuggestions). Empty offline.</summary>
+    public Func<string, CancellationToken, Task<IReadOnlyList<string>>>? LiveSuggest { get; set; }
+    public Func<string, CancellationToken, Task<SearchSuggestions>>? LiveSuggestRich { get; set; }
+
     public StoreLibrarySource(IStore store)
     {
         _store = store;
@@ -87,16 +91,22 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         return _store.GetArtist(uri);
     }
 
-    // First open of a playlist/album fetches its tracks (the rootlist/collection sync stores headers only). No-op offline.
+    // First open fetches the detail envelope. Albums are upgraded until they have BOTH tracks and the full Pathfinder
+    // metadata; a track-only extended-metadata album is not allowed to strand the page without artist art/releases.
     async Task EnsureFetchedAsync(string uri, CancellationToken ct)
     {
         var fetch = OnDemandFetch;
         if (fetch is null) return;
-        bool need =
-            uri.StartsWith("spotify:playlist:", StringComparison.Ordinal) ? _store.Membership(uri).Count == 0 :
-            uri.StartsWith("spotify:album:", StringComparison.Ordinal) ? _store.GetAlbum(uri)?.Tracks is null or { Count: 0 } :
-            uri.StartsWith("spotify:artist:", StringComparison.Ordinal) ? _store.GetArtist(uri)?.TopTracks is null or { Count: 0 } :   // cache: fetch once, then served from the store (the virtualized discography reads it many times)
-            false;
+        bool need = false;
+        if (uri.StartsWith("spotify:playlist:", StringComparison.Ordinal))
+            need = _store.Membership(uri).Count == 0;
+        else if (uri.StartsWith("spotify:album:", StringComparison.Ordinal))
+        {
+            var album = _store.GetAlbum(uri);
+            need = album is null || album.Tracks is null or { Count: 0 } || album.Hydration < AlbumHydrationLevel.Full;
+        }
+        else if (uri.StartsWith("spotify:artist:", StringComparison.Ordinal))
+            need = _store.GetArtist(uri)?.TopTracks is null or { Count: 0 };   // cache: fetch once, then served from the store (the virtualized discography reads it many times)
         if (need) { try { await fetch(uri, ct).ConfigureAwait(false); } catch { } }
     }
 
@@ -140,6 +150,32 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         }
         var tracks = _store.QueryTracks(q);
         return new SearchResults(tracks, Array.Empty<Album>(), Array.Empty<Artist>(), Array.Empty<Playlist>());
+    }
+
+    public async Task<IReadOnlyList<string>> SuggestAsync(string query, CancellationToken ct = default)
+    {
+        var s = await SuggestRichAsync(query, ct).ConfigureAwait(false);
+        return s.Queries;
+    }
+
+    public async Task<SearchSuggestions> SuggestRichAsync(string query, CancellationToken ct = default)
+    {
+        var q = query.Trim();
+        if (q.Length == 0) return SearchSuggestions.Empty;
+        if (LiveSuggestRich is { } rich)
+        {
+            try { return await rich(q, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { throw; }
+            catch { return SearchSuggestions.Empty; }
+        }
+        if (LiveSuggest is not { } live) return SearchSuggestions.Empty;
+        try
+        {
+            var queries = await live(q, ct).ConfigureAwait(false);
+            return new SearchSuggestions(queries, Array.Empty<SearchSuggestionItem>());
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { return SearchSuggestions.Empty; }
     }
 
     // A home built from the SYNCED library (no Spotify home-feed API needed): a jump-back-in quick grid (Liked +
@@ -255,6 +291,7 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     void OnStoreChange(StoreChange c)
     {
         if (c.IsBulk) { foreach (var k in AllKinds) _collections.OnNext(k); return; }
+        if (c.Kind is { } explicitKind) { _collections.OnNext(explicitKind); return; }
         if (KindOfUri(c.Uri) is { } kind) _collections.OnNext(kind);
     }
 
@@ -264,7 +301,6 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     static CollectionKind? KindOfUri(string uri) =>
         uri.StartsWith("spotify:album:", StringComparison.Ordinal) ? CollectionKind.Albums :
         uri.StartsWith("spotify:artist:", StringComparison.Ordinal) ? CollectionKind.Artists :
-        uri.StartsWith("spotify:track:", StringComparison.Ordinal) ? CollectionKind.Liked :
         uri.StartsWith("spotify:show:", StringComparison.Ordinal) || uri.StartsWith("spotify:episode:", StringComparison.Ordinal) ? CollectionKind.Shows :
         uri.StartsWith("spotify:playlist:", StringComparison.Ordinal) || uri == "rootlist" ? CollectionKind.Playlists :
         null;

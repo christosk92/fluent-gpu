@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
@@ -146,8 +147,8 @@ internal sealed class PagedShelfCore : Component
         int page = _page.Value;                        // subscribe → pager state + glide retarget
 
         // Compute the fit the layout will land at (count-independent), to size the strip + page math.
-        var (perPage, cardW) = FillRowVirtualLayout.Fit(w, _minCardW, _maxCardW, _gap, _perPageOverride, _fixedCardW);
-        int perPageItems = Math.Max(1, perPage * _rows);
+        var (perPageColumns, cardW) = FillRowVirtualLayout.Fit(w, _minCardW, _maxCardW, _gap, _perPageOverride, _fixedCardW);
+        int perPageItems = Math.Max(1, perPageColumns * (_measured ? 1 : _rows));
         int pageCount = Math.Max(1, (_count + perPageItems - 1) / perPageItems);
         int maxPage = pageCount - 1;
         int p = Math.Clamp(page, 0, maxPage);
@@ -168,7 +169,7 @@ internal sealed class PagedShelfCore : Component
         EdgeFadeSpec? fade = mask == EdgeMask.None || _edgeFade <= 0f ? null : new EdgeFadeSpec(mask, _edgeFade);
 
         Element body = _measured
-            ? MeasuredBody(perPageItems, cardW, p, fade)
+            ? MeasuredBody(perPageColumns, cardW, p, fade)
             : VirtualBody(perPageItems, cardW, p, w, fade);
         if ((_pager & ShelfPager.HoverEdge) != 0)
             body = ZStack(body, new BoxEl
@@ -196,14 +197,11 @@ internal sealed class PagedShelfCore : Component
     // — uniform, EXACT, and computed by the layout engine (no cardHeight() estimate; the card sizes itself). For the
     // handful of cards a content shelf holds, laying them all out beats the machinery to avoid it; paging slides the
     // row (animated OffsetX) rather than virtualizing. Single-row (Rows == 1) — the content-shelf shape. ──
-    Element MeasuredBody(int perPageItems, float cardW, int p, EdgeFadeSpec? fade)
+    Element MeasuredBody(int perPageColumns, float cardW, int p, EdgeFadeSpec? fade)
     {
-        float stride = cardW + _gap;
-        float contentW  = _count <= 0 ? 0f : _count * cardW + (_count - 1) * _gap;
-        float viewportW = perPageItems * cardW + (perPageItems - 1) * _gap;       // one full page of cards
-        float maxOffset = MathF.Max(0f, contentW - viewportW);                    // don't overscroll past the end
-        float target = MathF.Min(p * perPageItems * stride, maxOffset);
-        float x = UseAnimatedValue(target, 320f, Easing.SmoothOut);              // smooth glide between pages
+        var viewport = UseRef(NodeHandle.Null);
+        UseLayoutEffect(() => ScrollMeasuredViewport(viewport.Value, p, perPageColumns, cardW),
+            p, perPageColumns, cardW, _count);
 
         var cells = new Element[Math.Max(0, _count)];
         for (int i = 0; i < _count; i++)
@@ -213,13 +211,48 @@ internal sealed class PagedShelfCore : Component
             // row's width — and the card cross-stretches to cardW. Mirrors the virtualized cell, minus the recycler.
             cells[i] = new BoxEl { Direction = 1, Width = cardW, Children = [ _cardAt(idx, cardW) ] };
         }
-        Element strip = new BoxEl { Direction = 0, Gap = _gap, OffsetX = -x, Children = cells };
-        return _parts.Apply(PagedShelf.PartViewport, new BoxEl
+        Element strip = new BoxEl { Direction = 0, Gap = _gap, Children = cells };
+        return _parts.Apply(PagedShelf.PartViewport, new ScrollEl
         {
-            ClipToBounds = true,        // no Height ⇒ the viewport wraps the strip = the tallest card (engine-measured)
+            Horizontal = true,
+            Grow = 0f,
+            SuppressScrollBar = true,
             EdgeFade = fade,
-            Children = [ strip ],
+            Content = strip,
+            OnRealized = h => viewport.Value = h,
         });
+    }
+
+    void ScrollMeasuredViewport(NodeHandle vp, int page, int perPageColumns, float cardW)
+    {
+        if (Context.Scene is not { } scene || vp.IsNull || !scene.IsLive(vp) || !scene.HasScroll(vp)) return;
+
+        ref ScrollState sc = ref scene.ScrollRef(vp);
+        float stride = cardW + _gap;
+        float maxX = MathF.Max(0f, sc.ContentW - sc.ViewportW);
+        float target = Math.Clamp(page * Math.Max(1, perPageColumns) * stride, 0f, maxX);
+        if (MathF.Abs(sc.TargetX - target) < 0.5f && MathF.Abs(sc.OffsetX - target) < 0.5f) return;
+
+        if (Motion.ReducedMotion)
+        {
+            sc.OffsetX = sc.TargetX = target;
+            NodeHandle content = sc.ContentNode;
+            if (!content.IsNull && scene.IsLive(content))
+            {
+                scene.Paint(content).LocalTransform = Affine2D.Translation(-target, 0f);
+                scene.Mark(content, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+            }
+            Context.RequestRerender();
+            return;
+        }
+
+        sc.ScrollMode = ScrollAnimator.ProgrammaticMode;
+        sc.FlingVelocity = 0f;
+        sc.FlingRetargeted = false;
+        sc.FlingSnapTarget = float.NaN;
+        sc.TargetX = target;
+        Context.ArmScroll?.Invoke(vp);
+        Context.RequestRerender();
     }
 
     // ── Virtualized body: the size-reactive, recycling strip (scales to thousands). Needs cardHeight(cardW) to size

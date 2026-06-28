@@ -34,6 +34,18 @@ public sealed partial class AnimEngine
             return n;
         }
     }
+    /// <summary>True if any active row is a DISPLAY-RATE loop — a transient loop (e.g. an indeterminate progress bar)
+    /// that opts out of the ambient frame-rate cap so it runs at the panel refresh. Read by the host's cap decision.</summary>
+    public bool DisplayRateActive
+    {
+        get
+        {
+            foreach (int nodeIndex in _slab.NodeIndices)
+                for (int s = _slab.HeadOnNode(nodeIndex); s >= 0; s = _slab.At(s).NextOnNode)
+                    if (_slab.At(s).Has(AnimFlags.DisplayRate)) return true;
+            return false;
+        }
+    }
     /// <summary>Live per-node layout-transition specs — O(1).</summary>
     public int TransitionCount => _transitions.Count;
 

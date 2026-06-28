@@ -33,7 +33,6 @@ sealed class ShellToolbar : ReactiveComponent
     readonly Action _toggleTheme;
     readonly List<Route> _backHistory;
     readonly List<Route> _forwardHistory;
-    static readonly string[] NoSuggestions = Array.Empty<string>();
 
     public ShellToolbar(Signal<Route> route, Signal<bool> canBack, Signal<bool> canForward,
                         Action<string, string?> go, Action back, Action forward, Action home,
@@ -84,12 +83,9 @@ sealed class ShellToolbar : ReactiveComponent
                 Padding = new Edges4(8f, 0f, 8f, 0f), Margin = new Edges4(0f, 0f, WaveeSpace.L, 0f),
                 Children =
                 [
-                    // Fills the omnibar slot, capped at 720 (shrinks below that on a narrow window).
-                    AutoSuggestBox.Create(NoSuggestions, Loc.Get(Strings.Shell.SearchPlaceholder),
-                        grow: 1f, maxFillWidth: 720f, text: _searchText,
-                        onQuerySubmitted: q => _go("search", string.IsNullOrWhiteSpace(q) ? null : q),
-                        onSuggestionChosen: q => _go("search", string.IsNullOrWhiteSpace(q) ? null : q),
-                        minHeight: 36f, cornerRadius: 18f),
+                    // Fills the omnibar slot, capped at 720 (shrinks below that on a narrow window). Live as-you-type
+                    // suggestions come from the Omnibar component (online searchSuggestions).
+                    Embed.Comp(() => new RichOmnibar(_searchText, _go)),
                 ],
             },
 
@@ -135,8 +131,9 @@ sealed class ShellToolbar : ReactiveComponent
         var auth = b?.Auth.Value ?? AuthStatus.LoggedOut;   // subscribe
         if (auth == AuthStatus.Authenticated)
         {
-            var name = b?.User.Value?.DisplayName ?? "";    // subscribe
-            var pic = PersonPicture.Create("", 24f, displayName: name);
+            var user = b?.User.Value;                        // subscribe
+            var name = user?.DisplayName ?? "";
+            var pic = PersonPicture.Create(user?.AvatarUrl ?? "", 24f, displayName: name);   // real photo when the profile resolved (falls back to initials)
             return new BoxEl
             {
                 Direction = 0, Gap = 8f, AlignItems = FlexAlign.Center, Height = 32f,
@@ -288,4 +285,413 @@ sealed class OverflowMenu : Component
 
         return IconButton.Create(Icons.More, Toggle, _style) with { OnRealized = h => anchor.Value = h };
     }
+}
+
+// The omnibar: an AutoSuggestBox with LIVE as-you-type suggestions (online searchSuggestions via the library seam),
+// rendered Spotify-style — a leading search glyph per row + the typed substring brightened/bolded. Empty offline.
+sealed class Omnibar : Component
+{
+    readonly Signal<string> _text;
+    readonly Action<string, string?> _go;
+    // The results are held HERE (not via UseAsyncResource, which resets to the seed each keystroke and flashes the popup
+    // empty): a new fetch keeps the prior list visible + flips _loading until the fresh set lands — no "No results" flash.
+    readonly Signal<IReadOnlyList<string>> _sugg = new(System.Array.Empty<string>());
+    readonly Signal<bool> _loading = new(false);
+    public Omnibar(Signal<string> text, Action<string, string?> go) { _text = text; _go = go; }
+
+    public override Element Render()
+    {
+        var svc = UseContext(Services.Slot);
+        var post = UsePost();                 // marshal the async completion back to the UI thread (signal writes)
+        string text = _text.Value.Trim();     // subscribe → the effect re-fires (re-fetches) when the query changes
+        UseEffect(() => StartFetch(svc, post, text), text);
+
+        return AutoSuggestBox.Create(System.Array.Empty<string>(), Loc.Get(Strings.Shell.SearchPlaceholder),
+            grow: 1f, maxFillWidth: 720f, text: _text, suggestionsSignal: _sugg, loadingSignal: _loading,
+            onQuerySubmitted: q => _go("search", string.IsNullOrWhiteSpace(q) ? null : q),
+            onSuggestionChosen: q => _go("search", string.IsNullOrWhiteSpace(q) ? null : q),
+            minHeight: 36f, cornerRadius: 18f, boldMatch: true, itemGlyph: Icons.Search);
+    }
+
+    void StartFetch(Services? svc, Action<Action> post, string q)
+    {
+        if (q.Length == 0 || svc is null) { _sugg.Value = System.Array.Empty<string>(); _loading.Value = false; return; }
+        _loading.Value = true;                // KEEP _sugg (prior results) until the fresh set lands
+        _ = Run();
+
+        async System.Threading.Tasks.Task Run()
+        {
+            try
+            {
+                var s = await svc.Library.SuggestAsync(q).ConfigureAwait(false);
+                post(() => { if (_text.Peek().Trim() == q) { _sugg.Value = s; _loading.Value = false; } });   // ignore stale (the box moved on)
+            }
+            catch { post(() => { if (_text.Peek().Trim() == q) _loading.Value = false; }); }
+        }
+    }
+}
+
+sealed class RichOmnibar : Component
+{
+    readonly Signal<string> _text;
+    readonly Action<string, string?> _go;
+    readonly Signal<SearchSuggestions> _suggestions = new(SearchSuggestions.Empty);
+    readonly Signal<bool> _loading = new(false);
+    readonly Signal<float> _fieldWidth = new(0f);
+    public RichOmnibar(Signal<string> text, Action<string, string?> go) { _text = text; _go = go; }
+
+    public override Element Render()
+    {
+        var svc = UseContext(Services.Slot);
+        var overlay = UseContext(Overlay.Service);
+        var post = UsePost();
+        var anchor = UseRef<NodeHandle>(default);
+        var handle = UseRef<OverlayHandle?>(null);
+        string text = _text.Value.Trim();
+        UseEffect(() => StartFetch(svc, post, text), text);
+        UseEffect(() =>
+        {
+            if (text.Length == 0) ClosePopup();
+            else OpenPopup();
+        }, text);
+
+        void ClosePopup()
+        {
+            handle.Value?.Close();
+            handle.Value = null;
+        }
+
+        void OpenPopup()
+        {
+            if (handle.Value is { IsOpen: true }) return;
+            handle.Value = overlay.Open(
+                () => anchor.Value,
+                () => Embed.Comp(() => new OmnibarSuggestionsPopup(_text, _suggestions, _loading, _fieldWidth, svc, _go, ClosePopup)),
+                FlyoutPlacement.BottomStretch,
+                // Real acrylic chrome: scrolling the artwork rows no longer re-blurs the backdrop — the compositor caches
+                // the blurred snapshot per overlay and re-blurs only when content BEHIND the popup moves (AcrylicCompositor
+                // retained-backdrop cache; design/subsystems/backdrop-effects-animation.md §2.3).
+                new PopupOptions(Chrome: PopupChrome.Static));
+            handle.Value.ClosedAction = () => handle.Value = null;
+        }
+
+        void Submit(string q)
+        {
+            var trimmed = q.Trim();
+            _go("search", trimmed.Length == 0 ? null : trimmed);
+            ClosePopup();
+        }
+
+        const float fieldHeight = 36f;
+        const float iconCol = AutoSuggestBox.QueryButtonWidth + AutoSuggestBox.QueryButtonLeftMargin + AutoSuggestBox.RightButtonMargin;
+        float width = _fieldWidth.Value > 0f ? _fieldWidth.Value : 720f;
+        var innerWidth = UseComputed(() => MathF.Max(16f, (_fieldWidth.Value > 0f ? _fieldWidth.Value : 720f) - iconCol));
+        var editor = Embed.Comp(() => new EditableText
+        {
+            Text = _text,
+            Width = width - iconCol,
+            WidthSignal = innerWidth,
+            Height = 32f,
+            Placeholder = Loc.Get(Strings.Shell.SearchPlaceholder),
+            Chromeless = true,
+            OnCommit = Submit,
+            OnCancel = ClosePopup,
+        });
+
+        var queryPlate = new BoxEl
+        {
+            Grow = 1f, Margin = new Edges4(1, 3, 1, 3),
+            AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Corners = Radii.ControlAll, Role = AutomationRole.Button,
+            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+            OnClick = () => Submit(_text.Peek()),
+            Children =
+            [
+                new TextEl(Icons.Search)
+                {
+                    Size = AutoSuggestBox.IconFontSize, FontFamily = Theme.IconFont,
+                    Color = Tok.TextSecondary, PressedColor = Tok.TextTertiary,
+                },
+            ],
+        };
+
+        return new BoxEl
+        {
+            Direction = 0,
+            Width = float.NaN,
+            Grow = 1f,
+            Shrink = 1f,
+            MaxWidth = 720f,
+            Height = fieldHeight,
+            MinHeight = fieldHeight,
+            MaxHeight = fieldHeight,
+            AlignItems = FlexAlign.Center,
+            Corners = CornerRadius4.All(18f),
+            BorderWidth = 1f,
+            BorderColor = Tok.StrokeControlDefault,
+            Fill = Tok.FillControlDefault,
+            HoverFill = Tok.FillControlSecondary,
+            ClipToBounds = true,
+            Role = AutomationRole.ComboBox,
+            OnRealized = h => anchor.Value = h,
+            OnBoundsChanged = r =>
+            {
+                if (r.W > 0f && MathF.Abs(r.W - _fieldWidth.Peek()) > 0.5f) _fieldWidth.Value = r.W;
+            },
+            Children =
+            [
+                new BoxEl { Grow = 1f, Basis = 0f, Shrink = 1f, ClipToBounds = true, AlignItems = FlexAlign.Stretch, Children = [editor] },
+                new BoxEl
+                {
+                    Width = AutoSuggestBox.QueryButtonWidth,
+                    Height = AutoSuggestBox.QueryButtonHeight,
+                    Margin = new Edges4(AutoSuggestBox.QueryButtonLeftMargin, 0, AutoSuggestBox.RightButtonMargin, 0),
+                    AlignItems = FlexAlign.Stretch,
+                    Children = [queryPlate],
+                },
+            ],
+        };
+    }
+
+    void StartFetch(Services? svc, Action<Action> post, string q)
+    {
+        if (q.Length == 0 || svc is null) { _suggestions.Value = SearchSuggestions.Empty; _loading.Value = false; return; }
+        _loading.Value = true;
+        _ = Run();
+
+        async System.Threading.Tasks.Task Run()
+        {
+            try
+            {
+                var s = await svc.Library.SuggestRichAsync(q).ConfigureAwait(false);
+                post(() => { if (_text.Peek().Trim() == q) { _suggestions.Value = s; _loading.Value = false; } });
+            }
+            catch { post(() => { if (_text.Peek().Trim() == q) _loading.Value = false; }); }
+        }
+    }
+}
+
+sealed class OmnibarSuggestionsPopup : Component
+{
+    readonly Signal<string> _text;
+    readonly IReadSignal<SearchSuggestions> _suggestions;
+    readonly IReadSignal<bool> _loading;
+    readonly IReadSignal<float> _width;
+    readonly Services? _svc;
+    readonly Action<string, string?> _go;
+    readonly Action _close;
+
+    public OmnibarSuggestionsPopup(Signal<string> text, IReadSignal<SearchSuggestions> suggestions, IReadSignal<bool> loading,
+        IReadSignal<float> width, Services? svc, Action<string, string?> go, Action close)
+    {
+        _text = text; _suggestions = suggestions; _loading = loading; _width = width; _svc = svc; _go = go; _close = close;
+    }
+
+    public override Element Render()
+    {
+        string q = _text.Value.Trim();
+        var s = _suggestions.Value;
+        bool loading = _loading.Value;
+        float width = _width.Value > 0f ? _width.Value : 720f;
+
+        var rows = new List<Element>();
+        int queryCount = 0;
+        foreach (var query in s.Queries)
+        {
+            if (!Matches(query, q)) continue;
+            rows.Add(QueryRow(query, q));
+            if (++queryCount >= 6) break;
+        }
+
+        int richCount = 0;
+        foreach (var item in s.Items)
+        {
+            if (!Matches(item, q)) continue;
+            if (richCount == 0 && rows.Count > 0) rows.Add(Divider());
+            rows.Add(RichRow(item));
+            if (++richCount >= 10) break;
+        }
+
+        Element body;
+        if (rows.Count == 0)
+        {
+            body = loading
+                ? new BoxEl { Width = width, MinWidth = width, MinHeight = AutoSuggestBox.ItemMinHeight }
+                : new BoxEl
+                {
+                    Width = width, MinWidth = width, MinHeight = AutoSuggestBox.ItemMinHeight,
+                    AlignItems = FlexAlign.Center,
+                    Padding = new Edges4(24, 0, 24, 0),
+                    Children = [new TextEl(Loc.Get(Strings.Search.NoResults)) { Size = 14f, Color = Tok.TextPrimary, Grow = 1f }],
+                };
+        }
+        else
+        {
+            body = new ScrollEl
+            {
+                Width = width,
+                MinWidth = width,
+                MaxHeight = 560f,
+                ContentSized = true,
+                Content = new BoxEl
+                {
+                    Direction = 1,
+                    Width = width,
+                    MinWidth = width,
+                    Margin = new Edges4(-1, 0, -1, 0),
+                    Children = rows.ToArray(),
+                },
+            };
+        }
+
+        // PopupChrome.Static supplies the acrylic plate + border + rounded corners + shadow + clip, so return just the
+        // content with the 2px vertical breathing room the rows had inside the old plate.
+        return new BoxEl
+        {
+            Direction = 1, Width = width, MinWidth = width, Padding = new Edges4(0, 2, 0, 2),
+            Children = loading ? [ProgressBar.Indeterminate(width), body] : [body],
+        };
+    }
+
+    Element QueryRow(string query, string typed) => new BoxEl
+    {
+        MinHeight = AutoSuggestBox.ItemMinHeight,
+        AlignItems = FlexAlign.Center,
+        Padding = new Edges4(12, 0, 8, 0),
+        Margin = new Edges4(4, 2, 4, 2),
+        Corners = Radii.ControlAll,
+        Role = AutomationRole.MenuItem,
+        HoverFill = Tok.FillSubtleSecondary,
+        PressedFill = Tok.FillSubtleTertiary,
+        OnClick = () =>
+        {
+            _text.Value = query;
+            _go("search", query);
+            _close();
+        },
+        Children = QueryContent(query, typed),
+    };
+
+    Element RichRow(SearchSuggestionItem item)
+    {
+        bool circular = item.Kind == SearchSuggestionKind.Artist;
+        float radius = circular ? 22f : 5f;
+        return new BoxEl
+        {
+            Direction = 0,
+            Height = 58f,
+            AlignItems = FlexAlign.Center,
+            Gap = WaveeSpace.M,
+            Padding = new Edges4(12, 0, 10, 0),
+            Margin = new Edges4(4, 2, 4, 2),
+            Corners = Radii.ControlAll,
+            Role = AutomationRole.MenuItem,
+            HoverFill = Tok.FillSubtleSecondary,
+            PressedFill = Tok.FillSubtleTertiary,
+            OnClick = () => Invoke(item),
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = 44f, Height = 44f, Shrink = 0f,
+                    Corners = CornerRadius4.All(radius), ClipToBounds = true,
+                    Children = [Surfaces.Artwork(item.Image, item.Uri.GetHashCode() & 0x7fffffff, 44f, 44f, radius)],
+                },
+                new BoxEl
+                {
+                    Direction = 1, Grow = 1f, Basis = 0f, Gap = 1f,
+                    Children =
+                    [
+                        new TextEl(item.Title) { Size = 14f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                        new TextEl(item.Subtitle ?? TypeLabel(item.Kind)) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                    ],
+                },
+                TypePill(TypeLabel(item.Kind)),
+            ],
+        };
+    }
+
+    void Invoke(SearchSuggestionItem item)
+    {
+        switch (item.Kind)
+        {
+            case SearchSuggestionKind.Track:
+                if (_svc is not null) _ = _svc.Player.PlayTrackAsync(item.Uri);
+                break;
+            case SearchSuggestionKind.Artist:
+                _go("artist:" + item.Uri, item.Title);
+                break;
+            case SearchSuggestionKind.Album:
+                _go("album:" + item.Uri, item.Title);
+                break;
+            case SearchSuggestionKind.Playlist:
+                _go("pl:" + item.Uri, item.Title);
+                break;
+        }
+        _close();
+    }
+
+    static Element Divider() => new BoxEl
+    {
+        Height = 1f,
+        Margin = new Edges4(16f, 4f, 16f, 4f),
+        Fill = Tok.StrokeDividerDefault,
+    };
+
+    static Element TypePill(string type) => new BoxEl
+    {
+        Shrink = 0f,
+        Padding = new Edges4(9f, 2f, 9f, 2f),
+        Corners = CornerRadius4.All(10f),
+        Fill = Tok.FillSubtleSecondary,
+        Children = [new TextEl(type) { Size = 10f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 40f }],
+    };
+
+    static string TypeLabel(SearchSuggestionKind kind) => kind switch
+    {
+        SearchSuggestionKind.Track => Loc.Get(Strings.Search.TypeSong),
+        SearchSuggestionKind.Artist => Loc.Get(Strings.Search.TypeArtist),
+        SearchSuggestionKind.Album => Loc.Get(Strings.Search.TypeAlbum),
+        SearchSuggestionKind.Playlist => Loc.Get(Strings.Search.TypePlaylist),
+        _ => "",
+    };
+
+    static Element[] QueryContent(string text, string query)
+    {
+        var kids = new List<Element>(4)
+        {
+            new TextEl(Icons.Search) { Size = 16f, FontFamily = Theme.IconFont, Color = Tok.TextSecondary, Margin = new Edges4(0, 0, 12, 0) },
+        };
+
+        int mi = query.Length > 0 ? text.IndexOf(query, StringComparison.OrdinalIgnoreCase) : -1;
+        if (mi < 0)
+        {
+            kids.Add(new TextEl(text) { Size = 14f, Color = Tok.TextPrimary, Grow = 1f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
+            return kids.ToArray();
+        }
+
+        if (mi > 0) kids.Add(Seg(text.Substring(0, mi), false, false));
+        kids.Add(Seg(text.Substring(mi, query.Length), true, false));
+        int after = mi + query.Length;
+        kids.Add(after < text.Length ? Seg(text.Substring(after), false, true) : new BoxEl { Grow = 1f });
+        return kids.ToArray();
+
+        static Element Seg(string s, bool match, bool grow) => new TextEl(s)
+        {
+            Size = 14f,
+            Weight = (ushort)(match ? 700 : 400),
+            Color = match ? Tok.TextPrimary : Tok.TextSecondary,
+            Grow = grow ? 1f : 0f,
+            MaxLines = 1,
+            Trim = TextTrim.CharacterEllipsis,
+        };
+    }
+
+    static bool Matches(string value, string query)
+        => query.Length == 0 || value.Contains(query, StringComparison.OrdinalIgnoreCase);
+
+    static bool Matches(SearchSuggestionItem item, string query)
+        => query.Length == 0
+        || item.Title.Contains(query, StringComparison.OrdinalIgnoreCase)
+        || (item.Subtitle?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false);
 }

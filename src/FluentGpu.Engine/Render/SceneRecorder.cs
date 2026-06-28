@@ -18,7 +18,7 @@ public readonly record struct TextEditStyle(ColorF SelectionFill, ColorF Selecte
     public bool Enabled => SelectionFill.A > 0f || CaretColor.A > 0f;
 }
 
-public readonly record struct SceneRecordStats(int NodesVisited, int DrawnNodeCount, int CulledNodeCount);
+public readonly record struct SceneRecordStats(int NodesVisited, int DrawnNodeCount, int CulledNodeCount, RectF Damage = default);
 
 /// <summary>
 /// Phase 8 (record): walks the retained SceneStore and emits the DrawList. Composites like a browser — each node's
@@ -51,8 +51,20 @@ public static class SceneRecorder
         public int NodesVisited;
         public int DrawnNodeCount;
         public int CulledNodeCount;
+        public RectF Damage;       // union of this frame's changed-node device bounds → the acrylic backdrop-cache damage region
+        public bool HasDamage;
 
-        public readonly SceneRecordStats ToStats() => new(NodesVisited, DrawnNodeCount, CulledNodeCount);
+        // Union a changed node's device bounds into the frame damage region (region-aware acrylic invalidation).
+        public void AddDamage(in RectF r)
+        {
+            if (r.W <= 0f || r.H <= 0f) return;
+            if (!HasDamage) { Damage = r; HasDamage = true; return; }
+            float x0 = MathF.Min(Damage.X, r.X), y0 = MathF.Min(Damage.Y, r.Y);
+            float x1 = MathF.Max(Damage.X + Damage.W, r.X + r.W), y1 = MathF.Max(Damage.Y + Damage.H, r.Y + r.H);
+            Damage = new RectF(x0, y0, x1 - x0, y1 - y0);
+        }
+
+        public readonly SceneRecordStats ToStats() => new(NodesVisited, DrawnNodeCount, CulledNodeCount, HasDamage ? Damage : default);
     }
 
     /// <param name="skipRoots">Subtree roots EXCLUDED from this record pass — out-of-bounds popup wrappers that render
@@ -270,6 +282,19 @@ public static class SceneRecorder
         var local = new RectF(0f, 0f, pw, ph);
         var deviceBounds = world.TransformBounds(local);
 
+        // Backdrop damage (region-aware acrylic cache): a node whose TRANSFORM moved this frame changes what an acrylic
+        // layer would blur, so union its device bounds into the frame damage — EXCEPT a scroll viewport's own content
+        // (it draws OVER the backdrop; including it would re-blur the popup's own backdrop on every in-popup scroll
+        // frame). Paint-/layout-only changes behind a STATIONARY overlay aren't tracked (PaintDirty is sticky,
+        // LayoutDirty clears pre-record) — they refresh on the next motion/re-open (design §2.3 "v1 at rest"). The player
+        // bar's bottom-anchored ambient motion is correctly ignored for a top popup by the region intersection.
+        if ((flags & NodeFlags.TransformDirty) != 0)
+        {
+            var dmgParent = scene.Parent(node);
+            if (dmgParent.IsNull || (scene.Flags(dmgParent) & NodeFlags.Scrollable) == 0)
+                stats.AddDamage(deviceBounds);
+        }
+
         // ── flat opacity group (NodePaint.OpacityGroup, WinUI Composition LayerVisual semantics): the subtree renders
         // at FULL alpha into a pooled offscreen RT and composites ONCE at the group alpha — overlapping children
         // (a fading dialog's plate + buttons, a stacked badge) don't double-blend. The cumulative opacity resets to 1
@@ -364,7 +389,10 @@ public static class SceneRecorder
         // ── acrylic: snapshot + blur the backdrop drawn so far, composite the frosted surface, then content draws on top ──
         bool isAcrylic = scene.TryGetAcrylic(node, out var ac) && deviceBounds.Overlaps(clip);
         if (isAcrylic)
-            dl.PushLayer(deviceBounds, p.Corners, ac.Tint, ac.Fallback, ac.TintOpacity, ac.BlurSigma, ac.NoiseOpacity, ac.LuminosityOpacity, key);
+            // layerId = the stable node handle (index|gen) → keys the compositor's retained blurred-backdrop cache, so a
+            // stationary acrylic surface reuses its blur across frames (scrolling inside it no longer re-blurs).
+            dl.PushLayer(deviceBounds, p.Corners, ac.Tint, ac.Fallback, ac.TintOpacity, ac.BlurSigma, ac.NoiseOpacity, ac.LuminosityOpacity, key,
+                ((ulong)node.Raw.Index << 32) | node.Raw.Gen);
 
         // Cull this node's OWN draw if it falls entirely outside the active clip (offscreen virtualized/overscan rows).
         bool hasOwnVisual = p.VisualKind != VisualKind.None;

@@ -65,16 +65,10 @@ static class DetailRail
             Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis,
         });
 
-        // Billed-artist row (album/single) — clickable to the first artist.
+        // Billed-artist row (album/single): a STACKED artist face-pile (overlapping avatars + "+N" of the distinct album
+        // artists + the billed name) when the album carries artist avatars; else the plain clickable artist names.
         if (cfg.Badges == BadgeStyle.TypeYear && m.Artists.Count > 0)
-        {
-            var first = m.Artists[0];
-            kids.Add(new BoxEl
-            {
-                Direction = 0, OnClick = () => h.Go("artist:" + first.Uri, first.Name),
-                Children = [WaveeType.TrackTitle(DetailFormat.ArtistNames(m.Artists)) with { Width = cover, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }],
-            });
-        }
+            kids.Add(Embed.Comp(() => new ArtistFacePile(m, cover, h)));
 
         // Meta line.
         if (m.MetaLine is { Length: > 0 })
@@ -99,7 +93,7 @@ static class DetailRail
                         m.ContextUri is { Length: > 0 } saveUri
                             ? Embed.Comp(() => new SaveButton(saveUri, 16f, FabSize))
                             : Fab(Icons.Heart, () => { }),
-                        Fab(Icons.Share, () => { /* TODO: share */ }),
+                        Fab(Icons.Share, () => Share(m)),
                     ],
                 },
             ],
@@ -112,6 +106,9 @@ static class DetailRail
             (cfg.Heart == HeartMode.Follow ? Loc.Get(Strings.Detail.CopyToPlaylist) : Loc.Get(Strings.Detail.AddToPlaylist), h.AddToPlaylist),
             (Loc.Get(Strings.Detail.AddToQueue), h.AddToQueue),
         ], cover));
+
+        if (cfg.Badges == BadgeStyle.TypeYear && AlbumTrailing.HasReleasePanel(m))
+            kids.Add(AlbumTrailing.ReleasePanel(m, h, outerPadding: false));
 
         // Description / release blurb — an HTML fragment (links to artists/playlists, bold): parse → rich spans (links
         // accent + clickable via h.Go, bold rendered, entities decoded). Trimmed to descMaxLines (shell lowers it when short).
@@ -155,7 +152,7 @@ static class DetailRail
         // Title cross-stretches to the info column's (Grow) width → wraps to it; ≤3 lines avoids truncation.
         info.Add(WaveeType.PageHero(m.Title) with { Size = 28f, Weight = 900, Wrap = TextWrap.Wrap, MaxLines = 3, Trim = TextTrim.CharacterEllipsis });
         if (cfg.Badges == BadgeStyle.TypeYear && m.Artists.Count > 0)
-            info.Add(WaveeType.TrackTitle(DetailFormat.ArtistNames(m.Artists)) with { MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
+            info.Add(Embed.Comp(() => new ArtistFacePile(m, 600f, h)));
         if (m.MetaLine is { Length: > 0 })
             info.Add(WaveeType.TrackMeta(m.MetaLine) with { MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
 
@@ -174,11 +171,15 @@ static class DetailRail
             ],
         };
 
+        var headerKids = new List<Element>(3) { coverRow, PlayToolbarRow(cfg, h, m) };
+        if (cfg.Badges == BadgeStyle.TypeYear && AlbumTrailing.HasReleasePanel(m))
+            headerKids.Add(AlbumTrailing.ReleasePanel(m, h, outerPadding: false));
+
         return new BoxEl
         {
             Direction = 1, Gap = WaveeSpace.M, Shrink = 0f,
             Padding = new Edges4(WaveeSpace.L, WaveeSpace.L, WaveeSpace.L, WaveeSpace.S),
-            Children = [coverRow, PlayToolbarRow(cfg, h, m)],
+            Children = headerKids.ToArray(),
         };
     }
 
@@ -197,7 +198,7 @@ static class DetailRail
                 m.ContextUri is { Length: > 0 } saveUri
                     ? Embed.Comp(() => new SaveButton(saveUri, 16f, FabSize))
                     : Fab(Icons.Heart, () => { }),
-                Fab(Icons.Share, () => { /* TODO */ }),
+                Fab(Icons.Share, () => Share(m)),
             ],
         };
         Element Tools() => new BoxEl
@@ -228,6 +229,69 @@ static class DetailRail
         Children = [Icon(glyph, 14f, Tok.TextSecondary)],
     };
 
+    static void Share(DetailModel m)
+    {
+        if (m.ShareUrl is { Length: > 0 } url) InputHooks.Current.Default.OpenUri?.Invoke(url);
+    }
+
+    // The billed-artist control: a stacked face-pile (the album's primary artists' avatars, overlapping, capped at 3) +
+    // a "+N" badge folding in the rest of the DISTINCT artists across the album's tracks + the billed name. Clickable to
+    // the lead artist. Falls back to the plain artist names when the album carries no artist avatars.
+    static Element BilledArtists(DetailModel m, float cover, DetailHandlers h)
+    {
+        var detailed = m.AlbumArtists;
+        if (detailed is not { Count: > 0 })
+        {
+            var only = m.Artists[0];
+            return new BoxEl
+            {
+                Direction = 0, OnClick = () => h.Go("artist:" + only.Uri, only.Name),
+                Children = [WaveeType.TrackTitle(DetailFormat.ArtistNames(m.Artists)) with { Width = cover, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }],
+            };
+        }
+
+        // Distinct artists across the album (primary ∪ all track artists) → the "+N" overflow count.
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var a in detailed) seen.Add(a.Uri);
+        foreach (var t in m.Tracks) foreach (var ar in t.Artists) if (ar.Uri.Length > 0) seen.Add(ar.Uri);
+
+        int shown = Math.Min(detailed.Count, 3);
+        int extra = seen.Count - shown;
+        var lead = detailed[0];
+
+        var pile = new List<Element>(shown + 1);
+        for (int i = 0; i < shown; i++)
+        {
+            var a = detailed[i];
+            pile.Add(new BoxEl
+            {
+                Width = 28f, Height = 28f, Shrink = 0f, Corners = CornerRadius4.All(14f), ClipToBounds = true,
+                Margin = new Edges4(i == 0 ? 0f : -10f, 0f, 0f, 0f),   // overlap the stack
+                Children = [Surfaces.Artwork(a.Image, a.Id.GetHashCode() & 0x7fffffff, 28f, 28f, 14f)],
+            });
+        }
+        if (extra > 0)
+            pile.Add(new BoxEl
+            {
+                Height = 28f, MinWidth = 34f, Shrink = 0f, Corners = CornerRadius4.All(14f), Fill = Tok.FillSubtleTertiary,
+                Margin = new Edges4(-10f, 0f, 0f, 0f), Padding = new Edges4(11f, 0f, 8f, 0f),
+                AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Children = [new TextEl("+" + extra) { Size = 11f, Weight = 700, Color = Tok.TextSecondary }],
+            });
+
+        return new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S, MaxWidth = cover,
+            Corners = CornerRadius4.All(16f), Padding = new Edges4(2f, 2f, WaveeSpace.S, 2f),
+            HoverFill = Tok.FillSubtleSecondary, OnClick = () => h.Go("artist:" + lead.Uri, lead.Name),
+            Children =
+            [
+                new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Shrink = 0f, Children = pile.ToArray() },
+                new TextEl(DetailFormat.ArtistNames(m.Artists)) { Size = 14f, Weight = 700, Color = Tok.AccentTextPrimary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+            ],
+        };
+    }
+
     static Element OwnerRow(string owner, float cover, DetailHandlers h) => new BoxEl
     {
         Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
@@ -257,8 +321,8 @@ static class DetailRail
         Fill = accent, HoverScale = 1.04f, PressScale = 0.97f, Shadow = Elevation.Card, OnClick = onPlay,
         Children =
         [
-            Icon(Icons.Play, 14f, Tok.TextOnAccentPrimary),
-            new TextEl(Loc.Get(Strings.Detail.Play)) { Size = 14f, Weight = 700, Color = Tok.TextOnAccentPrimary },
+            Icon(Icons.Play, 14f, WaveePalette.OnAccent(accent)),
+            new TextEl(Loc.Get(Strings.Detail.Play)) { Size = 14f, Weight = 700, Color = WaveePalette.OnAccent(accent) },
         ],
     };
 

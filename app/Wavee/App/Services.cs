@@ -32,6 +32,9 @@ public sealed class Services
     public IPlaybackPlayer Player { get; }
     public IConnectDevices Devices { get; }
     public ILyricsProvider Lyrics { get; }
+    /// <summary>Progressive, below-the-fold album data. Stable wrapper; the live Spotify implementation is installed
+    /// after login while mounted pages keep the same service identity.</summary>
+    public SwitchableAlbumEnrichmentService AlbumEnrichment { get; }
     public PlaybackBridge Playback { get; }
     /// <summary>The Mutations facet bridge (saved/liked/followed → engine Signal). Read via <see cref="LibraryBridge.Slot"/>.</summary>
     public LibraryBridge LibraryBridge { get; }
@@ -51,6 +54,7 @@ public sealed class Services
         Player = player;
         Devices = devices;
         Lyrics = lyrics;
+        AlbumEnrichment = new SwitchableAlbumEnrichmentService(new CatalogAlbumEnrichmentService(library));
         Settings = settings;
         Playback = new PlaybackBridge(player, devices, session);
         LibraryBridge = new LibraryBridge(mutations, userPlaylists);

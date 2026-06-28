@@ -95,24 +95,12 @@ sealed class SearchPage : Component
 
     Element AllView(SearchResults r, Action<string, string?> go, Action<string> play, Action<string> playTrack)
     {
-        var sections = new List<Element>(5);
+        var sections = new List<Element>(3);
 
-        Element? top = TopResult(r, go, play);
-        Element? songs = r.Tracks.Count > 0 ? SongsSection(r.Tracks, playTrack, go) : null;
-        if (top is not null || songs is not null)
-            sections.Add(Responsive.Of(w =>
-            {
-                bool wide = w >= 720f;
-                var cols = new List<Element>(2);
-                if (top is not null) cols.Add(new BoxEl { Direction = 1, Shrink = 0f, Width = wide ? 360f : float.NaN, Grow = wide ? 0f : 1f, Children = [top] });
-                if (songs is not null) cols.Add(new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Children = [songs] });
-                return new BoxEl { Direction = (byte)(wide ? 0 : 1), Gap = WaveeSpace.XL, Children = cols.ToArray() };
-            }, fallback: 900f));
+        // Modern Spotify "All": a full-width Top Result + a unified best-results list (songs + artists inline, each with
+        // a type chip and a per-row action), then the album & playlist shelves.
+        sections.Add(Embed.Comp(() => new SearchAllList(r, go, playTrack, play)));
 
-        if (r.Artists.Count > 0)
-            sections.Add(Shelf(Loc.Get(Strings.Search.Artists), r.Artists.Count, (i, w) =>
-                MediaCard.Shelf(r.Artists[i].Image, r.Artists[i].Name, Loc.Get(Strings.Search.TypeArtist), r.Artists[i].Uri,
-                    () => go("artist:" + r.Artists[i].Uri, r.Artists[i].Name), () => play(r.Artists[i].Uri), w, circular: true)));
         if (r.Albums.Count > 0)
             sections.Add(Shelf(Loc.Get(Strings.Search.Albums), r.Albums.Count, (i, w) =>
                 MediaCard.Shelf(r.Albums[i].Cover, r.Albums[i].Name, r.Albums[i].Year > 0 ? r.Albums[i].Year.ToString() : Loc.Get(Strings.Search.TypeAlbum),
@@ -323,5 +311,138 @@ sealed class SearchSongs : Component
                                    Cols, Columns, 56f, showTrackArtist: true, static (_, _) => { },
                                    onPlay: static () => { }, onLike: null);
         return new BoxEl { Direction = 1, Children = rows };
+    }
+}
+
+// The "All" tab body — the modern Spotify layout: a FULL-WIDTH Top Result card, then a unified "best results" list that
+// interleaves songs and artists (each with a type chip + a per-row action: save a song ♥ / follow an artist). A Component
+// so the row actions re-skin live on save/follow.
+sealed class SearchAllList : Component
+{
+    readonly SearchResults _r;
+    readonly Action<string, string?> _go;
+    readonly Action<string> _playTrack;
+    readonly Action<string> _playContext;
+    public SearchAllList(SearchResults r, Action<string, string?> go, Action<string> playTrack, Action<string> playContext)
+    { _r = r; _go = go; _playTrack = playTrack; _playContext = playContext; }
+
+    public override Element Render()
+    {
+        var lib = UseContext(LibraryBridge.Slot);
+        var rows = new List<Element>(16);
+
+        // Top result: first artist, else album, else playlist — a full-width horizontal card.
+        bool topIsArtist = _r.Artists.Count > 0;
+        if (topIsArtist) { var a = _r.Artists[0]; rows.Add(TopBar(a.Image, a.Name, Loc.Get(Strings.Search.TypeArtist), a.Id.GetHashCode(), true, a.Uri, lib, followable: true, () => _go("artist:" + a.Uri, a.Name))); }
+        else if (_r.Albums.Count > 0) { var a = _r.Albums[0]; rows.Add(TopBar(a.Cover, a.Name, Loc.Get(Strings.Search.TypeAlbum), a.Id.GetHashCode(), false, a.Uri, lib, false, () => _go("album:" + a.Uri, a.Name))); }
+        else if (_r.Playlists.Count > 0) { var p = _r.Playlists[0]; rows.Add(TopBar(p.Cover, p.Name, Loc.Get(Strings.Search.TypePlaylist), p.Id.GetHashCode(), false, p.Uri, lib, false, () => _go("pl:" + p.Uri, p.Name))); }
+
+        // Unified list: songs as the spine, the next artists inserted after the 3rd and 6th song (≈ Spotify's mix).
+        int aIdx = topIsArtist ? 1 : 0;
+        int n = Math.Min(_r.Tracks.Count, 8);
+        for (int i = 0; i < n; i++)
+        {
+            rows.Add(TrackRow(_r.Tracks[i], lib));
+            if ((i == 2 || i == 5) && aIdx < _r.Artists.Count) rows.Add(ArtistRow(_r.Artists[aIdx++], lib));
+        }
+        int artistCap = (topIsArtist ? 1 : 0) + 4;
+        while (aIdx < _r.Artists.Count && aIdx < artistCap) rows.Add(ArtistRow(_r.Artists[aIdx++], lib));
+
+        return new BoxEl { Direction = 1, Gap = WaveeSpace.S, Children = rows.ToArray() };
+    }
+
+    Element TopBar(Image? img, string name, string type, int seed, bool circular, string uri, LibraryBridge? lib, bool followable, Action open)
+    {
+        var right = new List<Element>(2);
+        if (followable) right.Add(FollowButton(lib?.IsSaved(uri) ?? false, () => lib?.ToggleSaved(uri)));
+        right.Add(new BoxEl
+        {
+            Width = 48f, Height = 48f, Shrink = 0f, Corners = CornerRadius4.All(24f), Fill = Tok.AccentDefault,
+            AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Shadow = Elevation.Card,
+            HoverScale = 1.06f, PressScale = 0.94f, OnClick = () => _playContext(uri),
+            Children = [Icon(Icons.Play, 18f, Tok.TextOnAccentPrimary)],
+        });
+        return new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.L,
+            Padding = new Edges4(WaveeSpace.M, WaveeSpace.M, WaveeSpace.L, WaveeSpace.M),
+            Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
+            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, HoverFill = Tok.FillCardDefault, OnClick = open,
+            Children =
+            [
+                new BoxEl { Width = 72f, Height = 72f, Shrink = 0f, Corners = CornerRadius4.All(circular ? 36f : WaveeRadius.Card), ClipToBounds = true, Shadow = Elevation.Card,
+                    Children = [Surfaces.Artwork(img, seed & 0x7fffffff, 72f, 72f, circular ? 36f : WaveeRadius.Card, decodePx: 256)] },
+                new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = 3f,
+                    Children =
+                    [
+                        new TextEl(name) { Size = 26f, Weight = 800, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                        new TextEl(type) { Size = 13f, Color = Tok.TextSecondary },
+                    ] },
+                .. right,
+            ],
+        };
+    }
+
+    Element TrackRow(Track t, LibraryBridge? lib)
+    {
+        bool saved = t.Uri.Length > 0 && (lib?.IsSaved(t.Uri) ?? false);   // subscribe → re-skin on save toggle
+        string sub = (t.HasVideo ? "Music video" : "Song") + " • " + Names(t.Artists);
+        return Row(t.Image, t.Id.GetHashCode(), t.Title, sub, false, "Song",
+            SaveButton(saved, () => { if (t.Uri.Length > 0) lib?.ToggleSaved(t.Uri); }),
+            () => _playTrack(t.Uri));
+    }
+
+    Element ArtistRow(Artist a, LibraryBridge? lib)
+        => Row(a.Image, a.Id.GetHashCode(), a.Name, Loc.Get(Strings.Search.TypeArtist), true, Loc.Get(Strings.Search.TypeArtist),
+            FollowButton(lib?.IsSaved(a.Uri) ?? false, () => lib?.ToggleSaved(a.Uri)),
+            () => _go("artist:" + a.Uri, a.Name));
+
+    static Element Row(Image? img, int seed, string title, string subtitle, bool circular, string type, Element action, Action open) => new BoxEl
+    {
+        Direction = 0, Height = 60f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
+        Padding = new Edges4(WaveeSpace.S, 0f, WaveeSpace.S, 0f), Corners = CornerRadius4.All(6f),
+        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary, OnClick = open,
+        Children =
+        [
+            new BoxEl { Width = 44f, Height = 44f, Shrink = 0f, Corners = CornerRadius4.All(circular ? 22f : 6f), ClipToBounds = true,
+                Children = [Surfaces.Artwork(img, seed & 0x7fffffff, 44f, 44f, circular ? 22f : 6f)] },
+            new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = 1f,
+                Children =
+                [
+                    new TextEl(title) { Size = 15f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                    new TextEl(subtitle) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                ] },
+            Pill(type),
+            action,
+        ],
+    };
+
+    static Element Pill(string type) => new BoxEl
+    {
+        Shrink = 0f, Padding = new Edges4(10f, 3f, 10f, 3f), Corners = CornerRadius4.All(11f), Fill = Tok.FillSubtleSecondary,
+        Children = [new TextEl(type) { Size = 10f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 40f }],
+    };
+
+    static Element SaveButton(bool saved, Action toggle) => new BoxEl
+    {
+        Width = 32f, Height = 32f, Shrink = 0f, Corners = CornerRadius4.All(16f),
+        AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, HoverFill = Tok.FillSubtleSecondary, HoverScale = 1.1f, OnClick = toggle,
+        Children = [Icon(saved ? Icons.Accept : Icons.Add, 16f, saved ? Tok.AccentDefault : Tok.TextSecondary)],
+    };
+
+    static Element FollowButton(bool following, Action toggle) => new BoxEl
+    {
+        Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Padding = new Edges4(16f, 6f, 16f, 6f), Corners = CornerRadius4.All(16f),
+        BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, HoverFill = Tok.FillSubtleSecondary, HoverScale = 1.04f, OnClick = toggle,
+        Children = [new TextEl(following ? "Following" : "Follow") { Size = 12f, Weight = 700, Color = Tok.TextPrimary }],
+    };
+
+    static string Names(IReadOnlyList<ArtistRef> artists)
+    {
+        if (artists.Count == 0) return "";
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < artists.Count && i < 3; i++) { if (i > 0) sb.Append(", "); sb.Append(artists[i].Name); }
+        return sb.ToString();
     }
 }

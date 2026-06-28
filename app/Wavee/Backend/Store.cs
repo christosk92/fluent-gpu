@@ -14,7 +14,7 @@ namespace Wavee.Backend;
 public enum SyncState { Confirmed, Pending, Failed }
 public enum TrackSort { None, Title, Artist, DurationAsc }
 
-public readonly record struct StoreChange(string Uri, bool IsBulk = false)   // struct → no heap alloc per Bump, no boxing through SimpleSubject<StoreChange>
+public readonly record struct StoreChange(string Uri, bool IsBulk = false, CollectionKind? Kind = null)   // struct → no heap alloc per Bump, no boxing through SimpleSubject<StoreChange>
 {
     public static readonly StoreChange Bulk = new("", true);   // one signal for a bulk load; subscribers re-read
 }
@@ -51,10 +51,111 @@ public interface IStore
     IReadOnlyList<RootlistEntry> Rootlist();
     // reactivity
     long Version(string uri);
-    void Bump(string uri);
+    void Bump(string uri, CollectionKind? kind = null);
     IObservable<StoreChange> Changes { get; }
     /// <summary>Coalesce a burst of writes (e.g. a 10k-entity metadata sync) into ONE change signal, not one per entity.</summary>
     IDisposable BeginBulk();
+}
+
+static class StoreEntityMerge
+{
+    public static Track Track(Track? current, Track incoming)
+    {
+        if (current is null) return incoming;
+        return incoming with
+        {
+            Id = NonEmpty(incoming.Id, current.Id),
+            Title = NonEmpty(incoming.Title, current.Title),
+            Artists = Has(incoming.Artists) ? incoming.Artists : current.Artists,
+            Album = MergeAlbumRef(current.Album, incoming.Album),
+            DurationMs = incoming.DurationMs > 0 ? incoming.DurationMs : current.DurationMs,
+            IsExplicit = incoming.IsExplicit || current.IsExplicit,
+            Image = incoming.Image ?? current.Image,
+            AddedAt = incoming.AddedAt ?? current.AddedAt,
+            AddedBy = incoming.AddedBy ?? current.AddedBy,
+            HasVideo = incoming.HasVideo || current.HasVideo,
+            PlayCount = incoming.PlayCount > 0 ? incoming.PlayCount : current.PlayCount,
+            Origin = incoming.Origin != TrackOrigin.Streamed || current.Origin == TrackOrigin.Streamed ? incoming.Origin : current.Origin,
+            Availability = incoming.Availability != Availability.Playable ? incoming.Availability : current.Availability,
+            Source = incoming.Source ?? current.Source,
+        };
+    }
+
+    public static Album Album(Album? current, Album incoming)
+    {
+        if (current is null) return incoming;
+        return incoming with
+        {
+            Id = NonEmpty(incoming.Id, current.Id),
+            Name = NonEmpty(incoming.Name, current.Name),
+            Cover = incoming.Cover ?? current.Cover,
+            Artists = Has(incoming.Artists) ? incoming.Artists : current.Artists,
+            Year = incoming.Year > 0 ? incoming.Year : current.Year,
+            TrackCount = incoming.TrackCount > 0 ? incoming.TrackCount : current.TrackCount,
+            Tracks = Has(incoming.Tracks) ? incoming.Tracks : current.Tracks,
+            MoreByArtist = Has(incoming.MoreByArtist) ? incoming.MoreByArtist : current.MoreByArtist,
+            Label = incoming.Label ?? current.Label,
+            Copyright = incoming.Copyright ?? current.Copyright,
+            ReleaseDate = incoming.ReleaseDate ?? current.ReleaseDate,
+            ArtistsDetailed = MergeArtists(current.ArtistsDetailed, incoming.ArtistsDetailed),
+            OtherVersions = Has(incoming.OtherVersions) ? incoming.OtherVersions : current.OtherVersions,
+            CourtesyLine = incoming.CourtesyLine ?? current.CourtesyLine,
+            ReleaseDatePrecision = incoming.ReleaseDatePrecision ?? current.ReleaseDatePrecision,
+            DiscCount = incoming.Hydration == AlbumHydrationLevel.Full
+                ? Math.Max(1, incoming.DiscCount)
+                : Math.Max(current.DiscCount, incoming.DiscCount),
+            ShareUrl = incoming.ShareUrl ?? current.ShareUrl,
+            IsPreRelease = incoming.Hydration == AlbumHydrationLevel.Full ? incoming.IsPreRelease : current.IsPreRelease,
+            PreReleaseEnd = incoming.PreReleaseEnd ?? current.PreReleaseEnd,
+            Hydration = incoming.Hydration > current.Hydration ? incoming.Hydration : current.Hydration,
+        };
+    }
+
+    public static Artist Artist(Artist? current, Artist incoming)
+    {
+        if (current is null) return incoming;
+        return incoming with
+        {
+            Id = NonEmpty(incoming.Id, current.Id),
+            Name = NonEmpty(incoming.Name, current.Name),
+            Image = incoming.Image ?? current.Image,
+            TopAlbums = Has(incoming.TopAlbums) ? incoming.TopAlbums : current.TopAlbums,
+            MonthlyListeners = incoming.MonthlyListeners > 0 ? incoming.MonthlyListeners : current.MonthlyListeners,
+            Followers = incoming.Followers > 0 ? incoming.Followers : current.Followers,
+            Bio = incoming.Bio ?? current.Bio,
+            Verified = incoming.Verified || current.Verified,
+            WorldRank = incoming.WorldRank > 0 ? incoming.WorldRank : current.WorldRank,
+            HeaderImage = incoming.HeaderImage ?? current.HeaderImage,
+            TopTracks = Has(incoming.TopTracks) ? incoming.TopTracks : current.TopTracks,
+            AppearsOn = Has(incoming.AppearsOn) ? incoming.AppearsOn : current.AppearsOn,
+            Pinned = incoming.Pinned ?? current.Pinned,
+            Extras = incoming.Extras ?? current.Extras,
+        };
+    }
+
+    static IReadOnlyList<Artist>? MergeArtists(IReadOnlyList<Artist>? current, IReadOnlyList<Artist>? incoming)
+    {
+        if (!Has(incoming)) return current;
+        if (!Has(current)) return incoming;
+        var existing = new Dictionary<string, Artist>(StringComparer.Ordinal);
+        for (int i = 0; i < current!.Count; i++) existing[current[i].Uri] = current[i];
+        var merged = new List<Artist>(incoming!.Count);
+        for (int i = 0; i < incoming.Count; i++)
+        {
+            var artist = incoming[i];
+            existing.TryGetValue(artist.Uri, out var prior);
+            merged.Add(Artist(prior, artist));
+        }
+        return merged;
+    }
+
+    static AlbumRef MergeAlbumRef(AlbumRef current, AlbumRef incoming) => new(
+        NonEmpty(incoming.Id, current.Id),
+        NonEmpty(incoming.Uri, current.Uri),
+        NonEmpty(incoming.Name, current.Name));
+
+    static bool Has<T>(IReadOnlyList<T>? value) => value is { Count: > 0 };
+    static string NonEmpty(string value, string fallback) => value.Length > 0 ? value : fallback;
 }
 
 public sealed class InMemoryStore : IStore
@@ -77,7 +178,11 @@ public sealed class InMemoryStore : IStore
 
     public void UpsertTrack(Track t)
     {
-        lock (_gate) _tracks[t.Uri] = t;
+        lock (_gate)
+        {
+            _tracks.TryGetValue(t.Uri, out var current);
+            _tracks[t.Uri] = StoreEntityMerge.Track(current, t);
+        }
         Bump(t.Uri);
     }
 
@@ -133,9 +238,25 @@ public sealed class InMemoryStore : IStore
         return false;
     }
 
-    public void UpsertAlbum(Album a) { lock (_gate) _albums[a.Uri] = a; Bump(a.Uri); }
+    public void UpsertAlbum(Album a)
+    {
+        lock (_gate)
+        {
+            _albums.TryGetValue(a.Uri, out var current);
+            _albums[a.Uri] = StoreEntityMerge.Album(current, a);
+        }
+        Bump(a.Uri);
+    }
     public Album? GetAlbum(string uri) { lock (_gate) return _albums.TryGetValue(uri, out var a) ? a : null; }
-    public void UpsertArtist(Artist a) { lock (_gate) _artists[a.Uri] = a; Bump(a.Uri); }
+    public void UpsertArtist(Artist a)
+    {
+        lock (_gate)
+        {
+            _artists.TryGetValue(a.Uri, out var current);
+            _artists[a.Uri] = StoreEntityMerge.Artist(current, a);
+        }
+        Bump(a.Uri);
+    }
     public Artist? GetArtist(string uri) { lock (_gate) return _artists.TryGetValue(uri, out var a) ? a : null; }
     public void UpsertPlaylist(Playlist p) { lock (_gate) _playlists[p.Uri] = p; Bump(p.Uri); }
     public Playlist? GetPlaylist(string uri) { lock (_gate) return _playlists.TryGetValue(uri, out var p) ? p : null; }
@@ -160,7 +281,7 @@ public sealed class InMemoryStore : IStore
                 if (_savedBySet.TryGetValue(setId, out var set)) set.Remove(uri);
             }
         }
-        Bump(uri);
+        Bump(uri, KindForSet(setId));
     }
 
     public bool IsSaved(string setId, string uri)
@@ -210,12 +331,22 @@ public sealed class InMemoryStore : IStore
         lock (_gate) return _versions.TryGetValue(uri, out var v) ? v : 0;
     }
 
-    public void Bump(string uri)
+    public void Bump(string uri, CollectionKind? kind = null)
     {
         bool suppressed;
         lock (_gate) { _versions[uri] = _versions.TryGetValue(uri, out var v) ? v + 1 : 1; suppressed = _bulkDepth > 0; }
-        if (!suppressed) _changes.OnNext(new StoreChange(uri));   // during a bulk the per-uri signals are coalesced
+        if (!suppressed) _changes.OnNext(new StoreChange(uri, Kind: kind));   // during a bulk the per-uri signals are coalesced
     }
+
+    static CollectionKind? KindForSet(string setId) => setId switch
+    {
+        "albums" => CollectionKind.Albums,
+        "artists" => CollectionKind.Artists,
+        "shows" or "episodes" => CollectionKind.Shows,
+        "playlists" => CollectionKind.Playlists,
+        "liked" => CollectionKind.Liked,
+        _ => null,
+    };
 
     int _bulkDepth;
 

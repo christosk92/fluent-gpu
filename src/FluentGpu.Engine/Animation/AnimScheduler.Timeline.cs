@@ -27,7 +27,8 @@ public sealed partial class AnimEngine
 
     /// <summary>Multi-keyframe eased track (@keyframes). Offsets ascending in 0..1; per-segment easing.</summary>
     public void Keyframes(NodeHandle node, AnimChannel channel, Keyframe[] keys, float durationMs,
-                          bool loop = false, CompositeOp composite = CompositeOp.Replace, float delayMs = 0f)
+                          bool loop = false, CompositeOp composite = CompositeOp.Replace, float delayMs = 0f,
+                          bool displayRate = false)
     {
         int s = Get(node, channel, composite != CompositeOp.Replace);
         ref AnimValue r = ref _slab.At(s);
@@ -40,6 +41,7 @@ public sealed partial class AnimEngine
         r.DelayRemainingMs = MathF.Max(0f, delayMs);
         r.Flags &= ~(AnimFlags.Done | AnimFlags.Driven);
         if (loop) r.Flags |= AnimFlags.Loop; else r.Flags &= ~AnimFlags.Loop;
+        if (displayRate) r.Flags |= AnimFlags.DisplayRate; else r.Flags &= ~AnimFlags.DisplayRate;   // transient loop → display rate
         r.Flags |= AnimFlags.JustSeeded;   // seed frame holds the initial value (advance begins next frame)
         r.DrivenSrc = AnimValue.WallClock;
         _keysBySlot[s] = keys;

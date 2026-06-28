@@ -66,6 +66,7 @@ public sealed class PathfinderClient
             var bytes = await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
             return JsonDocument.Parse(bytes);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex) { _log?.Invoke("pathfinder " + operationName + " error: " + ex.Message); return null; }
     }
 
@@ -106,6 +107,8 @@ public static class PathfinderOps
 
     public const string Home = "home";
     public const string HomeHash = "40c1423fc26ea0d68cd8f212e79ca47df7968fc40d83d184e756af54fd043143";
+    public const string Recents = "recents";
+    public const string RecentsHash = "698be5892a3cc95331deebeff463d05dfdd5febf5254bea30b895b5a93dfb584";
 
     // Per-facet search — the variable is "searchTerm" (NOT "query"), and these hashes are current. Each fills its own
     // data.searchV2.<facet> (tracksV2.items[].item.data; albumsV2/artists/playlists.items[].data).
@@ -117,4 +120,17 @@ public static class PathfinderOps
     public const string SearchArtistsHash = "270905851ba5c7faca81cfe053c2dbd8ceb4f156a0e0ef4b385af75ab69ffd13";
     public const string SearchPlaylists = "searchPlaylists";
     public const string SearchPlaylistsHash = "af1730623dc1248b75a61a18bad1f47f1fc7eff802fb0676683de88815c958d8";
+
+    // As-you-type suggestions — NOTE this op's variable is "query" (unlike the per-facet ops' "searchTerm").
+    public const string SearchSuggestions = "searchSuggestions";
+    public const string SearchSuggestionsHash = "556f5a15b2fdd3a7113ffd377ad9805e38a3a27b8bb1ca7d6d76bad54aa8ee12";
+
+    public const string QueryAlbumMerch = "queryAlbumMerch";
+    public const string QueryAlbumMerchHash = "3ef44ed6f17be67299538fe77faffab4075aeaf9e1085f10fc835592266711b5";
+    public const string QueryNpvArtist = "queryNpvArtist";
+    public const string QueryNpvArtistHash = "047c9c225967d41a763949a4db3f0493e901c9f8689a6537408aabf9beffc177";
+    public const string SimilarAlbumsBasedOnThisTrack = "similarAlbumsBasedOnThisTrack";
+    public const string SimilarAlbumsBasedOnThisTrackHash = "1d1f93a737498adca2c892c73af87fc0b052afe4e1a33c989540c32413dfae17";
+    public const string GetTrack = "getTrack";
+    public const string GetTrackHash = "612585ae06ba435ad26369870deaae23b5c8800a256cd8a57e08eddc25a37294";
 }

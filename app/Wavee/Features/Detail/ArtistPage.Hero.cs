@@ -24,7 +24,7 @@ sealed partial class ArtistPage : Component
     // engine's trailing-anchored presented-height sink (BindSink.PresentedHTrailing): it clips the painted height AND
     // shifts every child up by the same delta, so the copy + the media edge-fade stay attached to the shrinking edge
     // with no relayout. See ArtistPage.cs (the pill arms via the sentinel) and the VerticalSlice 23u2 gate.
-    static Element Banner(Artist a, string uri, Action play, Action shuffle, Action radio,
+    Element Banner(Artist a, string uri, Action play, Action shuffle, Action radio,
         Action<string, string?> go)
     {
         const float h = 420f;
@@ -192,7 +192,7 @@ sealed partial class ArtistPage : Component
         return sb.ToString().Trim();
     }
 
-    static Element EyebrowPills(Artist a)
+    Element EyebrowPills(Artist a)
     {
         var pills = new List<Element>(2);
         if (a.Verified) pills.Add(VerifiedPill());
@@ -205,15 +205,15 @@ sealed partial class ArtistPage : Component
             };
     }
 
-    static Element VerifiedPill() => new BoxEl
+    Element VerifiedPill() => new BoxEl
     {
         Direction = 0, AlignItems = FlexAlign.Center, Gap = 6f,
-        Padding = new Edges4(8f, 4f, 12f, 4f), Corners = CornerRadius4.All(13f), Fill = Tok.AccentDefault,
+        Padding = new Edges4(8f, 4f, 12f, 4f), Corners = CornerRadius4.All(13f), Fill = _accent,
         Children =
         [
-            Icon(Mdl.Check, 12f, Tok.TextOnAccentPrimary),
+            Icon(Mdl.Check, 12f, WaveePalette.OnAccent(_accent)),
             new TextEl(Loc.Get(Strings.Artist.Verified))
-                { Size = 11f, Weight = 700, Color = Tok.TextOnAccentPrimary, CharSpacing = 20f }
+                { Size = 11f, Weight = 700, Color = WaveePalette.OnAccent(_accent), CharSpacing = 20f }
         ],
     };
 
@@ -277,15 +277,15 @@ sealed partial class ArtistPage : Component
     };
 
     // ── action affordances ───────────────────────────────────────────────────────────────────────────────
-    static Element PlayPill(Action onPlay) => new BoxEl
+    Element PlayPill(Action onPlay) => new BoxEl
     {
         Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
         Corners = CornerRadius4.All(24f), Padding = new Edges4(22f, 12f, 22f, 12f),
-        Fill = Tok.AccentDefault, HoverScale = 1.04f, PressScale = 0.97f, Shadow = Elevation.Card, OnClick = onPlay,
+        Fill = _accent, HoverScale = 1.04f, PressScale = 0.97f, Shadow = Elevation.Card, OnClick = onPlay,
         Children =
         [
-            Icon(Icons.Play, 16f, Tok.TextOnAccentPrimary),
-            new TextEl(Loc.Get(Strings.Artist.Play)) { Size = 15f, Weight = 700, Color = Tok.TextOnAccentPrimary }
+            Icon(Icons.Play, 16f, WaveePalette.OnAccent(_accent)),
+            new TextEl(Loc.Get(Strings.Artist.Play)) { Size = 15f, Weight = 700, Color = WaveePalette.OnAccent(_accent) }
         ],
     };
 

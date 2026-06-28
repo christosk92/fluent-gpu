@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using FluentGpu.Foundation;
 using FluentGpu.Render;
 using FluentGpu.Rhi;
+using FluentGpu.Scene;
 using TerraFX.Interop.DirectX;
 using TerraFX.Interop.Windows;
 using static TerraFX.Interop.DirectX.DirectX;
@@ -120,7 +121,8 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _glyphs is null || _imageTextures is null
             ? ""
             : $"glyphs={_glyphs.CachedGlyphCount} runs={_glyphs.CachedRunCount} atlasGen={_glyphs.AtlasResetCount} quadPool={_glyphs.QuadPoolRetained}" +
-              $" | tex: atlas={_imageTextures.AtlasImageCount} pooledFree={_imageTextures.PooledTextureCount} retired={_imageTextures.RetiredCount}";
+              $" | tex: atlas={_imageTextures.AtlasImageCount} pages={_imageTextures.AtlasPageCount} pooledFree={_imageTextures.PooledTextureCount} retired={_imageTextures.RetiredCount}" +
+              $" srv={_imageTextures.DescriptorSlotsUsed}/{_imageTextures.DescriptorCapacity} high={_imageTextures.DescriptorHighWater} rejected={_imageTextures.DroppedThisRun}";
 
     /// <summary>Operator dump: live D3D12 resources aggregated by name prefix, largest first (to stderr). The empirical
     /// "which resource class holds the climbing RAM" probe for native/UMA leak hunts. Routes to <see cref="D3D12MemoryDiagnostics"/>.</summary>
@@ -459,6 +461,9 @@ public sealed unsafe class D3D12Device : IGpuDevice
         Diag.Set("d3d12", "imagesSkipped", _frameImageSkipped);   // >0 ⇒ a recorded image had no live texture this frame
         Diag.Set("d3d12", "imageAtlas", _imageTextures!.AtlasImages);   // thumbnails (<=128) packed into shared atlas pages
         Diag.Set("d3d12", "imagePool", _imageTextures.PoolImages);      // art (256/512) in reused per-bucket pool textures
+        Diag.Set("d3d12", "imageSrvUsed", _imageTextures.DescriptorSlotsUsed);
+        Diag.Set("d3d12", "imageSrvHighWater", _imageTextures.DescriptorHighWater);
+        Diag.Set("d3d12", "imageUploadRejected", _imageTextures.DroppedThisRun);
         Diag.Set("text.atlas", "cachedGlyphs", _glyphs!.CachedGlyphs);
         Diag.Set("text.atlas", "nonZeroBytes", _glyphs.AtlasNonZero);
         Diag.Set("text.run", "cachedRuns", _glyphs.CachedRuns);      // shaped runs held across frames
@@ -477,7 +482,10 @@ public sealed unsafe class D3D12Device : IGpuDevice
     // Decode completion → resident GPU texture (media-pipeline §4.1). Staged here (heap/upload only, no command list);
     // the CopyTextureRegion is recorded by FlushUploads at the top of the next SubmitDrawList.
     public void UploadImage(int imageId, ReadOnlySpan<byte> pbgra8, int w, int h)
-        => _imageTextures?.Stage(imageId, pbgra8, w, h);
+        => _ = TryUploadImage(imageId, pbgra8, w, h);
+
+    public ImageUploadResult TryUploadImage(int imageId, ReadOnlySpan<byte> pbgra8, int w, int h)
+        => _imageTextures?.Stage(imageId, pbgra8, w, h) ?? ImageUploadResult.Invalid;
 
     // Residency evicted the image → free its GPU texture (deferred behind the frame fence in the store).
     public void EvictImage(int imageId) => _imageTextures?.Free(imageId);
@@ -947,7 +955,9 @@ public sealed unsafe class D3D12Device : IGpuDevice
                     // _fenceValue + 1 is the fence value SignalFrame will signal for THIS frame (gates pooled-RT retire).
                     // Documented limitation: nested inside an open opacity group, the acrylic composites into the
                     // CANVAS (the acrylic leaf owns its canvas binding) — combine acrylic + group on one node instead.
-                    _acrylic.BlurAndComposite(_cmdList, L, lw, lh, _frameScale, _fenceValue + 1);
+                    // ctx.Damage is the DIP union of nodes that moved this frame → physical px for the cache's region test.
+                    _acrylic.BlurAndComposite(_cmdList, L, lw, lh, _frameScale, _fenceValue + 1,
+                        ctx.Damage.X * _frameScale, ctx.Damage.Y * _frameScale, ctx.Damage.W * _frameScale, ctx.Damage.H * _frameScale);
                     if (_opacityGroups.Count > 0) _opacity.Bind(_cmdList, _opacityGroups[^1].Slot);   // back to the open group RT
                     ApplyCurrentScissor();
                     _layerKinds.Add((int)LayerKind.Acrylic);

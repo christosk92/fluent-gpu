@@ -10,16 +10,20 @@ namespace Wavee.Core;
 public enum HomeGroupKind { Hero, QuickGrid, Shelf, CollapsedGrid }
 
 /// <summary>What a home card points at — drives the nav route (pl: / album: / artist: / liked) and the card shape.</summary>
-public enum HomeCardKind { Playlist, Album, Artist, Liked }
+public enum HomeCardKind { Playlist, Album, Artist, Track, Liked }
 
 /// <summary>One home tile: a context URI + display metadata + its kind. Source-neutral (cover may be a remote CDN url).
 /// <paramref name="MosaicTiles"/> (when <paramref name="Image"/> is null) carries up to 4 album-cover URLs for a 2×2
 /// cover-less-playlist mosaic.</summary>
 public sealed record HomeCard(string Uri, string Title, string? Subtitle, Image? Image, HomeCardKind Kind,
-    System.Collections.Generic.IReadOnlyList<string>? MosaicTiles = null);
+    System.Collections.Generic.IReadOnlyList<string>? MosaicTiles = null,
+    // The cover's extracted dominant color (ARGB; null = none). Drives the section accent bar / tinted band. uint keeps
+    // Core framework-neutral (mapped to the renderer's ColorF at the UI boundary, like Palette).
+    uint? Accent = null);
 
-/// <summary>A titled group of home cards laid out per <see cref="HomeGroupKind"/>.</summary>
-public sealed record HomeGroup(HomeGroupKind Kind, string? Title, IReadOnlyList<HomeCard> Cards);
+/// <summary>A titled group of home cards laid out per <see cref="HomeGroupKind"/>. <paramref name="Accent"/> (ARGB; null
+/// = none) is the group's section tint — the first card's extracted color, else a semantic per-kind fallback.</summary>
+public sealed record HomeGroup(HomeGroupKind Kind, string? Title, IReadOnlyList<HomeCard> Cards, uint? Accent = null);
 
 /// <summary>One source's contribution to the home feed (its groups), with a priority for ordering when merged across
 /// sources by the aggregate (lower sorts first).</summary>

@@ -102,11 +102,16 @@ sealed class DetailShell : Component
         Track? cur = bridge?.CurrentTrack.Value;     // subscribe → re-derive wash/tint on track change (rare)
         Palette? livePal = bridge?.TrackPalette.Value;   // subscribe
         bool thisPlaying = cur is not null && trackIds.Contains(cur.Id);
-        // _m.Palette is the future per-page art palette (GetPaletteAsync, §9 gap 2); until then, the live-track palette
-        // when this page is playing, else none — the feature degrades to "no tint", never a wrong colour.
+        // m.Palette is the page's cover-extracted palette; when absent, fall back to the live-track palette while THIS
+        // page is playing, else none — so the page tints from its own art, degrading to "no tint", never a wrong colour.
         Palette? art = m.Palette ?? (thisPlaying ? livePal : null);
 
-        ColorF accent = art is null ? Tok.AccentDefault : WaveePalette.Accent(art);
+        // The cover palette's Spotify colorDark is near-black, so LIFT it for legibility. The live-track palette was
+        // already tuned for the player chrome (the bar tint reads it raw), so keep IT raw — unchanged from before this
+        // feature, so a currently-playing track on a null-palette page (Liked / show) doesn't suddenly brighten.
+        ColorF accent = m.Palette is { } cover ? WaveePalette.Lift(WaveePalette.Accent(cover))
+                      : thisPlaying && livePal is { } lp ? WaveePalette.Accent(lp)
+                      : Tok.AccentDefault;
         // The hero wash. Dark: the art's dark background tone (or the neutral #1C1C1C). Light: a soft ACCENT band instead
         // — a neutral-dark wash over the off-white card just reads as a muddy gray smudge (HeroWash applies it at 22%).
         ColorF washColor = Tok.Theme == ThemeKind.Light

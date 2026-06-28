@@ -8,8 +8,47 @@ namespace Wavee.Core;
 // Url is the single cover. When Url is empty and MosaicTiles carries ≥4 album-cover URLs, renderers compose a 2×2 mosaic
 // (a cover-less playlist, the way Spotify does). Carrying the tiles on Image lets every Surfaces.Artwork call site mosaic
 // with no per-card plumbing.
-public sealed record Image(string Url, int? Width = null, int? Height = null, string? BlurHash = null,
-    System.Collections.Generic.IReadOnlyList<string>? MosaicTiles = null);
+public sealed record Image
+{
+    string _url = "";
+    System.Collections.Generic.IReadOnlyList<string>? _mosaicTiles;
+
+    public Image(string Url, int? Width = null, int? Height = null, string? BlurHash = null,
+        System.Collections.Generic.IReadOnlyList<string>? MosaicTiles = null)
+    {
+        this.Url = Url;
+        this.Width = Width;
+        this.Height = Height;
+        this.BlurHash = BlurHash;
+        this.MosaicTiles = MosaicTiles;
+    }
+
+    public string Url
+    {
+        get => _url;
+        init => _url = ImageSource.Normalize(value) ?? "";
+    }
+
+    public int? Width { get; init; }
+    public int? Height { get; init; }
+    public string? BlurHash { get; init; }
+
+    public System.Collections.Generic.IReadOnlyList<string>? MosaicTiles
+    {
+        get => _mosaicTiles;
+        init => _mosaicTiles = ImageSource.NormalizeAll(value);
+    }
+
+    public void Deconstruct(out string Url, out int? Width, out int? Height, out string? BlurHash,
+        out System.Collections.Generic.IReadOnlyList<string>? MosaicTiles)
+    {
+        Url = this.Url;
+        Width = this.Width;
+        Height = this.Height;
+        BlurHash = this.BlurHash;
+        MosaicTiles = this.MosaicTiles;
+    }
+}
 
 public sealed record ArtistRef(string Id, string Uri, string Name);
 public sealed record AlbumRef(string Id, string Uri, string Name);
@@ -25,7 +64,9 @@ public sealed record Artist(
     // hero backdrop (vs the square avatar Image); TopTracks is the real "Popular" list; Pinned is the hero promo card.
     int WorldRank = 0, Image? HeaderImage = null,
     IReadOnlyList<Track>? TopTracks = null, IReadOnlyList<Album>? AppearsOn = null,
-    PinnedItem? Pinned = null, ArtistExtras? Extras = null);
+    PinnedItem? Pinned = null, ArtistExtras? Extras = null,
+    // Cover-extracted page accent (ARGB; null = none). Drives the artist page wash + Play button + section bars.
+    Palette? Palette = null);
 
 /// <summary>The optional "magazine" facet bundle for an artist (concerts, merch, playlists, videos, top cities, links,
 /// gallery, related artists, a derived tour banner). Any empty list ⇒ that section is omitted from the page.</summary>
@@ -72,10 +113,27 @@ public sealed record TourBanner(string Eyebrow, string Headline, string Subline,
 /// the track rows show a per-track artist (compilations are various-artists).</summary>
 public enum AlbumKind { Single, EP, Album, Compilation }
 
+/// <summary>How complete an album read-model is. Summary rows come from search/home, Tracks from extended metadata,
+/// and Full from Pathfinder getAlbum. Stores must never replace a higher level with a lower one.</summary>
+public enum AlbumHydrationLevel { Summary, Tracks, Full }
+
 public sealed record Album(
     string Id, string Uri, string Name, Image? Cover,
     IReadOnlyList<ArtistRef> Artists, int Year, int TrackCount,
-    IReadOnlyList<Track>? Tracks = null, AlbumKind Kind = AlbumKind.Album);
+    IReadOnlyList<Track>? Tracks = null, AlbumKind Kind = AlbumKind.Album,
+    IReadOnlyList<Album>? MoreByArtist = null,
+    // "About this release" facets (getAlbum: label, copyright.items[].text, date.isoString) + the album's primary artists
+    // WITH avatars (albumUnion.artists.visuals) for the stacked face-pile header. All additive/nullable.
+    string? Label = null, string? Copyright = null, string? ReleaseDate = null,
+    IReadOnlyList<Artist>? ArtistsDetailed = null,
+    // "Other versions" — alternate editions of THIS album (deluxe/remaster/anniversary), from albumUnion.releases.items.
+    IReadOnlyList<Album>? OtherVersions = null,
+    // Remaining getAlbum envelope fields used by the release panel and actions.
+    string? CourtesyLine = null, string? ReleaseDatePrecision = null, int DiscCount = 1,
+    string? ShareUrl = null, bool IsPreRelease = false, DateTimeOffset? PreReleaseEnd = null,
+    AlbumHydrationLevel Hydration = AlbumHydrationLevel.Summary,
+    // Cover-extracted page accent (ARGB; null = none). Drives the album page wash + Play button + section bars.
+    Palette? Palette = null);
 
 public sealed record Track(
     string Id, string Uri, string Title,
@@ -113,7 +171,9 @@ public sealed record Playlist(
     Image? Cover, int TrackCount, IReadOnlyList<Track>? Tracks = null,
     // Source-agnostic seam (see docs/architecture.md §5): the real owner, the user's capabilities (drives the
     // read-only vs editable UI), the recommender format (daily-mix/editorial/…), and which provider this came from.
-    Owner? Owner = null, PlaylistCapabilities Capabilities = default, string? Format = null, string? Source = null);
+    Owner? Owner = null, PlaylistCapabilities Capabilities = default, string? Format = null, string? Source = null,
+    // Cover-extracted page accent (ARGB; null = none). Drives the playlist page wash + Play button + section bars.
+    Palette? Palette = null);
 
 /// <summary>Album-art-derived palette. Plain ARGB <see cref="uint"/> channels keep Core
 /// framework-neutral; the app maps each to its renderer color (ColorF) at the UI boundary.</summary>

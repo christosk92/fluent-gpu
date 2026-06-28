@@ -37,6 +37,11 @@ public interface ICatalogSource : ISource
     Task<IReadOnlyList<Artist>> GetArtistsAsync(CancellationToken ct = default);
     Task<IReadOnlyList<Track>> GetLikedSongsAsync(CancellationToken ct = default);
     Task<SearchResults> SearchAsync(string query, CancellationToken ct = default);
+    /// <summary>As-you-type search suggestions (the omnibar dropdown). Default empty — only an online source provides them.</summary>
+    Task<IReadOnlyList<string>> SuggestAsync(string query, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<string>>(System.Array.Empty<string>());
+    async Task<SearchSuggestions> SuggestRichAsync(string query, CancellationToken ct = default)
+        => new(await SuggestAsync(query, ct).ConfigureAwait(false), System.Array.Empty<SearchSuggestionItem>());
     Task<HomeContribution> GetHomeAsync(CancellationToken ct = default);
     Task<LibraryStats> GetStatsAsync(CancellationToken ct = default);
 }

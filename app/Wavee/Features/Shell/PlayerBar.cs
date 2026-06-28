@@ -231,29 +231,29 @@ sealed class PlayerBarContent : Component
         // The edge fade is unaffected: a right-edge "there's more" cue at rest, both edges while scrolling.
         // Now-playing is clickable: art + title → the album; the subtitle splits into an artist link + an album link.
         var npAlbum = track?.Album;
-        var npArtist = track is { Artists.Count: > 0 } ? track.Artists[0] : null;
         bool albumNav = npAlbum is { Uri.Length: > 0 };
-        bool artistNav = npArtist is { Uri.Length: > 0 };
         void NavAlbum() { if (albumNav) go?.Invoke("album:" + npAlbum!.Uri, npAlbum.Name); }
-        void NavArtist() { if (artistNav) go?.Invoke("artist:" + npArtist!.Uri, npArtist.Name); }
 
+        var titleLinkHover = UseSignal(false);
+        bool titleHot = albumNav && titleLinkHover.Value;
         Element titleEl = Marquee.Of(Prop.Of(() => NowPlaying(b).Title),
-            new Marquee.Style { FontSize = 14f, Weight = 700, Foreground = Prop.Of(() => NowPlaying(b).Color), CycleMs = MarqueeCycleMs, Trigger = Marquee.TriggerMode.Hover },
+            new Marquee.Style { FontSize = 14f, Weight = 700, Foreground = Prop.Of(() => titleHot ? Tok.AccentTextPrimary : NowPlaying(b).Color), CycleMs = MarqueeCycleMs, Trigger = Marquee.TriggerMode.Hover },
             scrollWhen: titleHover);
         if (albumNav)   // the title opens the album (click); hover still scrolls the marquee (the metaCol drives titleHover)
-            titleEl = new BoxEl { Cursor = CursorId.Hand, OnClick = NavAlbum, Children = [titleEl] };
+            titleEl = new BoxEl
+            {
+                Cursor = CursorId.Hand, OnClick = NavAlbum,
+                OnHoverMove = _ => { if (!titleLinkHover.Peek()) titleLinkHover.Value = true; },
+                OnPointerExit = () => { if (titleLinkHover.Peek()) titleLinkHover.Value = false; },
+                Role = AutomationRole.Hyperlink, Focusable = true,
+                Children = [titleEl],
+            };
 
         var metaKids = new List<Element>(2) { titleEl };
         if (showSubtitle && track is not null && err is null)
         {
-            var subKids = new List<Element>(3);
-            if (npArtist is { Name.Length: > 0 })
-                subKids.Add(NavSpan(string.Join(", ", track.Artists.Select(a => a.Name)), NavArtist, artistNav));
-            if (npAlbum is { Name.Length: > 0 })
-            {
-                if (subKids.Count > 0) subKids.Add(new TextEl(" · ") { Size = 12f, Color = Tok.TextSecondary });
-                subKids.Add(NavSpan(npAlbum.Name, NavAlbum, albumNav));
-            }
+            var subKids = new List<Element>(Math.Max(3, track.Artists.Count * 2 + 2));
+            AddArtistLinks(subKids, track.Artists, go);
             if (subKids.Count > 0)
                 metaKids.Add(new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, ClipToBounds = true, Children = subKids.ToArray() });
         }
@@ -461,25 +461,7 @@ sealed class PlayerBarContent : Component
         };
     }
 
-    // "artist · album" subtitle, derived live. NoTrack/Error carry no artist line (mirrors the title state machine).
-    static string NowPlayingSubtitle(PlaybackBridge b)
-    {
-        var track = b.CurrentTrack.Value;
-        bool hasErr = b.Error.Value is not null;
-        string artistText = (track is null || hasErr) ? "" : ArtistsOf(track);
-        return SubtitleOf(track, artistText);
-    }
-
     static string ArtistsOf(Track? t) => t is null ? "" : string.Join(", ", t.Artists.Select(a => a.Name));
-
-    // "artist · album" subtitle (falls back to just the artist when the album is empty/unknown).
-    static string SubtitleOf(Track? t, string artistText)
-    {
-        if (t is null) return artistText;
-        string album = t.Album?.Name ?? "";
-        if (string.IsNullOrEmpty(artistText)) return album;
-        return string.IsNullOrEmpty(album) ? artistText : artistText + " · " + album;
-    }
 
     static int SeedOf(Track? t) => t is null ? 11 : Math.Abs((t.Uri ?? t.Id).Length * 7 + t.Title.Length);
 
@@ -490,14 +472,51 @@ sealed class PlayerBarContent : Component
         return m.ToString() + ":" + (s < 10 ? "0" + s : s.ToString());
     }
 
-    // A clickable now-playing meta link (artist / album): Hand cursor + a brighter foreground on hover when navigable.
-    static Element NavSpan(string text, Action onClick, bool enabled) => new BoxEl
+    static void AddArtistLinks(List<Element> into, IReadOnlyList<ArtistRef> artists, Action<string, string?>? go)
     {
-        Cursor = enabled ? CursorId.Hand : (CursorId?)null,
-        OnClick = enabled ? onClick : null,
-        ClipToBounds = true,
-        Children = [new TextEl(text) { Size = 12f, Color = Tok.TextSecondary, HoverColor = enabled ? Tok.TextPrimary : Tok.TextSecondary }],
-    };
+        for (int i = 0; i < artists.Count; i++)
+        {
+            var a = artists[i];
+            if (a.Name.Length == 0) continue;
+            if (into.Count > 0) into.Add(new TextEl(", ") { Size = 12f, Color = Tok.TextSecondary });
+            bool enabled = a.Uri.Length > 0;
+            into.Add(NavSpan(a.Name, () => { if (enabled) go?.Invoke("artist:" + a.Uri, a.Name); }, enabled));
+        }
+    }
+
+    // A clickable now-playing meta link (artist / album). It drives its own foreground because TextEl.HoverColor follows
+    // the engine's ancestor hover path too, which makes the album look hovered when the pointer is over the title line.
+    static Element NavSpan(string text, Action onClick, bool enabled)
+        => Embed.Comp(() => new NowPlayingMetaLink(text, onClick, enabled));
+
+    sealed class NowPlayingMetaLink : Component
+    {
+        readonly string _text;
+        readonly Action _onClick;
+        readonly bool _enabled;
+
+        public NowPlayingMetaLink(string text, Action onClick, bool enabled)
+        {
+            _text = text;
+            _onClick = onClick;
+            _enabled = enabled;
+        }
+
+        public override Element Render()
+        {
+            var hover = UseSignal(false);
+            return new BoxEl
+            {
+                Cursor = _enabled ? CursorId.Hand : (CursorId?)null,
+                OnClick = _enabled ? _onClick : null,
+                OnHoverMove = _enabled ? _ => { if (!hover.Peek()) hover.Value = true; } : null,
+                OnPointerExit = _enabled ? () => { if (hover.Peek()) hover.Value = false; } : null,
+                ClipToBounds = true,
+                Role = _enabled ? AutomationRole.Hyperlink : AutomationRole.Text,
+                Children = [new TextEl(_text) { Size = 12f, Color = hover.Value ? Tok.TextPrimary : Tok.TextSecondary }],
+            };
+        }
+    }
 
     /// <summary>A transport TOGGLE/command glyph button. The active state is shown by an ACCENT glyph + a 3px accent dot
     /// under it — never a filled background (that's reserved for the hover/press interaction axis). Box never fills at

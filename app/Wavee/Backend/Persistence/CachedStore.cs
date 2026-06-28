@@ -152,16 +152,32 @@ public sealed class CachedStore : IStore, IDisposable
 
     public long Version(string uri) => _hot.Version(uri);
     public IObservable<StoreChange> Changes => _hot.Changes;
-    public void Bump(string uri) => _hot.Bump(uri);
+    public void Bump(string uri, CollectionKind? kind = null) => _hot.Bump(uri, kind);
     public IDisposable BeginBulk() => _hot.BeginBulk();   // the cold tier is already write-behind batched
 
     // writes → DUAL: memory (synchronous) + cold (write-behind, batched)
-    public void UpsertTrack(Track t) { _hot.UpsertTrack(t); _cold.UpsertEntity(t.Uri, EntityKind.Track, JsonSerializer.SerializeToUtf8Bytes(t, EntityJson.Default.Track)); }
+    public void UpsertTrack(Track t)
+    {
+        _hot.UpsertTrack(t);
+        var merged = _hot.GetTrack(t.Uri) ?? t;
+        _cold.UpsertEntity(t.Uri, EntityKind.Track, JsonSerializer.SerializeToUtf8Bytes(merged, EntityJson.Default.Track));
+    }
     // Persist the entity HEADER thin: a container's hydrated tracklist is a read-model (joined from membership × shared
     // entities at read), never baked into the entity blob — that would re-serialize a multi-MB LOH blob per edit and
     // duplicate every Track N times. The in-memory tier keeps whatever the caller passed; only the cold blob is thinned.
-    public void UpsertAlbum(Album a) { _hot.UpsertAlbum(a); var thin = a.Tracks is null ? a : a with { Tracks = null }; _cold.UpsertEntity(a.Uri, EntityKind.Album, JsonSerializer.SerializeToUtf8Bytes(thin, EntityJson.Default.Album)); }
-    public void UpsertArtist(Artist a) { _hot.UpsertArtist(a); _cold.UpsertEntity(a.Uri, EntityKind.Artist, JsonSerializer.SerializeToUtf8Bytes(a, EntityJson.Default.Artist)); }
+    public void UpsertAlbum(Album a)
+    {
+        _hot.UpsertAlbum(a);
+        var merged = _hot.GetAlbum(a.Uri) ?? a;
+        var thin = merged.Tracks is null ? merged : merged with { Tracks = null };
+        _cold.UpsertEntity(a.Uri, EntityKind.Album, JsonSerializer.SerializeToUtf8Bytes(thin, EntityJson.Default.Album));
+    }
+    public void UpsertArtist(Artist a)
+    {
+        _hot.UpsertArtist(a);
+        var merged = _hot.GetArtist(a.Uri) ?? a;
+        _cold.UpsertEntity(a.Uri, EntityKind.Artist, JsonSerializer.SerializeToUtf8Bytes(merged, EntityJson.Default.Artist));
+    }
     public void UpsertPlaylist(Playlist p) { _hot.UpsertPlaylist(p); var thin = p.Tracks is null ? p : p with { Tracks = null }; _cold.UpsertEntity(p.Uri, EntityKind.Playlist, JsonSerializer.SerializeToUtf8Bytes(thin, EntityJson.Default.Playlist)); }
     public void UpsertShow(Show s) { _hot.UpsertShow(s); _cold.UpsertEntity(s.Uri, EntityKind.Show, JsonSerializer.SerializeToUtf8Bytes(s, EntityJson.Default.Show)); }
     public void UpsertEpisode(Episode e) { _hot.UpsertEpisode(e); _cold.UpsertEntity(e.Uri, EntityKind.Episode, JsonSerializer.SerializeToUtf8Bytes(e, EntityJson.Default.Episode)); }

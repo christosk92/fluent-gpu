@@ -40,6 +40,8 @@ public enum AnimFlags : ushort
     RmExempt      = 1 << 7,   // exempt from the reduced-motion snap (essential motion, e.g. a spinner)
     Additive      = 1 << 8,   // CompositeOp != Replace
     Accumulate    = 1 << 9,   // distinguishes Add vs Accumulate when Additive is set
+    DisplayRate   = 1 << 10,  // a TRANSIENT loop (e.g. an indeterminate progress bar) that opts OUT of the ambient
+                              // frame-rate cap and runs at the panel refresh — it's short-lived, not a perpetual idle loop
 }
 
 /// <summary>The 16-byte tagged-union generator law. The owning <see cref="AnimValue.Kind"/> selects the reading.

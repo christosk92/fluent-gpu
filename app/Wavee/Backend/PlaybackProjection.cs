@@ -52,6 +52,16 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
 
     // ── the slab (mutated in place under _gate; coarse Changes fired outside) ─────────────────────────────────────────
     Track? _track;
+    // Live enrichment: the cluster's player_state metadata is often THIN (title + album only, no artist name, no album
+    // art). When set by the live bootstrap, this resolves the full track by uri (transport metadata) and folds artist +
+    // album + art into the now-playing track. Null offline -> the cluster snapshot is shown as-is.
+    Func<string, CancellationToken, Task<Track?>>? _trackResolver;
+    public Func<string, CancellationToken, Task<Track?>>? TrackResolver
+    {
+        get => _trackResolver;
+        set { _trackResolver = value; if (value is not null) MaybeEnrichCurrent(); }
+    }
+    string? _resolvingUri;   // de-dupe: at most one in-flight resolve per uri (guarded by _gate)
     string? _contextUri;
     string _activeDeviceId = "";
     bool _isPlaying, _isBuffering, _shuffle;
@@ -118,7 +128,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
             // a contradicting cluster revert our optimistic play-state. As a viewer, the cluster is always the truth.
             bool suppressPlayState = weActive && _lastLocalCmdWall != long.MinValue && (_now() - _lastLocalCmdWall) < LocalCmdWindowMs;
 
-            if (c.HasTrack) _track = MapTrack(c.Track);
+            if (c.HasTrack) _track = MergeClusterTrack(_track, MapTrack(c.Track));
             _contextUri = c.ContextUri;
             _durMs = c.DurationMs > 0 ? c.DurationMs : (c.HasTrack ? c.Track.DurationMs : _durMs);
             if (!suppressPlayState)
@@ -140,6 +150,47 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         }
         FireChanges();
         RestartTicker();
+        MaybeEnrichCurrent();   // the cluster track may be thin (no artist/art) → resolve + fold in the full metadata
+    }
+
+    // Resolve full metadata for a cluster track whose player_state was thin (no artist name / no album art). At most one
+    // resolve per uri is in flight; the result is applied only if that uri is STILL current (the user didn't skip on).
+    void MaybeEnrichCurrent()
+    {
+        if (TrackResolver is not { } resolve) return;
+        string uri;
+        lock (_gate)
+        {
+            if (_track is not { } t) return;
+            bool thin = !ImageSource.IsUsable(t.Image) || t.Artists.Count == 0 || string.IsNullOrEmpty(t.Artists[0].Name);
+            if (!thin || t.Uri.Length == 0 || _resolvingUri == t.Uri) return;
+            _resolvingUri = uri = t.Uri;
+        }
+        _ = ResolveAsync(resolve, uri);
+    }
+
+    async Task ResolveAsync(Func<string, CancellationToken, Task<Track?>> resolve, string uri)
+    {
+        Track? enriched = null;
+        try { enriched = await resolve(uri, default).ConfigureAwait(false); } catch { /* best-effort */ }
+        bool changed = false;
+        lock (_gate)
+        {
+            if (_resolvingUri == uri) _resolvingUri = null;
+            if (enriched is { } e && _track is { } cur && cur.Uri == uri)
+            {
+                // Keep the cluster's title (+ duration/position state); fill artist + album + art from the resolved track.
+                _track = cur with
+                {
+                    Title = string.IsNullOrEmpty(cur.Title) ? e.Title : cur.Title,
+                    Artists = e.Artists.Count > 0 ? e.Artists : cur.Artists,
+                    Album = e.Album,
+                    Image = ImageSource.ChooseBetter(e.Image, cur.Image),
+                };
+                changed = true;
+            }
+        }
+        if (changed) FireChanges();
     }
 
     // ── Local fold — when WE are the active device (Stage E controller + Stage H host) ───────────────────────────────
@@ -204,6 +255,27 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         Image? img = string.IsNullOrEmpty(r.ImageUrl) ? null : new Image(r.ImageUrl!);
         return new Track(IdFromUri(r.Uri), r.Uri, r.Title, artists, album, r.DurationMs, false, img);
     }
+
+    // Cluster player_state often repeats a THIN copy of the same current track. Preserve the enriched TrackV4 fields
+    // already folded into the slab (artist credits + album cover) so each cluster heartbeat cannot blank the player bar.
+    static Track MergeClusterTrack(Track? current, Track incoming)
+    {
+        if (current is null || current.Uri != incoming.Uri) return incoming;
+        bool incomingHasArtist = incoming.Artists.Count > 0 && !string.IsNullOrEmpty(incoming.Artists[0].Name);
+        return incoming with
+        {
+            Title = string.IsNullOrEmpty(incoming.Title) ? current.Title : incoming.Title,
+            Artists = incomingHasArtist ? incoming.Artists : current.Artists,
+            Album = MergeAlbumRef(current.Album, incoming.Album),
+            DurationMs = incoming.DurationMs > 0 ? incoming.DurationMs : current.DurationMs,
+            Image = ImageSource.ChooseBetter(incoming.Image, current.Image),
+        };
+    }
+
+    static AlbumRef MergeAlbumRef(AlbumRef current, AlbumRef incoming) => new(
+        string.IsNullOrEmpty(incoming.Id) ? current.Id : incoming.Id,
+        string.IsNullOrEmpty(incoming.Uri) ? current.Uri : incoming.Uri,
+        string.IsNullOrEmpty(incoming.Name) ? current.Name : incoming.Name);
 
     static IReadOnlyList<QueueEntry> MapQueue(IReadOnlyList<RemoteTrack> next)
     {

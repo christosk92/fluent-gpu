@@ -20,8 +20,6 @@ namespace Wavee.Backend.Metadata;
 // (type_url ignored), parsed by the array's ExtensionKind — exactly the real client's contract.
 public sealed class ExtendedMetadataSource : IMetadataSource
 {
-    const string Path = "/extended-metadata/v0/extended-metadata";
-
     // Lean parsers that DISCARD unknown fields → the many unused Track/Album/Artist repeated fields (file[], restriction[],
     // availability[], alternative[]…) are skipped on the wire, not allocated as messages.
     static readonly MessageParser<Lean.LeanTrack> TrackParser = Lean.LeanTrack.Parser.WithDiscardUnknownFields(true);
@@ -31,8 +29,10 @@ public sealed class ExtendedMetadataSource : IMetadataSource
     static readonly MessageParser<Lean.LeanShow> ShowParser = Lean.LeanShow.Parser.WithDiscardUnknownFields(true);
     static readonly MessageParser<Lean.LeanEpisode> EpisodeParser = Lean.LeanEpisode.Parser.WithDiscardUnknownFields(true);
 
+    const string Path = "/extended-metadata/v0/extended-metadata";
+
     readonly IHttpExchange _http;
-    readonly Func<string> _baseUrl;       // spclient base, e.g. https://gew4-spclient.spotify.com
+    readonly Func<string> _baseUrl;
     readonly Func<SessionContext> _ctx;
 
     public ExtendedMetadataSource(IHttpExchange http, Func<string> baseUrl, Func<SessionContext> ctx)
@@ -53,14 +53,7 @@ public sealed class ExtendedMetadataSource : IMetadataSource
             {
                 var gz = GzipRequest(entities, start, count, session);
                 if (gz is null) continue;   // the chunk had no supported entities
-                var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-                {
-                    ["Content-Type"] = "application/protobuf",
-                    ["Content-Encoding"] = "gzip",
-                    ["Accept"] = "application/protobuf",
-                    ["Accept-Encoding"] = "gzip, deflate, br",
-                };
-                using var resp = await _http.SendAsync(new HttpReq("POST", _baseUrl() + Path, headers, gz), ct).ConfigureAwait(false);
+                using var resp = await SendAsync(gz, ct).ConfigureAwait(false);
                 if (resp.Status != 200) throw new InvalidOperationException($"extended-metadata fetch failed ({resp.Status})");
                 ProjectResponse(resp.Body, store, proj);   // resp.Body is the response stream → parsed without an LOH byte[]
             }
@@ -100,6 +93,74 @@ public sealed class ExtendedMetadataSource : IMetadataSource
             if (!any) return null;
         }   // o flushes, then gz finalizes the gzip into ms
         return ms.ToArray();
+    }
+
+    // ── Arbitrary-kind reads (feature payloads beyond bulk Track/Album/Artist hydration) ──────────────────────────────
+    // Same endpoint, auth pipeline, protobuf envelope and gzip framing as FetchAsync, but the caller chooses the
+    // ExtensionKind per entity and gets the RAW extension payload back (parsed by the feature, NOT projected into the
+    // Store here). E.g. an album's RECOMMENDED_PLAYLISTS (151) refs, then those playlists' LIST_METADATA_V2 (205) heroes.
+    static readonly IReadOnlyDictionary<(string Uri, Xm.ExtensionKind Kind), ByteString> NoExtensions
+        = new Dictionary<(string, Xm.ExtensionKind), ByteString>();
+
+    public async Task<IReadOnlyDictionary<(string Uri, Xm.ExtensionKind Kind), ByteString>> GetExtensionsAsync(
+        IReadOnlyList<(string Uri, Xm.ExtensionKind Kind)> requests, CancellationToken ct = default)
+    {
+        if (requests.Count == 0) return NoExtensions;
+        using var resp = await SendAsync(GzipExtensionRequest(requests, _ctx()), ct).ConfigureAwait(false);
+        if (resp.Status != 200) throw new InvalidOperationException($"extended-metadata fetch failed ({resp.Status})");
+        var parsed = Xm.BatchedExtensionResponse.Parser.ParseFrom(resp.Body);   // streamed, no LOH byte[]
+        var result = new Dictionary<(string, Xm.ExtensionKind), ByteString>();
+        foreach (var array in parsed.ExtendedMetadata)
+            foreach (var data in array.ExtensionData)
+                if (data.ExtensionData?.Value is { IsEmpty: false } value)   // the opaque Any's value = the raw extension bytes
+                    result[(data.EntityUri, array.ExtensionKind)] = value;
+        return result;
+    }
+
+    /// <summary>Convenience for a single (uri, kind) read; null when the entity carried no such extension.</summary>
+    public async Task<ByteString?> GetExtensionAsync(string uri, Xm.ExtensionKind kind, CancellationToken ct = default)
+    {
+        var values = await GetExtensionsAsync(new[] { (uri, kind) }, ct).ConfigureAwait(false);
+        return values.TryGetValue((uri, kind), out var value) ? value : null;
+    }
+
+    // One EntityRequest per uri (its kinds grouped under it), serialized straight into gzip — the same envelope
+    // GzipRequest builds, but keyed by an explicit (uri, kind) list instead of the EntityRef→KindFor mapping.
+    static byte[] GzipExtensionRequest(IReadOnlyList<(string Uri, Xm.ExtensionKind Kind)> requests, SessionContext ctx)
+    {
+        Span<byte> taskId = stackalloc byte[16];
+        RandomNumberGenerator.Fill(taskId);
+        var request = new Xm.BatchedEntityRequest
+        {
+            Header = new Xm.BatchedEntityRequestHeader { Country = ctx.Market, Catalogue = ctx.Catalogue, TaskId = ByteString.CopyFrom(taskId) },
+        };
+        var byUri = new Dictionary<string, Xm.EntityRequest>(StringComparer.Ordinal);
+        foreach (var (uri, kind) in requests)
+        {
+            if (!byUri.TryGetValue(uri, out var er))
+            {
+                er = new Xm.EntityRequest { EntityUri = uri };
+                byUri[uri] = er;
+                request.EntityRequest.Add(er);   // preserves first-seen uri order
+            }
+            er.Query.Add(new Xm.ExtensionQuery { ExtensionKind = kind });
+        }
+
+        using var ms = new MemoryStream();
+        using (var gz = new GZipStream(ms, CompressionLevel.Fastest, leaveOpen: true)) request.WriteTo(gz);
+        return ms.ToArray();
+    }
+
+    async Task<HttpResp> SendAsync(byte[] gzippedBody, CancellationToken ct)
+    {
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Content-Type"] = "application/protobuf",
+            ["Content-Encoding"] = "gzip",
+            ["Accept"] = "application/protobuf",
+            ["Accept-Encoding"] = "gzip, deflate, br",
+        };
+        return await _http.SendAsync(new HttpReq("POST", _baseUrl() + Path, headers, gzippedBody), ct).ConfigureAwait(false);
     }
 
     static Xm.ExtensionKind KindFor(EntityKind k) => k switch
@@ -184,7 +245,8 @@ public sealed class ExtendedMetadataSource : IMetadataSource
                 store.UpsertTrack(track);
             }
 
-        store.UpsertAlbum(new Album(id, albumRef.Uri, al.Name, cover, artists, year, tracks.Count, tracks));
+        store.UpsertAlbum(new Album(id, albumRef.Uri, al.Name, cover, artists, year, tracks.Count, tracks,
+            Hydration: AlbumHydrationLevel.Tracks));
     }
 
     static void ProjectArtist(Lean.LeanArtist ar, IStore store)

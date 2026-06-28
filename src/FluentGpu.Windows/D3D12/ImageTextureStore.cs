@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using FluentGpu.Foundation;
+using FluentGpu.Scene;
 using TerraFX.Interop.DirectX;
 using TerraFX.Interop.Windows;
 using static TerraFX.Interop.DirectX.DirectX;
@@ -23,7 +24,7 @@ namespace FluentGpu.Rhi.D3D12;
 /// </summary>
 internal sealed unsafe class ImageTextureStore : IDisposable
 {
-    private const int MaxSrv = 256;     // SRV heap depth (pool textures + atlas pages share it)
+    private const int MaxSrv = 4096;    // SRV heap depth (pool textures + atlas pages share it)
     private const int PageSize = 1024;  // atlas page side
 
     private struct Tex
@@ -38,6 +39,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         public int Ox, Oy;                       // image origin within that texture (cell origin for atlas; else 0,0)
         public int Bucket;                       // pool bucket (0 = standalone, not pooled)
         public int Page;                         // atlas page index (when Atlas)
+        public D3D12_RESOURCE_STATES State;       // actual state of Resource (atlas state lives on AtlasPage)
         public bool NeedsCopy, Live;
     }
 
@@ -47,18 +49,27 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         public D3D12_GPU_DESCRIPTOR_HANDLE Srv;
         public int Slot, Bucket;
         public readonly Stack<(int x, int y)> Free = new();
+        public D3D12_RESOURCE_STATES State;
+        public int Used;
         public bool Live;
     }
 
-    private struct Pooled { public ID3D12Resource* Resource; public D3D12_GPU_DESCRIPTOR_HANDLE Srv; public int Slot; }
+    private struct Pooled
+    {
+        public ID3D12Resource* Resource;
+        public D3D12_GPU_DESCRIPTOR_HANDLE Srv;
+        public int Slot;
+        public D3D12_RESOURCE_STATES State;
+    }
 
     // A deferred resource return (released/recycled once the GPU has fenced past any in-flight frame still using it).
     private struct Retire
     {
-        public int Frame, Kind;                  // 0 standalone-release | 1 pool-return | 2 atlas-cell-return
+        public int Frame, Kind;                  // 0 standalone-release | 1 pool-return | 2 atlas-cell-return | 3 upload-release
         public ID3D12Resource* Upload, Resource; // Upload always released; Resource released for kind 0
         public int Bucket, Slot, Page, CellX, CellY;
         public D3D12_GPU_DESCRIPTOR_HANDLE Srv;
+        public D3D12_RESOURCE_STATES State;
     }
 
     private ID3D12Device* _device;
@@ -66,7 +77,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     private D3D12_CPU_DESCRIPTOR_HANDLE _srvCpu0;
     private D3D12_GPU_DESCRIPTOR_HANDLE _srvGpu0;
     private uint _srvInc;
-    private int _nextSlot, _frame;
+    private int _nextSlot, _frame, _descriptorHighWater;
     private readonly Dictionary<int, Tex> _byId = new(64);
     private readonly List<int> _pendingCopies = new(32);
     private readonly Stack<int> _freeSlots = new();
@@ -88,15 +99,22 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     public int DroppedThisRun { get; private set; }
     public int AtlasImages => _atlasCount;
     public int PoolImages => _poolCount;
+    public int DescriptorCapacity => MaxSrv;
+    public int DescriptorSlotsUsed => _nextSlot - _freeSlots.Count;
+    public int DescriptorHighWater => _descriptorHighWater;
     /// <summary>True when decoded pixels are staged but not yet copied to their resident texture (drained by
     /// <see cref="FlushUploads"/> at the top of the next submit). The host must NOT skip that submit, or the texture
     /// stays empty and the image renders white — uploads are throttled, so a deferred one can land on an otherwise
     /// idle frame whose DrawList is unchanged.</summary>
-    public bool HasPendingUploads => _pendingCopies.Count > 0;
+    public bool HasPendingUploads => _pendingCopies.Count > 0 || _retired.Count > 0;
 
     // ── MemCensus accessors (O(1), or a tiny fixed-bucket sum at census cadence — never per-frame) ──
     /// <summary>Images currently packed into atlas pages — O(1) census (alias of <see cref="AtlasImages"/>).</summary>
     internal int AtlasImageCount => _atlasCount;
+    internal int AtlasPageCount
+    {
+        get { int n = 0; for (int i = 0; i < _pages.Count; i++) if (_pages[i].Tex != null) n++; return n; }
+    }
     /// <summary>FREE pooled bucket textures retained for reuse — sum of the per-bucket free stacks (a handful of
     /// buckets; census cadence). Distinct from <see cref="PoolImages"/> (pooled textures currently IN USE).</summary>
     internal int PooledTextureCount
@@ -150,9 +168,10 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     /// <summary>Heap/upload-only (NO command list): runs during the host's <c>ImageCache.Pump</c>, before the frame list
     /// opens. Routes the image to the atlas (≤128) or the per-bucket pool, (re)acquiring on a routing/size change, and
     /// copies pixels into a staging buffer with a 256-aligned row pitch. The GPU copy is deferred to <see cref="FlushUploads"/>.</summary>
-    public void Stage(int id, ReadOnlySpan<byte> pbgra8, int w, int h)
+    public ImageUploadResult Stage(int id, ReadOnlySpan<byte> pbgra8, int w, int h)
     {
-        if (_device == null || w <= 0 || h <= 0) return;
+        if (_device == null || w <= 0 || h <= 0 || pbgra8.Length < (long)w * h * 4)
+            return ImageUploadResult.Invalid;
         int bucket = BucketFor(Math.Max(w, h));
         bool wantAtlas = bucket <= 128;
         int rowBytes = w * 4;
@@ -162,32 +181,41 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         bool had = _byId.TryGetValue(id, out var t);
         // Re-route if this id's prior placement (atlas vs pool, or a different bucket) no longer fits the new pixels.
         bool reroute = had && (t.Atlas != wantAtlas || t.Bucket != (wantAtlas ? bucket : (bucket <= 512 ? bucket : 0)));
-        if (reroute) { RetirePlacement(ref t); t = default; had = false; }
+        // Acquire the replacement before retiring the old placement. A rejected full-res upload must not destroy an
+        // already-resident blur-hash texture.
+        Tex prior = reroute ? t : default;
+        if (reroute) { t = default; had = false; }
 
         if (!had)
         {
             if (wantAtlas)
             {
-                if (!AcquireCell(bucket, out int page, out int cx, out int cy)) { DroppedThisRun++; return; }
+                if (!AcquireCell(bucket, out int page, out int cx, out int cy)) return RejectCapacity();
                 t.Atlas = true; t.Page = page; t.Slot = -1; t.Bucket = bucket;
                 t.Srv = _pages[page].Srv; t.TexSize = PageSize; t.Ox = cx; t.Oy = cy;
                 _atlasCount++;
             }
             else if (bucket <= 512)
             {
-                if (!AcquirePooled(bucket, out var pt)) { DroppedThisRun++; return; }
+                if (!AcquirePooled(bucket, out var pt)) return RejectCapacity();
                 t.Atlas = false; t.Resource = pt.Resource; t.Srv = pt.Srv; t.Slot = pt.Slot; t.Bucket = bucket;
-                t.TexSize = bucket; t.Ox = 0; t.Oy = 0; t.Live = false;
+                t.TexSize = bucket; t.Ox = 0; t.Oy = 0; t.State = pt.State; t.Live = false;
                 _poolCount++;
             }
             else   // > 512: standalone exact-size texture (defensive; the cache buckets to ≤512, so this rarely runs)
             {
-                int slot = _freeSlots.Count > 0 ? _freeSlots.Pop() : (_nextSlot < MaxSrv ? _nextSlot++ : -1);
-                if (slot < 0) { DroppedThisRun++; return; }
+                if (!TryAcquireSlot(out int slot)) return RejectCapacity();
                 t.Atlas = false; t.Resource = CreateTexture(w, h); t.Slot = slot; t.Bucket = 0;
-                t.TexSize = Math.Max(w, h); t.Ox = 0; t.Oy = 0; t.Live = false;
+                t.TexSize = Math.Max(w, h); t.Ox = 0; t.Oy = 0;
+                t.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST; t.Live = false;
                 CreateSrv(t.Resource, slot, out t.Srv);
             }
+        }
+
+        if (reroute)
+        {
+            RetirePlacement(ref prior);
+            if (prior.Atlas) _atlasCount--; else if (prior.Bucket > 0) _poolCount--;
         }
 
         // (Re)allocate the staging upload buffer if it must grow.
@@ -208,6 +236,14 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         t.NeedsCopy = true;
         _byId[id] = t;
         if (!_pendingCopies.Contains(id)) _pendingCopies.Add(id);
+        return ImageUploadResult.Accepted;
+    }
+
+    private ImageUploadResult RejectCapacity()
+    {
+        DroppedThisRun++;
+        Diag.Count("d3d12", "imageUploadRejected");
+        return ImageUploadResult.ResourceExhausted;
     }
 
     /// <summary>Evict an image (residency dropped it): return its atlas cell / pool texture for reuse and release its
@@ -225,7 +261,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     // Queue this Tex's GPU resources for deferred reclaim (cell return / pool return / standalone release + upload).
     private void RetirePlacement(ref Tex t)
     {
-        var r = new Retire { Frame = _frame, Upload = t.Upload };
+        var r = new Retire { Frame = _frame, Upload = t.Upload, State = t.State };
         if (t.Atlas) { r.Kind = 2; r.Page = t.Page; r.CellX = t.Ox; r.CellY = t.Oy; }
         else if (t.Bucket > 0) { r.Kind = 1; r.Bucket = t.Bucket; r.Resource = t.Resource; r.Srv = t.Srv; r.Slot = t.Slot; }
         else { r.Kind = 0; r.Resource = t.Resource; r.Slot = t.Slot; }
@@ -246,8 +282,9 @@ internal sealed unsafe class ImageTextureStore : IDisposable
             switch (r.Kind)
             {
                 case 0: if (r.Resource != null) { D3D12MemoryDiagnostics.Release(r.Resource, "Image.Texture"); r.Resource->Release(); } _freeSlots.Push(r.Slot); break;
-                case 1: ReleasePooled(r.Bucket, new Pooled { Resource = r.Resource, Srv = r.Srv, Slot = r.Slot }); break;
-                case 2: _pages[r.Page].Free.Push((r.CellX, r.CellY)); break;
+                case 1: ReleasePooled(r.Bucket, new Pooled { Resource = r.Resource, Srv = r.Srv, Slot = r.Slot, State = r.State }); break;
+                case 2: ReleaseAtlasCell(r.Page, r.CellX, r.CellY); break;
+                case 3: break;
             }
             _retired.RemoveAt(i);
         }
@@ -259,8 +296,9 @@ internal sealed unsafe class ImageTextureStore : IDisposable
 
             ID3D12Resource* destTex = t.Atlas ? _pages[t.Page].Tex : t.Resource;
             if (destTex == null) continue;
-            bool wasLive = t.Atlas ? _pages[t.Page].Live : t.Live;
-            if (wasLive) Transition(cmd, destTex, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST);
+            D3D12_RESOURCE_STATES state = t.Atlas ? _pages[t.Page].State : t.State;
+            if (state != D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST)
+                Transition(cmd, destTex, state, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST);
 
             D3D12_TEXTURE_COPY_LOCATION dst = default;
             dst.pResource = destTex; dst.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX; dst.Anonymous.SubresourceIndex = 0;
@@ -275,7 +313,17 @@ internal sealed unsafe class ImageTextureStore : IDisposable
 
             Transition(cmd, destTex, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             t.NeedsCopy = false; t.Live = true;
-            if (t.Atlas) _pages[t.Page].Live = true;
+            if (t.Atlas)
+            {
+                _pages[t.Page].State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+                _pages[t.Page].Live = true;
+            }
+            else t.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            if (t.Upload != null)
+            {
+                _retired.Add(new Retire { Frame = _frame, Kind = 3, Upload = t.Upload });
+                t.Upload = null;
+            }
             _byId[id] = t;
         }
         _pendingCopies.Clear();
@@ -285,11 +333,14 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     private bool AcquirePooled(int bucket, out Pooled pt)
     {
         if (_pool.TryGetValue(bucket, out var stk) && stk.Count > 0) { pt = stk.Pop(); return true; }
-        int slot = _freeSlots.Count > 0 ? _freeSlots.Pop() : (_nextSlot < MaxSrv ? _nextSlot++ : -1);
-        if (slot < 0) { pt = default; return false; }
+        if (!TryAcquireSlot(out int slot)) { pt = default; return false; }
         var res = CreateTexture(bucket, bucket);            // cold pool growth (the only CreateTexture in steady state)
         CreateSrv(res, slot, out var srv);
-        pt = new Pooled { Resource = res, Srv = srv, Slot = slot };
+        pt = new Pooled
+        {
+            Resource = res, Srv = srv, Slot = slot,
+            State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST
+        };
         return true;
     }
 
@@ -311,21 +362,69 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     private bool AcquireCell(int bucket, out int page, out int cx, out int cy)
     {
         for (int i = 0; i < _pages.Count; i++)
-            if (_pages[i].Bucket == bucket && _pages[i].Free.Count > 0)
+            if (_pages[i].Tex != null && _pages[i].Bucket == bucket && _pages[i].Free.Count > 0)
             {
-                (cx, cy) = _pages[i].Free.Pop(); page = i; return true;
+                (cx, cy) = _pages[i].Free.Pop(); _pages[i].Used++; page = i; return true;
             }
-        int slot = _freeSlots.Count > 0 ? _freeSlots.Pop() : (_nextSlot < MaxSrv ? _nextSlot++ : -1);
-        if (slot < 0) { page = cx = cy = 0; return false; }
-        var pg = new AtlasPage { Tex = CreateTexture(PageSize, PageSize), Slot = slot, Bucket = bucket };
+        for (int i = 0; i < _pages.Count; i++)
+            if (_pages[i].Tex == null && _pages[i].Bucket == bucket)
+                return CreateAtlasPage(i, bucket, out page, out cx, out cy);
+        return CreateAtlasPage(-1, bucket, out page, out cx, out cy);
+    }
+
+    private bool CreateAtlasPage(int reuse, int bucket, out int page, out int cx, out int cy)
+    {
+        if (!TryAcquireSlot(out int slot)) { page = cx = cy = 0; return false; }
+        var pg = reuse >= 0 ? _pages[reuse] : new AtlasPage();
+        pg.Free.Clear();
+        pg.Tex = CreateTexture(PageSize, PageSize);
+        pg.Slot = slot;
+        pg.Bucket = bucket;
+        pg.Used = 0;
+        pg.Live = false;
+        pg.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST;
         CreateSrv(pg.Tex, slot, out pg.Srv);
         int per = PageSize / bucket;
         for (int y = per - 1; y >= 0; y--)
             for (int x = per - 1; x >= 0; x--)
                 pg.Free.Push((x * bucket, y * bucket));
-        _pages.Add(pg);
-        page = _pages.Count - 1;
+        if (reuse < 0)
+        {
+            _pages.Add(pg);
+            page = _pages.Count - 1;
+        }
+        else page = reuse;
         (cx, cy) = pg.Free.Pop();
+        pg.Used = 1;
+        return true;
+    }
+
+    private void ReleaseAtlasCell(int page, int cellX, int cellY)
+    {
+        if ((uint)page >= (uint)_pages.Count) return;
+        var pg = _pages[page];
+        if (pg.Tex == null) return;
+        pg.Free.Push((cellX, cellY));
+        if (pg.Used > 0) pg.Used--;
+        if (pg.Used != 0) return;
+
+        D3D12MemoryDiagnostics.Release(pg.Tex, "Image.Texture");
+        pg.Tex->Release();
+        pg.Tex = null;
+        pg.Srv = default;
+        pg.Live = false;
+        pg.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST;
+        pg.Free.Clear();
+        if (pg.Slot >= 0) { _freeSlots.Push(pg.Slot); pg.Slot = -1; }
+    }
+
+    private bool TryAcquireSlot(out int slot)
+    {
+        if (_freeSlots.Count > 0) slot = _freeSlots.Pop();
+        else if (_nextSlot < MaxSrv) slot = _nextSlot++;
+        else { slot = -1; return false; }
+        int used = DescriptorSlotsUsed;
+        if (used > _descriptorHighWater) _descriptorHighWater = used;
         return true;
     }
 

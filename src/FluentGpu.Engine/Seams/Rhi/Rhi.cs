@@ -1,9 +1,12 @@
 using FluentGpu.Foundation;
+using FluentGpu.Scene;
 
 namespace FluentGpu.Rhi;
 
 /// <summary>Per-frame context handed to the device at submit. POD.</summary>
-public readonly record struct FrameInfo(Size2 SizePx, float Scale, ColorF Clear);
+// Damage = the union (device/DIP px) of nodes whose transform moved this frame — the region-aware invalidation set for
+// the in-app acrylic backdrop cache (default empty ⇒ nothing moved ⇒ reuse every cached blur). See AcrylicBackdropMath.
+public readonly record struct FrameInfo(Size2 SizePx, float Scale, ColorF Clear, RectF Damage = default);
 
 /// <summary><paramref name="DesktopAcrylic"/> = back this composited popup with a true desktop-sampling acrylic
 /// (Windows.UI.Composition host backdrop) tinted by <paramref name="AcrylicTint"/> — the WinUI MenuFlyout material,
@@ -35,10 +38,10 @@ public interface IGpuDevice : IDisposable
     /// (headless), so it reads as "no stall" rather than missing.</summary>
     double LastFenceWaitMs => 0;
 
-    /// <summary>True when decoded image pixels are staged but not yet copied to their resident GPU texture (the copy is
-    /// recorded at the top of the next <see cref="SubmitDrawList(ReadOnlySpan{byte}, ReadOnlySpan{ulong}, in FrameInfo)"/>).
-    /// The host must NOT elide that submit (its scene-unchanged skip gate), or the texture stays empty and the image
-    /// renders white. Default false (a headless/synchronous backend has nothing pending).</summary>
+    /// <summary>True when decoded image pixels are staged but not yet copied to their resident GPU texture, or when
+    /// transient upload resources are awaiting fence-gated release. The host must NOT elide that submit, or the texture
+    /// stays empty and deferred upload memory can remain resident until unrelated UI work happens. Default false (a
+    /// headless/synchronous backend has nothing pending).</summary>
     bool HasPendingUploads => false;
 
     /// <summary>Record + batch + submit to a specific swapchain target (windowed popup HWNDs). Backends without
@@ -52,6 +55,15 @@ public interface IGpuDevice : IDisposable
     /// the backend copies it into its texture-staging ring; it is never retained. Rows may not be 256-aligned; the
     /// backend pads. Called once per decode completion, before <see cref="SubmitDrawList"/>.</summary>
     void UploadImage(int imageId, ReadOnlySpan<byte> pbgra8, int w, int h);
+
+    /// <summary>Admission-aware image upload. Existing backends remain source-compatible through this default, which
+    /// delegates to <see cref="UploadImage"/> and assumes success; bounded backends override it so the cache never marks
+    /// a rejected texture Ready.</summary>
+    ImageUploadResult TryUploadImage(int imageId, ReadOnlySpan<byte> pbgra8, int w, int h)
+    {
+        UploadImage(imageId, pbgra8, w, h);
+        return ImageUploadResult.Accepted;
+    }
 
     /// <summary>The residency manager evicted <paramref name="imageId"/> — release its GPU texture (deferred behind the
     /// frame fence so an in-flight frame can't read freed memory). No-op if not resident.</summary>

@@ -105,7 +105,7 @@ public static class FluentApp
         // Real image pipeline: WIC constrained decode on a worker pool, behind a disk-cached HTTP/2 fetcher.
         using var imageFetcher = new DefaultImageFetcher(diskCache: new DiskImageCache());
         using var imageDecoder = new DecodeScheduler(new WicImageCodec(), imageFetcher);
-        var images = new ImageCache(imageDecoder);
+        var images = new ImageCache(imageDecoder, ImageCacheBudgetBytes());
 
         using var host = new AppHost(app, window, device, fonts, strings, root(), images);
         host.SmoothScroll = true;   // inertial wheel scrolling + auto-hiding scrollbars (the real-app default)
@@ -185,6 +185,14 @@ public static class FluentApp
         }
 
         WindowHandle = 0;   // the window is gone; don't leave a stale handle for a late SMTC/picker call.
+    }
+
+    private static long ImageCacheBudgetBytes()
+    {
+        const long DefaultBytes = 64L * 1024 * 1024;
+        string? raw = Environment.GetEnvironmentVariable("FG_IMAGE_CACHE_MB");
+        if (int.TryParse(raw, out int mb) && mb is >= 16 and <= 1024) return (long)mb * 1024 * 1024;
+        return DefaultBytes;
     }
 
     /// <summary><c>FluentApp.Run&lt;MyApp&gt;()</c> — same, for a parameterless root component.</summary>

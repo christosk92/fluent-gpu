@@ -23,7 +23,7 @@ sealed partial class ArtistPage : Component
             bool wide = w >= 760f;
             // ArtistPopular owns its own header (title + pager) so the pager sits in the section header like WinUI.
             string popTitle = Loc.Get(Strings.Artist.TopTracksReleases);
-            Element left = Embed.Comp(() => new ArtistPopular(popular, uri, bridge, svc, popTitle))
+            Element left = Embed.Comp(() => new ArtistPopular(popular, uri, bridge, svc, popTitle, _accent))
                 with { SkeletonProxy = () => ArtistPopular.SkeletonShape(popular, popTitle) };
             Element right = Section(Loc.Get(Strings.Artist.PopularReleases), PopularReleases(albumsAll, go, play));
             return new BoxEl

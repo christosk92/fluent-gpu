@@ -29,6 +29,17 @@ public enum ImageFailureKind : byte
     HttpError = 5,    // permanent: other 4xx — not retried
     Decode = 6,       // permanent: bytes fetched but not a decodable image — not retried
     Canceled = 7,     // request was canceled (row recycled / unmounted) before completion
+    GpuResourceExhausted = 8, // transient across a later remount: backend could not admit another resident texture/SRV
+    GpuUpload = 9,    // permanent for this decode: backend rejected invalid pixels/dimensions
+}
+
+/// <summary>GPU admission result for decoded pixels. A decode is Ready only after the backend accepted its synchronous
+/// staging copy; a rejected upload must never publish a texture-less Ready handle.</summary>
+public enum ImageUploadResult : byte
+{
+    Accepted = 0,
+    ResourceExhausted = 1,
+    Invalid = 2,
 }
 
 /// <summary>Image lifecycle notification for app observability (e.g. a retry toast, a broken-art fallback, telemetry).
@@ -47,6 +58,9 @@ public readonly record struct ImageHandle(int Id)
 /// the synchronous call (it is never stored — the backend copies it into its upload heap), so the cache need not own
 /// pixel memory: it flows decoder → cache.Pump → host sink → IGpuDevice.UploadImage in one stack.</summary>
 public delegate void ImageReadyHandler(int id, System.ReadOnlySpan<byte> bgra8, int w, int h);
+
+/// <summary>Admission-aware variant of <see cref="ImageReadyHandler"/>. The span has the same call-scoped lifetime.</summary>
+public delegate ImageUploadResult ImageUploadAttemptHandler(int id, System.ReadOnlySpan<byte> bgra8, int w, int h);
 
 /// <summary>The decode seam: the portable cache asks a leaf to decode a source to a target size, off the UI thread.
 /// The Windows leaf is WIC→GPU (needs-pixels); the headless leaf is deterministic. <see cref="Pump"/> drains completions
@@ -106,10 +120,16 @@ public sealed class ImageCache
     private readonly IImageDecoder _decoder;
     private readonly long _budgetBytes;
     private readonly ImageCompleteHandler _onComplete;   // cached → Pump allocates nothing
+    private readonly ImageReadyHandler _onPixels;         // cached admission bridge → Pump allocates nothing
     private static readonly ImageReadyHandler _noPixels = static (int id, System.ReadOnlySpan<byte> p, int w, int h) => { };
     private static readonly System.Action<int> _noEvict = static _ => { };
     private ImageReadyHandler _pixelSink;
+    private ImageUploadAttemptHandler? _pixelAttemptSink;
     private System.Action<int> _evictSink;
+    // IImageDecoder guarantees a successful completion calls onPixels immediately before onComplete for the same id.
+    // Remember that one admission result so OnDecodeComplete can fold GPU rejection into the terminal cache state.
+    private int _uploadResultId;
+    private ImageUploadResult _uploadResult;
     private int _nextId = 1;
     private long _clock = 1;
     private int _pumpCompleted;
@@ -135,13 +155,26 @@ public sealed class ImageCache
         _decoder = decoder;
         _budgetBytes = budgetBytes;
         _onComplete = OnDecodeComplete;
+        _onPixels = OnPixels;
         _pixelSink = _noPixels;
         _evictSink = _noEvict;
     }
 
     /// <summary>The host wires this to <c>IGpuDevice.UploadImage</c>; the cache forwards each decode's pixels through it
     /// during <see cref="Pump"/> (transiently — the sink must copy, not store). Set once at composition.</summary>
-    public void SetPixelSink(ImageReadyHandler sink) => _pixelSink = sink ?? _noPixels;
+    public void SetPixelSink(ImageReadyHandler sink)
+    {
+        _pixelSink = sink ?? _noPixels;
+        _pixelAttemptSink = null;
+    }
+
+    /// <summary>Admission-aware GPU sink. Unlike the legacy <see cref="SetPixelSink"/>, rejection becomes a terminal
+    /// image failure instead of publishing a Ready handle with no resident texture.</summary>
+    public void SetPixelAttemptSink(ImageUploadAttemptHandler sink)
+    {
+        _pixelAttemptSink = sink;
+        _pixelSink = _noPixels;
+    }
 
     /// <summary>The host wires this to <c>IGpuDevice.EvictImage</c>; the cache calls it when residency evicts an image so
     /// the backend frees the GPU texture. Set once at composition.</summary>
@@ -168,7 +201,21 @@ public sealed class ImageCache
         var key = new SourceKey(source, targetW, targetH);
         if (_byKey.TryGetValue(key, out int id))
         {
-            _byId[id].LastUsed = _clock++;
+            var hit = _byId[id];
+            hit.LastUsed = _clock++;
+            // Capacity rejection is retryable only after every prior visual released the handle. This makes a later
+            // remount recover after residency pressure subsides without a failed visible component entering a retry loop.
+            if (hit.State == ImageState.Failed && hit.Failure == ImageFailureKind.GpuResourceExhausted && hit.Refs == 0)
+            {
+                hit.State = ImageState.Pending;
+                hit.Failure = ImageFailureKind.None;
+                hit.Attempts = 0;
+                hit.W = hit.H = 0;
+                _pendingCount++;
+                _totalRequested++;
+                Diag.Set("media", "requested", _totalRequested);
+                _decoder.Begin(id, source, targetW, targetH, priority);
+            }
             // A visible node arriving over a prefetch entry promotes the in-flight decode to the front of the queue.
             if (priority < ImagePriority.Prefetch) _decoder.Prioritize(id, priority);
             return new ImageHandle(id);
@@ -186,13 +233,15 @@ public sealed class ImageCache
 
         // LQIP: decode the blurhash once and upload it as this image's instant initial texture (replaced by the
         // full-res decode when it lands). Render-edge work, cache-miss only — never per-frame. The reveal fade starts now.
-        if (!string.IsNullOrEmpty(blurHash) && _pixelSink != _noPixels
+        if (!string.IsNullOrEmpty(blurHash) && (_pixelAttemptSink is not null || _pixelSink != _noPixels)
             && BlurHash.Decode(blurHash, BlurW, BlurH, _blurScratch))
         {
-            _pixelSink(id, _blurScratch.AsSpan(0, BlurW * BlurH * 4), BlurW, BlurH);
-            entry.TextureMs = _clockMs;
-            NoteCrossfadeDeadline(entry);
-            Diag.Count("media", "blurhash");
+            if (UploadPixels(id, _blurScratch.AsSpan(0, BlurW * BlurH * 4), BlurW, BlurH) == ImageUploadResult.Accepted)
+            {
+                entry.TextureMs = _clockMs;
+                NoteCrossfadeDeadline(entry);
+                Diag.Count("media", "blurhash");
+            }
         }
 
         _decoder.Begin(id, source, targetW, targetH, priority);
@@ -268,14 +317,52 @@ public sealed class ImageCache
     public int Pump()
     {
         _pumpCompleted = 0;
-        _decoder.Pump(_onComplete, _pixelSink);
+        _decoder.Pump(_onComplete, _onPixels);
         if (_pumpCompleted > 0) EvictToBudget();
         return _pumpCompleted;
+    }
+
+    private ImageUploadResult UploadPixels(int id, System.ReadOnlySpan<byte> pixels, int w, int h)
+    {
+        if (_pixelAttemptSink is { } attempt) return attempt(id, pixels, w, h);
+        _pixelSink(id, pixels, w, h);
+        return ImageUploadResult.Accepted;
+    }
+
+    private void OnPixels(int id, System.ReadOnlySpan<byte> pixels, int w, int h)
+    {
+        _uploadResultId = id;
+        _uploadResult = UploadPixels(id, pixels, w, h);
     }
 
     private void OnDecodeComplete(int id, bool ok, int w, int h, ImageFailureKind failure, int attempts)
     {
         if (!_byId.TryGetValue(id, out var e)) return;
+        bool uploadRejected = false;
+        if (ok && _uploadResultId == id && _uploadResult != ImageUploadResult.Accepted)
+        {
+            uploadRejected = true;
+            ok = false;
+            failure = _uploadResult == ImageUploadResult.ResourceExhausted
+                ? ImageFailureKind.GpuResourceExhausted
+                : ImageFailureKind.GpuUpload;
+            w = h = 0;
+        }
+        if (_uploadResultId == id)
+        {
+            _uploadResultId = 0;
+            _uploadResult = ImageUploadResult.Accepted;
+        }
+        if (uploadRejected)
+        {
+            // A blur-hash preview may already be resident under this id. Admission failure makes the whole handle
+            // non-drawable, so release that partial placement too; otherwise a zero-byte Failed entry leaks one SRV.
+            _evictSink(id);
+            bool wasActiveDeadline = e.Transition.Enabled && !float.IsNaN(e.TextureMs)
+                && e.TextureMs + e.Transition.DurationMs >= _clockMs;
+            e.TextureMs = float.NaN;
+            if (wasActiveDeadline) RecomputeCrossfadeDeadline();
+        }
         if (e.State == ImageState.Pending) _pendingCount--;   // leaving Pending (Ready/Failed) — mirror the former scan
         e.State = ok ? ImageState.Ready : ImageState.Failed;
         e.Failure = ok ? ImageFailureKind.None : failure;
