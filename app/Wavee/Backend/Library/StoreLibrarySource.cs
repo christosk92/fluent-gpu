@@ -30,7 +30,7 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
 
     /// <summary>Set by the live bootstrap: full-catalog online search (Pathfinder). Primary when present; the offline
     /// store track search is the fallback. Returns null on failure → caller degrades to offline.</summary>
-    public Func<string, CancellationToken, Task<SearchResults?>>? LiveSearch { get; set; }
+    public Func<string, SearchFacet, int, int, CancellationToken, Task<SearchResults?>>? LiveSearch { get; set; }
 
     /// <summary>Set by the live bootstrap: as-you-type search suggestions (Pathfinder searchSuggestions). Empty offline.</summary>
     public Func<string, CancellationToken, Task<IReadOnlyList<string>>>? LiveSuggest { get; set; }
@@ -136,7 +136,10 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     public Task<IReadOnlyList<Artist>> GetArtistsAsync(CancellationToken ct = default) => Task.FromResult(JoinSet("artists", _store.GetArtist));
     public Task<IReadOnlyList<Track>> GetLikedSongsAsync(CancellationToken ct = default) => Task.FromResult(JoinSet("liked", _store.GetTrack));
 
-    public async Task<SearchResults> SearchAsync(string query, CancellationToken ct = default)
+    public Task<SearchResults> SearchAsync(string query, CancellationToken ct = default)
+        => SearchAsync(query, SearchFacet.All, 0, 30, ct);
+
+    public async Task<SearchResults> SearchAsync(string query, SearchFacet facet, int offset, int limit, CancellationToken ct = default)
     {
         var q = query.Trim();
         if (q.Length == 0) return SearchResults.Empty;
@@ -144,12 +147,12 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         // The Store's offline track index (the cached library) is the fallback when the live session isn't up.
         if (LiveSearch is { } live)
         {
-            try { if (await live(q, ct).ConfigureAwait(false) is { } online) return online; }
-            catch (OperationCanceledException) { throw; }
-            catch { /* fall through to offline */ }
+            var online = await live(q, facet, offset, limit, ct).ConfigureAwait(false);
+            return online ?? throw new InvalidOperationException("Spotify search returned no response.");
         }
-        var tracks = _store.QueryTracks(q);
-        return new SearchResults(tracks, Array.Empty<Album>(), Array.Empty<Artist>(), Array.Empty<Playlist>());
+        var tracks = facet is SearchFacet.All or SearchFacet.Tracks ? _store.QueryTracks(q) : Array.Empty<Track>();
+        return new SearchResults(tracks, Array.Empty<Album>(), Array.Empty<Artist>(), Array.Empty<Playlist>(),
+            TracksTotal: tracks.Count);
     }
 
     public async Task<IReadOnlyList<string>> SuggestAsync(string query, CancellationToken ct = default)

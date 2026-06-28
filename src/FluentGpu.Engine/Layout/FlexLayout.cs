@@ -1037,37 +1037,55 @@ public sealed class FlexLayout
         return row ? (mainSize, crossSize) : (crossSize, mainSize);
     }
 
+    // flex-wrap arrange. Children flow into lines (CSS flex line-breaking); then — the part the original single pass
+    // skipped — each line distributes ITS leftover main to that line's flex-grow children (CSS grow applies per line,
+    // including the last), so a wrapped row fills edge-to-edge instead of leaving a ragged gap. A line with no grow child
+    // (pill/chip rows, FlexGrow 0) yields growUnit 0 and is placed at base size byte-for-byte as before. Allocation-free:
+    // two linked-list walks per line, no per-line buffer.
     private void ArrangeWrap(NodeHandle node, float finalW, float finalH, in LayoutInput li, bool row)
     {
         float padMainStart = row ? li.Padding.Left : li.Padding.Top;
         float padCrossStart = row ? li.Padding.Top : li.Padding.Left;
         float availMain = (row ? finalW : finalH) - (row ? li.Padding.Horizontal : li.Padding.Vertical);
+        float lineTop = padCrossStart;
 
-        float cursor = padMainStart, lineTop = padCrossStart, lineCross = 0f;
-        bool first = true;
-        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
+        for (var lineStart = _scene.FirstChild(node); !lineStart.IsNull;)
         {
-            ref LayoutInput cli = ref _scene.Layout(c);
-            ref RectF cb = ref _scene.Bounds(c);
-            float baseMain = row ? cb.W : cb.H, baseCross = row ? cb.H : cb.W;
-            float oMain = baseMain + MarginMain(cli, row), oCross = baseCross + MarginCross(cli, row);
-
-            if (!first && (cursor - padMainStart) + li.Gap + oMain > availMain + 0.01f)
+            // Pass 1 — gather one line: the children that fit, their base-main extent (bases + margins + gaps), total grow.
+            // The break condition mirrors MeasureWrap exactly, so arrange's line count matches the measured cross height.
+            float usedMain = 0f, totalGrow = 0f;
+            int count = 0;
+            for (var c = lineStart; !c.IsNull; c = _scene.NextSibling(c))
             {
-                lineTop += lineCross + li.Gap;   // wrap to the next line
-                cursor = padMainStart; lineCross = 0f; first = true;
+                ref LayoutInput cli = ref _scene.Layout(c);
+                ref RectF cb = ref _scene.Bounds(c);
+                float oMain = (row ? cb.W : cb.H) + MarginMain(cli, row);
+                float next = usedMain + (count > 0 ? li.Gap : 0f) + oMain;
+                if (count > 0 && next > availMain + 0.01f) break;   // CSS: always ≥1 item per line
+                usedMain = next; totalGrow += cli.FlexGrow; count++;
             }
-            if (!first) cursor += li.Gap;
 
-            float childMainPos = cursor + MarginMainStart(cli, row);
-            float childCrossPos = lineTop + MarginCrossStart(cli, row);
-            float cx = row ? childMainPos : childCrossPos;
-            float cy = row ? childCrossPos : childMainPos;
-            Arrange(c, cx, cy, row ? baseMain : baseCross, row ? baseCross : baseMain);
-
-            cursor += oMain;
-            lineCross = MathF.Max(lineCross, oCross);
-            first = false;
+            // Pass 2 — share this line's free main across its grow children (0 grow ⇒ growUnit 0 ⇒ base size), place L→R.
+            float growUnit = totalGrow > 0f ? MathF.Max(0f, availMain - usedMain) / totalGrow : 0f;
+            float cursor = padMainStart, lineCross = 0f;
+            var cc = lineStart;
+            for (int i = 0; i < count; i++, cc = _scene.NextSibling(cc))
+            {
+                ref LayoutInput cli = ref _scene.Layout(cc);
+                ref RectF cb = ref _scene.Bounds(cc);
+                float baseMain = row ? cb.W : cb.H, baseCross = row ? cb.H : cb.W;
+                float mainSize = baseMain + cli.FlexGrow * growUnit;
+                if (i > 0) cursor += li.Gap;
+                float childMainPos = cursor + MarginMainStart(cli, row);
+                float childCrossPos = lineTop + MarginCrossStart(cli, row);
+                float cx = row ? childMainPos : childCrossPos;
+                float cy = row ? childCrossPos : childMainPos;
+                Arrange(cc, cx, cy, row ? mainSize : baseCross, row ? baseCross : mainSize);
+                cursor += MarginMain(cli, row) + mainSize;
+                lineCross = MathF.Max(lineCross, baseCross + MarginCross(cli, row));
+            }
+            lineTop += lineCross + li.Gap;
+            lineStart = cc;   // cc walked exactly `count` siblings ⇒ first child of the next line (or Null)
         }
     }
 

@@ -126,20 +126,21 @@ sealed class ArtistFacePile : Component
 
     Element ArtistLinks(IReadOnlyList<Artist> billed)
     {
-        var kids = new List<Element>(billed.Count * 2);
-        for (int i = 0; i < billed.Count; i++)
+        // ONE clickable, ellipsized run (to the lead artist). A long multi-artist string must truncate CLEANLY, never clip
+        // under the scrollbar — the chevron's "view all artists" flyout is the per-artist escape hatch. Grow+Basis 0 so the
+        // run fills the width left of the avatar pile; MaxLines 1 + ellipsis keeps it to one tidy line within the rail.
+        if (billed.Count == 0) return new BoxEl();
+        var lead = billed[0];
+        bool enabled = lead.Uri.Length > 0;
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < billed.Count; i++) { if (i > 0) sb.Append(", "); sb.Append(billed[i].Name); }
+        return new BoxEl
         {
-            var a = billed[i];
-            if (i > 0) kids.Add(new TextEl(", ") { Size = 14f, Weight = 700, Color = Tok.TextSecondary });
-            bool enabled = a.Uri.Length > 0;
-            kids.Add(new BoxEl
-            {
-                Direction = 0, OnClick = enabled ? () => _h.Go("artist:" + a.Uri, a.Name) : null,
-                Cursor = enabled ? CursorId.Hand : (CursorId?)null, Role = enabled ? AutomationRole.Hyperlink : AutomationRole.Text,
-                Children = [new TextEl(a.Name) { Size = 14f, Weight = 700, Color = Tok.AccentTextPrimary }],
-            });
-        }
-        return new BoxEl { Direction = 0, Wrap = true, Grow = 1f, Basis = 0f, Children = kids.ToArray() };
+            Direction = 0, Grow = 1f, Basis = 0f, Shrink = 1f,
+            OnClick = enabled ? () => _h.Go("artist:" + lead.Uri, lead.Name) : null,
+            Cursor = enabled ? CursorId.Hand : (CursorId?)null, Role = enabled ? AutomationRole.Hyperlink : AutomationRole.Text,
+            Children = [new TextEl(sb.ToString()) { Size = 14f, Weight = 700, Color = Tok.AccentTextPrimary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }],
+        };
     }
 
     Element Flyout(IReadOnlyList<Artist> artists, Action close)

@@ -61,8 +61,8 @@ static class DetailRail
         // to a compact 2-line block. Natural line height; ellipsis is the last resort.
         kids.Add(WaveeType.PageHero(m.Title) with
         {
-            Size = titleSize, MinSize = 18f, Weight = 900, Width = cover,
-            Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis,
+            Size = titleSize, MinSize = 18f, Weight = 900, Width = cover, LineHeight = float.NaN,   // font-NATURAL leading: tracks the auto-fit size (a pinned 36 gaps badly once the font shrinks)
+            Wrap = TextWrap.Wrap, MaxLines = 3, Trim = TextTrim.CharacterEllipsis,
         });
 
         // Billed-artist row (album/single): a STACKED artist face-pile (overlapping avatars + "+N" of the distinct album
@@ -70,8 +70,9 @@ static class DetailRail
         if (cfg.Badges == BadgeStyle.TypeYear && m.Artists.Count > 0)
             kids.Add(Embed.Comp(() => new ArtistFacePile(m, cover, h)));
 
-        // Meta line.
-        if (m.MetaLine is { Length: > 0 })
+        // Meta line — albums surface Songs/Length/Released as the bento facts panel below, so an inline line would just
+        // duplicate it; only non-album surfaces (playlists / liked) show it here.
+        if (cfg.Badges != BadgeStyle.TypeYear && m.MetaLine is { Length: > 0 })
             kids.Add(WaveeType.TrackMeta(m.MetaLine) with { Width = cover, MaxLines = 2, Trim = TextTrim.CharacterEllipsis });
 
         // CTA cluster: Play pill + a GROUP of shuffle/heart/share FABs. Wrap=true → at a wide rail they're one line; at a
@@ -153,7 +154,7 @@ static class DetailRail
         info.Add(WaveeType.PageHero(m.Title) with { Size = 28f, Weight = 900, Wrap = TextWrap.Wrap, MaxLines = 3, Trim = TextTrim.CharacterEllipsis });
         if (cfg.Badges == BadgeStyle.TypeYear && m.Artists.Count > 0)
             info.Add(Embed.Comp(() => new ArtistFacePile(m, 600f, h)));
-        if (m.MetaLine is { Length: > 0 })
+        if (cfg.Badges != BadgeStyle.TypeYear && m.MetaLine is { Length: > 0 })
             info.Add(WaveeType.TrackMeta(m.MetaLine) with { MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
 
         var coverRow = new BoxEl
@@ -354,12 +355,14 @@ static class DetailRail
         }, fallback: fallbackW);
     }
 
+    // A Fluent standard button (rounded-RECT, subtle resting fill + hairline stroke), not a Spotify full-pill outline:
+    // ControlFill at rest, a lighter hover, a recessed press — the WinUI secondary-action look.
     static Element SecondaryPill(string label, Action onClick, float padX) => new BoxEl
     {
-        Direction = 0, Height = 36f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Padding = new Edges4(padX, 0f, padX, 0f), Corners = CornerRadius4.All(18f),
-        BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault,
-        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary, OnClick = onClick,
-        Children = [new TextEl(label) { Size = 13f, Weight = 600, Color = Tok.TextSecondary }],
+        Direction = 0, Height = 32f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Padding = new Edges4(padX, 0f, padX, 0f), Corners = CornerRadius4.All(WaveeRadius.Control),
+        Fill = Tok.FillCardSecondary, HoverFill = Tok.FillCardDefault, PressedFill = Tok.FillSubtleTertiary,
+        BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, OnClick = onClick,
+        Children = [new TextEl(label) { Size = 13f, Weight = 600, Color = Tok.TextPrimary }],
     };
 }

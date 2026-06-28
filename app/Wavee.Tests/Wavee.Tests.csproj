@@ -47,6 +47,8 @@
   <ItemGroup>
     <ProjectReference Include="..\Wavee.Core\Wavee.Core.csproj" />
     <Compile Include="..\Wavee\Backend\**\*.cs" />
+    <!-- the pure (FluentGpu-free) QR encoder, source-included so QrTests can round-trip-decode its output -->
+    <Compile Include="..\Wavee\Features\Auth\Qr.cs" />
   </ItemGroup>
 
 </Project>

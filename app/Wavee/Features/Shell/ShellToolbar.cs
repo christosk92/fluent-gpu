@@ -130,18 +130,7 @@ sealed class ShellToolbar : ReactiveComponent
     {
         var auth = b?.Auth.Value ?? AuthStatus.LoggedOut;   // subscribe
         if (auth == AuthStatus.Authenticated)
-        {
-            var user = b?.User.Value;                        // subscribe
-            var name = user?.DisplayName ?? "";
-            var pic = PersonPicture.Create(user?.AvatarUrl ?? "", 24f, displayName: name);   // real photo when the profile resolved (falls back to initials)
-            return new BoxEl
-            {
-                Direction = 0, Gap = 8f, AlignItems = FlexAlign.Center, Height = 32f,
-                Padding = new Edges4(4f, 0f, showName ? 10f : 4f, 0f), Corners = CornerRadius4.All(WaveeRadius.Control),
-                HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary, OnClick = () => { },
-                Children = showName ? new Element[] { pic, Caption(name).Primary() } : new Element[] { pic },
-            };
-        }
+            return Embed.Comp(() => new ProfileMenu(b!, showName));   // avatar chip → account MenuFlyout → modal logout confirm
         if (auth == AuthStatus.Authenticating)
             return new BoxEl { Height = 32f, AlignItems = FlexAlign.Center, Padding = new Edges4(8f, 0f, 8f, 0f), Children = [ Caption(Loc.Get(Strings.Shell.Connecting)).Secondary() ] };
         return Button.Accent(Loc.Get(Strings.Shell.SignIn), () => { _ = b?.Session.ConnectAsync(); });

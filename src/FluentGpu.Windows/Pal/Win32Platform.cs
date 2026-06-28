@@ -338,6 +338,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private readonly GCHandle _self;
     private readonly Queue<InputEvent> _queue = new();
     private Win32TextInput _textInput = null!;   // created right after the HWND exists (WndProc IME cases route to it)
+    private UiaProviderCcw* _uiaProvider;        // the window's minimal UIA root provider (the live-region announcer)
     private int _w, _h;
     private float _scale = 1f;
     private bool _closed;
@@ -444,6 +445,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         // and the OS drop-effect cursor, which WM_DROPFILES cannot. Best-effort: null on a non-STA thread / if it fails
         // (the window then receives no OS drops). Revoked in Dispose. (RegisterDragDrop SUPPRESSES WM_DROPFILES.)
         _dropReg = Win32DropTarget.Register(_hwnd);
+
+        // A minimal UIA root provider for the window (served via WM_GETOBJECT) + the live-region announcer the app reaches
+        // through InputHooks.Announce. Best-effort a11y: a null/failed provider just means no screen-reader announcements.
+        _uiaProvider = UiaProviderCcw.Create((nint)_hwnd);
+        FluentGpu.Hooks.InputHooks.Current.Default.Announce = AnnounceUia;
     }
 
     /// <summary>Desired-client → window-rect outsets. Standard frame: <c>AdjustWindowRectEx</c>. Custom frame: the
@@ -707,12 +713,19 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     /// may call this directly; WM_NULL (0) is discarded by the pump after waking.</summary>
     public void Wake() => PostMessageW(_hwnd, 0u /* WM_NULL */, 0, 0);
 
+    /// <summary>Raise a screen-reader announcement (UIA live region) on this window's provider — wired onto
+    /// <see cref="FluentGpu.Hooks.InputHooks"/>.Announce. Best-effort; a no-op when no assistive tech is listening.</summary>
+    internal void AnnounceUia(string text, bool assertive) => Win32Uia.Announce(_uiaProvider, text, assertive);
+
     public void Dispose()
     {
         Win32DropTarget.Revoke(_dropReg);   // RevokeDragDrop + free the CCW before the HWND dies
         _dropReg = null;
         _textInput?.DisposeSip();   // release the WinRT InputPane refs + SIP event subscriptions before the HWND dies
         if (_hwnd != HWND.NULL) { KillTimer(_hwnd, MoveLoopTimerId); DestroyWindow(_hwnd); }
+        // The UIA provider CCW is intentionally LEAKED (not freed): UIA may still hold a ref after the HWND dies and a
+        // synchronous free would risk a use-after-free. A few bytes, one per window, reclaimed at process exit.
+        if (_uiaProvider != null) { _uiaProvider = null; FluentGpu.Hooks.InputHooks.Current.Default.Announce = null; }
         if (_self.IsAllocated) _self.Free();
     }
 
@@ -750,6 +763,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         {
             case WM_DESTROY: _closed = true; PostQuitMessage(0); return true;
             case WM_CLOSE: _closed = true; DestroyWindow(hWnd); return true;
+            case Win32Uia.WM_GETOBJECT:
+                // Hand the UIA root provider to a connecting client; non-UIA object ids fall through to DefWindowProc.
+                if (Win32Uia.HandleGetObject((nint)hWnd, (nint)wParam, (nint)lParam, _uiaProvider, out nint uiaRes)) { result = (LRESULT)uiaRes; return true; }
+                return false;
             case WM_ERASEBKGND: result = (LRESULT)1; return true;   // we paint every pixel — suppress the flicker-erase
             case WM_SIZE:
                 // Iconic size is 0×0 — adopting it would churn a degenerate swapchain resize + full relayout, and the

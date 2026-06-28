@@ -35,7 +35,7 @@ public enum MotionTokenId : ushort
 }
 
 /// <summary>A resolved motion recipe: dynamics (eased OR spring) + the reduced-motion policy. 24B-ish POD.</summary>
-public readonly struct MotionTokenDef
+public readonly struct MotionTokenDef : System.IEquatable<MotionTokenDef>
 {
     public readonly IntegrationMode Mode;
     public readonly Easing Easing;          // Mode == Eased
@@ -69,6 +69,15 @@ public readonly struct MotionTokenDef
         }
         return TransitionDynamics.Tween(DurationMs, Easing);
     }
+
+    // IEquatable so the base Element.Transition (Prop-adjacent: a `MotionTokenDef?` on EVERY node) diffs through the
+    // no-box GenericEqualityComparer/NullableEqualityComparer path, not ObjectEqualityComparer's boxing + reflection
+    // ValueType.Equals (which would also recurse-box the nested SpringParams). Field-wise, matching ValueType.Equals.
+    public bool Equals(MotionTokenDef other)
+        => Mode == other.Mode && Easing == other.Easing && DurationMs == other.DurationMs
+        && Spring.Equals(other.Spring) && Reduced == other.Reduced;
+    public override bool Equals(object? obj) => obj is MotionTokenDef o && Equals(o);
+    public override int GetHashCode() => System.HashCode.Combine((int)Mode, (int)Easing, DurationMs, Spring, (int)Reduced);
 }
 
 /// <summary>A gesture-state target set (Framer <c>whileHover</c>/<c>whileTap</c>): the channel values a node animates

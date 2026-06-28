@@ -22,14 +22,41 @@ public sealed record SearchSuggestions(
         System.Array.Empty<string>(), System.Array.Empty<SearchSuggestionItem>());
 }
 
+public enum SearchFacet { All, Tracks, Albums, Playlists, Audiobooks, Podcasts, Artists }
+
+public enum SearchHitKind { Track, Artist, Album, Playlist, Audiobook, Podcast, Episode, Author, User, Unknown }
+
+/// <summary>One row of Spotify's unified search top-results (topResultsV2.itemsV2) — SERVER ORDER preserved (the first
+/// item IS the Top Result), each carrying its type and the per-hit eyebrow signals: a "LYRICS" lyric match, and an
+/// audiobook's access note ("Included in Premium") plus optional secondary metadata such as publish date/duration.</summary>
+public sealed record SearchTopHit(
+    SearchHitKind Kind, string Uri, string Name, string Subtitle, string TypeLabel,
+    Image? Image, bool RoundImage, bool Followable, bool MatchedLyrics, string? AccessLabel,
+    string? Detail = null,
+    string? Meta = null);
+
 public sealed record SearchResults(
     IReadOnlyList<Track> Tracks,
     IReadOnlyList<Album> Albums,
     IReadOnlyList<Artist> Artists,
-    IReadOnlyList<Playlist> Playlists)
+    IReadOnlyList<Playlist> Playlists,
+    IReadOnlyList<SearchTopHit>? TopHits = null,
+    int TracksTotal = -1,
+    int AlbumsTotal = -1,
+    int ArtistsTotal = -1,
+    int PlaylistsTotal = -1)
 {
     public static readonly SearchResults Empty = new(
         System.Array.Empty<Track>(), System.Array.Empty<Album>(), System.Array.Empty<Artist>(), System.Array.Empty<Playlist>());
+
+    public int TotalFor(SearchFacet facet) => facet switch
+    {
+        SearchFacet.Tracks => TracksTotal >= 0 ? TracksTotal : Tracks.Count,
+        SearchFacet.Albums => AlbumsTotal >= 0 ? AlbumsTotal : Albums.Count,
+        SearchFacet.Artists => ArtistsTotal >= 0 ? ArtistsTotal : Artists.Count,
+        SearchFacet.Playlists => PlaylistsTotal >= 0 ? PlaylistsTotal : Playlists.Count,
+        _ => TopHits?.Count ?? Tracks.Count + Albums.Count + Artists.Count + Playlists.Count,
+    };
 }
 
 /// <summary>One page of a streamed track list (skeleton-then-stream — see docs/architecture.md §3/§6): the tracks
@@ -57,6 +84,7 @@ public interface IMusicLibrary
     Task<DiscographyPage> GetDiscographyAsync(string artistUri, DiscographyKind kind, int offset, int limit, CancellationToken ct = default);
     Task<IReadOnlyList<LibraryItem>> GetLibraryAsync(CancellationToken ct = default);
     Task<SearchResults> SearchAsync(string query, CancellationToken ct = default);
+    Task<SearchResults> SearchAsync(string query, SearchFacet facet, int offset, int limit, CancellationToken ct = default);
     /// <summary>As-you-type search suggestions for the omnibar dropdown (online catalog; empty offline).</summary>
     Task<IReadOnlyList<string>> SuggestAsync(string query, CancellationToken ct = default);
     /// <summary>As-you-type search suggestions with typed rich hits from the same online response.</summary>

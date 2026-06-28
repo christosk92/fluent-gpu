@@ -63,6 +63,16 @@ static class Program
             Environment.Exit(code);
         }
 
+        // QR diagnostic: encode [text] with the REAL Qr encoder → ASCII + a crisp PNG (isolates the encoder from the GUI
+        // renderer). Usage: --qr-dump [text] [outpath.png]
+        int qrIdx = Array.IndexOf(args, "--qr-dump");
+        if (qrIdx >= 0)
+        {
+            string qtext = qrIdx + 1 < args.Length && !args[qrIdx + 1].StartsWith("--") ? args[qrIdx + 1] : "https://spotify.com/pair";
+            string qpath = qrIdx + 2 < args.Length && !args[qrIdx + 2].StartsWith("--") ? args[qrIdx + 2] : "qr.png";
+            Environment.Exit(QrDump.Run(qtext, qpath, Console.Error.WriteLine));
+        }
+
         // Headless LIVE Spotify login (real network): OAuth device-code → AP handshake + login → APWelcome.
         if (Array.IndexOf(args, "--spotify-login") >= 0)
         {
@@ -145,9 +155,10 @@ static class Program
         Localization.DefaultCulture = "en-US";
         Localization.LoadFolder(Path.Combine(AppContext.BaseDirectory, "assets", "loc"));
 
-        // --real-backend: wire the persistent Store-backed catalog + durable mutations instead of the FakeData demo (the
-        // live sync — login → spclient fetchers → the hm:// dealer — is the bootstrap that fills it; an unsynced run is empty).
-        Services.UseRealBackend = Array.IndexOf(args, "--real-backend") >= 0;
+        // Real (live Spotify) backend is the DEFAULT: the persistent Store-backed catalog + durable mutations, hydrated by
+        // the live session (login → spclient fetchers → the hm:// dealer) that the login takeover starts on launch. Pass
+        // --fake for the offline FakeData demo (populated UI with no login/network — used by --screenshot and UI iteration).
+        Services.UseRealBackend = Array.IndexOf(args, "--fake") < 0;
 
         // Premium-only gate: Wavee requires a Spotify Premium account for now. A Free account is refused OUTRIGHT — we do
         // NOT bring up the window; we show a nice warning and exit. (No real login yet, so this defaults to Premium; pass

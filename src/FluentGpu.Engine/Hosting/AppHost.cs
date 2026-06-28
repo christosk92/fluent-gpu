@@ -642,6 +642,7 @@ public sealed class AppHost : IDisposable
         // the InputHooks.Current channel-default instance too (last-constructed host wins — matches the
         // single-window v1 host model; headless checks construct hosts sequentially).
         InputHooks.Current.Default.OpenUri = app.OpenUri;
+        InputHooks.Current.Default.Clipboard = app.Clipboard;   // mirror the clipboard too (static factories / host-less reads use the default)
 
         // OS file/folder drop seam (the inbound twin of OpenUri): the platform's file-drop handler (the Windows backend's
         // WM_DROPFILES case) invokes these on the UI thread via the normal message pump; they drive the dispatcher's

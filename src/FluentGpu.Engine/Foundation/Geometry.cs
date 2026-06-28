@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace FluentGpu.Foundation;
 
 public readonly record struct Size2(float Width, float Height)
@@ -170,19 +172,21 @@ public readonly record struct Affine2D(float M11, float M12, float M21, float M2
     }
     public bool IsIdentity => M11 == 1f && M12 == 0f && M21 == 0f && M22 == 1f && Dx == 0f && Dy == 0f;
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Point2 Transform(Point2 p) => new(M11 * p.X + M21 * p.Y + Dx, M12 * p.X + M22 * p.Y + Dy);
 
     /// <summary>The axis-aligned bounding box of <paramref name="r"/> after this transform (device-space clip/cull rect).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public RectF TransformBounds(in RectF r)
     {
-        var p0 = Transform(new Point2(r.X, r.Y));
-        var p1 = Transform(new Point2(r.Right, r.Y));
-        var p2 = Transform(new Point2(r.X, r.Bottom));
-        var p3 = Transform(new Point2(r.Right, r.Bottom));
-        float minX = MathF.Min(MathF.Min(p0.X, p1.X), MathF.Min(p2.X, p3.X));
-        float minY = MathF.Min(MathF.Min(p0.Y, p1.Y), MathF.Min(p2.Y, p3.Y));
-        float maxX = MathF.Max(MathF.Max(p0.X, p1.X), MathF.Max(p2.X, p3.X));
-        float maxY = MathF.Max(MathF.Max(p0.Y, p1.Y), MathF.Max(p2.Y, p3.Y));
+        float x = M11 * r.X + M21 * r.Y + Dx;
+        float y = M12 * r.X + M22 * r.Y + Dy;
+        float wx = M11 * r.W, wy = M12 * r.W;
+        float hx = M21 * r.H, hy = M22 * r.H;
+        float minX = x + MathF.Min(0f, wx) + MathF.Min(0f, hx);
+        float minY = y + MathF.Min(0f, wy) + MathF.Min(0f, hy);
+        float maxX = x + MathF.Max(0f, wx) + MathF.Max(0f, hx);
+        float maxY = y + MathF.Max(0f, wy) + MathF.Max(0f, hy);
         return new RectF(minX, minY, maxX - minX, maxY - minY);
     }
 

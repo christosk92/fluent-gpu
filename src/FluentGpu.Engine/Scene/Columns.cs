@@ -138,6 +138,7 @@ public struct NodePaint
     public bool OpacityGroup;
     public int ImageId;           // VisualKind.Image: handle into the ImageCache (Fill doubles as the placeholder tint)
     public byte ImageFit;         // VisualKind.Image: (ImageFit) content-fit mode; 0 = Cover (default). Read by the recorder
+    public float ImageFocusX, ImageFocusY;
     public VisualKind VisualKind;
 
     /// <summary><see cref="TextDecorations"/>: draw the face-metric underline bar.</summary>
@@ -159,6 +160,8 @@ public struct NodePaint
         StrokeTrimStart = float.NaN,
         StrokeTrimEnd = float.NaN,
         Fill = ColorF.Transparent,
+        ImageFocusX = 0.5f,
+        ImageFocusY = 0.5f,
         VisualKind = VisualKind.None,
     };
 }

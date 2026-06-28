@@ -65,6 +65,9 @@ public sealed class TreeReconciler
     // Skeleton-loading: per SkelRegionEl node, the last branch (0 none / 1 shimmer / 2 real / 3 failed), the last-mounted
     // child element (for ReconcileSingleChild's type-compare), and the reveal-group token (for the group coordinator).
     private readonly Dictionary<int, (byte Branch, Element? El, object? Group)> _skelState = new();
+    private readonly Dictionary<int, SkelRegionEl> _skelEl = new();
+    private readonly Dictionary<int, Effect> _skelEffect = new();
+    private readonly HashSet<int> _skelForce = new();
     // KeepAlive boundaries retain inactive page subtrees detached from the live child chain. Entries are node-owned so
     // unmounting the boundary releases every parked component/effect/resource deterministically.
     private sealed class KeepAliveEntry
@@ -424,9 +427,10 @@ public sealed class TreeReconciler
             return;   // autonomous retained-page boundary
         }
 
-        if (newEl is SkelRegionEl)
+        if (newEl is SkelRegionEl nskr)
         {
-            return;   // autonomous skeleton boundary — its effect manages shimmer↔real on the loadable's state
+            UpdateSkeletonRegion(node, nskr);
+            return;
         }
 
         if (newEl is ContextProviderEl np)
@@ -604,15 +608,14 @@ public sealed class TreeReconciler
         AddBinding(node, eff);
     }
 
-    // Native skeleton-loading boundary (modelled on MountShow): a reconcile effect reads the loadable's STATE via
-    // se.Pending()/se.Failed() (subscribes State; se.Content() reads Value via Peek, so a value change never re-fires
-    // here) and mounts one of three branches — a DERIVED shimmer, the real content, or the onFailed UI. On the
-    // shimmer→real edge it blur-reveals the freshly-mounted real subtree (the existing recipes); the looping pulse is
-    // cancelled on the orphan-exit path (Remove) so HasTracks drops and the idle wake-stop is not defeated.
+    // Native skeleton-loading boundary (modelled on MountShow): a reconcile effect reads the current loadable's state,
+    // and the real branch reads its value so Ready-to-Ready refreshes reconcile in place. Parent re-renders replace the
+    // stored SkelRegionEl and schedule this same effect, so dependency tracking follows the latest loadable.
     private void MountSkeletonRegion(NodeHandle node, SkelRegionEl se)
     {
         int mountIdx = (int)node.Raw.Index;
         _skelState[mountIdx] = (0, null, se.Group);
+        _skelEl[mountIdx] = se;
         if (se.Group is { } grp) SkelGroupCoordinator.Register(grp, mountIdx);
 
         // Smooth-resize: mark the region BoundsAnimated with a SizeMode.Reflow transition so a branch swap whose new
@@ -630,64 +633,91 @@ public sealed class TreeReconciler
 
         var eff = new Effect(Runtime, () =>
         {
-            if (!_scene.IsLive(node)) return;
             int idx = (int)node.Raw.Index;
-            var (lastBranch, lastEl, _) = _skelState.TryGetValue(idx, out var st) ? st : ((byte)0, (Element?)null, se.Group);
-
-            byte branch = se.Failed() ? (byte)3 : se.Pending() ? (byte)1 : (byte)2;   // 1 shimmer / 2 real / 3 failed
-            if (branch == lastBranch) return;   // state didn't flip the branch (a value-only change won't reach here)
-
-            Element? desired = branch switch
-            {
-                // Reduced motion ⇒ no exit-fade stamp (the swap snaps); the pulse + reveal already no-op under it.
-                // Content-owned reveal (SkelReveal.None): the shimmer must LINGER across the content's own per-row
-                // entrance (it draws behind the live tree, so a too-fast exit leaves an empty gap before the rows fade
-                // up). Floor the exit at the standard content-reveal duration so apps get the cross-dissolve for free —
-                // no hand-tuned ExitMs to match the list's row-add timing.
-                // The pending tree is removed immediately on Ready. Keeping it as an exiting orphan over the newly
-                // mounted real tree produced a visibly "half resolved" page when an exit track was delayed/wedged.
-                // The real branch still owns the configured reveal below, so the swap remains animated without two
-                // complete page trees painting simultaneously.
-                1 => SkeletonDeriver.Derive((se.ShimmerSource ?? se.Content)(), se.Style),
-                3 => se.OnFailed?.Invoke(),
-                _ => se.Content(),
-            };
-            ReconcileSingleChild(node, desired, lastEl);
-            // Inherit the active branch's layout participation (Grow/size) onto this transparent boundary — exactly like a
-            // component (ReconcileComponent) or KeepAlive (ReconcileKeepAlive) does. Without it the SkelRegion node keeps its
-            // default Grow=0, so a Grow=1 content subtree (e.g. a single-column virtualized list whose only intrinsic height
-            // is its chrome) can't fill its parent: the region collapses to the content's intrinsic size and a viewport-driven
-            // list realizes 0 rows (the empty-Liked bug). Large-intrinsic content (home shelves, a detail rail) masked it.
-            MirrorParticipation(node, _scene.FirstChild(node));
-            _scene.Mark(node, NodeFlags.LayoutDirty);
-            _skelState[idx] = (branch, desired, se.Group);
-
-            // Hide the enclosing scrollbar while this region is loading (branch 1): the short skeleton → tall real swap
-            // would otherwise pop the rail from a tiny thumb to its real size. Restored on Ready/Failed.
-            SetSkeletonScrollbarSuppression(node, branch == 1);
-
-            if (branch == 1 && Anim is { } a1)
-            {
-                // Pulse the whole derived skeleton (one looping track on the root; CancelAll on the orphan path kills it).
-                var shimmerRoot = _scene.FirstChild(node);
-                if (!shimmerRoot.IsNull) a1.SkeletonPulse(shimmerRoot, se.Style.PulseMin, se.Style.PulseMs);
-            }
-            else if (branch == 2 && lastBranch == 1 && Anim is { } a2)
-            {
-                // Shimmer→real: blur-reveal the freshly-mounted real subtree (grouped regions reveal together).
-                var realRoot = _scene.FirstChild(node);
-                void Reveal() { if (!realRoot.IsNull && _scene.IsLive(realRoot)) SkeletonReveal.Play(a2, _scene, se.Reveal, realRoot, se.Style); }
-                if (se.Group is { } g) SkelGroupCoordinator.Done(g, idx, Reveal);
-                else Reveal();
-            }
-            else if (branch == 3 && lastBranch != 3 && se.Group is { } gf)
-            {
-                SkelGroupCoordinator.Done(gf, idx, null);   // a failed member still completes its group's round
-            }
-
-            MirrorParticipation(node, _scene.FirstChild(node));
-        }, owner: null, runNow: true);
+            bool force = _skelForce.Remove(idx);
+            ReconcileSkeletonRegion(node, force);
+        }, owner: null, runNow: false);
+        _skelEffect[mountIdx] = eff;
         AddBinding(node, eff);
+        eff.RunNow();
+    }
+
+    private void UpdateSkeletonRegion(NodeHandle node, SkelRegionEl next)
+    {
+        int idx = (int)node.Raw.Index;
+        object? oldGroup = _skelState.TryGetValue(idx, out var st) ? st.Group : null;
+        if (!Equals(oldGroup, next.Group))
+        {
+            if (oldGroup is not null) SkelGroupCoordinator.Unregister(oldGroup, idx);
+            if (next.Group is not null) SkelGroupCoordinator.Register(next.Group, idx);
+            if (_skelState.TryGetValue(idx, out st)) _skelState[idx] = (st.Branch, st.El, next.Group);
+        }
+
+        _skelEl[idx] = next;
+        _skelForce.Add(idx);
+        if (_skelEffect.TryGetValue(idx, out var eff)) eff.Schedule();
+    }
+
+    private void ReconcileSkeletonRegion(NodeHandle node, bool force)
+    {
+        if (!_scene.IsLive(node)) return;
+        int idx = (int)node.Raw.Index;
+        if (!_skelEl.TryGetValue(idx, out var se)) return;
+        var (lastBranch, lastEl, _) = _skelState.TryGetValue(idx, out var st) ? st : ((byte)0, (Element?)null, se.Group);
+
+        byte branch = se.Failed() ? (byte)3 : se.Pending() ? (byte)1 : (byte)2;   // 1 shimmer / 2 real / 3 failed
+        bool sameBranch = branch == lastBranch;
+        if (sameBranch && !force && branch != 2 && !(branch == 1 && se.ShimmerSource is null)) return;
+
+        Element? desired = branch switch
+        {
+            // Reduced motion ⇒ no exit-fade stamp (the swap snaps); the pulse + reveal already no-op under it.
+            // Content-owned reveal (SkelReveal.None): the shimmer must LINGER across the content's own per-row
+            // entrance (it draws behind the live tree, so a too-fast exit leaves an empty gap before the rows fade
+            // up). Floor the exit at the standard content-reveal duration so apps get the cross-dissolve for free —
+            // no hand-tuned ExitMs to match the list's row-add timing.
+            // The pending tree is removed immediately on Ready. Keeping it as an exiting orphan over the newly
+            // mounted real tree produced a visibly "half resolved" page when an exit track was delayed/wedged.
+            // The real branch still owns the configured reveal below, so the swap remains animated without two
+            // complete page trees painting simultaneously.
+            1 => SkeletonDeriver.Derive((se.ShimmerSource ?? se.Content)(), se.Style),
+            3 => se.OnFailed?.Invoke(),
+            _ => se.Content(),
+        };
+        ReconcileSingleChild(node, desired, lastEl);
+        // Inherit the active branch's layout participation (Grow/size) onto this transparent boundary — exactly like a
+        // component (ReconcileComponent) or KeepAlive (ReconcileKeepAlive) does. Without it the SkelRegion node keeps its
+        // default Grow=0, so a Grow=1 content subtree (e.g. a single-column virtualized list whose only intrinsic height
+        // is its chrome) can't fill its parent: the region collapses to the content's intrinsic size and a viewport-driven
+        // list realizes 0 rows (the empty-Liked bug). Large-intrinsic content (home shelves, a detail rail) masked it.
+        MirrorParticipation(node, _scene.FirstChild(node));
+        _scene.Mark(node, NodeFlags.LayoutDirty);
+        _skelState[idx] = (branch, desired, se.Group);
+
+        // Hide the enclosing scrollbar while this region is loading (branch 1): the short skeleton → tall real swap
+        // would otherwise pop the rail from a tiny thumb to its real size. Restored on Ready/Failed.
+        SetSkeletonScrollbarSuppression(node, branch == 1);
+
+        if (branch == 1 && lastBranch != 1 && Anim is { } a1)
+        {
+            // Pulse the whole derived skeleton (one looping track on the root; CancelAll on the orphan path kills it).
+            var shimmerRoot = _scene.FirstChild(node);
+            if (!shimmerRoot.IsNull) a1.SkeletonPulse(shimmerRoot, se.Style.PulseMin, se.Style.PulseMs);
+        }
+        else if (branch == 2 && lastBranch == 1 && Anim is { } a2)
+        {
+            // Shimmer→real: blur-reveal the freshly-mounted real subtree (grouped regions reveal together).
+            var realRoot = _scene.FirstChild(node);
+            void Reveal() { if (!realRoot.IsNull && _scene.IsLive(realRoot)) SkeletonReveal.Play(a2, _scene, se.Reveal, realRoot, se.Style); }
+            if (se.Group is { } g) SkelGroupCoordinator.Done(g, idx, Reveal);
+            else Reveal();
+        }
+        else if (branch == 3 && lastBranch != 3 && se.Group is { } gf)
+        {
+            SkelGroupCoordinator.Done(gf, idx, null);   // a failed member still completes its group's round
+        }
+
+        MirrorParticipation(node, _scene.FirstChild(node));
     }
 
     private void MountFor(NodeHandle node, ForEl fe)
@@ -1622,6 +1652,9 @@ public sealed class TreeReconciler
             Array.Clear(fs.Prev, 0, fs.Len);
             ArrayPool<Element>.Shared.Return(fs.Prev);
         }
+        _skelEl.Remove(idx);
+        _skelEffect.Remove(idx);
+        _skelForce.Remove(idx);
         if (_skelState.Remove(idx, out var sk) && sk.Group is { } skg) SkelGroupCoordinator.Unregister(skg, idx);
         if (_comps.Remove(node, out var e)) { e.Effect?.Dispose(); e.Comp.Unmount(); _live.Remove(e.Comp); _anchorOf.Remove(e.Comp); }
         if (_virtuals.Remove(node, out var v))
@@ -2226,6 +2259,8 @@ public sealed class TreeReconciler
                 if (!im.Placeholder.IsBound) paint.Fill = im.Placeholder.Value;   // bound rows tint via the binding
                 paint.Corners = im.Corners;
                 paint.ImageFit = (byte)im.Fit;
+                paint.ImageFocusX = Math.Clamp(im.FocusX, 0f, 1f);
+                paint.ImageFocusY = Math.Clamp(im.FocusY, 0f, 1f);
 
                 // Decode-target size: explicit Width/Height when set; otherwise the DecodePx hint (a fluid/aspect image's
                 // real box size isn't known until layout), deriving the cross dimension from AspectRatio when possible.

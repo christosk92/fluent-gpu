@@ -106,14 +106,18 @@
     "worldRank": "#{rank} in the world",
     "monthlyListeners": "{count} monthly listeners",
     "followers": "{count} followers",
-    "heroMeta": "{monthly} monthly listeners · {followers} followers · {albums} albums · {singles} singles",
+    "metaMonthly": "monthly listeners",
+    "metaFollowers": "followers",
+    "metaAlbums": "albums",
+    "metaSingles": "singles",
     "stat": {
       "monthly": "Monthly listeners",
       "followers": "Followers",
       "albums": "Albums",
       "singles": "Singles & EPs",
       "concerts": "Upcoming concerts",
-      "related": "Related artists"
+      "related": "Related artists",
+      "worldRank": "World rank"
     }
   },
 
@@ -214,6 +218,62 @@
     "darkTheme": "Dark theme"
   },
 
+  "auth": {
+    "welcomeTagline": "Your Spotify library, beautifully fast.",
+    "continueWithSpotify": "Continue with Spotify",
+    "noPasswordHelper": "You'll approve Wavee on Spotify — no password needed here.",
+    "restoringSession": "Restoring your session…",
+    "gettingCode": "Getting your code…",
+    "signingIn": "Signing you in…",
+    "signingInSub": "Setting up your library.",
+    "useACode": "Use a code instead",
+    "browserWaiting": "Finish signing in in your browser…",
+    "browserWaitingSub": "We opened Spotify in your browser. Approve there to continue.",
+    "logIn": "Log in",
+    "spotifySignInWeb": "Sign in with your Spotify® account on the Spotify® website",
+    "disclaimer": "Disclaimer: Spotify® and the Spotify logo are registered trademarks of Spotify AB. All trademarks, logos, and brand names are the property of their respective owners. Their use in this application is for identification purposes only and does not imply any endorsement or affiliation.",
+    "scanToLogIn": "Scan QR code to log in",
+    "orGoTo": "Go to",
+    "enterCodeColon": "and enter this code:",
+    "readyStatus": "Ready to authenticate. Use the QR code, pairing code, or open in browser.",
+    "close": "Close",
+    "open": "Open",
+    "or": "OR",
+    "authorizeTitle": "Log in with a code",
+    "step1": "On your phone or computer, go to",
+    "pairUrl": "spotify.com/pair",
+    "step2": "and enter this code:",
+    "copyCode": "Copy code",
+    "copied": "Copied",
+    "scanToSkip": "Scan to skip typing",
+    "waitingApproval": "Waiting for you to authorize…",
+    "reconnecting": "Reconnecting…",
+    "expiresIn": "Expires in {time}",
+    "antiPhishing": "Only enter a code you started here. Wavee never asks for your password.",
+    "openPairPage": "Open spotify.com/pair",
+    "cancel": "Cancel",
+    "codeExpired": "That code expired",
+    "codeExpiredBody": "Codes are short-lived for your security.",
+    "getNewCode": "Get a new code",
+    "couldntSignIn": "Couldn't sign in",
+    "networkError": "We couldn't reach Spotify. Check your connection and try again.",
+    "tryAgain": "Try again",
+    "back": "Back",
+    "premiumTitle": "Wavee needs Spotify Premium",
+    "premiumBody": "Wavee streams full-quality, on-demand audio, which Spotify only allows on Premium accounts. You're signed in to a Free account, so playback is blocked.",
+    "upgrade": "Go to Premium",
+    "useAnotherAccount": "Use a different account",
+    "logOut": "Log out",
+    "account": "Account",
+    "settings": "Settings",
+    "switchAccount": "Switch account…",
+    "manageAccount": "Manage account on the web",
+    "logoutConfirmTitle": "Log out of Wavee?",
+    "logoutConfirmBody": "You'll need to authorize Wavee again to stream your library.",
+    "premiumBadge": "Spotify Premium",
+    "freeBadge": "Spotify Free"
+  },
+
   "player": {
     "nothingPlaying": "Nothing playing",
     "loading": "Loading…",
@@ -225,7 +285,8 @@
     "like": "Like",
     "queue": "Queue",
     "devices": "Devices",
-    "nowPlaying": "Now playing"
+    "nowPlaying": "Now playing",
+    "playingOn": "Playing on {device}"
   },
 
   "nav": {

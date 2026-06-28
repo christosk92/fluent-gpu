@@ -672,12 +672,13 @@ public sealed partial class RenderContext
     {
         var loadable = cell.Loadable;
         var token = cell.Cts.Token;
-        _ = Run();
+        _ = Task.Run(Run);
 
         async Task Run()
         {
             try
             {
+                token.ThrowIfCancellationRequested();
                 T v = await loader(token).ConfigureAwait(false);
                 if (!token.IsCancellationRequested)
                     post(() => { if (!token.IsCancellationRequested) loadable.SetReady(v); });

@@ -574,6 +574,9 @@ public sealed record ImageEl : Element
     /// <summary>How the decoded pixels map into the layout box — see <see cref="ImageFit"/>. Default
     /// <see cref="ImageFit.Cover"/> (aspect-preserving crop), what most grids want; harmless for square-source/square-box.</summary>
     public ImageFit Fit { get; init; } = ImageFit.Cover;
+    /// <summary>Focal point for Cover crops, normalized 0..1. Default 0.5,0.5 centres the decoded image.</summary>
+    public float FocusX { get; init; } = 0.5f;
+    public float FocusY { get; init; } = 0.5f;
     /// <summary>Decode-size hint (target px) used when the layout extent is fluid (<see cref="Width"/> is <c>NaN</c>, so the
     /// real box size isn't known at request time). Ignored when <see cref="Width"/> is explicit (that drives the decode).
     /// <c>NaN</c> ⇒ decode at source resolution.</summary>

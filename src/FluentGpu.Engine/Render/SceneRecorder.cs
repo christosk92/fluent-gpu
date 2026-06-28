@@ -233,6 +233,8 @@ public static class SceneRecorder
         NodeFlags flags = scene.Flags(node);
         if ((flags & NodeFlags.Visible) == 0) return;   // invisible subtree contributes nothing
         stats.NodesVisited++;
+        bool maybeSparsePaint = (flags & NodeFlags.SparsePaint) != 0;
+        bool hasInteractionAnim = (flags & NodeFlags.InteractionAnim) != 0;
         // Motion gate for glyph snapping: a transform write this frame (scroll/fling/drag/FLIP/sticky — every motion
         // writer marks TransformDirty; the host clears the bits right after record) means this subtree is mid-motion.
         // Its glyph runs skip the device-grid baseline snap and ride sub-pixel WITH their plates (no 1px shear against
@@ -250,9 +252,9 @@ public static class SceneRecorder
         // Interaction-driven composited scale (thumb hover-grow): scale about the node centre by the eased hover/press.
         // The progress comes from the node's own row if it is interactive, else from the nearest interactive ancestor
         // (a slider/scrollbar thumb is non-interactive — drag stays on the track — but grows when the control is used).
-        if (scene.TryGetInteract(node, out var iaScale) && (iaScale.HoverScale != 1f || iaScale.PressScale != 1f))
+        if (hasInteractionAnim && scene.TryGetInteract(node, out var iaScale) && (iaScale.HoverScale != 1f || iaScale.PressScale != 1f))
         {
-            TryResolveInteractionProgress(scene, node, out float useH, out float useP);
+            TryResolveInteractionProgress(scene, node, flags, out float useH, out float useP);
             float hs = 1f + (iaScale.HoverScale - 1f) * useH;
             float isc = hs + (iaScale.PressScale - hs) * useP;
             if (MathF.Abs(isc - 1f) > 0.0008f)
@@ -270,7 +272,7 @@ public static class SceneRecorder
         float childScaleX = netScaleX * p.LocalTransform.M11;   // the scale this node imposes on its children
         float childScaleY = netScaleY * p.LocalTransform.M22;
 
-        float opacity = parentOpacity * ResolveOpacity(scene, node, in p);
+        float opacity = parentOpacity * ResolveOpacity(scene, node, flags, in p);
 
         // Presented extent (layout-transition "Reveal"): the node's own fill + its child clip are drawn at PresentedW/H
         // when set (which may exceed the model bounds during a shrink), while layout/hit-test keep the model Bounds.
@@ -281,6 +283,7 @@ public static class SceneRecorder
         ulong key = (ulong)depth << 32;   // painter order ~ depth for the slice
         var local = new RectF(0f, 0f, pw, ph);
         var deviceBounds = world.TransformBounds(local);
+        bool overlapsClip = deviceBounds.Overlaps(clip);
 
         // Backdrop damage (region-aware acrylic cache): a node whose TRANSFORM moved this frame changes what an acrylic
         // layer would blur, so union its device bounds into the frame damage — EXCEPT a scroll viewport's own content
@@ -310,9 +313,9 @@ public static class SceneRecorder
         // rounded corners (the curve). Takes precedence over the opacity/self-blur groups — it composites once at the
         // group alpha and blurs via its own sigma. Explicit (BoxEl/ScrollEl.EdgeFade) or a scroller's AutoEdgeFade.
         EdgeFadeSpec edgeFade = default;
-        bool isEdgeFade = deviceBounds.Overlaps(clip) && TryResolveEdgeFade(scene, node, out edgeFade);
-        bool isBlurGroup = !isEdgeFade && p.BlurSigma > 0.01f && deviceBounds.Overlaps(clip);
-        bool isOpacityGroup = !isEdgeFade && !isBlurGroup && p.OpacityGroup && opacity < 0.999f && deviceBounds.Overlaps(clip);
+        bool isEdgeFade = overlapsClip && TryResolveEdgeFade(scene, node, flags, maybeSparsePaint, out edgeFade);
+        bool isBlurGroup = !isEdgeFade && p.BlurSigma > 0.01f && overlapsClip;
+        bool isOpacityGroup = !isEdgeFade && !isBlurGroup && p.OpacityGroup && opacity < 0.999f && overlapsClip;
         if (isEdgeFade)
         {
             // DIP→device px scale from this node's own box (uniform DPI ⇒ sx≈sy); corners + bands scale with it.
@@ -342,14 +345,14 @@ public static class SceneRecorder
         // ── shadow: drawn beneath the fill, BEFORE this node pushes its OWN clip — otherwise a ClipToBounds node (a flyout
         //    surface, a dialog) would clip its own soft-shadow halo away (the halo extends outside the node bounds). It is
         //    still bounded by the PARENT clip via the deviceBounds.Overlaps(clip) gate. ──
-        if (scene.TryGetShadow(node, out var sh) && !sh.IsNone && deviceBounds.Overlaps(clip))
+        if (maybeSparsePaint && overlapsClip && scene.TryGetShadow(node, out var sh) && !sh.IsNone)
             dl.Shadow(local, p.Corners, sh.Color, sh.OffsetX, sh.OffsetY, sh.Blur, sh.Spread, world, opacity, key);
 
         // Circular-arc stroke (ProgressRing): a trimmed, round-capped ring drawn as its own SDF primitive. The ring node
         // carries no fill (the arc IS the visual), so its order vs the fill block below doesn't matter for its own node.
         // The arc honors the StrokeTrim paint channels (AnimChannel.StrokeTrimStart/End) as a fraction of its sweep, so the
         // indeterminate ring can "breathe" (animate its arc length) — not just rotate.
-        if (scene.TryGetArc(node, out var arcS) && !arcS.IsNone && deviceBounds.Overlaps(clip))
+        if (maybeSparsePaint && overlapsClip && scene.TryGetArc(node, out var arcS) && !arcS.IsNone)
         {
             float trimS = float.IsNaN(p.StrokeTrimStart) ? 0f : Math.Clamp(p.StrokeTrimStart, 0f, 1f);
             float trimE = float.IsNaN(p.StrokeTrimEnd) ? 1f : Math.Clamp(p.StrokeTrimEnd, 0f, 1f);
@@ -387,7 +390,8 @@ public static class SceneRecorder
         }
 
         // ── acrylic: snapshot + blur the backdrop drawn so far, composite the frosted surface, then content draws on top ──
-        bool isAcrylic = scene.TryGetAcrylic(node, out var ac) && deviceBounds.Overlaps(clip);
+        AcrylicSpec ac = default;
+        bool isAcrylic = maybeSparsePaint && overlapsClip && scene.TryGetAcrylic(node, out ac);
         if (isAcrylic)
             // layerId = the stable node handle (index|gen) → keys the compositor's retained blurred-backdrop cache, so a
             // stationary acrylic surface reuses its blur across frames (scrolling inside it no longer re-blurs).
@@ -396,7 +400,7 @@ public static class SceneRecorder
 
         // Cull this node's OWN draw if it falls entirely outside the active clip (offscreen virtualized/overscan rows).
         bool hasOwnVisual = p.VisualKind != VisualKind.None;
-        bool ownVisible = deviceBounds.Overlaps(clip);
+        bool ownVisible = overlapsClip;
         if (hasOwnVisual)
         {
             if (ownVisible) stats.DrawnNodeCount++;
@@ -414,17 +418,20 @@ public static class SceneRecorder
         float pendingBorderHoverT = 0f, pendingBorderPressT = 0f;
 
         bool drawSelf = hasOwnVisual && ownVisible;
+        GradientSpec nodeGradient = default;
+        bool hasNodeGradient = maybeSparsePaint && scene.TryGetGradient(node, out nodeGradient) && nodeGradient.Stops is { Length: > 0 };
         if (drawSelf)
         switch (p.VisualKind)
         {
             case VisualKind.Box when p.Fill.A > 0f || p.HoverFill.A > 0f || p.PressedFill.A > 0f || p.BorderWidth > 0f
                                      || p.ValidationBorder.A > 0f
-                                     || (scene.TryGetGradient(node, out var guardGradient) && guardGradient.Stops is { Length: > 0 }):
+                                     || hasNodeGradient:
             {
                 ResolveSurface(scene, node, flags, in p, out ColorF fill, out ColorF border);
-                bool hasGradFill = scene.TryGetGradient(node, out var g) && g.Stops is { Length: > 0 };
+                bool hasGradFill = hasNodeGradient;
+                GradientSpec g = nodeGradient;
                 GradientSpec bb = default;
-                bool hasGradBorder = p.BorderWidth > 0f && scene.TryGetBorderBrush(node, out bb) && bb.Stops is { Length: > 0 };
+                bool hasGradBorder = p.BorderWidth > 0f && maybeSparsePaint && scene.TryGetBorderBrush(node, out bb) && bb.Stops is { Length: > 0 };
 
                 // Stateful gradient variants (P4b): resolve once; the eased progress feeds the per-stop blend in Emit*.
                 GradientSpec hg = default, pg = default, hbb = default, pbb = default;
@@ -434,7 +441,7 @@ public static class SceneRecorder
                 bool hasPBB = hasGradBorder && scene.TryGetPressedBorderBrush(node, out pbb) && pbb.Stops is { Length: > 0 };
                 float gHoverT = 0f, gPressT = 0f;
                 if (hasHG || hasPG || hasHBB || hasPBB)
-                    TryResolveInteractionProgress(scene, node, out gHoverT, out gPressT);
+                    TryResolveInteractionProgress(scene, node, flags, out gHoverT, out gPressT);
 
                 // ── fill ── the interior is always filled at its FULL geometry; the border is a hollow SDF ring drawn
                 // ON TOP of the fill edge (below). We must NOT fill the whole box with the border colour and overlay an
@@ -611,7 +618,7 @@ public static class SceneRecorder
                 if (ready && images is not null)
                 {
                     var (srcW, srcH) = images.SizeOf(ih);
-                    (drawRect, uv) = ImageContentFit((ImageFit)p.ImageFit, in local, srcW, srcH);
+                    (drawRect, uv) = ImageContentFit((ImageFit)p.ImageFit, in local, srcW, srcH, p.ImageFocusX, p.ImageFocusY);
                 }
 
                 dl.DrawImage(drawRect, p.Corners, p.ImageId, ready, p.Fill, world, opacity, uv, crossFade, key);
@@ -619,7 +626,7 @@ public static class SceneRecorder
             }
             case VisualKind.PolylineStroke:
             {
-                if (scene.TryGetPolylineStroke(node, out var pl))
+                if (maybeSparsePaint && scene.TryGetPolylineStroke(node, out var pl))
                 {
                     float trimStart = float.IsNaN(p.StrokeTrimStart) ? pl.TrimStart : p.StrokeTrimStart;
                     float trimEnd = float.IsNaN(p.StrokeTrimEnd) ? pl.TrimEnd : p.StrokeTrimEnd;
@@ -670,7 +677,7 @@ public static class SceneRecorder
         // ── focus ring: keyboard focus only (FocusVisual), drawn last so it overlays children. Emitted AFTER the
         // node's own clip pops — the WinUI ring lives OUTSIDE the bounds (FocusVisualMargin −3), so a ClipsToBounds
         // control (a TextBox field) must not scissor its own ring away. Ancestor clips still apply (correct).
-        if (focus.Enabled && (flags & NodeFlags.FocusVisual) != 0 && deviceBounds.Overlaps(clip))
+        if (focus.Enabled && (flags & NodeFlags.FocusVisual) != 0 && overlapsClip)
             EmitFocusRing(dl, b, p.Corners, scene.Interaction(node).FocusVisualMargin, world, opacity, in focus, key | 0x10);
 
         // Auto-hiding scrollbar overlay: draw after popping the viewport's content clip so the expanded gutter/thumb
@@ -681,19 +688,19 @@ public static class SceneRecorder
             bool hs = scene.TryGetScroll(node, out var d);
             Console.Error.WriteLine(
                 $"[scroll] gate n#{node.Raw.Index} bounds={b.W:0}x{b.H:0} dev=({deviceBounds.X:0},{deviceBounds.Y:0} {deviceBounds.W:0}x{deviceBounds.H:0}) " +
-                $"clip=({clip.X:0},{clip.Y:0} {clip.W:0}x{clip.H:0}) overlapClip={deviceBounds.Overlaps(clip)} thumbA={scrollThumb.A:0.00} " +
+                $"clip=({clip.X:0},{clip.Y:0} {clip.W:0}x{clip.H:0}) overlapClip={overlapsClip} thumbA={scrollThumb.A:0.00} " +
                 $"hasState={hs} contentH={(hs ? d.ContentH : 0):0} viewportH={(hs ? d.ViewportH : 0):0} offY={(hs ? d.OffsetY : 0):0} fadeT={(hs ? d.FadeT : 0):0.00} orient={(hs ? d.Orientation : 0)}");
         }
         // Scroll-edge cues (controls.md §8.3): a surface-colour fade at any overflowing edge so a clipped list reads as
         // scrollable. Drawn BEFORE the scrollbar (under the thumb) and NOT gated on FadeT — the fade is always-on while
         // there is more content (unlike the auto-hiding bar). Self-gates on overflow + per-edge offset + the resolved
         // opaque surface to fade toward (no opaque plate ⇒ skip rather than a wrong-colour fade).
-        if (deviceBounds.Overlaps(clip) && !isEdgeFade && (flags & NodeFlags.Scrollable) != 0 &&
+        if (overlapsClip && !isEdgeFade && (flags & NodeFlags.Scrollable) != 0 &&
             scene.TryGetScroll(node, out var sec) && sec.EdgeCueConfig != 0 &&
-            TryResolveCueSurface(scene, node, in p, out var cueSurface))
+            TryResolveCueSurface(scene, node, flags, in p, out var cueSurface))
             EmitScrollEdgeCues(dl, b, in sec, p.Corners, world, opacity, key | 0x18, cueSurface, scrollThumb);
 
-        if (scrollThumb.A > 0f && deviceBounds.Overlaps(clip) && (flags & NodeFlags.Scrollable) != 0 &&
+        if (scrollThumb.A > 0f && overlapsClip && (flags & NodeFlags.Scrollable) != 0 &&
             scene.TryGetScroll(node, out var scb))
             EmitScrollbar(dl, b, in scb, world, opacity, key | 0x20, scrollThumb, scrollTrack);
 
@@ -707,31 +714,34 @@ public static class SceneRecorder
 
     /// <summary>Resolve the surface fill/border for this frame: eased hover/press if an interaction row exists,
     /// else the instantaneous flag behaviour (first frame / no animator).</summary>
-    private static bool TryResolveInteractionProgress(SceneStore scene, NodeHandle node, out float hoverT, out float pressT)
+    private static bool TryResolveInteractionProgress(SceneStore scene, NodeHandle node, NodeFlags flags, out float hoverT, out float pressT)
     {
         hoverT = 0f;
         pressT = 0f;
 
         int interactive = InteractionInfo.ClickBit | InteractionInfo.PointerBit;
         bool nodeInteractive = (scene.Interaction(node).HandlerMask & interactive) != 0;
-        bool hasOwn = scene.TryGetInteract(node, out var own);
+        InteractionAnim own = default;
+        bool hasOwn = (flags & NodeFlags.InteractionAnim) != 0 && scene.TryGetInteract(node, out own);
         if (hasOwn)
         {
             // HoverWithin (set on a container whose subtree holds the hovered leaf) pins hover FULL, so the container's
             // HoverFill stays steady as the pointer crosses its interactive children; else the eased own progress.
-            hoverT = (scene.Flags(node) & NodeFlags.HoverWithin) != 0 ? 1f : own.HoverT;
+            hoverT = (flags & NodeFlags.HoverWithin) != 0 ? 1f : own.HoverT;
             pressT = own.PressT;
             return true;
         }
         // No own anim yet (e.g. the pointer entered straight onto a child) — a HoverWithin container still reads hovered.
-        if ((scene.Flags(node) & NodeFlags.HoverWithin) != 0) { hoverT = 1f; return true; }
+        if ((flags & NodeFlags.HoverWithin) != 0) { hoverT = 1f; return true; }
 
         if (!nodeInteractive)
         {
             for (var anc = scene.Parent(node); !anc.IsNull; anc = scene.Parent(anc))
             {
                 if ((scene.Interaction(anc).HandlerMask & interactive) == 0) continue;
-                if ((scene.Flags(anc) & NodeFlags.HoverWithin) != 0) { hoverT = 1f; pressT = 0f; return true; }
+                NodeFlags ancFlags = scene.Flags(anc);
+                if ((ancFlags & NodeFlags.HoverWithin) != 0) { hoverT = 1f; pressT = 0f; return true; }
+                if ((ancFlags & NodeFlags.InteractionAnim) == 0) continue;
                 if (!scene.TryGetInteract(anc, out var parent)) continue;
                 hoverT = parent.HoverT;
                 pressT = parent.PressT;
@@ -742,14 +752,14 @@ public static class SceneRecorder
         return hasOwn;
     }
 
-    private static float ResolveOpacity(SceneStore scene, NodeHandle node, in NodePaint p)
+    private static float ResolveOpacity(SceneStore scene, NodeHandle node, NodeFlags flags, in NodePaint p)
     {
         bool hasHover = !float.IsNaN(p.HoverOpacity);
         bool hasPress = !float.IsNaN(p.PressedOpacity);
         if (!hasHover && !hasPress) return p.Opacity;
 
         float opacity = p.Opacity;
-        if (TryResolveInteractionProgress(scene, node, out float hoverT, out float pressT))
+        if (TryResolveInteractionProgress(scene, node, flags, out float hoverT, out float pressT))
         {
             if (hasHover)
                 opacity += (p.HoverOpacity - opacity) * hoverT;
@@ -758,7 +768,6 @@ public static class SceneRecorder
             return opacity;
         }
 
-        NodeFlags flags = scene.Flags(node);
         if (hasPress && (flags & NodeFlags.Pressed) != 0) return p.PressedOpacity;
         if (hasHover && (flags & NodeFlags.Hovered) != 0) return p.HoverOpacity;
         return opacity;
@@ -767,7 +776,7 @@ public static class SceneRecorder
     private static void ResolveSurface(SceneStore scene, NodeHandle node, NodeFlags flags, in NodePaint p, out ColorF fill, out ColorF border)
     {
         fill = p.Fill; border = p.BorderColor;
-        if (TryResolveInteractionProgress(scene, node, out float hoverT, out float pressT) && (hoverT > 0.001f || pressT > 0.001f))
+        if (TryResolveInteractionProgress(scene, node, flags, out float hoverT, out float pressT) && (hoverT > 0.001f || pressT > 0.001f))
         {
             ColorF hov = p.HoverFill.A > 0f ? p.HoverFill : Lighten(p.Fill, 0.08f);
             ColorF prs = p.PressedFill.A > 0f ? p.PressedFill : Darken(p.Fill, 0.12f);
@@ -831,7 +840,7 @@ public static class SceneRecorder
         bool hasPress = p.TextPressedColor.A > 0f;
         if (hasHover || hasPress)
         {
-            if (TryResolveInteractionProgress(scene, node, out float hoverT, out float pressT) && (hoverT > 0.001f || pressT > 0.001f))
+            if (TryResolveInteractionProgress(scene, node, flags, out float hoverT, out float pressT) && (hoverT > 0.001f || pressT > 0.001f))
             {
                 ColorF c = p.TextColor;
                 if (hasHover) c = ColorF.LerpLinear(c, p.TextHoverColor, hoverT);   // linear-light cross-fade (color canon)
@@ -861,7 +870,7 @@ public static class SceneRecorder
     /// per <paramref name="fit"/> — returns the draw quad (node-local) and the 0..1 source UV sub-rect. <c>Cover</c>
     /// crops via a centered UV inset (quad = box); <c>Contain</c>/<c>None</c> shrink the quad and center it; <c>Fill</c>
     /// (and unknown / zero source) keeps the whole texture stretched to the box. Pure — also the golden-test entry point.</summary>
-    public static (RectF DrawRect, RectF Uv) ImageContentFit(ImageFit fit, in RectF box, int srcW, int srcH)
+    public static (RectF DrawRect, RectF Uv) ImageContentFit(ImageFit fit, in RectF box, int srcW, int srcH, float focusX = 0.5f, float focusY = 0.5f)
     {
         RectF drawRect = box;
         RectF uv = new RectF(0f, 0f, 1f, 1f);
@@ -871,8 +880,20 @@ public static class SceneRecorder
         switch (fit)
         {
             case ImageFit.Cover:
-                if (boxAR > srcAR) { float uh = srcAR / boxAR; uv = new RectF(0f, (1f - uh) * 0.5f, 1f, uh); }
-                else if (boxAR < srcAR) { float uw = boxAR / srcAR; uv = new RectF((1f - uw) * 0.5f, 0f, uw, 1f); }
+                focusX = Math.Clamp(focusX, 0f, 1f);
+                focusY = Math.Clamp(focusY, 0f, 1f);
+                if (boxAR > srcAR)
+                {
+                    float uh = srcAR / boxAR;
+                    float uy = Math.Clamp(focusY - uh * 0.5f, 0f, 1f - uh);
+                    uv = new RectF(0f, uy, 1f, uh);
+                }
+                else if (boxAR < srcAR)
+                {
+                    float uw = boxAR / srcAR;
+                    float ux = Math.Clamp(focusX - uw * 0.5f, 0f, 1f - uw);
+                    uv = new RectF(ux, 0f, uw, 1f);
+                }
                 break;
             case ImageFit.Contain:
                 if (boxAR > srcAR) { float w2 = box.H * srcAR; drawRect = new RectF(box.X + (box.W - w2) * 0.5f, box.Y, w2, box.H); }
@@ -1164,10 +1185,10 @@ public static class SceneRecorder
     /// <summary>Resolve a node's edge fade: an explicit <c>BoxEl/ScrollEl.EdgeFade</c> spec, or a scroller's
     /// <c>AutoEdgeFade</c> synthesized from its live overflow (feather only the edges with more content past them, the
     /// per-edge band ramped to 0 over the last <c>runway</c> px so it appears/disappears smoothly with the offset).</summary>
-    private static bool TryResolveEdgeFade(SceneStore scene, NodeHandle node, out EdgeFadeSpec ef)
+    private static bool TryResolveEdgeFade(SceneStore scene, NodeHandle node, NodeFlags flags, bool maybeSparsePaint, out EdgeFadeSpec ef)
     {
-        if (scene.TryGetEdgeFade(node, out ef) && !ef.IsNone) return true;          // explicit, any element
-        if ((scene.Flags(node) & NodeFlags.Scrollable) != 0 && scene.TryGetScroll(node, out var sc)
+        if (maybeSparsePaint && scene.TryGetEdgeFade(node, out ef) && !ef.IsNone) return true;          // explicit, any element
+        if ((flags & NodeFlags.Scrollable) != 0 && scene.TryGetScroll(node, out var sc)
             && sc.AutoEdgeFade && sc.AutoEdgeFadeBand > 0.5f)
         {
             float band = sc.AutoEdgeFadeBand;
@@ -1197,16 +1218,16 @@ public static class SceneRecorder
     /// MenuFlyout / AutoSuggest dropdown fades into the MENU colour, not the page — the popup acrylic is translucent so
     /// its Fill is not opaque). A translucent card composites ≈ the page base, so the first opaque plate is a good
     /// approximation. No opaque plate found ⇒ skip the cue rather than draw a wrong-colour fade.</summary>
-    private static bool TryResolveCueSurface(SceneStore scene, NodeHandle node, in NodePaint p, out ColorF surface)
+    private static bool TryResolveCueSurface(SceneStore scene, NodeHandle node, NodeFlags flags, in NodePaint p, out ColorF surface)
     {
         const float opaqueA = 0.985f;
         if (p.Fill.A >= opaqueA) { surface = p.Fill; return true; }
-        if (scene.TryGetAcrylic(node, out var selfAc) && selfAc.Fallback.A >= opaqueA) { surface = selfAc.Fallback; return true; }
+        if ((flags & NodeFlags.SparsePaint) != 0 && scene.TryGetAcrylic(node, out var selfAc) && selfAc.Fallback.A >= opaqueA) { surface = selfAc.Fallback; return true; }
         for (var n = scene.Parent(node); !n.IsNull; n = scene.Parent(n))
         {
             ColorF f = scene.Paint(n).Fill;
             if (f.A >= opaqueA) { surface = f; return true; }
-            if (scene.TryGetAcrylic(n, out var ac) && ac.Fallback.A >= opaqueA) { surface = ac.Fallback; return true; }
+            if ((scene.Flags(n) & NodeFlags.SparsePaint) != 0 && scene.TryGetAcrylic(n, out var ac) && ac.Fallback.A >= opaqueA) { surface = ac.Fallback; return true; }
         }
         surface = default;
         return false;

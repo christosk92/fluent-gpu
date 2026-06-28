@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wavee — Account & Logout (Prototype 2)</title>
+<style>
+/* ============================================================
+   THEME TOKENS
+   ============================================================ */
+:root{
+  --r8:8px; --r12:12px; --r16:16px;
+  --s4:4px; --s8:8px; --s12:12px; --s16:16px; --s24:24px; --s32:32px;
+  --mono:"Cascadia Code","SF Mono",ui-monospace,"Consolas","Liberation Mono",monospace;
+  --font:-apple-system,"Segoe UI",system-ui,"Helvetica Neue",sans-serif;
+  --noise:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+html[data-theme="dark"]{
+  --win-base:#0b0b0c;
+  --mica:rgba(20,21,22,.72);
+  --s1:#161718; --s2:#1d1e20; --s3:#232428;
+  --content-bg:rgba(22,23,24,.92);
+  --layer-toolbar:rgba(255,255,255,.022);
+  --layer-sidebar:rgba(255,255,255,.018);
+  --layer-player:rgba(18,19,20,.55);
+  --tile:rgba(255,255,255,.04);
+  --tile-hover:rgba(255,255,255,.07);
+  --border:rgba(255,255,255,.08);
+  --border-2:rgba(255,255,255,.12);
+  --hover:rgba(255,255,255,.06);
+  --press:rgba(255,255,255,.10);
+  --text:#f6f5f4; --text-2:#a8a29e; --text-3:#6f6b66;
+  --accent:#5b8cff; --accent-2:#7aa3ff; --accent-ink:#0a0c14; --accent-soft:rgba(91,140,255,.16);
+  --gold:#e9c46a; --gold-ink:#f0d490; --gold-soft:rgba(233,196,106,.14); --gold-line:rgba(233,196,106,.40);
+  --danger:#e5484d; --danger-2:#f0616a; --danger-ink:#ffffff; --danger-soft:rgba(229,72,77,.14);
+  --ink:#f6f5f4; --ink-on:#0b0b0c;
+  --scrim:rgba(0,0,0,.50);
+  --acrylic:rgba(34,35,38,.82);
+  --acrylic-dialog:rgba(28,29,31,.88);
+  --edge-hi:rgba(255,255,255,.06);
+  --shadow-win:0 30px 80px rgba(0,0,0,.60),0 10px 28px rgba(0,0,0,.42);
+  --shadow-card:0 8px 24px rgba(0,0,0,.35);
+  --shadow-flyout:0 18px 50px rgba(0,0,0,.58),0 3px 10px rgba(0,0,0,.4);
+  --mica-glow-a:rgba(91,140,255,.16);
+  --mica-glow-b:rgba(120,90,200,.15);
+  --wallpaper:
+    radial-gradient(1200px 820px at 12% -10%, rgba(91,140,255,.20), transparent 60%),
+    radial-gradient(1000px 700px at 96% 6%, rgba(233,196,106,.10), transparent 55%),
+    radial-gradient(900px 900px at 82% 112%, rgba(120,90,200,.18), transparent 60%),
+    linear-gradient(158deg,#15161c,#0a0a0c 62%);
+}
+
+html[data-theme="light"]{
+  --win-base:#efece6;
+  --mica:rgba(246,244,240,.70);
+  --s1:#fbfaf8; --s2:#f6f4f0; --s3:#eceae0;
+  --content-bg:rgba(251,250,248,.94);
+  --layer-toolbar:rgba(255,255,255,.34);
+  --layer-sidebar:rgba(236,234,213,.40);
+  --layer-player:rgba(231,229,224,.58);
+  --tile:rgba(0,0,0,.035);
+  --tile-hover:rgba(0,0,0,.06);
+  --border:rgba(0,0,0,.08);
+  --border-2:rgba(0,0,0,.12);
+  --hover:rgba(0,0,0,.05);
+  --press:rgba(0,0,0,.09);
+  --text:#1b1a18; --text-2:#5c574f; --text-3:#8a847b;
+  --accent:#2f6bed; --accent-2:#2456c8; --accent-ink:#ffffff; --accent-soft:rgba(47,107,237,.12);
+  --gold:#b07d12; --gold-ink:#8a6310; --gold-soft:rgba(233,196,106,.26); --gold-line:rgba(176,125,18,.40);
+  --danger:#d22d33; --danger-2:#b9272c; --danger-ink:#ffffff; --danger-soft:rgba(210,45,51,.10);
+  --ink:#1b1a18; --ink-on:#ffffff;
+  --scrim:rgba(40,36,30,.34);
+  --acrylic:rgba(250,248,244,.84);
+  --acrylic-dialog:rgba(252,251,249,.92);
+  --edge-hi:rgba(255,255,255,.60);
+  --shadow-win:0 30px 80px rgba(40,36,30,.28),0 10px 26px rgba(40,36,30,.16);
+  --shadow-card:0 8px 24px rgba(40,36,30,.16);
+  --shadow-flyout:0 18px 48px rgba(40,36,30,.24),0 3px 10px rgba(40,36,30,.14);
+  --mica-glow-a:rgba(47,107,237,.10);
+  --mica-glow-b:rgba(233,196,106,.16);
+  --wallpaper:
+    radial-gradient(1200px 820px at 10% -12%, rgba(47,107,237,.14), transparent 60%),
+    radial-gradient(1000px 700px at 96% 0%, rgba(233,196,106,.22), transparent 55%),
+    linear-gradient(158deg,#f4f0e8,#e6e1d6 72%);
+}
+
+*{box-sizing:border-box;}
+html,body{height:100%;}
+body{
+  margin:0;
+  font-family:var(--font);
+  color:var(--text);
+  background:var(--wallpaper) fixed;
+  padding-top:44px;
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+}
+
+/* focus rings (a11y) */
+:focus{outline:none;}
+:focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:6px;}
+
+/* ============================================================
+   PROTOTYPE TOOLBAR (clearly separate dev chrome)
+   ============================================================ */
+.proto-bar{
+  position:fixed; top:0; left:0; right:0; height:44px; z-index:100;
+  display:flex; align-items:center; gap:18px; padding:0 14px;
+  background:linear-gradient(180deg,#212327,#17181b);
+  border-bottom:1px solid rgba(255,255,255,.09);
+  box-shadow:0 1px 0 rgba(0,0,0,.4);
+  color:#e9e7e4;
+}
+.proto-brand{
+  font-family:var(--mono); font-size:12px; letter-spacing:.04em;
+  color:#b7b3ad; white-space:nowrap; display:flex; align-items:center; gap:8px;
+}
+.proto-brand b{color:#f1efeb; font-weight:600;}
+.proto-dot{width:8px;height:8px;border-radius:50%;background:linear-gradient(135deg,#5b8cff,#9b6bff);box-shadow:0 0 10px rgba(91,140,255,.6);}
+.seg{display:flex; gap:3px; background:rgba(255,255,255,.06); padding:3px; border-radius:9px; border:1px solid rgba(255,255,255,.07);}
+.seg button{
+  font:600 12px var(--font); color:#cfcbc5; background:transparent;
+  border:none; padding:6px 11px; border-radius:7px; cursor:pointer; white-space:nowrap;
+}
+.seg button:hover{background:rgba(255,255,255,.07); color:#fff;}
+.seg button[aria-pressed="true"]{background:#5b8cff; color:#0a0c14; box-shadow:0 1px 4px rgba(91,140,255,.5);}
+.seg button:focus-visible{outline:2px solid #8fb0ff; outline-offset:2px;}
+.proto-right{margin-left:auto; display:flex; align-items:center; gap:10px;}
+.theme-toggle{
+  display:flex; align-items:center; gap:8px; font:600 12px var(--font);
+  color:#e9e7e4; background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.10);
+  padding:6px 11px; border-radius:8px; cursor:pointer;
+}
+.theme-toggle:hover{background:rgba(255,255,255,.12);}
+.theme-toggle:focus-visible{outline:2px solid #8fb0ff; outline-offset:2px;}
+.theme-toggle svg{width:15px;height:15px;}
+
+/* ============================================================
+   STAGE + WINDOW (Mica)
+   ============================================================ */
+.stage{
+  min-height:calc(100vh - 44px);
+  display:flex; align-items:center; justify-content:center;
+  padding:24px;
+}
+.window-frame{
+  position:relative;
+  width:min(1180px,100%);
+  height:min(768px, calc(100vh - 44px - 48px));
+  min-height:540px;
+  border-radius:var(--r12);
+  overflow:hidden;
+  border:1px solid var(--border-2);
+  background:var(--mica);
+  backdrop-filter:blur(50px) saturate(1.5);
+  -webkit-backdrop-filter:blur(50px) saturate(1.5);
+  box-shadow:var(--shadow-win), inset 0 1px 0 var(--edge-hi);
+  display:flex; flex-direction:column;
+  isolation:isolate;
+}
+.window-frame::before{ /* accent-tinted Mica glow */
+  content:""; position:absolute; inset:0; z-index:0; pointer-events:none;
+  background:
+    radial-gradient(820px 460px at 6% -12%, var(--mica-glow-a), transparent 62%),
+    radial-gradient(680px 560px at 102% 116%, var(--mica-glow-b), transparent 60%);
+}
+.window-frame::after{ /* film grain */
+  content:""; position:absolute; inset:0; z-index:0; pointer-events:none;
+  background-image:var(--noise); opacity:.035; mix-blend-mode:overlay;
+}
+
+/* ----- Title bar (row 1) ----- */
+.titlebar{
+  position:relative; z-index:1; height:40px; flex:0 0 40px;
+  display:flex; align-items:center; justify-content:space-between;
+  padding:0 6px 0 14px; border-bottom:1px solid var(--border);
+}
+.title-id{display:flex; align-items:center; gap:9px; font-size:12.5px; font-weight:600; color:var(--text-2);}
+.logo{width:18px;height:18px;display:block;}
+.caption{display:flex; gap:2px;}
+.cap-btn{
+  width:42px; height:30px; display:flex; align-items:center; justify-content:center;
+  background:transparent; border:none; border-radius:6px; color:var(--text-2); cursor:default;
+}
+.cap-btn svg{width:13px;height:13px;}
+.cap-btn:hover{background:var(--hover); color:var(--text);}
+.cap-btn.close:hover{background:#e5484d; color:#fff;}
+
+/* ----- Shell toolbar (row 2) ----- */
+.toolbar{
+  position:relative; z-index:1; height:56px; flex:0 0 56px;
+  display:flex; align-items:center; gap:12px; padding:0 14px;
+  background:var(--layer-toolbar); border-bottom:1px solid var(--border);
+}
+.nav-btns{display:flex; gap:4px;}
+.circ-btn{
+  width:32px;height:32px;border-radius:50%; display:flex;align-items:center;justify-content:center;
+  background:var(--hover); border:1px solid var(--border); color:var(--text-2); cursor:pointer;
+}
+.circ-btn:disabled{opacity:.45;}
+.circ-btn:not(:disabled):hover{background:var(--press); color:var(--text);}
+.circ-btn svg{width:16px;height:16px;}
+.search{
+  display:flex; align-items:center; gap:9px; height:36px; width:300px; max-width:34%;
+  padding:0 14px; border-radius:18px; background:var(--tile); border:1px solid var(--border);
+  color:var(--text-3); font-size:13.5px;
+}
+.search svg{width:16px;height:16px; color:var(--text-2);}
+.spacer{flex:1;}
+
+/* Profile chip — consistent with login flow identity */
+.chip{
+  display:flex; align-items:center; gap:9px; height:40px; padding:4px 12px 4px 4px;
+  border-radius:22px; background:transparent; border:1px solid transparent; cursor:pointer;
+  color:var(--text);
+}
+.chip:hover{background:var(--hover); border-color:var(--border);}
+.chip .chip-name{font-size:13.5px; font-weight:600;}
+.chip svg.chev{width:15px;height:15px; color:var(--text-2);}
+
+.avatar{
+  width:32px;height:32px;border-radius:50%; flex:0 0 auto;
+  display:flex; align-items:center; justify-content:center;
+  font-weight:700; font-size:13px; color:#fff; letter-spacing:.02em;
+  background:radial-gradient(120% 120% at 30% 20%,#7aa3ff,#5b6bff 45%,#7b5cff 100%);
+}
+.avatar.prem{box-shadow:0 0 0 2px var(--win-base),0 0 0 3.5px var(--gold-line);}
+.avatar.lg{width:46px;height:46px;font-size:18px;}
+
+/* ----- Body: sidebar + content card (row 3) ----- */
+.shell-body{position:relative; z-index:1; flex:1; min-height:0; display:flex; padding:8px; gap:8px;}
+.sidebar{
+  width:236px; flex:0 0 236px; border-radius:var(--r12);
+  background:var(--layer-sidebar); border:1px solid var(--border);
+  padding:8px; display:flex; flex-direction:column; gap:2px;
+  box-shadow:inset 0 1px 0 var(--edge-hi);
+}
+.side-head{padding:8px 12px 4px; font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--text-3);}
+.nav-item{
+  display:flex; align-items:center; gap:13px; height:42px; padding:0 12px; border-radius:var(--r8);
+  color:var(--text-2); background:transparent; border:none; cursor:pointer; width:100%;
+  font:600 14px var(--font); text-align:left; position:relative;
+}
+.nav-item svg{width:20px;height:20px; flex:0 0 auto;}
+.nav-item:hover{background:var(--hover); color:var(--text);}
+.nav-item.active{background:var(--accent-soft); color:var(--text);}
+.nav-item.active::before{content:""; position:absolute; left:-8px; top:11px; bottom:11px; width:3px; border-radius:3px; background:var(--accent);}
+.side-sep{height:1px; background:var(--border); margin:8px 12px;}
+.pl-item{padding:8px 12px; font-size:13px; color:var(--text-2); border-radius:8px; cursor:pointer;}
+.pl-item:hover{background:var(--hover); color:var(--text);}
+
+.content{
+  flex:1; min-width:0; border-radius:var(--r12); overflow:auto;
+  background:var(--content-bg); border:1px solid var(--border);
+  box-shadow:inset 0 1px 0 var(--edge-hi);
+  padding:26px 28px 28px;
+}
+.content::-webkit-scrollbar{width:10px;}
+.content::-webkit-scrollbar-thumb{background:var(--border-2); border-radius:8px; border:3px solid transparent; background-clip:content-box;}
+.page-hero{font-size:28px; line-height:36px; font-weight:700; margin:0 0 18px; letter-spacing:-.01em;}
+.quick{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; max-width:580px;}
+.tile{
+  display:flex; align-items:center; gap:12px; height:58px; overflow:hidden;
+  background:var(--tile); border:1px solid var(--border); border-radius:var(--r8); cursor:pointer;
+}
+.tile:hover{background:var(--tile-hover);}
+.tile .thumb{width:58px;height:58px;flex:0 0 auto;}
+.tile .t-name{font-size:13.5px; font-weight:600;}
+.sec-head{display:flex; align-items:baseline; justify-content:space-between; margin:28px 0 14px;}
+.sec-head h2{font-size:20px; line-height:28px; font-weight:700; margin:0;}
+.sec-head .more{font-size:12px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--text-2); cursor:pointer;}
+.row{display:flex; gap:18px; overflow:auto; padding-bottom:6px;}
+.album{width:152px; flex:0 0 auto; cursor:pointer;}
+.cover{width:152px;height:152px;border-radius:var(--r8); box-shadow:var(--shadow-card); position:relative; overflow:hidden;}
+.cover::after{content:""; position:absolute; inset:0; box-shadow:inset 0 1px 0 rgba(255,255,255,.18);}
+.a-title{font-size:14px; font-weight:600; margin-top:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.a-sub{font-size:12px; line-height:16px; color:var(--text-2); margin-top:3px;}
+
+/* art gradients (CSS only) */
+.art1{background:linear-gradient(135deg,#5b8cff,#9b6bff);}
+.art2{background:linear-gradient(135deg,#ff7a59,#ffb24d);}
+.art3{background:linear-gradient(135deg,#1fc8a9,#3a8dff);}
+.art4{background:linear-gradient(135deg,#e85d9c,#7b5cff);}
+.art5{background:linear-gradient(135deg,#f2c14e,#e8743b);}
+.art6{background:linear-gradient(135deg,#36d1dc,#5b86e5);}
+.art7{background:linear-gradient(135deg,#b06ab3,#4568dc);}
+.art8{background:linear-gradient(160deg,#0e2e3a,#1f8a70);}
+
+/* ----- Player bar (row 4) ----- */
+.player{
+  position:relative; z-index:1; height:78px; flex:0 0 78px;
+  display:flex; align-items:center; gap:16px; padding:0 18px;
+  background:var(--layer-player); border-top:1px solid var(--border);
+}
+.np{display:flex; align-items:center; gap:13px; width:30%; min-width:200px;}
+.np .cover{width:54px;height:54px; box-shadow:none; border-radius:6px;}
+.np-meta{min-width:0;}
+.np-title{font-size:13.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.np-artist{font-size:12px; color:var(--text-2); margin-top:2px;}
+.np .like{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--accent);background:transparent;border:none;cursor:pointer;}
+.np .like:hover{background:var(--hover);}
+.np .like svg{width:17px;height:17px;}
+
+.transport{flex:1; display:flex; flex-direction:column; align-items:center; gap:7px;}
+.t-row{display:flex; align-items:center; gap:16px;}
+.t-btn{background:transparent;border:none;color:var(--text-2);cursor:pointer;display:flex;align-items:center;justify-content:center; padding:4px;}
+.t-btn:hover{color:var(--text);}
+.t-btn svg{width:18px;height:18px;}
+.play{
+  width:38px;height:38px;border-radius:50%; background:var(--ink); color:var(--ink-on);
+  display:flex; align-items:center; justify-content:center; border:none; cursor:pointer;
+}
+.play svg{width:17px;height:17px; margin-left:1px;}
+.play:hover{transform:scale(1.05);}
+.prog{display:flex; align-items:center; gap:10px; width:100%; max-width:520px; font-size:11px; color:var(--text-3); font-variant-numeric:tabular-nums;}
+.bar{flex:1; height:4px; border-radius:3px; background:var(--border-2); position:relative;}
+.bar > span{position:absolute; left:0; top:0; bottom:0; width:36%; border-radius:3px; background:var(--text);}
+.bar > i{position:absolute; left:36%; top:50%; width:11px;height:11px; margin:-5.5px 0 0 -5px; border-radius:50%; background:var(--text); box-shadow:0 1px 3px rgba(0,0,0,.4);}
+.vol{display:flex; align-items:center; gap:9px; width:24%; min-width:150px; justify-content:flex-end; color:var(--text-2);}
+.vol svg{width:18px;height:18px;}
+.vbar{width:92px;height:4px;border-radius:3px;background:var(--border-2); position:relative;}
+.vbar>span{position:absolute;left:0;top:0;bottom:0;width:62%;border-radius:3px;background:var(--text);}
+
+/* ============================================================
+   OVERLAYS (one shown per state)
+   ============================================================ */
+.dismiss-layer,.flyout,.scrim,.dialog,.premium,.toast{display:none;}
+
+/* scrim */
+.scrim{position:absolute; inset:0; z-index:9; background:var(--scrim); backdrop-filter:blur(1px); -webkit-backdrop-filter:blur(1px);}
+
+/* light-dismiss layer for flyout */
+.dismiss-layer{position:absolute; inset:0; z-index:10; background:transparent; cursor:default;}
+
+/* ----- Profile flyout (Acrylic) ----- */
+.flyout{
+  position:absolute; z-index:11; top:88px; right:14px; width:272px;
+  flex-direction:column; padding:6px;
+  background:var(--acrylic); backdrop-filter:blur(40px) saturate(1.6); -webkit-backdrop-filter:blur(40px) saturate(1.6);
+  border:1px solid var(--border-2); border-radius:var(--r12);
+  box-shadow:var(--shadow-flyout), inset 0 1px 0 var(--edge-hi);
+}
+.flyout-head{display:flex; gap:13px; padding:12px 12px 13px; align-items:center;}
+.who{min-width:0;}
+.who-name{font-size:15px; font-weight:700; line-height:1.1;}
+.who-mail{font-size:12px; color:var(--text-2); margin-top:7px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.badge-prem{
+  display:inline-flex; align-items:center; gap:5px; margin-top:7px;
+  background:var(--gold-soft); border:1px solid var(--gold-line); color:var(--gold-ink);
+  font-size:11px; font-weight:700; letter-spacing:.01em; padding:2px 8px 2px 6px; border-radius:11px;
+}
+.badge-prem svg{width:12px;height:12px;}
+.flyout-sep{height:1px; background:var(--border); margin:4px 8px;}
+.menu-item{
+  display:flex; align-items:center; gap:12px; width:100%; height:40px; padding:0 12px;
+  background:transparent; border:none; border-radius:var(--r8); cursor:pointer;
+  color:var(--text); font:600 13.5px var(--font); text-align:left;
+}
+.menu-item svg{width:18px;height:18px; color:var(--text-2);}
+.menu-item .grow{flex:1;}
+.menu-item .ext{width:14px;height:14px; color:var(--text-3);}
+.menu-item:hover{background:var(--hover);}
+.menu-item.danger{color:var(--danger-2);}
+.menu-item.danger svg{color:var(--danger-2);}
+.menu-item.danger:hover{background:var(--danger-soft);}
+
+/* ----- Dialog / Premium card shared centering ----- */
+.dialog,.premium{position:absolute; inset:0; z-index:10; align-items:center; justify-content:center; padding:24px;}
+.dialog-card,.premium-card{
+  width:100%; max-width:420px;
+  background:var(--acrylic-dialog); backdrop-filter:blur(40px) saturate(1.5); -webkit-backdrop-filter:blur(40px) saturate(1.5);
+  border:1px solid var(--border-2); border-radius:var(--r16);
+  box-shadow:var(--shadow-flyout), inset 0 1px 0 var(--edge-hi);
+  padding:26px 26px 20px;
+}
+.dialog-title{font-size:21px; line-height:28px; font-weight:700; margin:0 0 10px;}
+.dialog-msg{font-size:14px; line-height:21px; color:var(--text-2); margin:0;}
+.dialog-foot{display:flex; gap:10px; justify-content:flex-end; margin-top:26px;}
+
+/* busy state */
+.busy-body{display:none; align-items:center; gap:16px; padding:6px 0 4px;}
+.busy-title{font-size:17px; font-weight:700;}
+.busy-sub{font-size:13px; color:var(--text-2); margin-top:5px; line-height:18px;}
+
+/* buttons */
+.btn{
+  height:38px; padding:0 18px; border-radius:var(--r8); font:600 13.5px var(--font);
+  cursor:pointer; border:1px solid var(--border-2); background:var(--hover); color:var(--text);
+  display:inline-flex; align-items:center; justify-content:center; gap:8px;
+}
+.btn:hover{background:var(--press);}
+.btn-subtle{background:transparent;}
+.btn-subtle:hover{background:var(--hover);}
+.btn-danger{background:var(--danger); border-color:transparent; color:var(--danger-ink); min-width:96px;}
+.btn-danger:hover{background:var(--danger-2);}
+.btn-accent{background:var(--accent); border-color:transparent; color:var(--accent-ink);}
+.btn-accent:hover{background:var(--accent-2);}
+.btn:disabled{opacity:.5; cursor:default;}
+.btn-link{
+  background:transparent; border:none; color:var(--accent); cursor:pointer;
+  font:700 14px var(--font); display:inline-flex; align-items:center; gap:7px; padding:6px 2px;
+}
+.btn-link:hover{text-decoration:underline;}
+.btn-link svg{width:14px;height:14px;}
+
+/* link (hyperlink style) */
+.link{color:var(--accent); cursor:pointer; font-weight:600; text-decoration:none;}
+.link:hover{text-decoration:underline;}
+
+/* ----- Premium required card ----- */
+.premium-card{max-width:440px; text-align:left;}
+.prem-icon{
+  width:48px;height:48px;border-radius:14px; display:flex;align-items:center;justify-content:center;
+  background:var(--gold-soft); border:1px solid var(--gold-line); color:var(--gold-ink); margin-bottom:16px;
+}
+.prem-icon svg{width:26px;height:26px;}
+.premium-card h2{font-size:22px; line-height:29px; font-weight:700; margin:0 0 12px;}
+.prem-body{font-size:14px; line-height:21px; color:var(--text-2); margin:0 0 6px;}
+.prem-body + .prem-body{margin-top:8px;}
+.prem-actions{display:flex; align-items:center; gap:16px; margin-top:24px;}
+
+/* ----- Re-auth toast (non-blocking, near player) ----- */
+.toast{
+  position:absolute; z-index:8; left:50%; bottom:92px; transform:translateX(-50%);
+  align-items:center; gap:12px; max-width:90%;
+  padding:11px 12px 11px 16px; border-radius:13px;
+  background:var(--acrylic); backdrop-filter:blur(40px) saturate(1.6); -webkit-backdrop-filter:blur(40px) saturate(1.6);
+  border:1px solid var(--border-2); box-shadow:var(--shadow-flyout), inset 0 1px 0 var(--edge-hi);
+}
+.toast-text{font-size:13.5px; color:var(--text); white-space:nowrap;}
+.toast-text strong{font-weight:700;}
+.toast-x{width:28px;height:28px;border-radius:50%; border:none; background:transparent; color:var(--text-2); cursor:pointer; display:flex; align-items:center; justify-content:center;}
+.toast-x:hover{background:var(--hover); color:var(--text);}
+.toast-x svg{width:14px;height:14px;}
+
+/* spinner */
+.spinner{
+  width:30px;height:30px;flex:0 0 auto; border-radius:50%;
+  background:conic-gradient(from 90deg, transparent 0 18%, var(--accent) 92%);
+  -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 0);
+          mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 0);
+}
+.spinner.sm{width:18px;height:18px;
+  -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 2.2px),#000 0);
+          mask:radial-gradient(farthest-side,transparent calc(100% - 2.2px),#000 0);}
+
+/* chip active when menu open */
+#app[data-state="menu"] .chip{background:var(--hover); border-color:var(--border);}
+
+/* state visibility */
+#app[data-state="menu"] .dismiss-layer{display:block;}
+#app[data-state="menu"] .flyout{display:flex;}
+#app[data-state="confirm-logout"] .scrim,
+#app[data-state="logging-out"] .scrim,
+#app[data-state="premium-required"] .scrim{display:block;}
+#app[data-state="confirm-logout"] .dialog,
+#app[data-state="logging-out"] .dialog{display:flex;}
+#app[data-state="premium-required"] .premium{display:flex;}
+#app[data-state="reauth-toast"] .toast{display:flex;}
+
+/* logging-out content swap */
+#app[data-state="logging-out"] .dialog .confirm-body{display:none;}
+#app[data-state="logging-out"] .dialog .busy-body{display:flex;}
+#app[data-state="logging-out"] .dialog .dialog-foot{display:none;}
+
+/* ============================================================
+   MOTION — entrance anims only when motion is allowed
+   ============================================================ */
+@media (prefers-reduced-motion: no-preference){
+  .flyout{animation:pop .16s cubic-bezier(.2,.8,.2,1); transform-origin:top right;}
+  .scrim{animation:fade .18s ease-out;}
+  .dialog-card{animation:rise .20s cubic-bezier(.2,.8,.2,1);}
+  .premium-card{animation:rise .22s cubic-bezier(.2,.8,.2,1);}
+  .toast{animation:toastin .22s cubic-bezier(.2,.8,.2,1);}
+  .spinner{animation:spin .85s linear infinite;}
+}
+@keyframes pop{from{opacity:0; transform:scale(.95) translateY(-6px);} to{opacity:1; transform:none;}}
+@keyframes fade{from{opacity:0;} to{opacity:1;}}
+@keyframes rise{from{opacity:0; transform:scale(.97) translateY(8px);} to{opacity:1; transform:none;}}
+@keyframes toastin{from{opacity:0; transform:translate(-50%,14px);} to{opacity:1; transform:translateX(-50%);}}
+@keyframes spin{to{transform:rotate(360deg);}}
+
+@media (max-width:720px){
+  .search,.vol{display:none;}
+  .sidebar{width:76px; flex-basis:76px;}
+  .nav-item span,.side-head,.side-sep,.pl-item{display:none;}
+}
+</style>
+</head>
+<body>
+
+<!-- ============ PROTOTYPE TOOLBAR ============ -->
+<div class="proto-bar" role="toolbar" aria-label="Prototype controls">
+  <span class="proto-brand"><span class="proto-dot"></span><b>Wavee</b>&nbsp;· Prototype 2 — Account &amp; Logout</span>
+  <div class="seg" role="group" aria-label="Prototype states">
+    <button data-state="menu" aria-pressed="true">Profile menu</button>
+    <button data-state="confirm-logout" aria-pressed="false">Confirm logout</button>
+    <button data-state="logging-out" aria-pressed="false">Signing out</button>
+    <button data-state="premium-required" aria-pressed="false">Premium required</button>
+    <button data-state="reauth-toast" aria-pressed="false">Re-auth toast</button>
+  </div>
+  <div class="proto-right">
+    <button class="theme-toggle" id="themeToggle" aria-label="Toggle dark or light theme">
+      <svg id="themeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>
+      <span id="themeLabel">Dark</span>
+    </button>
+  </div>
+</div>
+
+<!-- ============ APP WINDOW ============ -->
+<div class="stage">
+<div class="window-frame" id="app" data-state="menu">
+
+  <!-- Row 1: title bar -->
+  <div class="titlebar">
+    <div class="title-id">
+      <svg class="logo" viewBox="0 0 24 24" aria-hidden="true">
+        <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#7aa3ff"/><stop offset=".55" stop-color="#5b6bff"/><stop offset="1" stop-color="#9b6bff"/>
+        </linearGradient></defs>
+        <path d="M12 1.6 22.4 12 12 22.4 1.6 12Z" fill="url(#lg)"/>
+        <path d="M12 6.4 17.6 12 12 17.6 6.4 12Z" fill="#0b0b0c" opacity=".22"/>
+      </svg>
+      <span>Wavee</span>
+    </div>
+    <div class="caption" aria-hidden="true">
+      <button class="cap-btn" tabindex="-1" aria-label="Minimize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 12h14"/></svg></button>
+      <button class="cap-btn" tabindex="-1" aria-label="Maximize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="6" y="6" width="12" height="12" rx="1.6"/></svg></button>
+      <button class="cap-btn close" tabindex="-1" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </div>
+  </div>
+
+  <!-- Row 2: shell toolbar -->
+  <div class="toolbar">
+    <div class="nav-btns">
+      <button class="circ-btn" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6 9 12l6 6"/></svg></button>
+      <button class="circ-btn" disabled aria-label="Forward"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>
+    </div>
+    <div class="search" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <span>Search your library</span>
+    </div>
+    <div class="spacer"></div>
+    <button class="chip" id="chip" data-goto="menu" aria-haspopup="menu" aria-expanded="true" aria-label="Account menu for Christos">
+      <span class="avatar prem">C</span>
+      <span class="chip-name">Christos</span>
+      <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+  </div>
+
+  <!-- Row 3: sidebar + content -->
+  <div class="shell-body">
+    <nav class="sidebar" aria-label="Primary">
+      <button class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 11.2 12 4l9 7.2"/><path d="M5 10v10h5v-6h4v6h5V10"/></svg><span>Home</span></button>
+      <button class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><span>Search</span></button>
+      <button class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 4v16M10 4v16"/><path d="M15.5 5.2 19 18.4" /><path d="M14 6.5h3.6"/></svg><span>Your Library</span></button>
+      <div class="side-sep"></div>
+      <div class="side-head">Playlists</div>
+      <div class="pl-item">Liked Songs</div>
+      <div class="pl-item">Late Night Drive</div>
+      <div class="pl-item">Focus Flow</div>
+      <div class="pl-item">Sunrise Acoustic</div>
+      <div class="pl-item">2009 Time Capsule</div>
+    </nav>
+
+    <main class="content">
+      <h1 class="page-hero">Good evening</h1>
+      <div class="quick">
+        <div class="tile"><div class="thumb art4"></div><div class="t-name">Liked Songs</div></div>
+        <div class="tile"><div class="thumb art1"></div><div class="t-name">Discover Weekly</div></div>
+        <div class="tile"><div class="thumb art3"></div><div class="t-name">Daily Mix 1</div></div>
+        <div class="tile"><div class="thumb art5"></div><div class="t-name">Release Radar</div></div>
+        <div class="tile"><div class="thumb art7"></div><div class="t-name">This Is Wavee</div></div>
+        <div class="tile"><div class="thumb art6"></div><div class="t-name">Chill Lo-fi Beats</div></div>
+      </div>
+
+      <div class="sec-head"><h2>Made for you</h2><span class="more">Show all</span></div>
+      <div class="row">
+        <div class="album"><div class="cover art1"></div><div class="a-title">Daily Mix 1</div><div class="a-sub">M83, ODESZA, Tycho…</div></div>
+        <div class="album"><div class="cover art3"></div><div class="a-title">Daily Mix 2</div><div class="a-sub">Bonobo, Four Tet…</div></div>
+        <div class="album"><div class="cover art5"></div><div class="a-title">Discover Weekly</div><div class="a-sub">Your weekly mixtape</div></div>
+        <div class="album"><div class="cover art4"></div><div class="a-title">Release Radar</div><div class="a-sub">New from artists you follow</div></div>
+        <div class="album"><div class="cover art8"></div><div class="a-title">Time Capsule</div><div class="a-sub">Songs to take you back</div></div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Row 4: player bar -->
+  <div class="player">
+    <div class="np">
+      <div class="cover art1" style="border-radius:6px"></div>
+      <div class="np-meta">
+        <div class="np-title">Midnight City</div>
+        <div class="np-artist">M83</div>
+      </div>
+      <button class="like" aria-label="Save to Liked Songs"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 20.7 4.3 13a4.6 4.6 0 0 1 6.5-6.5l1.2 1.2 1.2-1.2A4.6 4.6 0 0 1 19.7 13z"/></svg></button>
+    </div>
+    <div class="transport">
+      <div class="t-row">
+        <button class="t-btn" aria-label="Shuffle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h4v4"/><path d="M4 20 20 4"/><path d="M16 20h4v-4"/><path d="M4 4l5 5"/><path d="M14.5 14.5 20 20"/></svg></button>
+        <button class="t-btn" aria-label="Previous"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5v14H5V5zM19 5v14L9 12z"/></svg></button>
+        <button class="play" aria-label="Pause"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h3.4v14H7zM13.6 5H17v14h-3.4z"/></svg></button>
+        <button class="t-btn" aria-label="Next"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M17 5v14h2V5zM5 5v14l10-7z"/></svg></button>
+        <button class="t-btn" aria-label="Repeat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l3 3-3 3"/><path d="M3 11V9a4 4 0 0 1 4-4h13"/><path d="M7 22l-3-3 3-3"/><path d="M21 13v2a4 4 0 0 1-4 4H4"/></svg></button>
+      </div>
+      <div class="prog"><span>1:24</span><div class="bar"><span></span><i></i></div><span>3:55</span></div>
+    </div>
+    <div class="vol">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 9a4 4 0 0 1 0 6"/><path d="M18.5 6.5a8 8 0 0 1 0 11"/></svg>
+      <div class="vbar"><span></span></div>
+    </div>
+  </div>
+
+  <!-- ===================== OVERLAYS ===================== -->
+
+  <!-- STATE 1: profile flyout -->
+  <div class="dismiss-layer" data-goto="none" aria-hidden="true"></div>
+  <div class="flyout" role="menu" aria-label="Account">
+    <div class="flyout-head">
+      <span class="avatar prem lg" aria-hidden="true">C</span>
+      <div class="who">
+        <div class="who-name">Christos</div>
+        <div class="badge-prem"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2l2.95 6.34 6.9.72-5.18 4.6 1.5 6.78L12 17.9 5.83 20.44l1.5-6.78L2.15 9.06l6.9-.72z"/></svg>Spotify Premium</div>
+        <div class="who-mail">christos@marteco.nl</div>
+      </div>
+    </div>
+    <div class="flyout-sep"></div>
+    <button class="menu-item" role="menuitem">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>
+      <span class="grow">Account</span>
+      <svg class="ext" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M20 4 10 14"/><path d="M20 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/></svg>
+    </button>
+    <button class="menu-item" role="menuitem">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      <span class="grow">Settings</span>
+    </button>
+    <div class="flyout-sep"></div>
+    <button class="menu-item danger" role="menuitem" data-goto="confirm-logout">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+      <span class="grow">Log out</span>
+    </button>
+  </div>
+
+  <!-- STATES 2 & 3: logout confirm / signing out -->
+  <div class="scrim" aria-hidden="true"></div>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlgTitle">
+    <div class="dialog-card">
+      <div class="confirm-body">
+        <h2 class="dialog-title" id="dlgTitle">Log out of Wavee?</h2>
+        <p class="dialog-msg">You will need to sign in again to stream.</p>
+      </div>
+      <div class="busy-body" aria-live="polite">
+        <div class="spinner" aria-hidden="true"></div>
+        <div>
+          <div class="busy-title">Signing out…</div>
+          <div class="busy-sub">Clearing your credentials and tearing down the session.</div>
+        </div>
+      </div>
+      <div class="dialog-foot">
+        <button class="btn btn-subtle" id="cancelBtn" data-goto="none">Cancel</button>
+        <button class="btn btn-danger" data-goto="logging-out">Log out</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- STATE 4: premium required -->
+  <div class="premium" role="dialog" aria-modal="true" aria-labelledby="premTitle">
+    <div class="premium-card">
+      <div class="prem-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.95 6.34 6.9.72-5.18 4.6 1.5 6.78L12 17.9 5.83 20.44l1.5-6.78L2.15 9.06l6.9-.72z"/></svg>
+      </div>
+      <h2 id="premTitle">Wavee needs Spotify Premium</h2>
+      <p class="prem-body">Wavee streams full-quality, on-demand audio, which Spotify only allows on Premium accounts. You're signed in to a Free account, so playback is blocked.</p>
+      <p class="prem-body">Upgrade to Premium, or switch to a Premium account to continue.</p>
+      <div class="prem-actions">
+        <button class="btn-link">Go to Premium
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M20 4 10 14"/><path d="M20 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/></svg>
+        </button>
+        <button class="btn btn-subtle" data-goto="none">Use a different account</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- STATE 5: re-auth toast (non-blocking) -->
+  <div class="toast" role="status" aria-live="polite">
+    <div class="spinner sm" aria-hidden="true"></div>
+    <div class="toast-text"><strong>Your session expired</strong> — reconnecting…</div>
+    <button class="toast-x" data-goto="none" aria-label="Dismiss"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+  </div>
+
+</div><!-- /window-frame -->
+</div><!-- /stage -->
+
+<script>
+(function(){
+  var app = document.getElementById('app');
+  var chip = document.getElementById('chip');
+  var stateBtns = Array.prototype.slice.call(document.querySelectorAll('.seg button[data-state]'));
+  var focusMap = {
+    'menu':'.flyout .menu-item',
+    'confirm-logout':'#cancelBtn',
+    'premium-required':'.premium .btn-link',
+    'reauth-toast':'.toast-x',
+    'logging-out':null,
+    'none':null
+  };
+
+  function setState(s){
+    app.setAttribute('data-state', s);
+    stateBtns.forEach(function(b){ b.setAttribute('aria-pressed', String(b.dataset.state === s)); });
+    chip.setAttribute('aria-expanded', String(s === 'menu'));
+    var sel = focusMap[s];
+    if (sel){
+      var el = document.querySelector(sel);
+      if (el && el.focus){ try{ el.focus({preventScroll:true}); }catch(e){ el.focus(); } }
+    }
+  }
+
+  // toolbar state buttons
+  stateBtns.forEach(function(b){
+    b.addEventListener('click', function(){ setState(b.dataset.state); });
+  });
+
+  // in-app transitions (chip -> menu, log out -> confirm -> signing out, cancels)
+  document.querySelectorAll('[data-goto]').forEach(function(el){
+    el.addEventListener('click', function(e){ e.stopPropagation(); setState(el.dataset.goto); });
+  });
+
+  // Esc closes overlays (safe default = cancel/dismiss)
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape' && app.getAttribute('data-state') !== 'none') setState('none');
+  });
+
+  // theme toggle (default Dark)
+  var root = document.documentElement;
+  var tBtn = document.getElementById('themeToggle');
+  var tLabel = document.getElementById('themeLabel');
+  var tIcon = document.getElementById('themeIcon');
+  var sun = '<circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.5M12 19.5V22M22 12h-2.5M4.5 12H2M19 5l-1.8 1.8M6.8 17.2 5 19M19 19l-1.8-1.8M6.8 6.8 5 5"/>';
+  var moon = '<path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/>';
+  tBtn.addEventListener('click', function(){
+    var next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    tLabel.textContent = next === 'dark' ? 'Dark' : 'Light';
+    tIcon.innerHTML = next === 'dark' ? moon : sun;
+  });
+
+  setState('menu');
+})();
+</script>
+</body>
+</html>

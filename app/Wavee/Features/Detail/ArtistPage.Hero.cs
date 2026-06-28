@@ -7,6 +7,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
+using FluentGpu.Scene;
 using FluentGpu.Signals;
 using Wavee.Core;
 using static FluentGpu.Dsl.Ui;
@@ -49,12 +50,7 @@ sealed partial class ArtistPage : Component
                         Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis,
                     },
                     HeroBioLine(a.Bio, w),
-                    new TextEl(Strings.Artist.HeroMeta(Count(a.MonthlyListeners), Count(a.Followers), albumCount.ToString(),
-                        singleCount.ToString()))
-                    {
-                        Size = 14f, Weight = 600, Color = WhiteText with { A = 0.85f }, MaxLines = 1,
-                        Trim = TextTrim.CharacterEllipsis
-                    },
+                    HeroMetaLine(a, albumCount, singleCount),
                     new BoxEl
                     {
                         Direction = 0, Gap = WaveeSpace.M, AlignItems = FlexAlign.Center,
@@ -88,13 +84,15 @@ sealed partial class ArtistPage : Component
             // The hero photo + its text scrim. The image fills the wide box COVER-fit, centred. A bottom EDGE FADE
             // alpha-masks the photo to transparent over the last ~200px so it composites into the page-over-Mica behind it
             // (and, during the collapse, keeps the live shrinking edge soft rather than a hard cut).
+            //
+            // While the photo downloads the slot shows a DARK ACCENT WASH (the artist colour, dimmed) rather than a neutral
+            // grey, so the hero reads as the artist's own colour during the load — matching WaveeMusic's dark-base-with-accent
+            // hero. The lifted _accent guarantees a visible hue even when the cover's extracted dark tone is near-black. On
+            // decode the photo reveals via HeroArt's WaveeMusic-matched pop-in (320ms FluentDecelerate fade + 1.0→1.05 zoom).
+            ColorF heroWash = ColorF.Lerp(ColorF.FromRgba(0x14, 0x14, 0x16), _accent, 0.30f);
             Element heroArt = bg?.Url is { Length: > 0 } hu
-                ? Ui.Image(hu, w, h, corners: 0f, placeholder: ColorF.FromRgba(0x1C, 0x1C, 0x1C),
-                        blurHash: bg.BlurHash) with
-                    {
-                        Fit = ImageFit.Cover
-                    }
-                : new BoxEl { Width = w, Height = h, Fill = Tok.FillCardDefault };
+                ? Embed.Comp(() => new HeroArt(hu, w, h, bg.BlurHash, heroWash)) with { Key = "heroart:" + hu }
+                : new BoxEl { Width = w, Height = h, Fill = heroWash };
             var media = new BoxEl
             {
                 Width = w, Height = h, ZStack = true, ClipToBounds = true,
@@ -165,6 +163,34 @@ sealed partial class ArtistPage : Component
         {
             Size = 14f, Color = WhiteText with { A = 0.8f }, Width = MathF.Min(w - 40f, 860f), Wrap = TextWrap.Wrap,
             MaxLines = 2, Trim = TextTrim.CharacterEllipsis
+        };
+    }
+
+    // The hero meta strip: "705,764 monthly listeners · 566,287 followers · 10 singles". One shaped flow (SpanTextEl) so it
+    // ellipsizes as a single line, with the NUMBERS in full-strength white and the LABELS + separators dimmed (primary vs
+    // secondary foreground). A zero count drops its WHOLE segment — never "0 albums" — so a thin catalogue just shows fewer
+    // facts (and an artist with nothing to report renders nothing).
+    static Element HeroMetaLine(Artist a, int albums, int singles)
+    {
+        ColorF num = WhiteText;                       // primary foreground (the counts)
+        ColorF dim = WhiteText with { A = 0.6f };     // secondary foreground (labels + " · " separators)
+        var spans = new List<TextSpan>(8);
+        void Seg(long value, string text, string label)
+        {
+            if (value <= 0) return;                   // drop a zero/absent segment entirely
+            if (spans.Count > 0) spans.Add(new TextSpan(" · ", Color: dim));
+            spans.Add(new TextSpan(text, Color: num));
+            spans.Add(new TextSpan(" " + label, Color: dim));
+        }
+        Seg(a.MonthlyListeners, Count(a.MonthlyListeners), Loc.Get(Strings.Artist.MetaMonthly));
+        Seg(a.Followers, Count(a.Followers), Loc.Get(Strings.Artist.MetaFollowers));
+        Seg(albums, albums.ToString(), Loc.Get(Strings.Artist.MetaAlbums));
+        Seg(singles, singles.ToString(), Loc.Get(Strings.Artist.MetaSingles));
+        if (spans.Count == 0) return new BoxEl();
+        return new SpanTextEl(spans.ToArray())
+        {
+            Size = 14f, Weight = 600, Color = num, Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+            MinWidth = 0f,   // the NoWrap run must ellipsize at the copy column's width, not inflate it (cf. TrackRow)
         };
     }
 
@@ -309,4 +335,79 @@ sealed partial class ArtistPage : Component
             new TextEl(Loc.Get(Strings.Artist.ArtistRadio)) { Size = 14f, Weight = 600, Color = WhiteText }
         ],
     };
+}
+
+// The artist hero photo with a WaveeMusic-matched load-in. The engine's built-in image reveal is an opacity cross-fade —
+// here 320ms FluentDecelerate, which is the EXACT curve (cubic-bezier 0.1,0.9,0.2,1.0) and ~timing of WaveeMusic's
+// HeroHeader pop-in. This component adds the second half WaveeMusic does and a bare Ui.Image can't: a 1.0→1.05 scale-settle
+// that fires the instant the photo decodes. The photo rests at 1.05 (declared static, so any re-render after the one-shot
+// settles back onto it — a finite anim track frees on completion); the zoom keyframe seeds exactly ONCE on the
+// loading→ready edge (latched, so a re-render mid-flight can't restart it). Like CoverShimmer it reads the load-state from
+// the displayed image's EXACT decode handle (same src + (w,h) per ImageDecodeTarget), so it forks no second decode.
+sealed class HeroArt : Component
+{
+    const float RevealFadeMs = 320f;    // opacity 0→1 — matches WaveeMusic's keyframe reaching full at 0.4×800ms
+    const float RevealScaleMs = 800f;   // scale 1.0→1.05 over the full WaveeMusic pop-in duration
+    const float RestScale = 1.05f;      // WaveeMusic FinalScale — the photo settles (and rests) at a 5% crop-zoom
+    const float FrameScale = 1.16f;     // static overscan; makes portrait panning visible even when source/slot AR match
+    const float FrameLiftFrac = 0.07f;  // move decoded pixels up inside the clipped hero slot
+    static readonly Keyframe[] ZoomIn = [new(0f, 1f), new(1f, RestScale, Easing.FluentDecelerate)];
+    static readonly Keyframe[] Rest = [new(0f, RestScale), new(1f, RestScale)];
+
+    readonly string _url;
+    readonly float _w, _h;
+    readonly string? _blurHash;
+    readonly ColorF _wash;
+    public HeroArt(string url, float w, float h, string? blurHash, ColorF wash)
+    { _url = url; _w = w; _h = h; _blurHash = blurHash; _wash = wash; }
+
+    public override Element Render()
+    {
+        // Fire the zoom only once the photo is actually resident. Latch on the first Ready/Failed so the tile then stops
+        // calling UseImage (unsubscribes from the image epoch → no steady-state re-render) and a later re-render can't
+        // re-trigger the settle. UseImage consumes no hook cell, so the conditional call is safe (mirrors CoverShimmer).
+        var settled = UseRef(false);
+        var zoom = UseRef(false);
+        if (!settled.Value)
+        {
+            var state = UseImage(_url, (int)_w, (int)_h).State;   // SAME (src,w,h) as the displayed image → shared handle
+            if (state == ImageState.Ready) { settled.Value = true; zoom.Value = true; }
+            else if (state == ImageState.Failed) settled.Value = true;   // no photo → no zoom, just stop probing
+        }
+        // One-shot 1.0→1.05 on the ready edge; otherwise hold the resting 1.05. Keyed by the latch so the layout-effect
+        // re-seeds exactly once (the finite track frees on completion and settles back onto the element's RestScale).
+        Keyframe[] keys = zoom.Value ? ZoomIn : Rest;
+        float dur = zoom.Value ? RevealScaleMs : 1f;
+        UseKeyframes(AnimChannel.ScaleX, keys, dur, false, DepKey.From(zoom.Value));
+        UseKeyframes(AnimChannel.ScaleY, keys, dur, false, DepKey.From(zoom.Value));
+        // The reveal zoom rides this host. A nested static frame adds real overscan + lift; FocusY alone only changes
+        // visible pixels when Cover actually crops the decoded source, so same-ratio Spotify hero art needs this pan.
+        //
+        // The zoom rides this BoxEl host (transform props live on BoxEl, not ImageEl). The host + photo are FLUID (a
+        // ZStack fills a NaN-sized child to its box — FlexLayout.ArrangeZStack), so LAYOUT — not a frozen ctor width —
+        // sizes them to the CURRENT responsive hero width every frame; the photo therefore always spans the full hero
+        // (a fixed-width child here left an empty band when the hero grew past the mount width). _w/_h are used ONLY as
+        // a frozen DECODE hint — decodePx + aspect resolve to the same (⌊w⌋,⌊h⌋) target the ready-probe shares — never as
+        // a layout extent. Origin defaults to centre; the parent `media` box clips the 5% scale overscan, cover-fit crops.
+        return new BoxEl
+        {
+            ZStack = true, ScaleX = RestScale, ScaleY = RestScale,
+            Children =
+            [
+                new BoxEl
+                {
+                    ZStack = true,
+                    ScaleX = FrameScale,
+                    ScaleY = FrameScale,
+                    OffsetY = -_h * FrameLiftFrac,
+                    Children =
+                    [
+                        Ui.Image(_url, ImageFit.Cover, aspect: _w / _h, decodePx: _w, corners: 0f,
+                                placeholder: _wash, blurHash: _blurHash, transition: ImageTransition.Fade(RevealFadeMs))
+                            with { FocusY = 0.35f },
+                    ],
+                },
+            ],
+        };
+    }
 }

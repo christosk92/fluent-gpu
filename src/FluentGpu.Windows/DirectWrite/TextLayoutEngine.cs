@@ -373,7 +373,14 @@ public sealed unsafe class TextLayoutEngine : IDisposable
                         var shaped = _shaper.Shape(p, pos, subLen, subFace, segSize, run.ScriptId, run.ScriptShapes, run.IsRightToLeft);
                         EnsureGlyphs(_glyphCount + shaped.Length);
                         foreach (var g in shaped)
-                            _glyphs[_glyphCount++] = new RunGlyph { Gid = g.GlyphId, Face = (nint)subFace, Advance = g.Advance + segSpacing, Cluster = g.Cluster, Level = run.BidiLevel, Size = segSize, Span = segSpan };
+                        {
+                            // A hard line-break char (LF/CR) carries a break opportunity but no ink; the shaper still returns a
+                            // .notdef glyph that would paint as a [] tofu box at every break. Keep the cluster (the editor's
+                            // caret/terminator math relies on it) but make it NON-DRAWING (Face 0 ⇒ GlyphRenderer skips it,
+                            // GlyphRenderer.cs) and zero-advance.
+                            bool brk = (uint)g.Cluster < (uint)n && FluentGpu.Text.LineBreaker.IsHardBreak(p[g.Cluster]);
+                            _glyphs[_glyphCount++] = new RunGlyph { Gid = g.GlyphId, Face = brk ? 0 : (nint)subFace, Advance = brk ? 0f : g.Advance + segSpacing, Cluster = g.Cluster, Level = run.BidiLevel, Size = segSize, Span = segSpan };
+                        }
                         pos += subLen; remaining -= subLen;
                     }
                 }

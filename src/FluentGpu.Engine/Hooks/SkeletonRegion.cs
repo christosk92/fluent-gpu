@@ -66,7 +66,7 @@ public static class Skel
     /// array is empty — and blur-reveal it (<paramref name="reveal"/>); on Failed mount <paramref name="onFailed"/>.
     /// The engine owns all four states (Pending / Ready / Empty / Failed) so callers never branch on them by hand.
     /// <paramref name="group"/> coordinates the reveal with sibling regions sharing the token (one settle window). Reads
-    /// State (subscribes) but Value via Peek (no re-fire on value change).</summary>
+    /// State and Value so both branch flips and Ready-to-Ready value refreshes reconcile.</summary>
     public static SkelRegionEl Region<T>(
         Loadable<T[]> loadable, Func<T?, Element> rowTemplate, int count, Func<T[], Element> content,
         SkelReveal reveal = SkelReveal.StaggerRows, Func<Element>? onFailed = null, Func<Element>? onEmpty = null,
@@ -76,7 +76,7 @@ public static class Skel
         return new SkelRegionEl(
             Pending: () => loadable.State.Value == (byte)LoadState.Pending,
             Failed: () => loadable.State.Value == (byte)LoadState.Failed,
-            Content: () => { var v = loadable.Value.Peek(); return onEmpty is not null && (v is null || v.Length == 0) ? onEmpty() : content(v); },
+            Content: () => { var v = loadable.Value.Value; return onEmpty is not null && (v is null || v.Length == 0) ? onEmpty() : content(v); },
             ShimmerSource: () => RowStack(count, rowTemplate, st.RowGap),
             OnFailed: onFailed,
             Reveal: reveal, Style: st, Group: group, SmoothResize: smoothResize);
@@ -94,7 +94,7 @@ public static class Skel
         => new(
             Pending: () => loadable.State.Value == (byte)LoadState.Pending,
             Failed: () => loadable.State.Value == (byte)LoadState.Failed,
-            Content: () => { var v = loadable.Value.Peek(); return onEmpty is not null && isEmpty is not null && isEmpty(v) ? onEmpty() : content(v); },
+            Content: () => { var v = loadable.Value.Value; return onEmpty is not null && isEmpty is not null && isEmpty(v) ? onEmpty() : content(v); },
             ShimmerSource: shimmerSource,
             OnFailed: onFailed,
             Reveal: reveal, Style: style ?? SkeletonStyle.Default, Group: group, SmoothResize: smoothResize);
@@ -119,7 +119,7 @@ public static class Skel
         => new(
             Pending: () => loadable.State.Value == (byte)LoadState.Pending,
             Failed: () => loadable.State.Value == (byte)LoadState.Failed,
-            Content: () => { var v = loadable.Value.Peek(); return onEmpty is not null && isEmpty is not null && isEmpty(v) ? onEmpty() : content(v); },
+            Content: () => { var v = loadable.Value.Value; return onEmpty is not null && isEmpty is not null && isEmpty(v) ? onEmpty() : content(v); },
             ShimmerSource: null,   // the shimmer IS Content(seed) — the reconciler derives Content itself, no separate field
             OnFailed: onFailed,
             Reveal: reveal, Style: style ?? SkeletonStyle.Default, Group: group, SmoothResize: smoothResize);
@@ -161,12 +161,7 @@ internal static class SkeletonReveal
                 break;
             case SkelReveal.StaggerRows:
             {
-                // The real content root is a (layout-transparent) Flow.For boundary; its children are the rows.
-                NodeHandle rowParent = realRoot;
-                var first = scene.FirstChild(realRoot);
-                // If the immediate child is itself a single boundary (the For node), descend to it for the rows.
-                if (!first.IsNull && scene.NextSibling(first).IsNull && !scene.FirstChild(first).IsNull)
-                    rowParent = first;
+                NodeHandle rowParent = UnwrapTransparentBoundaries(scene, realRoot);
                 int n = 0;
                 for (var c = scene.FirstChild(rowParent); !c.IsNull; c = scene.NextSibling(c)) n++;
                 if (n == 0) { anim.SoftReveal(realRoot); break; }
@@ -181,6 +176,26 @@ internal static class SkeletonReveal
                 break;
         }
     }
+
+    static NodeHandle UnwrapTransparentBoundaries(SceneStore scene, NodeHandle root)
+    {
+        var n = root;
+        for (int depth = 0; depth < 8 && scene.IsLive(n) && IsTransparentBoundary(scene.ElementTypeId(n)); depth++)
+        {
+            if (scene.ChildCount(n) != 1) break;
+            var child = scene.FirstChild(n);
+            if (child.IsNull) break;
+            n = child;
+        }
+        return n;
+    }
+
+    static bool IsTransparentBoundary(ushort typeId) => typeId is
+        3   // ComponentEl
+        or 4   // ContextProviderEl
+        or 7   // ShowEl
+        or 13  // SkelRegionEl
+        or 14; // KeepAliveEl
 }
 
 /// <summary>Coordinates the reveal of sibling <see cref="SkelRegionEl"/>s sharing a <c>group</c> token: each member

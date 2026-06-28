@@ -161,34 +161,34 @@ sealed class AlbumTrailing : Component
         catch { return fallback; }
     }
 
-    // "About this release" — a card of label/value rows (Released / Label / Copyright), like the WinUI reference.
+    // "About this release" — the album facts as a COMPACT bento (Songs / Length / Released / Label tiles, the wrap-grow
+    // grid from the artist Profile facts but denser), with the legal lines (Courtesy / Copyright) as a small footnote.
+    // Always present for an album with tracks (the Songs/Length tiles), hence the Tracks check.
     internal static bool HasReleasePanel(DetailModel m) =>
-        m.ReleaseDate is { Length: > 0 } || m.Label is { Length: > 0 } || m.Copyright is { Length: > 0 } ||
+        m.Tracks.Count > 0 || m.ReleaseDate is { Length: > 0 } || m.Label is { Length: > 0 } || m.Copyright is { Length: > 0 } ||
         m.CourtesyLine is { Length: > 0 } || m.OtherVersions is { Count: > 0 };
 
     internal static Element ReleasePanel(DetailModel m, DetailHandlers h, bool outerPadding = true)
     {
-        var children = new List<Element>(2);
+        var children = new List<Element>(4);
         if (m.OtherVersions is { Count: > 0 } ov) children.Add(OtherVersionsDropDown(ov, h));
 
-        var rows = new List<Element>(6)
+        var tiles = AlbumFactTiles(m);
+        var notes = ReleaseNotes(m);
+        if (tiles.Length > 0 || notes.Length > 0)
         {
-            new TextEl("ABOUT THIS RELEASE") { Size = 11f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 60f },
-        };
-        if (m.ReleaseDate is { Length: > 0 } rd) rows.Add(AboutRow("Released", rd));
-        if (m.Label is { Length: > 0 } lb) rows.Add(AboutRow("Label", lb));
-        if (m.CourtesyLine is { Length: > 0 } courtesy) rows.Add(AboutRow("Courtesy", courtesy));
-        if (m.Copyright is { Length: > 0 } cp) rows.Add(AboutRow("Copyright", cp));
-        if (rows.Count > 1)
-            children.Add(new BoxEl
+            var body = new List<Element>(3)
             {
-                Direction = 1, Gap = WaveeSpace.M,
-                Padding = new Edges4(WaveeSpace.L, WaveeSpace.L, WaveeSpace.L, WaveeSpace.L),
-                Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
-                BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-                Children = rows.ToArray(),
-            });
+                new TextEl("ABOUT THIS RELEASE") { Size = 11f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 60f },
+            };
+            // The bento: a wrap row of compact fact tiles. Wrap-grow (FlexLayout.ArrangeWrap) fills each line edge-to-edge,
+            // so the tiles flow 2×2 in a narrow rail and a single row when wide — no ragged gaps.
+            if (tiles.Length > 0) body.Add(new BoxEl { Direction = 0, Gap = WaveeSpace.S, Wrap = true, Children = tiles });
+            if (notes.Length > 0) body.Add(new BoxEl { Direction = 1, Gap = 3f, Children = notes });
+            children.Add(new BoxEl { Direction = 1, Gap = WaveeSpace.M, Children = body.ToArray() });
+        }
 
+        if (children.Count == 0) return new BoxEl();
         return new BoxEl
         {
             Direction = 1, Gap = WaveeSpace.M,
@@ -196,6 +196,54 @@ sealed class AlbumTrailing : Component
             Children = children.ToArray(),
         };
     }
+
+    // Songs / Length / Released / Label — each present-only (a missing fact drops its tile). Songs+Length come from the
+    // track list; Released prefers the formatted date, else the year; Label is the record label.
+    static Element[] AlbumFactTiles(DetailModel m)
+    {
+        var stats = new List<(string Value, string Label)>(4);
+        if (m.Tracks.Count > 0)
+        {
+            stats.Add((m.Tracks.Count.ToString(), "Songs"));
+            long ms = DetailFormat.TotalMs(m.Tracks);
+            if (ms > 0) stats.Add((DetailFormat.TotalTime(ms), "Length"));
+        }
+        string? released = m.ReleaseDate is { Length: > 0 } rd ? rd : m.Year;
+        if (released is { Length: > 0 }) stats.Add((released, "Released"));
+        if (m.Label is { Length: > 0 } lb) stats.Add((lb, "Label"));
+        var tiles = new Element[stats.Count];
+        for (int i = 0; i < stats.Count; i++) tiles[i] = CompactStatTile(stats[i].Value, stats[i].Label);
+        return tiles;
+    }
+
+    // The legal footnote (Courtesy + Copyright). Copyright joins several notices with '\n'; the text engine now renders a
+    // hard break as a real line break (LineBreaker.IsHardBreak / TextLayoutEngine), so each notice flows onto its own line
+    // with no [] tofu — the newline no longer needs splitting at the app layer.
+    static Element[] ReleaseNotes(DetailModel m)
+    {
+        var notes = new List<Element>(2);
+        if (m.CourtesyLine is { Length: > 0 } courtesy) notes.Add(NoteText(courtesy));
+        if (m.Copyright is { Length: > 0 } cp) notes.Add(NoteText(cp));
+        return notes.ToArray();
+    }
+
+    static Element NoteText(string value) => new TextEl(value)
+        { Size = 11f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap, MaxLines = 4, Trim = TextTrim.CharacterEllipsis };
+
+    // A compact fact tile (denser than the artist Profile-facts tile: 18px value, tighter padding). Content-width base +
+    // Grow=1 so the wrap-grow row fills; a long Label keeps its own width (base = content) and never clips short tiles.
+    static Element CompactStatTile(string value, string label) => new BoxEl
+    {
+        Direction = 1, Gap = 1f, Grow = 1f, Basis = 0f, MinWidth = 0f,
+        Padding = new Edges4(WaveeSpace.M, WaveeSpace.S, WaveeSpace.M, WaveeSpace.S),
+        Corners = CornerRadius4.All(WaveeRadius.Control), Fill = Tok.FillCardSecondary,
+        BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+        Children =
+        [
+            new TextEl(value) { Size = 18f, Weight = 800, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+            new TextEl(label) { Size = 11f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+        ],
+    };
 
     static Element OtherVersionsDropDown(IReadOnlyList<Album> versions, DetailHandlers h)
     {
@@ -227,15 +275,32 @@ sealed class AlbumTrailing : Component
         return string.Join(" · ", parts);
     }
 
-    static Element AboutRow(string label, string value) => new BoxEl
+    // Multi-line facts (Copyright joins several legal notices with '\n'; Courtesy can carry raw '\r\n' from Spotify) render
+    // LINE-BY-LINE as separate single-line runs: a raw newline reaching the shaper paints as a [] tofu glyph, so we split
+    // on it here rather than feed it through. Single-line values are unchanged (just trimmed).
+    static readonly char[] NewlineChars = { '\r', '\n' };
+    static Element AboutRow(string label, string value)
     {
-        Direction = 0, Gap = WaveeSpace.L, AlignItems = FlexAlign.Start,
-        Children =
-        [
-            new TextEl(label) { Size = 13f, Color = Tok.TextSecondary, Width = 84f, Shrink = 0f },
-            new TextEl(value) { Size = 13f, Color = Tok.TextPrimary, Grow = 1f, Basis = 0f, Wrap = TextWrap.Wrap, MaxLines = 4, Trim = TextTrim.CharacterEllipsis },
-        ],
-    };
+        var lines = value.Split(NewlineChars, StringSplitOptions.RemoveEmptyEntries);
+        Element valueCol = lines.Length <= 1
+            ? new TextEl(lines.Length == 1 ? lines[0].Trim() : value)
+                { Size = 13f, Color = Tok.TextPrimary, Grow = 1f, Basis = 0f, Wrap = TextWrap.Wrap, MaxLines = 4, Trim = TextTrim.CharacterEllipsis }
+            : new BoxEl
+            {
+                Direction = 1, Grow = 1f, Basis = 0f, Gap = 2f,
+                Children = lines.Select(l => (Element)new TextEl(l.Trim())
+                    { Size = 13f, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis }).ToArray(),
+            };
+        return new BoxEl
+        {
+            Direction = 0, Gap = WaveeSpace.L, AlignItems = FlexAlign.Start,
+            Children =
+            [
+                new TextEl(label) { Size = 13f, Color = Tok.TextSecondary, Width = 84f, Shrink = 0f },
+                valueCol,
+            ],
+        };
+    }
 
     // "Fans also like": one loadable regardless of release type. A short release reads the LEAD TRACK's related artists
     // (the same getTrack that carries the video signal); a full album reads the ARTIST's related artists (overview).

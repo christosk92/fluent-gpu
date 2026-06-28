@@ -829,7 +829,9 @@ public sealed class SceneStore : ISceneBackend
     /// <summary>Get-or-create the eased-interaction row for a node (hover/press progress).</summary>
     public ref InteractionAnim InteractRef(NodeHandle h)
     {
-        ref InteractionAnim s = ref _interact.GetOrAdd((int)h.Raw.Index, out bool existed);
+        int idx = (int)h.Raw.Index;
+        _flags[idx] |= NodeFlags.InteractionAnim;
+        ref InteractionAnim s = ref _interact.GetOrAdd(idx, out bool existed);
         if (!existed) s = InteractionAnim.Default;
         return ref s;
     }
@@ -846,47 +848,102 @@ public sealed class SceneStore : ISceneBackend
         Mark(node, NodeFlags.PaintDirty);
     }
 
-    public void SetShadow(NodeHandle h, in ShadowSpec s) => _shadows.GetOrAdd((int)h.Raw.Index) = s;
+    public void SetShadow(NodeHandle h, in ShadowSpec s)
+    {
+        int idx = (int)h.Raw.Index;
+        _flags[idx] |= NodeFlags.SparsePaint;
+        _shadows.GetOrAdd(idx) = s;
+    }
     public bool TryGetShadow(NodeHandle h, out ShadowSpec s) => _shadows.TryGet((int)h.Raw.Index, out s);
     public void ClearShadow(NodeHandle h) => _shadows.Remove((int)h.Raw.Index);
 
-    public void SetArc(NodeHandle h, in ArcSpec a) => _arcs.GetOrAdd((int)h.Raw.Index) = a;
+    public void SetArc(NodeHandle h, in ArcSpec a)
+    {
+        int idx = (int)h.Raw.Index;
+        _flags[idx] |= NodeFlags.SparsePaint;
+        _arcs.GetOrAdd(idx) = a;
+    }
     public bool TryGetArc(NodeHandle h, out ArcSpec a) => _arcs.TryGet((int)h.Raw.Index, out a);
     public void ClearArc(NodeHandle h) => _arcs.Remove((int)h.Raw.Index);
 
-    public void SetPolylineStroke(NodeHandle h, in PolylineStrokeSpec p) => _polylines.GetOrAdd((int)h.Raw.Index) = p;
+    public void SetPolylineStroke(NodeHandle h, in PolylineStrokeSpec p)
+    {
+        int idx = (int)h.Raw.Index;
+        _flags[idx] |= NodeFlags.SparsePaint;
+        _polylines.GetOrAdd(idx) = p;
+    }
     public bool TryGetPolylineStroke(NodeHandle h, out PolylineStrokeSpec p) => _polylines.TryGet((int)h.Raw.Index, out p);
     public void ClearPolylineStroke(NodeHandle h) => _polylines.Remove((int)h.Raw.Index);
 
-    public void SetGradient(NodeHandle h, in GradientSpec g) => _gradients.GetOrAdd((int)h.Raw.Index) = g;
+    public void SetGradient(NodeHandle h, in GradientSpec g)
+    {
+        int idx = (int)h.Raw.Index;
+        _flags[idx] |= NodeFlags.SparsePaint;
+        _gradients.GetOrAdd(idx) = g;
+    }
     public bool TryGetGradient(NodeHandle h, out GradientSpec g) => _gradients.TryGet((int)h.Raw.Index, out g);
     public void ClearGradient(NodeHandle h) => _gradients.Remove((int)h.Raw.Index);
 
-    public void SetBorderBrush(NodeHandle h, in GradientSpec g) => _borderBrushes.GetOrAdd((int)h.Raw.Index) = g;
+    public void SetBorderBrush(NodeHandle h, in GradientSpec g)
+    {
+        int idx = (int)h.Raw.Index;
+        _flags[idx] |= NodeFlags.SparsePaint;
+        _borderBrushes.GetOrAdd(idx) = g;
+    }
     public bool TryGetBorderBrush(NodeHandle h, out GradientSpec g) => _borderBrushes.TryGet((int)h.Raw.Index, out g);
     public void ClearBorderBrush(NodeHandle h) => _borderBrushes.Remove((int)h.Raw.Index);
 
-    public void SetHoverGradient(NodeHandle h, in GradientSpec g) => _hoverGradients.GetOrAdd((int)h.Raw.Index) = g;
+    public void SetHoverGradient(NodeHandle h, in GradientSpec g)
+    {
+        int idx = (int)h.Raw.Index;
+        _flags[idx] |= NodeFlags.SparsePaint;
+        _hoverGradients.GetOrAdd(idx) = g;
+    }
     public bool TryGetHoverGradient(NodeHandle h, out GradientSpec g) => _hoverGradients.TryGet((int)h.Raw.Index, out g);
     public void ClearHoverGradient(NodeHandle h) => _hoverGradients.Remove((int)h.Raw.Index);
 
-    public void SetPressedGradient(NodeHandle h, in GradientSpec g) => _pressedGradients.GetOrAdd((int)h.Raw.Index) = g;
+    public void SetPressedGradient(NodeHandle h, in GradientSpec g)
+    {
+        int idx = (int)h.Raw.Index;
+        _flags[idx] |= NodeFlags.SparsePaint;
+        _pressedGradients.GetOrAdd(idx) = g;
+    }
     public bool TryGetPressedGradient(NodeHandle h, out GradientSpec g) => _pressedGradients.TryGet((int)h.Raw.Index, out g);
     public void ClearPressedGradient(NodeHandle h) => _pressedGradients.Remove((int)h.Raw.Index);
 
-    public void SetHoverBorderBrush(NodeHandle h, in GradientSpec g) => _hoverBorderBrushes.GetOrAdd((int)h.Raw.Index) = g;
+    public void SetHoverBorderBrush(NodeHandle h, in GradientSpec g)
+    {
+        int idx = (int)h.Raw.Index;
+        _flags[idx] |= NodeFlags.SparsePaint;
+        _hoverBorderBrushes.GetOrAdd(idx) = g;
+    }
     public bool TryGetHoverBorderBrush(NodeHandle h, out GradientSpec g) => _hoverBorderBrushes.TryGet((int)h.Raw.Index, out g);
     public void ClearHoverBorderBrush(NodeHandle h) => _hoverBorderBrushes.Remove((int)h.Raw.Index);
 
-    public void SetPressedBorderBrush(NodeHandle h, in GradientSpec g) => _pressedBorderBrushes.GetOrAdd((int)h.Raw.Index) = g;
+    public void SetPressedBorderBrush(NodeHandle h, in GradientSpec g)
+    {
+        int idx = (int)h.Raw.Index;
+        _flags[idx] |= NodeFlags.SparsePaint;
+        _pressedBorderBrushes.GetOrAdd(idx) = g;
+    }
     public bool TryGetPressedBorderBrush(NodeHandle h, out GradientSpec g) => _pressedBorderBrushes.TryGet((int)h.Raw.Index, out g);
     public void ClearPressedBorderBrush(NodeHandle h) => _pressedBorderBrushes.Remove((int)h.Raw.Index);
 
-    public void SetAcrylic(NodeHandle h, in AcrylicSpec a) => _acrylics.GetOrAdd((int)h.Raw.Index) = a;
+    public void SetAcrylic(NodeHandle h, in AcrylicSpec a)
+    {
+        int idx = (int)h.Raw.Index;
+        _flags[idx] |= NodeFlags.SparsePaint;
+        _acrylics.GetOrAdd(idx) = a;
+    }
     public bool TryGetAcrylic(NodeHandle h, out AcrylicSpec a) => _acrylics.TryGet((int)h.Raw.Index, out a);
     public void ClearAcrylic(NodeHandle h) => _acrylics.Remove((int)h.Raw.Index);
 
-    public void SetEdgeFade(NodeHandle h, in EdgeFadeSpec e) => _edgeFades.GetOrAdd((int)h.Raw.Index) = e;
+    public void SetEdgeFade(NodeHandle h, in EdgeFadeSpec e)
+    {
+        int idx = (int)h.Raw.Index;
+        _flags[idx] |= NodeFlags.SparsePaint;
+        _edgeFades.GetOrAdd(idx) = e;
+    }
     public bool TryGetEdgeFade(NodeHandle h, out EdgeFadeSpec e) => _edgeFades.TryGet((int)h.Raw.Index, out e);
     public void ClearEdgeFade(NodeHandle h) => _edgeFades.Remove((int)h.Raw.Index);
 

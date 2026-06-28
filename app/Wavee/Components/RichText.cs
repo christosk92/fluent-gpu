@@ -26,6 +26,22 @@ public static class RichText
         };
     }
 
+    /// <summary>A single-line, FLEX rich caption for a media ROW subtitle: same anchor→hyperlink parsing as <see cref="Of"/>,
+    /// but it GROWS into the row's text column (Grow/Basis=0, no fixed width) and ellipsises ONE line. A span whose href
+    /// <see cref="RouteForUri"/> can route is an accent hyperlink — so artist/album names are clickable on their own,
+    /// independent of the row's click. Plain text (no markup) renders identical to a TrackMeta caption.</summary>
+    public static Element OfRow(string? text, float size, ColorF color, ColorF linkColor, Action<string>? onNavUri = null)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return new BoxEl();
+        var spans = Parse(text!, linkColor, onNavUri);
+        if (spans.Count == 0) return new BoxEl();
+        return new SpanTextEl(spans.ToArray())
+        {
+            Size = size, Color = color, LineHeight = size <= 12f ? 16f : float.NaN,
+            Grow = 1f, Basis = 0f, Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+        };
+    }
+
     /// <summary>A Spotify uri → the app's route key (matches ContentHost): playlist → "pl:…", album → "album:…",
     /// artist → "artist:…", saved-tracks → "liked". Null when it's not a navigable uri.</summary>
     public static string? RouteForUri(string? uri)
