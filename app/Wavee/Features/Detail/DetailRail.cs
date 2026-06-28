@@ -61,8 +61,8 @@ static class DetailRail
         // to a compact 2-line block. Natural line height; ellipsis is the last resort.
         kids.Add(WaveeType.PageHero(m.Title) with
         {
-            Size = titleSize, MinSize = 18f, Weight = 900, Width = cover,
-            Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis,
+            Size = titleSize, MinSize = 18f, Weight = 900, Width = cover, LineHeight = float.NaN,   // font-NATURAL leading: tracks the auto-fit size (a pinned 36 gaps badly once the font shrinks)
+            Wrap = TextWrap.Wrap, MaxLines = 3, Trim = TextTrim.CharacterEllipsis,
         });
 
         // Billed-artist row (album/single): a STACKED artist face-pile (overlapping avatars + "+N" of the distinct album
