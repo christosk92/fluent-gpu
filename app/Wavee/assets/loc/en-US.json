@@ -106,7 +106,10 @@
     "worldRank": "#{rank} in the world",
     "monthlyListeners": "{count} monthly listeners",
     "followers": "{count} followers",
-    "heroMeta": "{monthly} monthly listeners · {followers} followers · {albums} albums · {singles} singles",
+    "metaMonthly": "monthly listeners",
+    "metaFollowers": "followers",
+    "metaAlbums": "albums",
+    "metaSingles": "singles",
     "stat": {
       "monthly": "Monthly listeners",
       "followers": "Followers",

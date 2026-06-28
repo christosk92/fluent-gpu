@@ -4795,6 +4795,30 @@ static class Slice
         Check("29. flex-wrap flows children to lines", Near(c0.X, 0) && Near(c1.X, 40) && Near(c2.X, 0) && Near(c2.Y, 20), $"c2=({c2.X:0.#},{c2.Y:0.#})");
     }
 
+    // flex-wrap + flex-grow: each wrapped line distributes ITS leftover main to that line's grow children (CSS grow is
+    // per-line, INCLUDING the last line) — so a wrapped row fills edge-to-edge instead of leaving a ragged gap.
+    static void WrapGrowChecks(StringTable strings)
+    {
+        var scene = LayoutTree(strings, new BoxEl
+        {
+            Direction = 0, Width = 100, Height = 100, Wrap = true,   // gap 0
+            Children =
+            [
+                new BoxEl { Width = 40, Height = 20, Grow = 1f },
+                new BoxEl { Width = 40, Height = 20, Grow = 1f },
+                new BoxEl { Width = 40, Height = 20, Grow = 1f },
+            ],
+        });
+        var c0 = scene.AbsoluteRect(Child(scene, scene.Root, 0));
+        var c1 = scene.AbsoluteRect(Child(scene, scene.Root, 1));
+        var c2 = scene.AbsoluteRect(Child(scene, scene.Root, 2));
+        // line 1 = [0,1]: 40+40 base, 20 free split → each 50 (c1 starts at 50). line 2 = [2]: lone grow fills → 100 wide.
+        bool ok = Near(c0.X, 0) && Near(c0.W, 50) && Near(c1.X, 50) && Near(c1.W, 50)
+                  && Near(c2.X, 0) && Near(c2.Y, 20) && Near(c2.W, 100);
+        Check("29b. flex-wrap distributes grow per line (incl. the last) → lines fill", ok,
+            $"c0.W={c0.W:0.#} c1.X={c1.X:0.#} c2.W={c2.W:0.#}");
+    }
+
     // Regression for the gallery shell shape: a root overlay (ZStack) contains a fixed nav pane + grow content. The
     // content page has a wrapped caption followed by a grow virtual list. The overlay must pass the finite window width
     // into measure, and wrapping text must measure against the content frame width, not its full single-line width.
@@ -19026,6 +19050,7 @@ static class Slice
         StyleChecks();
         AnimValueChecks();
         WrapChecks(strings);
+        WrapGrowChecks(strings);
         ConstrainedWrapChecks(strings);
         CompositorChecks(strings);
         AnimEngineChecks(strings);

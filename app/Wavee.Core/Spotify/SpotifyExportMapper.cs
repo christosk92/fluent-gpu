@@ -323,8 +323,206 @@ public static class SpotifyExportMapper
                 Str(d, "ownerV2", "data", "name") ?? "", cover, 0));
         }
 
-        return new SearchResults(tracks, albums, artists, playlists);
+        return new SearchResults(tracks, albums, artists, playlists,
+            TracksTotal: TotalCount(sv, "tracksV2"),
+            AlbumsTotal: TotalCount(sv, "albumsV2"),
+            ArtistsTotal: TotalCount(sv, "artists"),
+            PlaylistsTotal: TotalCount(sv, "playlists"));
     }
+
+    /// <summary>Map a LIVE Pathfinder <c>searchTopResultsList</c> response → the ordered unified "All"-tab hits
+    /// (topResultsV2.itemsV2). Server order preserved (the FIRST item is the Top Result); each hit keeps its type, a
+    /// "LYRICS" lyric-match flag, and an audiobook access signifier ("Included in Premium").</summary>
+    public static IReadOnlyList<SearchTopHit> TopHitsFromV2(JsonElement responseRoot)
+    {
+        var hits = new List<SearchTopHit>();
+        foreach (var it in Arr(Dig(responseRoot, "data", "searchV2", "topResultsV2", "itemsV2")))
+        {
+            var wrapper = it.TryGetProperty("item", out var item) ? item : it;
+            bool lyrics = HasMatchedField(it, "LYRICS") || HasMatchedField(wrapper, "LYRICS");
+            var data = Dig(wrapper, "data");
+            var d = data.ValueKind == JsonValueKind.Object ? data : wrapper;
+            var type = TopHitType(Str(wrapper, "__typename"), Str(d, "__typename"), Str(d, "uri"));
+            if (MapTopHit(type, d, lyrics) is { } hit) hits.Add(hit);
+        }
+        return hits;
+    }
+
+    static bool HasMatchedField(JsonElement hit, string field)
+    {
+        if (!hit.TryGetProperty("matchedFields", out var mf) || mf.ValueKind != JsonValueKind.Array) return false;
+        foreach (var f in mf.EnumerateArray())
+            if (f.ValueKind == JsonValueKind.String && string.Equals(f.GetString(), field, StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
+    }
+
+    static int TotalCount(JsonElement searchV2, string facet)
+        => (int)Long(searchV2, facet, "totalCount");
+
+    static string TopHitType(string? wrapperType, string? dataType, string? uri)
+    {
+        static string Normalize(string? value)
+        {
+            if (string.IsNullOrEmpty(value)) return "";
+            if (value.Contains("Track", StringComparison.OrdinalIgnoreCase)) return "Track";
+            if (value.Contains("Artist", StringComparison.OrdinalIgnoreCase)) return "Artist";
+            if (value.Contains("Album", StringComparison.OrdinalIgnoreCase)) return "Album";
+            if (value.Contains("Playlist", StringComparison.OrdinalIgnoreCase)) return "Playlist";
+            if (value.Contains("Audiobook", StringComparison.OrdinalIgnoreCase)) return "Audiobook";
+            if (value.Contains("Podcast", StringComparison.OrdinalIgnoreCase) || value.Contains("Show", StringComparison.OrdinalIgnoreCase)) return "Podcast";
+            if (value.Contains("Episode", StringComparison.OrdinalIgnoreCase)) return "Episode";
+            return "";
+        }
+        var type = Normalize(dataType);
+        if (type.Length == 0) type = Normalize(wrapperType);
+        if (type.Length > 0) return type;
+        if (uri is not null)
+        {
+            if (uri.StartsWith("spotify:track:", StringComparison.Ordinal)) return "Track";
+            if (uri.StartsWith("spotify:artist:", StringComparison.Ordinal)) return "Artist";
+            if (uri.StartsWith("spotify:album:", StringComparison.Ordinal)) return "Album";
+            if (uri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) return "Playlist";
+            if (uri.StartsWith("spotify:audiobook:", StringComparison.Ordinal)) return "Audiobook";
+            if (uri.StartsWith("spotify:show:", StringComparison.Ordinal)) return "Podcast";
+            if (uri.StartsWith("spotify:episode:", StringComparison.Ordinal)) return "Episode";
+        }
+        return "";
+    }
+
+    static SearchTopHit? MapTopHit(string type, JsonElement d, bool lyrics)
+    {
+        if (Str(d, "uri") is not { } uri) return null;
+        switch (type)
+        {
+            case "Track":
+            {
+                string label = string.Equals(Str(d, "trackMediaType"), "VIDEO", StringComparison.OrdinalIgnoreCase) ? "Music video" : "Song";
+                return new SearchTopHit(SearchHitKind.Track, uri, Str(d, "name") ?? "", label + " • " + ArtistLinks(Dig(d, "artists", "items")), label,
+                    PickImage(Dig(d, "albumOfTrack", "coverArt", "sources")), false, false, lyrics, null);
+            }
+            case "Artist":
+                return new SearchTopHit(SearchHitKind.Artist, uri, Str(d, "profile", "name") ?? "", "Artist", "Artist",
+                    PickImage(Dig(d, "visuals", "avatarImage", "sources")), true, true, lyrics, null);
+            case "Album":
+                return new SearchTopHit(SearchHitKind.Album, uri, Str(d, "name") ?? "", "Album • " + ArtistLinks(Dig(d, "artists", "items")), "Album",
+                    PickImage(Dig(d, "coverArt", "sources")), false, false, lyrics, null);
+            case "Playlist":
+            {
+                var imgs = Dig(d, "images", "items");
+                Image? cover = imgs.ValueKind == JsonValueKind.Array && imgs.GetArrayLength() > 0 ? PickImage(Dig(imgs[0], "sources")) : null;
+                return new SearchTopHit(SearchHitKind.Playlist, uri, Str(d, "name") ?? "", "Playlist • " + Esc(Str(d, "ownerV2", "data", "name")), "Playlist",
+                    cover, false, false, lyrics, null);
+            }
+            case "Audiobook":
+                return new SearchTopHit(SearchHitKind.Audiobook, uri, Str(d, "name") ?? "", "Audiobook • " + Esc(AuthorName(Dig(d, "authorsV2"))), "Audiobook",
+                    PickImage(Dig(d, "coverArt", "sources")), false, false, lyrics,
+                    Str(d, "accessInfo", "signifier", "text"), AudiobookDetail(d), AudiobookMeta(d));
+            case "Podcast":
+                return new SearchTopHit(SearchHitKind.Podcast, uri, Str(d, "name") ?? "", "Podcast • " + Esc(PublisherName(d)), "Podcast",
+                    PickImage(Dig(d, "coverArt", "sources")), false, false, lyrics, null);
+            case "Episode":
+                return new SearchTopHit(SearchHitKind.Episode, uri, Str(d, "name") ?? "", "Episode • " + Esc(EpisodeShowName(d)), "Episode",
+                    PickImage(Dig(d, "coverArt", "sources")) ?? PickImage(Dig(d, "podcastV2", "data", "coverArt", "sources")), false, false, lyrics, null);
+            default:
+                return null;   // Author/User: not surfaced in the All hero list
+        }
+    }
+
+    // Artist names as an HTML fragment with <a href="uri"> links, so each artist in a row subtitle is individually clickable
+    // (RichText routes spotify:artist:… via RouteForUri). Names + uris are HTML-escaped; a uri-less artist renders as text.
+    static string ArtistLinks(JsonElement items)
+    {
+        var refs = MapUnionArtists(items);
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < refs.Count && i < 3; i++)
+        {
+            if (i > 0) sb.Append(", ");
+            var name = Esc(refs[i].Name);
+            if (!string.IsNullOrEmpty(refs[i].Uri)) sb.Append("<a href=\"").Append(Esc(refs[i].Uri)).Append("\">").Append(name).Append("</a>");
+            else sb.Append(name);
+        }
+        return sb.ToString();
+    }
+
+    // Minimal HTML-escape for dynamic text/attribute values placed into a RichText subtitle fragment ('&' FIRST so we
+    // don't double-escape the entities we just introduced).
+    static string Esc(string? s) => string.IsNullOrEmpty(s) ? "" : s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
+
+    static string AuthorName(JsonElement authors)
+    {
+        var items = Dig(authors, "items");
+        foreach (var a in Arr(items.ValueKind == JsonValueKind.Array ? items : authors))
+            return Str(a, "name") ?? Str(a, "data", "name") ?? "";
+        return "";
+    }
+
+    static string PublisherName(JsonElement d)
+        => Str(d, "publisher", "name") ?? Str(d, "publisherName") ?? Str(d, "publisher") ?? "";
+
+    // The audiobook blurb Spotify renders under the subtitle. The richest single field is the (HTML) description, so prefer
+    // it — strip tags, collapse whitespace, decode entities. Best-effort: field names in the searchTopResultsList audiobook
+    // entity vary, so this returns null (→ no line) when none of the candidates are present rather than guessing.
+    static string? AudiobookDetail(JsonElement d)
+    {
+        var raw = Str(d, "htmlDescription") ?? Str(d, "description");
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var sb = new System.Text.StringBuilder(raw!.Length);
+        bool inTag = false, lastSpace = false;
+        foreach (char c in raw!)
+        {
+            if (c == '<') { inTag = true; continue; }
+            if (c == '>') { inTag = false; continue; }
+            if (inTag) continue;
+            if (char.IsWhiteSpace(c)) { if (!lastSpace && sb.Length > 0) { sb.Append(' '); lastSpace = true; } continue; }
+            sb.Append(c); lastSpace = false;
+        }
+        var plain = HtmlText(sb.ToString())?.Trim();
+        return string.IsNullOrEmpty(plain) ? null : plain;
+    }
+
+    static string? AudiobookMeta(JsonElement d)
+    {
+        string? date = FormatSpotifyDate(
+            Str(d, "publishDate", "isoString") ?? Str(d, "date", "isoString"),
+            Str(d, "publishDate", "precision") ?? Str(d, "date", "precision"));
+        string? duration = FormatDuration(
+            Long(d, "audiobookDuration", "totalMilliseconds") is { } audiobookDuration && audiobookDuration > 0
+                ? audiobookDuration
+                : Long(d, "duration", "totalMilliseconds"));
+
+        return date is { Length: > 0 } && duration is { Length: > 0 } ? date + " • " + duration
+             : date is { Length: > 0 } ? date
+             : duration;
+    }
+
+    static string? FormatSpotifyDate(string? iso, string? precision)
+    {
+        if (string.IsNullOrWhiteSpace(iso)) return null;
+        if (!DateTimeOffset.TryParse(iso, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var date))
+            return iso.Length >= 4 ? iso[..4] : null;
+
+        return (precision ?? "").ToUpperInvariant() switch
+        {
+            "YEAR" => date.ToString("yyyy", CultureInfo.InvariantCulture),
+            "MONTH" => date.ToString("MMM yyyy", CultureInfo.InvariantCulture),
+            _ => date.ToString("MMM d, yyyy", CultureInfo.InvariantCulture),
+        };
+    }
+
+    static string? FormatDuration(long milliseconds)
+    {
+        if (milliseconds <= 0) return null;
+        long minutes = Math.Max(1, (long)Math.Round(TimeSpan.FromMilliseconds(milliseconds).TotalMinutes));
+        long hours = minutes / 60;
+        minutes %= 60;
+        if (hours <= 0) return minutes + " min";
+        if (minutes == 0) return hours + " hr";
+        return hours + " hr " + minutes + " min";
+    }
+
+    static string EpisodeShowName(JsonElement d)
+        => Str(d, "podcastV2", "data", "name") ?? Str(d, "show", "name") ?? Str(d, "podcast", "name") ?? "";
 
     /// <summary>Map a LIVE Pathfinder <c>searchSuggestions</c> response → the omnibar's as-you-type suggestion strings:
     /// the autocomplete entities (data.searchV2.topResultsV2.itemsV2[].item.data.text) plus top entity names, deduped.</summary>
@@ -593,11 +791,12 @@ public static class SpotifyExportMapper
         switch (typename)
         {
             case "Album":
-                return new HomeCard(uri, name, FirstArtistName(data), CoverArt(data), HomeCardKind.Album, Accent: ExtractedAccent(data));
+                return new HomeCard(uri, name, FirstArtistName(data), CoverArt(data) ?? EntityImage(data), HomeCardKind.Album, Accent: ExtractedAccent(data));
             case "Playlist":
-                return new HomeCard(uri, name, HtmlText(StrAt(data, "description")) ?? StrAt(data, "ownerV2", "data", "name"), ImagesCover(data), HomeCardKind.Playlist, Accent: ExtractedAccent(data));
+                return new HomeCard(uri, name, HtmlText(StrAt(data, "description")) ?? StrAt(data, "ownerV2", "data", "name"),
+                    ImagesCover(data) ?? EntityImage(data), HomeCardKind.Playlist, Accent: ExtractedAccent(data));
             case "Artist":
-                return new HomeCard(uri, name, "Artist", ArtistAvatar(data), HomeCardKind.Artist, Accent: ExtractedAccent(data));
+                return new HomeCard(uri, name, "Artist", ArtistAvatar(data) ?? EntityImage(data), HomeCardKind.Artist, Accent: ExtractedAccent(data));
             default:
                 return null;
         }
@@ -675,8 +874,20 @@ public static class SpotifyExportMapper
         return result;
     }
 
-    static Image? RecentImage(JsonElement data)
-        => PickImage(Dig(data, "visualIdentityTrait", "squareCoverImage", "image", "data", "sources"));
+    static Image? RecentImage(JsonElement data) => EntityImage(data);
+
+    static Image? EntityImage(JsonElement data)
+        => PickImage(Dig(data, "visualIdentityTrait", "squareCoverImage", "image", "data", "sources"))
+        ?? PickImage(Dig(data, "visualIdentityTrait", "image", "data", "sources"))
+        ?? PickImage(Dig(data, "visualIdentityTrait", "image", "sources"))
+        ?? PickImage(Dig(data, "visualIdentity", "squareCoverImage", "data", "sources"))
+        ?? PickImage(Dig(data, "visualIdentity", "squareCoverImage", "sources"))
+        ?? PickImage(Dig(data, "visuals", "avatarImage", "sources"))
+        ?? PickImage(Dig(data, "image", "data", "sources"))
+        ?? PickImage(Dig(data, "image", "sources"))
+        ?? CoverArt(data)
+        ?? ImagesCover(data)
+        ?? CoverArt(Dig(data, "albumOfTrack"));
 
     static string? FirstArtistName(JsonElement albumData)
     {

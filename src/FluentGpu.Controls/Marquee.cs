@@ -41,8 +41,8 @@ public static class Marquee
         // distance, so wider text moves faster). 0 ⇒ derive the duration from Speed (a standalone, constant-pace line).
         public float CycleMs { get; init; } = 0f;
         public float Gap { get; init; } = 48f;           // space between the two copies in Loop mode
-        public float FadeBand { get; init; } = 18f;      // edge fade width in px
-        public float FadeStrength { get; init; } = 0.55f; // edge-fade intensity 0..1 (1 = fades fully to transparent; lower = softer)
+        public float FadeBand { get; init; } = 12f;      // edge fade width in px
+        public float FadeStrength { get; init; } = 0.35f; // edge-fade intensity 0..1 (1 = fades fully to transparent; lower = softer)
         public float StartDelayMs { get; init; } = 350f;  // pause showing the START of the text before it scrolls
         public float EndPauseMs { get; init; } = 900f;    // pause at each end (Loop start / PingPong turns)
         public ScrollMode Mode { get; init; } = ScrollMode.Loop;
@@ -65,7 +65,15 @@ public static class Marquee
     /// sync, instead of each toggling only when the pointer is over its own line. Null = self-hover (Hover) / always
     /// (Always), unchanged. The edge fade is unaffected either way (right-edge cue at rest, both edges while scrolling).</param>
     public static Element Of(Prop<string> text, Style? style = null, IReadSignal<bool>? scrollWhen = null)
-        => Embed.Comp(() => new MarqueeHost { Text = text, Sty = style ?? Default, External = scrollWhen });
+        => new BoxEl
+        {
+            MinWidth = 0f,
+            Grow = 1f,
+            Shrink = 1f,
+            AlignSelf = FlexAlign.Stretch,
+            ClipToBounds = true,
+            Children = [Embed.Comp(() => new MarqueeHost { Text = text, Sty = style ?? Default, External = scrollWhen })],
+        };
 }
 
 /// <summary>The clip + edge-fade frame (and the optional self-hover trigger). The moving content is a child
@@ -77,6 +85,7 @@ internal sealed class MarqueeHost : Component
 {
     public Prop<string> Text = string.Empty;
     public Marquee.Style Sty = Marquee.Default;
+    const float MaxFadeViewportFraction = 0.22f;
     public IReadSignal<bool>? External;     // an external "scroll now" gate (a shared group hover) — replaces self-hover
 
     public override Element Render()
@@ -94,15 +103,18 @@ internal sealed class MarqueeHost : Component
         bool active = Sty.Trigger == Marquee.TriggerMode.Always || hovered.Value;
         bool scrolling = Sty.Enabled && overflow && active && !Motion.ReducedMotion;
 
-        EdgeFadeSpec? fade = !overflow ? null
-            : scrolling ? new EdgeFadeSpec(EdgeMask.Horizontal, Sty.FadeBand, FadeFalloff.Smoothstep, Sty.FadeStrength)
-                        : new EdgeFadeSpec(EdgeMask.Right, Sty.FadeBand, FadeFalloff.Smoothstep, Sty.FadeStrength);
+        float fadeBand = overflow ? MathF.Min(Sty.FadeBand, MathF.Max(0f, cw * MaxFadeViewportFraction)) : 0f;
+        EdgeFadeSpec? fade = fadeBand <= 0f ? null
+            : scrolling ? new EdgeFadeSpec(EdgeMask.Horizontal, fadeBand, FadeFalloff.Smoothstep, Sty.FadeStrength)
+                        : new EdgeFadeSpec(EdgeMask.Right, fadeBand, FadeFalloff.Smoothstep, Sty.FadeStrength);
 
         bool selfHover = Sty.Trigger == Marquee.TriggerMode.Hover && External is null;
 
         return new BoxEl
         {
             MinWidth = 0f,
+            Shrink = 1f,
+            AlignSelf = FlexAlign.Stretch,
             ClipToBounds = true,
             EdgeFade = fade,
             OnBoundsChanged = r => { if (r.W != containerW.Value) containerW.Value = r.W; },

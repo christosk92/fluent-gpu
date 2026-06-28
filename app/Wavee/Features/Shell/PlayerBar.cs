@@ -242,8 +242,13 @@ sealed class PlayerBarContent : Component
         if (albumNav)   // the title opens the album (click); hover still scrolls the marquee (the metaCol drives titleHover)
             titleEl = new BoxEl
             {
+                MinWidth = 0f, Grow = 1f, Shrink = 1f, AlignSelf = FlexAlign.Stretch, ClipToBounds = true,
                 Cursor = CursorId.Hand, OnClick = NavAlbum,
-                OnHoverMove = _ => { if (!titleLinkHover.Peek()) titleLinkHover.Value = true; },
+                OnHoverMove = _ =>
+                {
+                    if (!titleLinkHover.Peek()) titleLinkHover.Value = true;
+                    if (!titleHover.Peek()) titleHover.Value = true;
+                },
                 OnPointerExit = () => { if (titleLinkHover.Peek()) titleLinkHover.Value = false; },
                 Role = AutomationRole.Hyperlink, Focusable = true,
                 Children = [titleEl],

@@ -125,6 +125,11 @@ public static class PathfinderOps
     public const string SearchSuggestions = "searchSuggestions";
     public const string SearchSuggestionsHash = "556f5a15b2fdd3a7113ffd377ad9805e38a3a27b8bb1ca7d6d76bad54aa8ee12";
 
+    // The UNIFIED top-results op (the "All" tab): ordered mixed hits (track/artist/album/playlist/audiobook/podcast) with
+    // matchedFields ("LYRICS") + access signifiers. NOTE the variable is "query" (NOT "searchTerm" like the per-facet ops).
+    public const string SearchTopResults = "searchTopResultsList";
+    public const string SearchTopResultsHash = "63a93cc04f6d8dea84a85de315e43f396a76cb681500de9ac5ccf5fc618c84cb";
+
     public const string QueryAlbumMerch = "queryAlbumMerch";
     public const string QueryAlbumMerchHash = "3ef44ed6f17be67299538fe77faffab4075aeaf9e1085f10fc835592266711b5";
     public const string QueryNpvArtist = "queryNpvArtist";

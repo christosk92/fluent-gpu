@@ -49,4 +49,81 @@ public class SearchSuggestionMapperTests
         Assert.Equal("David Guetta", suggestions.Items[1].Title);
         Assert.Equal("https://i.scdn.co/image/avatar", suggestions.Items[1].Image!.Url);
     }
+
+    [Fact]
+    public void TopHitsFromV2_PreservesWrapperOrderAndMatchedFields()
+    {
+        var hits = SpotifyExportMapper.TopHitsFromV2(Root("""
+        { "data": { "searchV2": { "topResultsV2": { "itemsV2": [
+          { "item": { "__typename": "TrackResponseWrapper", "data": {
+            "__typename": "TrackResponseWrapper",
+            "uri": "spotify:track:top",
+            "name": "I don't want to hurt you",
+            "trackMediaType": "AUDIO",
+            "albumOfTrack": { "coverArt": { "sources": [
+              { "url": "https://i.scdn.co/image/top", "width": 300, "height": 300 }
+            ] } },
+            "artists": { "items": [
+              { "profile": { "name": "Natsu" }, "uri": "spotify:artist:top" }
+            ] }
+          } } },
+          { "matchedFields": [ "LYRICS" ], "item": { "__typename": "TrackResponseWrapper", "data": {
+            "uri": "spotify:track:lyrics",
+            "name": "BIRDS OF A FEATHER",
+            "trackMediaType": "VIDEO",
+            "albumOfTrack": { "coverArt": { "sources": [
+              { "url": "https://i.scdn.co/image/lyrics", "width": 300, "height": 300 }
+            ] } },
+            "artists": { "items": [
+              { "profile": { "name": "Billie Eilish" }, "uri": "spotify:artist:billie" }
+            ] }
+          } } },
+          { "item": { "__typename": "PodcastResponseWrapper", "data": {
+            "uri": "spotify:show:pod",
+            "name": "Strength and Sthenics Podcast",
+            "publisher": { "name": "Denis & Sasa" },
+            "coverArt": { "sources": [
+              { "url": "https://i.scdn.co/image/pod", "width": 300, "height": 300 }
+            ] }
+          } } },
+          { "item": { "__typename": "AudiobookResponseWrapper", "data": {
+            "uri": "spotify:audiobook:book",
+            "name": "Summary of Goodbye, Things",
+            "accessInfo": { "signifier": { "text": "Included in Premium" } },
+            "authorsV2": { "items": [ { "name": "Abbey Beathan" } ] },
+            "audiobookDuration": { "totalMilliseconds": 3840000 },
+            "publishDate": { "isoString": "2020-01-13T00:00:00Z", "precision": "MINUTE" },
+            "description": "Author(s): Abbey Beathan\nNarrator(s): Peter Prova\n\nGoodbye, Things summary.",
+            "coverArt": { "sources": [
+              { "url": "https://i.scdn.co/image/book", "width": 300, "height": 300 }
+            ] }
+          } } },
+          { "matchedFields": [ "LYRICS" ], "item": {
+            "__typename": "Playlist",
+            "uri": "spotify:playlist:direct",
+            "name": "Direct Playlist",
+            "ownerV2": { "data": { "name": "Spotify" } },
+            "images": { "items": [ { "sources": [
+              { "url": "https://i.scdn.co/image/pl", "width": 300, "height": 300 }
+            ] } ] }
+          } }
+        ] } } } }
+        """));
+
+        Assert.Equal(5, hits.Count);
+        Assert.Equal(SearchHitKind.Track, hits[0].Kind);
+        Assert.Equal("I don't want to hurt you", hits[0].Name);
+        Assert.False(hits[0].MatchedLyrics);
+        Assert.Equal(SearchHitKind.Track, hits[1].Kind);
+        Assert.True(hits[1].MatchedLyrics);
+        Assert.Equal("Music video", hits[1].TypeLabel);
+        Assert.Equal(SearchHitKind.Podcast, hits[2].Kind);
+        Assert.Equal(SearchHitKind.Audiobook, hits[3].Kind);
+        Assert.Equal("Included in Premium", hits[3].AccessLabel);
+        Assert.Equal("Jan 13, 2020 • 1 hr 4 min", hits[3].Meta);
+        Assert.Contains("Goodbye, Things summary.", hits[3].Detail);
+        Assert.Equal(SearchHitKind.Playlist, hits[4].Kind);
+        Assert.Equal("Playlist • Spotify", hits[4].Subtitle);
+        Assert.True(hits[4].MatchedLyrics);
+    }
 }

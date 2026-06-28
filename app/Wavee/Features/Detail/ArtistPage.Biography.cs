@@ -36,28 +36,30 @@ sealed partial class ArtistPage : Component
                     extras?.TopCities is { Count: > 0 } cities ? TopCitiesList(cities) : new BoxEl(),
                 ],
             };
+            // Profile-facts tiles — a zero/absent stat drops its WHOLE tile (never "0 Albums" / "0 Upcoming concerts"); if
+            // none survive, the whole column is dropped so the biography takes the full width.
+            var tiles = new List<Element>(6);
+            void Tile(long value, string label) { if (value > 0) tiles.Add(StatTile(Count(value), label)); }
+            Tile(a.MonthlyListeners, Loc.Get(Strings.Artist.Stat.Monthly));
+            Tile(a.Followers, Loc.Get(Strings.Artist.Stat.Followers));
+            Tile(albums, Loc.Get(Strings.Artist.Stat.Albums));
+            Tile(singles, Loc.Get(Strings.Artist.Stat.Singles));
+            Tile(extras?.Concerts?.Count ?? 0, Loc.Get(Strings.Artist.Stat.Concerts));
+            Tile(relatedCount, Loc.Get(Strings.Artist.Stat.Related));
             var right = new BoxEl
             {
                 Direction = 1, Gap = WaveeSpace.M, Grow = 1f, Basis = 0f,
                 Children =
                 [
                     AccentHeader(Loc.Get(Strings.Artist.ProfileFacts)),
-                    new BoxEl
-                    {
-                        Direction = 0, Gap = WaveeSpace.M, Wrap = true,
-                        Children =
-                        [
-                            StatTile(Count(a.MonthlyListeners), Loc.Get(Strings.Artist.Stat.Monthly)),
-                            StatTile(Count(a.Followers), Loc.Get(Strings.Artist.Stat.Followers)),
-                            StatTile(albums.ToString(), Loc.Get(Strings.Artist.Stat.Albums)),
-                            StatTile(singles.ToString(), Loc.Get(Strings.Artist.Stat.Singles)),
-                            StatTile((extras?.Concerts?.Count ?? 0).ToString(), Loc.Get(Strings.Artist.Stat.Concerts)),
-                            StatTile(relatedCount.ToString(), Loc.Get(Strings.Artist.Stat.Related)),
-                        ],
-                    },
+                    new BoxEl { Direction = 0, Gap = WaveeSpace.M, Wrap = true, Children = tiles.ToArray() },
                 ],
             };
-            return new BoxEl { Direction = (byte)(wide ? 0 : 1), Gap = WaveeSpace.XL, Children = [left, right] };
+            return new BoxEl
+            {
+                Direction = (byte)(wide ? 0 : 1), Gap = WaveeSpace.XL,
+                Children = tiles.Count > 0 ? new Element[] { left, right } : new Element[] { left },
+            };
         }, fallback: 900f);
 
     static Element ExternalLinkPills(IReadOnlyList<ExternalLink> links) => new BoxEl

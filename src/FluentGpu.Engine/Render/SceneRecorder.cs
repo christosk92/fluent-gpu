@@ -611,7 +611,7 @@ public static class SceneRecorder
                 if (ready && images is not null)
                 {
                     var (srcW, srcH) = images.SizeOf(ih);
-                    (drawRect, uv) = ImageContentFit((ImageFit)p.ImageFit, in local, srcW, srcH);
+                    (drawRect, uv) = ImageContentFit((ImageFit)p.ImageFit, in local, srcW, srcH, p.ImageFocusX, p.ImageFocusY);
                 }
 
                 dl.DrawImage(drawRect, p.Corners, p.ImageId, ready, p.Fill, world, opacity, uv, crossFade, key);
@@ -861,7 +861,7 @@ public static class SceneRecorder
     /// per <paramref name="fit"/> — returns the draw quad (node-local) and the 0..1 source UV sub-rect. <c>Cover</c>
     /// crops via a centered UV inset (quad = box); <c>Contain</c>/<c>None</c> shrink the quad and center it; <c>Fill</c>
     /// (and unknown / zero source) keeps the whole texture stretched to the box. Pure — also the golden-test entry point.</summary>
-    public static (RectF DrawRect, RectF Uv) ImageContentFit(ImageFit fit, in RectF box, int srcW, int srcH)
+    public static (RectF DrawRect, RectF Uv) ImageContentFit(ImageFit fit, in RectF box, int srcW, int srcH, float focusX = 0.5f, float focusY = 0.5f)
     {
         RectF drawRect = box;
         RectF uv = new RectF(0f, 0f, 1f, 1f);
@@ -871,8 +871,20 @@ public static class SceneRecorder
         switch (fit)
         {
             case ImageFit.Cover:
-                if (boxAR > srcAR) { float uh = srcAR / boxAR; uv = new RectF(0f, (1f - uh) * 0.5f, 1f, uh); }
-                else if (boxAR < srcAR) { float uw = boxAR / srcAR; uv = new RectF((1f - uw) * 0.5f, 0f, uw, 1f); }
+                focusX = Math.Clamp(focusX, 0f, 1f);
+                focusY = Math.Clamp(focusY, 0f, 1f);
+                if (boxAR > srcAR)
+                {
+                    float uh = srcAR / boxAR;
+                    float uy = Math.Clamp(focusY - uh * 0.5f, 0f, 1f - uh);
+                    uv = new RectF(0f, uy, 1f, uh);
+                }
+                else if (boxAR < srcAR)
+                {
+                    float uw = boxAR / srcAR;
+                    float ux = Math.Clamp(focusX - uw * 0.5f, 0f, 1f - uw);
+                    uv = new RectF(ux, 0f, uw, 1f);
+                }
                 break;
             case ImageFit.Contain:
                 if (boxAR > srcAR) { float w2 = box.H * srcAR; drawRect = new RectF(box.X + (box.W - w2) * 0.5f, box.Y, w2, box.H); }

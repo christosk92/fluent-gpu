@@ -46,6 +46,7 @@ public static class WaveeColors
     /// <summary>One theme's shell surfaces (the values that aren't simply a plain engine token).</summary>
     public sealed record Palette(
         ColorF Toolbar, ColorF Sidebar, ColorF PlayerBar, ColorF FileArea, ColorF Content, ColorF ContentAlt,
+        ColorF PremiumText,
         // Track-list row states. Zebra = odd-row rest; hover/press carry an even + a (deeper) zebra variant. The odd/even
         // pick stays at the call site (that's row STATE, not theme); here we only hold the two themes' values.
         ColorF RowZebra, ColorF RowHover, ColorF RowHoverZebra, ColorF RowPressed, ColorF RowPressedZebra);
@@ -61,6 +62,7 @@ public static class WaveeColors
         FileArea:   ColorF.FromRgba(0xFB, 0xFA, 0xF8, 0xD9),   // warm page @ ~85%
         Content:    ColorF.FromRgba(0xFB, 0xFA, 0xF8, 0xD9),
         ContentAlt: ColorF.FromRgba(0xF4, 0xF3, 0xF0),         // recessed inset within content (opaque canvas tone)
+        PremiumText: Tok.Light.SystemFillSuccess,
         RowZebra:        ColorF.FromRgba(0xF7, 0xF6, 0xF3),    // subtle warm zebra band (odd rows)
         RowHover:        ColorF.FromRgba(0xEC, 0xE9, 0xE2),    // even-row hover
         RowHoverZebra:   ColorF.FromRgba(0xE6, 0xE3, 0xDB),    // zebra-row hover (deeper — the card starts lighter)
@@ -77,6 +79,7 @@ public static class WaveeColors
         FileArea:   Tok.Dark.FillCardDefault,
         Content:    Tok.Dark.FillCardDefault,
         ContentAlt: Tok.Dark.FillCardSecondary,
+        PremiumText: ColorF.FromRgba(0x1D, 0xB9, 0x54),
         RowZebra:        Tok.Dark.FillSubtleTertiary,     // dark rows: WinUI subtle translucent fills (Mica bleeds through)
         RowHover:        Tok.Dark.FillSubtleSecondary,
         RowHoverZebra:   Tok.Dark.FillSubtleSecondary,    // dark hover isn't zebra-split — same subtle fill either way
@@ -98,6 +101,7 @@ public static class WaveeColors
     public static ColorF FileArea => Active.FileArea;
     public static ColorF Content => Active.Content;
     public static ColorF ContentAlt => Active.ContentAlt;
+    public static ColorF PremiumText => Active.PremiumText;
 
     public static ColorF RowZebra => Active.RowZebra;
     public static ColorF RowHover => Active.RowHover;

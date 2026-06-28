@@ -106,15 +106,25 @@ public sealed class AggregateCatalog : IMusicLibrary, ICollectionEvents
         return r;
     }
 
-    public async Task<SearchResults> SearchAsync(string query, CancellationToken ct = default)
+    public Task<SearchResults> SearchAsync(string query, CancellationToken ct = default)
+        => SearchAsync(query, SearchFacet.All, 0, 30, ct);
+
+    public async Task<SearchResults> SearchAsync(string query, SearchFacet facet, int offset, int limit, CancellationToken ct = default)
     {
         var t = new List<Track>(); var al = new List<Album>(); var ar = new List<Artist>(); var pl = new List<Playlist>();
+        IReadOnlyList<SearchTopHit>? topHits = null;
+        int tt = 0, at = 0, art = 0, pt = 0;
         foreach (var s in _reg.CatalogSources)
         {
-            var x = await s.SearchAsync(query, ct).ConfigureAwait(false);
+            var x = await s.SearchAsync(query, facet, offset, limit, ct).ConfigureAwait(false);
             t.AddRange(x.Tracks); al.AddRange(x.Albums); ar.AddRange(x.Artists); pl.AddRange(x.Playlists);
+            topHits ??= x.TopHits;
+            tt += x.TracksTotal >= 0 ? x.TracksTotal : x.Tracks.Count;
+            at += x.AlbumsTotal >= 0 ? x.AlbumsTotal : x.Albums.Count;
+            art += x.ArtistsTotal >= 0 ? x.ArtistsTotal : x.Artists.Count;
+            pt += x.PlaylistsTotal >= 0 ? x.PlaylistsTotal : x.Playlists.Count;
         }
-        return new SearchResults(t, al, ar, pl);
+        return new SearchResults(t, al, ar, pl, topHits, tt, at, art, pt);
     }
 
     public async Task<IReadOnlyList<string>> SuggestAsync(string query, CancellationToken ct = default)

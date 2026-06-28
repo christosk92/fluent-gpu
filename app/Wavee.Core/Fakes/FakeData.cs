@@ -7,6 +7,7 @@ public static class FakeData
 {
     /// <summary>How many cover images are bundled under assets/covers (cover00.jpg … coverNN.jpg).</summary>
     const int CoverCount = 16;
+    static int Wrap(int i, int count) => ((i % count) + count) % count;
     static readonly (string Title, string Artist)[] Seed =
     [
         ("LAST GOODBYE", "sunkis"), ("mellow pop wistful saturday late night", "Spotify"), ("\uC6B0\uC6B8\uD574", "Christos"),
@@ -27,16 +28,21 @@ public static class FakeData
 
     public static Image Cover(int i, int px = 640)
     {
-        int n = ((i % CoverCount) + CoverCount) % CoverCount;   // deterministic, handles any seed sign
+        int n = Wrap(i, CoverCount);   // deterministic, handles any seed sign
         string path = Path.Combine(AppContext.BaseDirectory, "assets", "covers", $"cover{n:D2}.jpg");
         return new Image(path, px, px);
     }
 
-    static ArtistRef ArtistRef(int i) { var s = Seed[i % Seed.Length]; return new ArtistRef($"ar{i % Seed.Length}", $"spotify:artist:ar{i % Seed.Length}", s.Artist); }
+    static ArtistRef ArtistRef(int i)
+    {
+        int n = Wrap(i, Seed.Length);
+        var s = Seed[n];
+        return new ArtistRef($"ar{n}", $"spotify:artist:ar{n}", s.Artist);
+    }
 
     public static Track Track(int i)
     {
-        var s = Seed[i % Seed.Length];
+        var s = Seed[Wrap(i, Seed.Length)];
         var album = new AlbumRef($"al{i}", $"spotify:album:al{i}", s.Title);
         long dur = 138_000 + (i * 37 % 150) * 1000L;       // 2:18 – ~4:50
         return new Track($"tr{i}", $"spotify:track:tr{i}", s.Title, [ArtistRef(i)], album, dur, i % 6 == 0, Cover(i, 64), HasVideo: i % 4 == 1);
@@ -51,7 +57,7 @@ public static class FakeData
 
     public static Palette PaletteFor(int seed)
     {
-        uint accent = Accents[seed % Accents.Length];
+        uint accent = Accents[Wrap(seed, Accents.Length)];
         // Derive a dark base + tinted-dark from the accent (rough; the real PaletteExtractor lands later).
         uint Dark(uint c, float k) => 0xFF000000u
             | ((uint)(((c >> 16) & 0xFF) * k) << 16)
@@ -86,7 +92,7 @@ public static class FakeData
 
     public static Album Album(int i)
     {
-        var s = Seed[i % Seed.Length];
+        var s = Seed[Wrap(i, Seed.Length)];
         var (kind, count) = AlbumShape(i);
         var artist = ArtistRef(i);
         var tracks = AlbumTracks(count, i * 10, artist, kind == AlbumKind.Compilation);
@@ -127,7 +133,7 @@ public static class FakeData
 
     public static Artist Artist(int i)
     {
-        var s = Seed[i % Seed.Length];
+        var s = Seed[Wrap(i, Seed.Length)];
         var albums = new Album[6];
         for (int k = 0; k < albums.Length; k++) albums[k] = Album(i * 6 + k);
         int h = Math.Abs(s.Artist.GetHashCode());
@@ -137,7 +143,8 @@ public static class FakeData
         int rank = h % 7 == 0 ? 0 : 1 + h % 500;                // some artists have no world rank
         // The full magazine facets, synthesized deterministically (each gated so artists differ). The real Spotify
         // export overrides these for exported artists; here every fake artist still gets a rich page (square art).
-        return new Artist($"ar{i % Seed.Length}", $"spotify:artist:ar{i % Seed.Length}", s.Artist, Cover(i, 300), albums,
+        int n = Wrap(i, Seed.Length);
+        return new Artist($"ar{n}", $"spotify:artist:ar{n}", s.Artist, Cover(i, 300), albums,
             monthly, followers, ArtistBio(s.Artist, monthly), verified,
             WorldRank: rank, HeaderImage: Cover(i, 640), TopTracks: null,
             AppearsOn: null, Pinned: SynthPinned(h, albums), Extras: SynthExtras(i, s.Artist, h, monthly, albums));
@@ -286,7 +293,7 @@ public static class FakeData
 
     public static Playlist Playlist(int i, int trackCount = 40)
     {
-        var s = Seed[i % Seed.Length];
+        var s = Seed[Wrap(i, Seed.Length)];
         // Match the (name, owner, count) the home/sidebar PlaylistSummary advertises for THIS uri, so the detail page's
         // pre-loaded header (cover/title/owner/count from the clicked card) does NOT get swapped for a different
         // playlist when the full model loads. (Real backends are consistent for a uri; the fake catalog must be too.)

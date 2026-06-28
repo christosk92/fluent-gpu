@@ -180,6 +180,97 @@ public static class MediaCard
         };
     }
 
+    // ── List row: a HORIZONTAL media row (search / "All" lists). The SAME factory + the SAME now-playing/play affordance
+    // (the shared NowPlayingOverlay) as the grid/shelf cards — only the SKIN differs (a row vs a tile). `large` is the
+    // Top-Result hero variant (bigger art + title + card chrome). Optional eyebrow ("Lyrics match" / "Included in Premium"),
+    // a trailing type chip, and a trailing action (save / follow). One home for a future shared context menu.
+    public static Element Row(Image? cover, string title, string subtitle, string uri, bool circular,
+                              Action onClick, Action onPlay,
+                              string? eyebrow = null, ColorF? eyebrowColor = null, string? typeChip = null, Element? trailing = null, bool large = false,
+                              string? detail = null, Action<string>? onSubtitleNav = null, string? meta = null, bool detailBelowArt = false)
+    {
+        float art = large ? 84f : 48f;
+        float r = circular ? art / 2f : (large ? WaveeRadius.Card : 6f);
+        float fab = large ? 44f : 30f;
+        bool hasMeta = !large && meta is { Length: > 0 };
+        bool hasDetail = !large && detail is { Length: > 0 };   // the audiobook blurb line under the subtitle (Spotify shows a 2-line description)
+        bool belowArt = detailBelowArt && (hasMeta || hasDetail);
+        var coverStack = new BoxEl
+        {
+            Width = art, Height = art, Shrink = 0f, ZStack = true, ClipToBounds = true, Corners = CornerRadius4.All(r),
+            Children =
+            [
+                Surfaces.Artwork(cover, Seed(uri), art, art, r),
+                Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, fab, cover: true, art, centered: true)).Skeletonized(false),
+            ],
+        };
+        var textKids = new System.Collections.Generic.List<Element>(3);
+        if (eyebrow is { Length: > 0 }) textKids.Add(new TextEl(eyebrow) { Size = 11f, Weight = 700, Color = eyebrowColor ?? Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
+        textKids.Add(large
+            ? new TextEl(title) { Size = 26f, Weight = 800, Color = Tok.TextPrimary, Grow = 1f, Basis = 0f, Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }
+            : WaveeType.TrackTitle(title) with { Grow = 1f, Basis = 0f, Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
+        // Subtitle as a rich caption (matches the TrackMeta Caption style: 12px / secondary): anchor spans (artist/album)
+        // become accent hyperlinks that navigate on their own, independent of the row's click. Plain text renders identically.
+        textKids.Add(RichText.OfRow(subtitle, 12f, Tok.TextSecondary, Tok.AccentTextPrimary, onSubtitleNav));
+        if (hasMeta && !belowArt) textKids.Add(new TextEl(meta!) { Size = 11f, Weight = 700, Color = Tok.TextPrimary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
+        if (hasDetail && !belowArt) textKids.Add(new TextEl(detail!) { Size = 11f, Color = Tok.TextTertiary, Grow = 1f, Basis = 0f, MaxLines = 2, Wrap = TextWrap.Wrap, Trim = TextTrim.CharacterEllipsis });
+        var kids = new System.Collections.Generic.List<Element>(4)
+        {
+            coverStack,
+            new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = large ? WaveeSpace.S : 1f, Children = textKids.ToArray() },
+        };
+        if (typeChip is { Length: > 0 }) kids.Add(RowChip(typeChip));
+        if (trailing is not null) kids.Add(trailing);
+        if (belowArt)
+        {
+            var belowKids = new System.Collections.Generic.List<Element>(2);
+            if (hasMeta) belowKids.Add(new TextEl(meta!) { Size = 12f, Weight = 700, Color = Tok.TextPrimary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
+            if (hasDetail) belowKids.Add(new TextEl(detail!) { Size = 12f, Color = Tok.TextSecondary, Grow = 1f, Basis = 0f, MaxLines = 2, Wrap = TextWrap.Wrap, Trim = TextTrim.CharacterEllipsis });
+
+            return new BoxEl
+            {
+                Direction = 1, Height = float.NaN, MinHeight = 72f, Gap = WaveeSpace.S,
+                Padding = new Edges4(WaveeSpace.S, WaveeSpace.S, WaveeSpace.S, WaveeSpace.S),
+                Corners = CornerRadius4.All(6f),
+                Fill = ColorF.Transparent,
+                HoverFill = Tok.FillSubtleSecondary,
+                PressedFill = Tok.FillSubtleTertiary,
+                Role = AutomationRole.Button, OnClick = onClick, OnPointerExit = static () => { },
+                Children =
+                [
+                    new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Children = kids.ToArray() },
+                    new BoxEl { Direction = 1, Gap = 2f, Children = belowKids.ToArray() },
+                ],
+            };
+        }
+
+        return new BoxEl
+        {
+            // A detail row auto-sizes (Height NaN + MinHeight) so the blurb can take two lines; plain rows stay a tidy 64px.
+            // The hero is roomier (taller card, generous inset) so the big title + subtitle aren't cramped against the cover.
+            Direction = 0, Height = large ? 112f : (hasDetail ? float.NaN : 64f), MinHeight = hasDetail ? 64f : float.NaN,
+            AlignItems = FlexAlign.Center, Gap = large ? WaveeSpace.L : WaveeSpace.M,
+            Padding = large ? new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, WaveeSpace.M)
+                    : hasDetail ? new Edges4(WaveeSpace.S, WaveeSpace.S, WaveeSpace.S, WaveeSpace.S)
+                    : new Edges4(WaveeSpace.S, 0f, WaveeSpace.S, 0f),
+            Corners = CornerRadius4.All(large ? WaveeRadius.Card : 6f),
+            Fill = large ? Tok.FillCardSecondary : ColorF.Transparent,
+            HoverFill = large ? Tok.FillCardDefault : Tok.FillSubtleSecondary,
+            PressedFill = large ? Tok.FillCardDefault : Tok.FillSubtleTertiary,
+            BorderWidth = large ? 1f : 0f, BorderColor = large ? Tok.StrokeCardDefault : ColorF.Transparent,
+            // The row is the interactive ancestor (OnClick + a no-op pointer-exit), so the cover's hover-revealed play FAB
+            // resolves off ROW hover — identical to the card behavior.
+            Role = AutomationRole.Button, OnClick = onClick, OnPointerExit = static () => { },
+            Children = kids.ToArray(),
+        };
+    }
+
+    static Element RowChip(string text) => new BoxEl
+    {
+        Shrink = 0f, Padding = new Edges4(10f, 3f, 10f, 3f), Corners = CornerRadius4.All(11f), Fill = Tok.FillSubtleSecondary,
+        Children = [ new TextEl(text) { Size = 10f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 40f } ],
+    };
+
     // A stable-ish placeholder seed from the card's context uri (so each card gets its own gradient cover tone).
     static int Seed(string s) => (s ?? string.Empty).GetHashCode() & 0x7fffffff;
 
@@ -191,7 +282,7 @@ public static class MediaCard
         Fill = Tok.AccentDefault, HoverFill = Tok.AccentSecondary, PressedFill = Tok.AccentTertiary,
         Shadow = Elevation.Card, HoverScale = 1.07f, PressScale = 0.92f,
         OnClick = onClick, Cursor = CursorId.Hand,
-        Children = [ Icon(glyph, size * 0.42f, Tok.TextOnAccentPrimary) ],
+        Children = [ FabGlyph(glyph, size * 0.42f, Tok.TextOnAccentPrimary) ],
     };
 
     internal static Element CoverActionFab(Action onClick, string glyph, string tooltip, float size) => ToolTip.Wrap(new BoxEl
@@ -204,8 +295,18 @@ public static class MediaCard
         BorderWidth = 1f, BorderColor = ColorF.FromRgba(255, 255, 255, 70),
         Shadow = Elevation.Card, HoverScale = 1.07f, PressScale = 0.92f,
         OnClick = onClick, Cursor = CursorId.Hand, Role = AutomationRole.Button, Focusable = true,
-        Children = [ Icon(glyph, size * 0.40f, ColorF.FromRgba(255, 255, 255)) ],
+        Children = [ FabGlyph(glyph, size * 0.40f, ColorF.FromRgba(255, 255, 255)) ],
     }, tooltip);
+
+    static TextEl FabGlyph(string glyph, float size, ColorF color) => new(glyph)
+    {
+        Width = size,
+        Height = size,
+        Size = size,
+        LineHeight = size,
+        FontFamily = Theme.IconFont,
+        Color = color,
+    };
 
 }
 
@@ -223,8 +324,9 @@ sealed class NowPlayingOverlay : Component
     readonly float _fab;
     readonly bool _cover;
     readonly float _inner;
-    public NowPlayingOverlay(string uri, Action onPlay, float fab, bool cover, float inner, Action? onNavigate = null)
-    { _uri = uri; _onPlay = onPlay; _fab = fab; _cover = cover; _inner = inner; _onNavigate = onNavigate; }
+    readonly bool _centered;
+    public NowPlayingOverlay(string uri, Action onPlay, float fab, bool cover, float inner, Action? onNavigate = null, bool centered = false)
+    { _uri = uri; _onPlay = onPlay; _fab = fab; _cover = cover; _inner = inner; _onNavigate = onNavigate; _centered = centered; }
 
     public override Element Render()
     {
@@ -279,6 +381,32 @@ sealed class NowPlayingOverlay : Component
             Children = [ WaveeEqualizer.Of(playing, Tok.AccentTextPrimary, 14f) ],
         };
 
+        if (_cover && _centered)
+        {
+            // Small ROW art (search "All" rows): the equalizer CENTERED at rest (hidden on hover), the play FAB centered
+            // over a hover scrim — Spotify's row affordance. SAME component, a row-fit layout (vs the card's bottom corners).
+            // A centering flex box (NOT a ZStack): a ZStack honors AlignItems (vertical) but ignores Justify, so it would
+            // pin the FAB to the LEFT edge instead of centering it over the art. A single-child flex centers on BOTH axes.
+            Element rowFab = new BoxEl
+            {
+                Width = _inner, Height = _inner, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Opacity = 0f, HoverOpacity = 1f, HoverDurationMs = 180f, HoverEasing = Easing.FluentDecelerate,
+                Fill = ColorF.FromRgba(0, 0, 0, 110),
+                Children = [ MediaCard.PlayFab(Toggle, playingHere ? Icons.Pause : Icons.Play, _fab) ],
+            };
+            return new BoxEl
+            {
+                Width = _inner, Height = _inner, ZStack = true,
+                Children =
+                [
+                    active
+                        ? new BoxEl { Width = _inner, Height = _inner, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, HoverOpacity = 0f, Children = [ EqPill() ] }
+                        : new BoxEl(),
+                    rowFab,
+                ],
+            };
+        }
+
         if (_cover)
             // FILL the cover rather than sizing to a captured `_inner`: this overlay rides in an Embed.Comp whose
             // template closure FREEZES at first mount, so a captured width goes stale when the card later re-fits wider
@@ -324,6 +452,7 @@ sealed class NowPlayingOverlay : Component
         if (string.IsNullOrEmpty(uri)) return false;
         if (!string.IsNullOrEmpty(contextUri) && string.Equals(uri, contextUri, StringComparison.OrdinalIgnoreCase)) return true;
         if (track is null) return false;
+        if (string.Equals(uri, track.Uri, StringComparison.OrdinalIgnoreCase)) return true;   // a TRACK row lights up when ITS track is the one playing
         if (string.Equals(uri, track.Album.Uri, StringComparison.OrdinalIgnoreCase)) return true;
         foreach (var a in track.Artists)
             if (string.Equals(uri, a.Uri, StringComparison.OrdinalIgnoreCase)) return true;

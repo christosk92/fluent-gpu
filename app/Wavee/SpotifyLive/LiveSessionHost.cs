@@ -120,7 +120,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
                     else if (uri.StartsWith("spotify:artist:", StringComparison.Ordinal)) await FetchArtistAsync(pathfinder, store, uri, c).ConfigureAwait(false);
                 };
                 libSrc.LiveHomeFetch = c => homeCache.GetAsync(c);   // cached editorial home + separately refreshed recents
-                libSrc.LiveSearch = (q, c) => FetchSearchAsync(pathfinder, q, c);   // full-catalog online search
+                libSrc.LiveSearch = (q, facet, offset, limit, c) => FetchSearchAsync(pathfinder, q, facet, offset, limit, c);   // paged online search
                 libSrc.LiveSuggest = async (q, c) => (await FetchSuggestRichAsync(pathfinder, q, c).ConfigureAwait(false)).Queries;   // omnibar as-you-type suggestions
                 libSrc.LiveSuggestRich = (q, c) => FetchSuggestRichAsync(pathfinder, q, c);
             }
@@ -246,35 +246,76 @@ public sealed class LiveSessionHost : IAsyncDisposable
     // Full-catalog online search via Pathfinder — the per-facet ops (searchTracks/Albums/Artists/Playlists) fired in
     // parallel, each filling its own data.searchV2.<facet>, merged into one SearchResults. The query variable is
     // "searchTerm" (NOT "query"), matching the captured wire request exactly.
-    static async Task<SearchResults?> FetchSearchAsync(PathfinderClient pf, string query, CancellationToken ct)
+    static async Task<SearchResults?> FetchSearchAsync(PathfinderClient pf, string query, SearchFacet facet, int offset, int limit, CancellationToken ct)
     {
+        offset = Math.Max(0, offset);
+        limit = Math.Clamp(limit, 1, 50);
+
         void Vars(Utf8JsonWriter w)
         {
             w.WriteBoolean("includePreReleases", false);
             w.WriteBoolean("includeAlbumPreReleases", true);
-            w.WriteNumber("numberOfTopResults", 20);
+            w.WriteNumber("numberOfTopResults", limit);
             w.WriteString("searchTerm", query);
-            w.WriteNumber("offset", 0);
-            w.WriteNumber("limit", 20);
+            w.WriteNumber("offset", offset);
+            w.WriteNumber("limit", limit);
             w.WriteBoolean("includeAudiobooks", true);
             w.WriteBoolean("includeAuthors", true);
             w.WriteBoolean("includeEpisodeContentRatingsV2", true);
         }
-        Task<JsonDocument?> Op(string op, string hash) => pf.QueryAsync(op, hash, Vars, PathfinderClient.Platform.WebPlayer, ct);
+        // The unified top-results op (the "All" tab) declares a DIFFERENT variable set, keyed on "query" (not "searchTerm").
+        void VarsTop(Utf8JsonWriter w)
+        {
+            w.WriteString("query", query);
+            w.WriteNumber("limit", limit);
+            w.WriteNumber("offset", offset);
+            w.WriteNumber("numberOfTopResults", limit);
+            w.WriteBoolean("includeArtistHasConcertsField", false);
+            w.WriteBoolean("includeAudiobooks", true);
+            w.WriteBoolean("includeAuthors", true);
+            w.WriteBoolean("includePreReleases", true);
+            w.WriteBoolean("includeAlbumPreReleases", true);
+            w.WriteBoolean("includeEpisodeContentRatingsV2", true);
+            w.WriteNull("isPrefix");
+            w.WriteStartArray("sectionFilters");
+            w.WriteStringValue("GENERIC");
+            w.WriteStringValue("VIDEO_CONTENT");
+            w.WriteEndArray();
+        }
 
-        var tT = Op(PathfinderOps.SearchTracks, PathfinderOps.SearchTracksHash);
-        var aT = Op(PathfinderOps.SearchAlbums, PathfinderOps.SearchAlbumsHash);
-        var rT = Op(PathfinderOps.SearchArtists, PathfinderOps.SearchArtistsHash);
-        var pT = Op(PathfinderOps.SearchPlaylists, PathfinderOps.SearchPlaylistsHash);
-        await Task.WhenAll(tT, aT, rT, pT).ConfigureAwait(false);
-        using var td = await tT; using var ad = await aT; using var rd = await rT; using var pd = await pT;
-        if (td is null && ad is null && rd is null && pd is null) return null;
+        var callerCt = ct;
+        using var searchCts = CancellationTokenSource.CreateLinkedTokenSource(callerCt);
+        searchCts.CancelAfter(TimeSpan.FromSeconds(8));
+        ct = searchCts.Token;
 
-        var tracks = td is null ? (IReadOnlyList<Track>)Array.Empty<Track>() : Wavee.Core.SpotifyExportMapper.SearchFromV2(td.RootElement).Tracks;
-        var albums = ad is null ? (IReadOnlyList<Album>)Array.Empty<Album>() : Wavee.Core.SpotifyExportMapper.SearchFromV2(ad.RootElement).Albums;
-        var artists = rd is null ? (IReadOnlyList<Artist>)Array.Empty<Artist>() : Wavee.Core.SpotifyExportMapper.SearchFromV2(rd.RootElement).Artists;
-        var playlists = pd is null ? (IReadOnlyList<Playlist>)Array.Empty<Playlist>() : Wavee.Core.SpotifyExportMapper.SearchFromV2(pd.RootElement).Playlists;
-        return new SearchResults(tracks, albums, artists, playlists);
+        try
+        {
+            if (facet == SearchFacet.All)
+            {
+                using var topd = await pf.QueryAsync(PathfinderOps.SearchTopResults, PathfinderOps.SearchTopResultsHash, VarsTop, PathfinderClient.Platform.WebPlayer, ct).ConfigureAwait(false);
+                if (topd is null) throw new InvalidOperationException("Spotify top-results search failed.");
+                var topHits = Wavee.Core.SpotifyExportMapper.TopHitsFromV2(topd.RootElement);
+                var totals = Wavee.Core.SpotifyExportMapper.SearchFromV2(topd.RootElement);
+                return totals with { TopHits = topHits };
+            }
+
+            var (op, hash) = facet switch
+            {
+                SearchFacet.Tracks => (PathfinderOps.SearchTracks, PathfinderOps.SearchTracksHash),
+                SearchFacet.Albums => (PathfinderOps.SearchAlbums, PathfinderOps.SearchAlbumsHash),
+                SearchFacet.Artists => (PathfinderOps.SearchArtists, PathfinderOps.SearchArtistsHash),
+                SearchFacet.Playlists => (PathfinderOps.SearchPlaylists, PathfinderOps.SearchPlaylistsHash),
+                _ => throw new NotSupportedException($"Search facet '{facet}' is not wired to a Pathfinder operation yet."),
+            };
+
+            using var doc = await pf.QueryAsync(op, hash, Vars, PathfinderClient.Platform.WebPlayer, ct).ConfigureAwait(false);
+            if (doc is null) throw new InvalidOperationException($"Spotify {facet} search failed.");
+            return Wavee.Core.SpotifyExportMapper.SearchFromV2(doc.RootElement);
+        }
+        catch (OperationCanceledException) when (!callerCt.IsCancellationRequested)
+        {
+            throw new TimeoutException($"Spotify {facet} search timed out.");
+        }
     }
 
     // The signed-in user's profile (display name + avatar) via spclient user-profile-view — the cluster/login only give
