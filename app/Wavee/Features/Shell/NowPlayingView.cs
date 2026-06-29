@@ -57,7 +57,7 @@ sealed class NowPlayingView : Component
         ColorF bg = palette is { } p1 ? WaveePalette.BackgroundDark(p1) : WaveePalette.BackgroundDark(WaveePalette.Neutral);
 
         float artSize = Math.Clamp(MathF.Min(vp.Width * 0.30f, vp.Height * 0.42f), 160f, 440f);
-        bool showQueueRail = vp.Width >= 1040f && track is not null;
+        bool showQueueRail = vp.Width >= 1040f && track is not null && !showLyrics;   // lyrics mode is full-width centered (no queue beside)
 
         // ── top bar: collapse + context label ──────────────────────────────────────────────────────
         var topBar = new BoxEl
@@ -279,7 +279,6 @@ sealed class NowPlayingView : Component
                 Children = [Surfaces.Artwork(t.Image, SeedOf(t), MathF.Max(vpW, 200f), MathF.Max(vpH, 200f), 0f, decodePx: 96)],
             },
             new BoxEl { Grow = 1f, Fill = bg with { A = 0.5f } },
-            Embed.Comp(() => new FluidBackdrop(palette)),   // animated palette aurora over the dimmed cover (BetterLyrics fluid)
         ],
     };
 

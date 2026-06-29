@@ -32,7 +32,6 @@ sealed class LyricsView : Component
 
     // Scroll follow: bound to the column Transform; eased toward the active line each frame by the ticker.
     readonly FloatSignal _scrollY = new(0f);
-    readonly FloatSignal _viewportW = new(0f);   // live viewport width — lets the centered (fullscreen) column fill + center
     // Resolver output — drives per-line emphasis (each line subscribes). -1 = before the first line.
     readonly Signal<int> _activeLine = new(-1);
     // Smooth playback ms — published every frame by the ticker; the ACTIVE word-by-word line reads it to advance its
@@ -117,11 +116,12 @@ sealed class LyricsView : Component
 
         // The scrolling content column — Transform is a compositor bind (no re-render on scroll). Generous top/bottom
         // padding so the first/last lines can still reach the focal band.
+        // Shrink=0 keeps the column at content height so it can overflow + scroll; as the viewport's cross-axis child it
+        // stretches to full width, so AlignItems=Center actually centers the (no-wrap) lines on the fullscreen surface.
         var column = new BoxEl
         {
-            Direction = 1, Gap = _large ? 14f : 8f, Padding = new Edges4(padX, padY, padX, padY),
+            Direction = 1, Shrink = 0f, Gap = _large ? 14f : 8f, Padding = new Edges4(padX, padY, padX, padY),
             AlignItems = centered ? FlexAlign.Center : FlexAlign.Stretch,
-            Width = Prop.Of(() => _large ? _viewportW.Value : float.NaN),   // fullscreen: fill width so centering works
             Transform = Prop.Of(() => Affine2D.Translation(0f, _scrollY.Value)),
             Children = lineKids,
         };
@@ -130,9 +130,8 @@ sealed class LyricsView : Component
 
         return new BoxEl
         {
-            Grow = 1f, MinHeight = 0f, ClipToBounds = true, ZStack = true,
+            Grow = 1f, MinHeight = 0f, ClipToBounds = true, Direction = 1,
             OnRealized = h => _viewport = h,
-            OnBoundsChanged = r => { if (r.W != _viewportW.Peek()) _viewportW.Value = r.W; },
             Children = ticker is null ? [column] : [column, ticker],
         };
     }
@@ -183,6 +182,19 @@ sealed class LyricsView : Component
         float next = cur + (target - cur) * 0.16f;          // exponential ease toward the focal target
         if (MathF.Abs(next - cur) < 0.05f) next = target;
         if (next != cur) _scrollY.Value = next;             // value-gated: an unmoved scroll is a true no-op
+
+        // Advance the ACTIVE line's karaoke wipe split directly on the scene side-table — this re-records JUST this one
+        // glyph run (no component re-render, no reshape), the SeekBar-thumb discipline applied to the wipe. (TryGetGlyphWipe
+        // is false for non-word-by-word active lines, which set no wipe.)
+        if (scene.TryGetGlyphWipe(line, out var w))
+        {
+            float split = LyricLineView.ComputeSplit(doc.Lines[active], nowMs);
+            if (MathF.Abs(split - w.Split) > 0.0008f)
+            {
+                scene.SetGlyphWipe(line, w with { Split = split });
+                scene.Mark(line, NodeFlags.PaintDirty);
+            }
+        }
     }
 
     // Current line = the last line whose StartMs <= now (BetterLyrics' next-StartMs boundary). -1 before the first line.
@@ -247,21 +259,20 @@ sealed class LyricLineView : Component
         Element textEl;
         if (isActive && _line.IsWordByWord && _line.Syllables.Count > 0)
         {
-            // Karaoke SOFT WIPE (A1): one flat run colored per-glyph by the played split (DrawGlyphRunGradient), advancing
-            // smoothly with the clock. Subscribing to _nowMs HERE means only the active line re-renders per frame; the
-            // wipe carries on paint (KaraokeSplit), so the run never reshapes as the split sweeps.
-            float split = ComputeSplit(_line, (long)_nowMs.Value);
+            // Karaoke wipe (A1) via the generic GlyphWipe primitive. Set the INITIAL split here (Peek → NO per-frame
+            // re-render); the view's ticker advances the split each frame directly on the scene side-table, so this
+            // component re-renders only when the active line changes.
+            float split = ComputeSplit(_line, (long)_nowMs.Peek());
             textEl = new TextEl(_line.Text)
             {
-                Size = _fontSz, Weight = 700, Wrap = TextWrap.Wrap, LineHeight = _lineHt, Color = Tok.TextSecondary,
-                // The generic glyph-wipe primitive: swept text bright, not-yet dim, soft boundary, a per-glyph lift trailing it.
+                Size = _fontSz, Weight = 700, Wrap = _centered ? TextWrap.NoWrap : TextWrap.Wrap, LineHeight = _lineHt, Color = Tok.TextSecondary,
                 Wipe = new GlyphWipe(Before: Tok.TextPrimary, After: Tok.TextSecondary, Split: split, Softness: 0.05f, Lift: 5f),
             };
         }
         else
         {
             ColorF color = isActive ? Tok.TextPrimary : Tok.TextSecondary;
-            textEl = new TextEl(_line.Text) { Size = _fontSz, Weight = 700, Color = color, Wrap = TextWrap.Wrap, LineHeight = _lineHt };
+            textEl = new TextEl(_line.Text) { Size = _fontSz, Weight = 700, Color = color, Wrap = _centered ? TextWrap.NoWrap : TextWrap.Wrap, LineHeight = _lineHt };
         }
 
         return new BoxEl
@@ -276,7 +287,7 @@ sealed class LyricLineView : Component
     }
 
     // Played fraction (0..1) along the line from the sung syllables + the smooth clock — the karaoke wipe split.
-    static float ComputeSplit(LyricLine line, long now)
+    internal static float ComputeSplit(LyricLine line, long now)
     {
         var syl = line.Syllables;
         int total = 0;
