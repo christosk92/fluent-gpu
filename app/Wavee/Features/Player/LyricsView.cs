@@ -32,6 +32,7 @@ sealed class LyricsView : Component
 
     // Scroll follow: bound to the column Transform; eased toward the active line each frame by the ticker.
     readonly FloatSignal _scrollY = new(0f);
+    bool _scrollSnapped;   // false → the next valid frame JUMPS the scroll to the active line (open mid-playback / new track), then eases
     // Resolver output — drives per-line emphasis (each line subscribes). -1 = before the first line.
     readonly Signal<int> _activeLine = new(-1);
     // Smooth playback ms — published every frame by the ticker; the ACTIVE word-by-word line reads it to advance its
@@ -39,7 +40,7 @@ sealed class LyricsView : Component
     readonly FloatSignal _nowMs = new(0f);
 
     // Live layout handles read by the ticker (the active line's arranged rect vs the viewport's → the scroll target).
-    NodeHandle _viewport;
+    // The viewport is this component's HostNode (read in OnFrame), not a reported handle.
     NodeHandle[] _lineNodes = Array.Empty<NodeHandle>();
     NodeHandle[] _glowNodes = Array.Empty<NodeHandle>();   // parallel: the active wbw line's wiped-glow run (split advanced in lockstep)
 
@@ -62,13 +63,18 @@ sealed class LyricsView : Component
 
         var track = b?.CurrentTrack.Value;                 // subscribe → reload on track change
         bool playing = b?.IsPlaying.Value ?? false;        // subscribe (kept for future gating)
-        bool open = _visible is not null ? _visible() : (ui?.RailOpen.Value ?? false);   // gate the ticker (rail uses RailOpen)
+        bool open = _visible is not null ? _visible() : (ui?.RailOpen.Value ?? false);   // gate the ticker + fetch
         long posTick = b?.PositionMs.Value ?? 0L;          // subscribe → re-anchor the smooth clock each tick
         string trackId = track?.Id ?? "";
+        string artist = track is { Artists.Count: > 0 } ? track.Artists[0].Name : "";
 
+        // Fetch only while the pane is shown, and re-fetch when: the track changes, the pane is (re)opened — so opening
+        // mid-playback loads immediately and a transient miss retries — or async enrichment fills in the initially-thin
+        // cluster track's artist (so the metadata sources get a real artist to match on).
+        string fetchKey = open ? trackId + "|" + artist : "";
         var docL = UseAsyncResource(
-            ct => svc?.Lyrics is { } lp ? lp.GetLyricsAsync(trackId, ct) : Task.FromResult<LyricsDocument?>(null),
-            (LyricsDocument?)null, trackId);
+            ct => open && svc?.Lyrics is { } lp ? lp.GetLyricsAsync(trackId, ct) : Task.FromResult<LyricsDocument?>(null),
+            (LyricsDocument?)null, fetchKey);
 
         UseEffect(() =>
         {
@@ -95,6 +101,7 @@ sealed class LyricsView : Component
             _glowNodes = new NodeHandle[lines.Count];
             _activeLine.Value = -1;
             _scrollY.Value = 0f;
+            _scrollSnapped = false;
         }
 
         _ = _activeLine.Value;   // subscribe so a new active line re-renders the column (per-line emphasis re-seeds)
@@ -133,7 +140,6 @@ sealed class LyricsView : Component
         return new BoxEl
         {
             Grow = 1f, MinHeight = 0f, ClipToBounds = true, Direction = 1,
-            OnRealized = h => _viewport = h,
             Children = ticker is null ? [column] : [column, ticker],
         };
     }
@@ -176,23 +182,38 @@ sealed class LyricsView : Component
         _nowMs.Value = nowMs;
 
         var scene = Context.Scene;
+        // The scroll viewport is THIS component's own rendered root (the clipped column container). OnRealized does NOT
+        // fire on a Component's ROOT element, so a self-reported handle stays null — read the engine-provided HostNode.
+        var viewport = Context.HostNode;
         if (scene is null || active < 0 || (uint)active >= (uint)_lineNodes.Length) return;
         var line = _lineNodes[active];
-        if (_viewport.IsNull || line.IsNull || !scene.IsLive(_viewport) || !scene.IsLive(line)) return;
+        if (line.IsNull || !scene.IsLive(line)) return;
 
-        // AbsoluteRect is the arranged (layout) rect — scroll is a compositor Transform, so these are scroll-invariant.
-        // On-screen Y of the line = layoutY + scrollY; we want that at viewport.Y + band ⇒ targetScroll = band-anchor - layoutY.
-        RectF vp = scene.AbsoluteRect(_viewport);
-        RectF lr = scene.AbsoluteRect(line);
-        float target = (vp.Y + vp.H * _band) - (lr.Y + lr.H * 0.5f);
-        float cur = _scrollY.Peek();
-        float next = cur + (target - cur) * 0.16f;          // exponential ease toward the focal target
-        if (MathF.Abs(next - cur) < 0.05f) next = target;
-        if (next != cur) _scrollY.Value = next;             // value-gated: an unmoved scroll is a true no-op
+        // Auto-scroll: park the active line at the focal band. SNAP on the first valid frame (so opening the pane mid-
+        // playback — or a track change — lands on the current line instantly), then EASE. AbsoluteRect is the arranged
+        // (layout) rect; scroll is a compositor Transform, so it's scroll-invariant → target is an absolute translation.
+        // Gated separately from the wipe below so a viewport hiccup never freezes the karaoke.
+        if (!viewport.IsNull && scene.IsLive(viewport))
+        {
+            RectF vp = scene.AbsoluteRect(viewport);
+            RectF lr = scene.AbsoluteRect(line);
+            // AbsoluteRect REFLECTS the live scroll (the column's compositor Transform), so `delta` is the REMAINING
+            // distance from the active line to the focal band — applied INCREMENTALLY to the current scroll (not as an
+            // absolute target). Wait for a real layout (lr.H > 0) so the first frame doesn't snap against a 0-height rect.
+            if (lr.H > 0.5f && vp.H > 0.5f)
+            {
+                float delta = (vp.Y + vp.H * _band) - (lr.Y + lr.H * 0.5f);
+                float cur = _scrollY.Peek();
+                float next = _scrollSnapped ? cur + delta * 0.18f : cur + delta;   // first valid frame snaps to the line; then eases
+                _scrollSnapped = true;
+                if (MathF.Abs(next - cur) < 0.05f) next = cur;   // settled → true no-op (idle the loop)
+                if (next != cur) _scrollY.Value = next;
+            }
+        }
 
         // Advance the ACTIVE line's karaoke wipe split directly on the scene side-table — this re-records JUST this one
         // glyph run (no component re-render, no reshape), the SeekBar-thumb discipline applied to the wipe. (TryGetGlyphWipe
-        // is false for non-word-by-word active lines, which set no wipe.)
+        // is false for non-word-by-word active lines, which set no wipe.) Independent of the scroll above.
         if (scene.TryGetGlyphWipe(line, out var w))
         {
             float split = LyricLineView.ComputeSplit(doc.Lines[active], nowMs);
@@ -214,6 +235,10 @@ sealed class LyricsView : Component
             }
         }
     }
+
+    /// <summary>Re-arm the scroll snap so the next valid frame JUMPS to the active line (no ease-in from the top) — called
+    /// when the ticker (re)mounts, i.e. the pane is opened, so opening mid-playback lands on the current line instantly.</summary>
+    internal void ResetScrollSnap() => _scrollSnapped = false;
 
     // Current line = the last line whose StartMs <= now (BetterLyrics' next-StartMs boundary). -1 before the first line.
     static int ResolveLine(IReadOnlyList<LyricLine> lines, long nowMs)
@@ -273,7 +298,9 @@ sealed class LyricLineView : Component
         // All ride springs that re-seed only when the distance bucket changes (deps) then settle on the compositor.
         float f = MathF.Min(dist / 5f, 1f);
         float scale = isActive ? 1f : 1f - 0.25f * f;
-        float opacity = isActive ? 1f : MathF.Max(0.12f, (1f - f) * 0.95f);
+        // Steeper opacity falloff than BetterLyrics' default so ONE line clearly dominates (was reading as "3 lines at once"):
+        // active 1.0, then ~0.44 / 0.33 / 0.22 for the next lines.
+        float opacity = isActive ? 1f : MathF.Max(0.16f, 0.55f * (1f - f));
         float blur = (isActive || dist > 6) ? 0f : 5f * f;   // DoF: Gaussian blur 0→5 with distance (BetterLyrics cap)
 
         UseSpring(AnimChannel.ScaleX, scale, SpringParams.Default, dist);
@@ -372,6 +399,7 @@ sealed class LyricsTicker : ReactiveComponent
 
     public override Element Setup()
     {
+        Owner.ResetScrollSnap();   // (re)opening the pane → the first frame snaps to the current line, no scroll-in from the top
         var tick = UseContextSignal(FrameClock.Tick);
         UseSignalEffect(() =>
         {

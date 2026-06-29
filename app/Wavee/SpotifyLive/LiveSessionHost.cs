@@ -110,7 +110,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
         // GoLive so a logout fired in the go-live window still tears the host down (not a no-op).
         if (ct.IsCancellationRequested) { await host.DisposeAsync().ConfigureAwait(false); return null; }
         svc.AttachLive(host, live.CredStore!);
-        var lyrics = BuildLiveLyrics(live.Pipeline, () => live.BaseUrl, connect.Controller);
+        var lyrics = BuildLiveLyrics(() => live.BaseUrl, connect.Controller, live.TokenProvider);
         svc.GoLive(connect.Controller, connect.Devices, liveSession, connectivity, lyrics);
         report.Report(new LoginSnapshot(LoginPhase.Authenticated, User: liveSession.CurrentUser));
         log("Live Connect session active — Wavee is a controllable device, mirrors now-playing, and shows the live account.");
@@ -128,6 +128,8 @@ public sealed class LiveSessionHost : IAsyncDisposable
             // Below-the-fold album enrichment (about-artist / merch / similar via Pathfinder; recommended playlists via the
             // SAME extended-metadata source, kinds 151→205) — installed into the switchable service the album pages hold.
             svc.AlbumEnrichment.SetInner(new SpotifyAlbumEnrichmentService(pathfinder, em, store, log));
+            // Music-video detection + the video↔audio file-id map over the SAME extended-metadata source (etag-cached).
+            svc.Video.SetInner(new SpotifyVideoService(em, store, log));
             if (svc.RealLibrarySource is { } libSrc)
             {
                 libSrc.OnDemandFetch = async (uri, c) =>
@@ -135,6 +137,8 @@ public sealed class LiveSessionHost : IAsyncDisposable
                     if (uri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) await fetcher.FetchPlaylistAsync(uri, c).ConfigureAwait(false);
                     else if (uri.StartsWith("spotify:album:", StringComparison.Ordinal)) await FetchAlbumAsync(pathfinder, store, uri, c).ConfigureAwait(false);
                     else if (uri.StartsWith("spotify:artist:", StringComparison.Ordinal)) await FetchArtistAsync(pathfinder, store, uri, c).ConfigureAwait(false);
+                    // Detect music videos for the just-hydrated tracklist (batch, off the critical path → the movie icons fill in).
+                    DetectContainerVideos(svc.Video, store, uri, c);
                 };
                 libSrc.LiveHomeFetch = c => homeCache.GetAsync(c);   // cached editorial home + separately refreshed recents
                 libSrc.LiveSearch = (q, facet, offset, limit, c) => FetchSearchAsync(pathfinder, q, facet, offset, limit, c);   // paged online search
@@ -147,6 +151,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
             connect.Projection.TrackResolver = async (uri, c) =>
             {
                 if (!uri.StartsWith("spotify:track:", StringComparison.Ordinal)) return null;
+                _ = svc.Video.GetAsync(uri, c);   // warm the current track's video↔audio mapping (best-effort, fire-and-forget)
                 return await ResolveNowPlayingTrackAsync(uri, md, pathfinder, store, c).ConfigureAwait(false);
             };
 
@@ -248,6 +253,33 @@ public sealed class LiveSessionHost : IAsyncDisposable
         catch (Exception ex) { log("playlist hydration: " + ex.Message); }
     }
 
+    // After a container's tracklist hydrates, batch-detect which of its tracks have a music video (fills the row indicator).
+    // Fire-and-forget off the open path — best-effort, etag-cached, and a no-op when the container has no resident tracks yet.
+    static void DetectContainerVideos(IVideoService video, IStore store, string uri, CancellationToken ct)
+    {
+        List<string>? uris = null;
+        if (uri.StartsWith("spotify:playlist:", StringComparison.Ordinal))
+        {
+            var m = store.Membership(uri);
+            if (m.Count > 0)
+            {
+                uris = new List<string>(m.Count);
+                foreach (var r in m) if (r.ItemUri.StartsWith("spotify:track:", StringComparison.Ordinal)) uris.Add(r.ItemUri);
+            }
+        }
+        else if (uri.StartsWith("spotify:album:", StringComparison.Ordinal))
+        {
+            if (store.GetAlbum(uri)?.Tracks is { Count: > 0 } tracks)
+            {
+                uris = new List<string>(tracks.Count);
+                foreach (var t in tracks) uris.Add(t.Uri);
+            }
+        }
+        if (uris is not { Count: > 0 }) return;
+        var list = uris;
+        _ = Task.Run(async () => { try { await video.DetectAsync(list, ct).ConfigureAwait(false); } catch { } }, ct);
+    }
+
     // Fetch the rich artist overview via Pathfinder GraphQL → map (the export's artist-*.json IS this shape) → store.
     // Best-effort: a stale persisted-query hash or error leaves the identity-only artist in place.
     static async Task FetchArtistAsync(PathfinderClient pf, IStore store, string uri, CancellationToken ct)
@@ -340,20 +372,27 @@ public sealed class LiveSessionHost : IAsyncDisposable
     // fallback); the reranker validates content/timing and picks the best. The request is resolved from the live
     // now-playing track (what the lyrics view asks for). Grey CJK/Musixmatch sources stay off by default (LyricsOptions).
     static Wavee.Backend.Lyrics.AggregatingLyricsProvider BuildLiveLyrics(
-        Wavee.Backend.Spotify.IHttpExchange pipeline, Func<string> baseUrl, IPlaybackPlayer controller)
+        Func<string> baseUrl, IPlaybackPlayer controller, Func<CancellationToken, Task<string>> token)
     {
         var http = new Wavee.Backend.Lyrics.SharedHttpLyricFetch();
 
+        // Spotify color-lyrics MUST carry app-platform=WebPlayer (it 400s on any other value). The shared spclient pipeline
+        // force-stamps App-Platform=Win32_x86_64 in ClientTokenMiddleware, so we must NOT route through it — instead a raw
+        // bearer GET via the shared HttpClient with the WebPlayer identity. The bearer is the refreshing TokenProvider
+        // (survives the ~1h access-token expiry), so lyrics keep loading deep into a session.
         async Task<string?> SpotifyGet(string url, CancellationToken c)
         {
             try
             {
-                var headers = new System.Collections.Generic.Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-                    { ["Accept"] = "application/json", ["app-platform"] = "WebPlayer" };
-                using var resp = await pipeline.SendAsync(new Wavee.Backend.Spotify.HttpReq("GET", url, headers, null), c).ConfigureAwait(false);
-                if (resp.Status != 200) return null;
-                using var reader = new System.IO.StreamReader(resp.Body);
-                return await reader.ReadToEndAsync(c).ConfigureAwait(false);
+                string tok = await token(c).ConfigureAwait(false);
+                if (string.IsNullOrEmpty(tok)) return null;
+                using var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, url);
+                req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + tok);
+                req.Headers.TryAddWithoutValidation("app-platform", "WebPlayer");
+                req.Headers.TryAddWithoutValidation("Accept", "application/json");
+                using var resp = await Wavee.Backend.Spotify.SharedHttp.Client.SendAsync(req, c).ConfigureAwait(false);
+                if (!resp.IsSuccessStatusCode) return null;
+                return await resp.Content.ReadAsStringAsync(c).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { throw; }
             catch { return null; }
