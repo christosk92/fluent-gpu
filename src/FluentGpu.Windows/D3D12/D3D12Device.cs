@@ -85,6 +85,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
     private int _frameImageCount;
     private int _frameImageSkipped;
     private readonly List<GlyphInstance> _glyphInsts = new();
+    private readonly List<GradGlyphInstance> _gradGlyphInsts = new();   // sub-glyph karaoke wipe (active lyric line + glow)
     private float _frameScale = 1f;
     private int _frameRectCount;
     private int _frameGlyphInstanceCount;
@@ -490,7 +491,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
     // Residency evicted the image → free its GPU texture (deferred behind the frame fence in the store).
     public void EvictImage(int imageId) => _imageTextures?.Free(imageId);
 
-    private void ClearInsts() { _rectInsts.Clear(); _glyphInsts.Clear(); _shadowInsts.Clear(); _arcInsts.Clear(); _polylineInsts.Clear(); _gradInsts.Clear(); _imageDraws.Clear(); _runs.Clear(); }
+    private void ClearInsts() { _rectInsts.Clear(); _glyphInsts.Clear(); _gradGlyphInsts.Clear(); _shadowInsts.Clear(); _arcInsts.Clear(); _polylineInsts.Clear(); _gradInsts.Clear(); _imageDraws.Clear(); _runs.Clear(); }
 
     // Record (or extend) a painter-order run for the just-appended primitive, so RecordAll can replay in stream order.
     private void PushRun(PrimKind kind)
@@ -555,12 +556,13 @@ public sealed unsafe class D3D12Device : IGpuDevice
                     string s = _strings.Resolve(g.Text);
                     if (s.Length > 0)
                     {
-                        int before = _glyphInsts.Count;
-                        // Karaoke wipe: per-glyph color from the split, replayed through the SAME glyph PSO/batch (_glyphInsts).
+                        int before = _gradGlyphInsts.Count;
+                        // Karaoke wipe: a per-PIXEL sub-glyph gradient (before→after over a soft band at the split) via a
+                        // SEPARATE gradient PSO/batch (_gradGlyphInsts) — normal text keeps its lean single-color path.
                         _glyphs!.LayoutRunGradient(g.Text, g.Family, s, _strings.Resolve(g.Family), g.FontSize, g.Weight, g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Wrap, g.Trim, g.MaxLines,
-                            g.CharSpacing, g.LineHeight, g.LineStacking, g.LineBounds, g.Before, g.After, g.Split, g.Softness, g.Lift, _frameScale, g.Transform, g.Opacity, _glyphInsts,
+                            g.CharSpacing, g.LineHeight, g.LineStacking, g.LineBounds, g.Before, g.After, g.Split, g.Softness, g.Lift, _frameScale, g.Transform, g.Opacity, _gradGlyphInsts,
                             g.SpanRunId, g.InMotion != 0);
-                        _frameGlyphInstanceCount += _glyphInsts.Count - before;
+                        _frameGlyphInstanceCount += _gradGlyphInsts.Count - before;
                     }
                     break;
                 }
@@ -874,6 +876,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
             }
         }
         if (_glyphInsts.Count > 0) _glyphs!.Record(_cmdList, _glyphInsts, lw, lh);
+        if (_gradGlyphInsts.Count > 0) _glyphs!.RecordGradient(_cmdList, _gradGlyphInsts, lw, lh);   // sub-glyph wipe, same RT/z as glyphs
     }
 
     private void FlushSegment(float lw, float lh)

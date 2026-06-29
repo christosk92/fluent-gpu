@@ -292,7 +292,7 @@ sealed class LyricLineView : Component
             var wipe = new TextEl(_line.Text)
             {
                 Size = _fontSz, Weight = 700, Wrap = wrap, LineHeight = _lineHt, Color = Tok.TextSecondary,
-                Wipe = new GlyphWipe(Before: Tok.TextPrimary, After: Tok.TextPrimary with { A = 0.4f }, Split: split, Softness: 0.06f, Lift: _lineHt * 0.1f),
+                Wipe = new GlyphWipe(Before: Tok.TextPrimary, After: Tok.TextPrimary with { A = 0.4f }, Split: split, Softness: 0.025f, Lift: _lineHt * 0.1f),
                 OnRealized = h => _reportNode(_index, h),
             };
             // The glow FOLLOWS the sung portion: a wiped bright→transparent run, blurred — so only sung words bloom while
