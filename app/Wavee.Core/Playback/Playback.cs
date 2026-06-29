@@ -73,9 +73,32 @@ public interface IConnectDevices
     Task TransferAsync(string deviceId, CancellationToken ct = default);
 }
 
+/// <summary>How tightly the lyric is timed — drives whether the view can do karaoke (Syllable), line-follow (Line),
+/// or only static display (Unsynced/None). Set by the provider/normalizer.</summary>
+public enum LyricsSyncKind { None, Unsynced, Line, Syllable }
+
 public sealed record LyricSyllable(long StartMs, long EndMs, string Text);
-public sealed record LyricLine(long StartMs, string Text, IReadOnlyList<LyricSyllable> Syllables);
-public sealed record LyricsDocument(string TrackId, bool IsSynced, IReadOnlyList<LyricLine> Lines);
+
+/// <summary>One lyric line. <paramref name="Syllables"/> carry word/syllable timing when present (word-by-word).
+/// The trailing args are additive (back-compat with positional <c>new LyricLine(start, text, syllables)</c> sites):
+/// <paramref name="EndMs"/> is the line's end (else derived = next line's StartMs); <paramref name="Translation"/>
+/// and <paramref name="Romanization"/> feed the multi-layer view; <paramref name="IsWordByWord"/> flags real syllable timing.</summary>
+public sealed record LyricLine(
+    long StartMs,
+    string Text,
+    IReadOnlyList<LyricSyllable> Syllables,
+    long? EndMs = null,
+    string? Translation = null,
+    string? Romanization = null,
+    bool IsWordByWord = false);
+
+public sealed record LyricsDocument(
+    string TrackId,
+    bool IsSynced,
+    IReadOnlyList<LyricLine> Lines,
+    LyricsSyncKind Sync = LyricsSyncKind.Line,
+    string? Provider = null,
+    long OffsetMsApplied = 0);
 
 public interface ILyricsProvider
 {

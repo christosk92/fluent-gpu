@@ -166,6 +166,7 @@ sealed class PlayerBarContent : Component
         var b = UseContext(PlaybackBridge.Slot);
         var lib = UseContext(LibraryBridge.Slot);    // Mutations: the now-playing like reflects + toggles the saved-set
         var go = UseContext(HistoryStore.NavCtx);    // navigate to the now-playing album / artist on click
+        var ui = UseContext(ShellUi.Slot);           // right-rail (lyrics) toggle state
         var titleHover = UseSignal(false);           // hover the now-playing text → BOTH lines scroll together (synced); idle = static + edge fade
         var L = _layout.Value;                       // coarse breakpoint signal; does NOT change for every resize pixel
         if (DiagEnabled)
@@ -391,6 +392,10 @@ sealed class PlayerBarContent : Component
             });
         if (showVolumeSlider)
             rightKids.Add(Slider.Bind(b.Volume, v => { _ = b.Player.SetVolumeAsync(v); }, 96f, 16f, RailStyle) with { Key = "volume-slider", Animate = ItemMotion });
+        if (ui is not null && active)
+            rightKids.Add(Transport(Mdl.Lyrics, () => ui.Toggle(RailMode.Lyrics), true,
+                ui.RailOpen.Value && ui.Mode.Value == RailMode.Lyrics, accent, buttonBox, buttonGlyph)
+                with { Key = "lyrics", Animate = ItemMotion });
         if (showQueue)
             rightKids.Add(Embed.Comp(() => new QueueButton(b, accent, buttonBox, buttonGlyph)) with { Key = "queue" });
         if (showDevices)

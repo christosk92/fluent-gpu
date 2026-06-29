@@ -31,6 +31,10 @@ sealed class WaveeShell : Component
     // Mica. Owner-gated writes (ShellTintState) make A→B navigation race-free. Provided at the root via ShellTint.Slot.
     readonly Signal<ShellTintState> _shellTint = new(default);
 
+    // Right-rail (WaveeMusic-style lyrics / now-playing panel) UI state — created here, provided via ShellUi.Slot, and
+    // toggled from the player bar. Independent of bridge.Expanded (the fullscreen now-playing takeover).
+    readonly ShellUi _shellUi = new();
+
     int _nextTabId = 1;
     readonly List<OpenTab> _open = new() { new OpenTab(0, "home", Loc.Get(Strings.Nav.Home), Icons.Home, null) };
     readonly Signal<int> _tabsVersion = new(0);
@@ -258,6 +262,16 @@ sealed class WaveeShell : Component
                                     },
                                 ],
                             },
+                            // Right rail — the WaveeMusic-style lyrics / now-playing panel. A literal row child (Shrink=0,
+                            // bound width) so the content card re-tiles against it; the width animates 0<->RailWidth on
+                            // toggle (SidebarReflow) and ClipToBounds hides the content while collapsed.
+                            new BoxEl
+                            {
+                                Direction = 1, Shrink = 0f, ClipToBounds = true, Fill = Prop.Of(() => WaveeColors.Sidebar),
+                                Width = Prop.Of(() => _shellUi.RailOpen.Value ? _shellUi.RailWidth.Value : 0f),
+                                Animate = SidebarReflow,
+                                Children = [ Embed.Comp(() => new RightRail()) ],
+                            },
                         ],
                     },
                     // Resize-grip overlay: a narrow strip translated to the pane↔content seam. The overlay's own hit
@@ -318,12 +332,13 @@ sealed class WaveeShell : Component
         };
         var shellWithNowPlaying = Ui.ZStack(tinted, nowPlayingLayer) with { Grow = 1f };
 
-        return Ctx.Provide(ShellTint.Slot, _shellTint,
+        return Ctx.Provide(ShellUi.Slot, _shellUi,
+               Ctx.Provide(ShellTint.Slot, _shellTint,
                Ctx.Provide(HistoryStore.NavCtx, (Action<string, string?>)GoNav,
                Ctx.Provide(HistoryStore.Slot, _historyStore,
                Ctx.Provide(NavPreviewStore.Slot, _navPreview,
                Ctx.Provide(SearchQuery.Slot, _searchText,
-               Embed.Comp(() => new OverlayHost { Child = shellWithNowPlaying }))))));
+               Embed.Comp(() => new OverlayHost { Child = shellWithNowPlaying })))))));
     }
 
     TabStrip BuildTabStrip() => new TabStrip
