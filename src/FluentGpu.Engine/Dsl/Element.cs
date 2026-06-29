@@ -464,6 +464,10 @@ public sealed record TextEl(Prop<string> Text) : Element
     /// soft boundary + optional per-glyph lift. Null = off. Carried in a sparse scene side-table (NOT on the hot paint
     /// struct), emitted as a gradient glyph run; advancing the split per frame is reshape-free.</summary>
     public GlyphWipe? Wipe { get; init; }
+
+    /// <summary>Called once when this glyph run is realized into the scene, with its node handle — lets a control drive the
+    /// node directly (the lyrics ticker advances THIS run's <see cref="Wipe"/> split per frame on the scene side-table).</summary>
+    public Action<NodeHandle>? OnRealized { get; init; }
     /// <summary>Read-only text selection (rtb-02): mouse drag selects, double-click selects the word, triple-click all,
     /// Ctrl+C copies via the clipboard seam; the highlight reuses the editor's selection-rect path. Default FALSE —
     /// WinUI TextBlock selection is opt-in (TextBlock.cpp:583 IsTextSelectionEnabled property change creates the

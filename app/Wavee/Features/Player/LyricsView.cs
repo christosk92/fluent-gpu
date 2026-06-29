@@ -41,6 +41,7 @@ sealed class LyricsView : Component
     // Live layout handles read by the ticker (the active line's arranged rect vs the viewport's → the scroll target).
     NodeHandle _viewport;
     NodeHandle[] _lineNodes = Array.Empty<NodeHandle>();
+    NodeHandle[] _glowNodes = Array.Empty<NodeHandle>();   // parallel: the active wbw line's wiped-glow run (split advanced in lockstep)
 
     LyricsDocument? _doc;     // the built doc the ticker resolves against (peek-only off the UI thread-of-record)
     PlaybackBridge? _b;
@@ -91,6 +92,7 @@ sealed class LyricsView : Component
         {
             _doc = doc;
             _lineNodes = new NodeHandle[lines.Count];      // reconcile-edge alloc (once per track) — fine
+            _glowNodes = new NodeHandle[lines.Count];
             _activeLine.Value = -1;
             _scrollY.Value = 0f;
         }
@@ -110,7 +112,7 @@ sealed class LyricsView : Component
         {
             int idx = i;
             var line = lines[i];
-            lineKids[i] = Embed.Comp(() => new LyricLineView(idx, line, _activeLine, _nowMs, fontSz, lineHt, centered, ReportLineNode, () => SeekToLine(idx)))
+            lineKids[i] = Embed.Comp(() => new LyricLineView(idx, line, _activeLine, _nowMs, fontSz, lineHt, centered, ReportLineNode, ReportGlowNode, () => SeekToLine(idx)))
                 with { Key = "ll" + idx };
         }
 
@@ -139,6 +141,11 @@ sealed class LyricsView : Component
     void ReportLineNode(int index, NodeHandle h)
     {
         if ((uint)index < (uint)_lineNodes.Length) _lineNodes[index] = h;
+    }
+
+    void ReportGlowNode(int index, NodeHandle h)
+    {
+        if ((uint)index < (uint)_glowNodes.Length) _glowNodes[index] = h;
     }
 
     void SeekToLine(int index)
@@ -193,6 +200,17 @@ sealed class LyricsView : Component
             {
                 scene.SetGlyphWipe(line, w with { Split = split });
                 scene.Mark(line, NodeFlags.PaintDirty);
+                // Advance the wiped glow run in lockstep (same split, its own bright→transparent colors) so the bloom
+                // tracks the sung words exactly.
+                if ((uint)active < (uint)_glowNodes.Length)
+                {
+                    var g = _glowNodes[active];
+                    if (!g.IsNull && scene.IsLive(g) && scene.TryGetGlyphWipe(g, out var gw))
+                    {
+                        scene.SetGlyphWipe(g, gw with { Split = split });
+                        scene.Mark(g, NodeFlags.PaintDirty);
+                    }
+                }
             }
         }
     }
@@ -232,14 +250,15 @@ sealed class LyricLineView : Component
     readonly float _lineHt;
     readonly bool _centered;
     readonly Action<int, NodeHandle> _reportNode;
+    readonly Action<int, NodeHandle> _reportGlow;
     readonly Action _onSeek;
 
     public LyricLineView(int index, LyricLine line, Signal<int> activeLine, FloatSignal nowMs,
-        float fontSz, float lineHt, bool centered, Action<int, NodeHandle> reportNode, Action onSeek)
+        float fontSz, float lineHt, bool centered, Action<int, NodeHandle> reportNode, Action<int, NodeHandle> reportGlow, Action onSeek)
     {
         _index = index; _line = line; _activeLine = activeLine; _nowMs = nowMs;
         _fontSz = fontSz; _lineHt = lineHt; _centered = centered;
-        _reportNode = reportNode; _onSeek = onSeek;
+        _reportNode = reportNode; _reportGlow = reportGlow; _onSeek = onSeek;
     }
 
     public override Element Render()
@@ -248,31 +267,68 @@ sealed class LyricLineView : Component
         bool isActive = _index == active;
         int dist = active < 0 ? 6 : Math.Abs(_index - active);
 
-        float scale = isActive ? 1f : 0.94f;
-        float opacity = isActive ? 1f : dist == 1 ? 0.6f : dist == 2 ? 0.42f : dist == 3 ? 0.3f : 0.22f;
+        // Emphasis (BetterLyrics): the active line is full-size, opaque and SHARP; neighbours shrink, dim, AND blur with
+        // distance (depth-of-field). All ride springs that re-seed only when the distance bucket changes (deps) then settle
+        // on the compositor — smooth, no per-frame re-render.
+        float scale = isActive ? 1f : 0.86f;
+        float opacity = isActive ? 1f : dist == 1 ? 0.5f : dist == 2 ? 0.34f : dist == 3 ? 0.24f : 0.16f;
+        float blur = (isActive || dist > 6) ? 0f : MathF.Min(1.2f + dist * 1.5f, 7.5f);   // DoF: progressive blur on neighbours
 
-        // Smooth the emphasis: springs re-seed only when the distance bucket changes (deps), then ride the compositor.
         UseSpring(AnimChannel.ScaleX, scale, SpringParams.Default, dist);
         UseSpring(AnimChannel.ScaleY, scale, SpringParams.Default, dist);
         UseSpring(AnimChannel.Opacity, opacity, SpringParams.Default, dist);
+        UseSpring(AnimChannel.BlurSigma, blur, SpringParams.Default, dist);
 
+        var wrap = _centered ? TextWrap.NoWrap : TextWrap.Wrap;
         Element textEl;
         if (isActive && _line.IsWordByWord && _line.Syllables.Count > 0)
         {
-            // Karaoke wipe (A1) via the generic GlyphWipe primitive. Set the INITIAL split here (Peek → NO per-frame
-            // re-render); the view's ticker advances the split each frame directly on the scene side-table, so this
-            // component re-renders only when the active line changes.
+            // Karaoke wipe (A1) via the generic GlyphWipe primitive. The INITIAL split is set here (Peek → no per-frame
+            // re-render); the ticker advances it each frame on the scene side-table keyed by THIS run's node (reported via
+            // OnRealized) — so the wipe flows without re-rendering or reshaping.
             float split = ComputeSplit(_line, (long)_nowMs.Peek());
-            textEl = new TextEl(_line.Text)
+            var wipe = new TextEl(_line.Text)
             {
-                Size = _fontSz, Weight = 700, Wrap = _centered ? TextWrap.NoWrap : TextWrap.Wrap, LineHeight = _lineHt, Color = Tok.TextSecondary,
-                Wipe = new GlyphWipe(Before: Tok.TextPrimary, After: Tok.TextSecondary, Split: split, Softness: 0.05f, Lift: 5f),
+                Size = _fontSz, Weight = 700, Wrap = wrap, LineHeight = _lineHt, Color = Tok.TextSecondary,
+                Wipe = new GlyphWipe(Before: Tok.TextPrimary, After: Tok.TextPrimary with { A = 0.4f }, Split: split, Softness: 0.06f, Lift: _centered ? 6f : 4f),
+                OnRealized = h => _reportNode(_index, h),
             };
+            // The glow FOLLOWS the sung portion: a wiped bright→transparent run, blurred — so only sung words bloom while
+            // the unsung stay clean and dim (the BetterLyrics karaoke glow). Its split rides in lockstep with the main wipe.
+            var glow = new BoxEl
+            {
+                Blur = _centered ? 13f : 9f, HitTestVisible = false,
+                Children = [new TextEl(_line.Text)
+                {
+                    Size = _fontSz, Weight = 700, Wrap = wrap, LineHeight = _lineHt, Color = Tok.TextPrimary,
+                    Wipe = new GlyphWipe(Before: Tok.TextPrimary, After: Tok.TextPrimary with { A = 0f }, Split: split, Softness: 0.14f),
+                    OnRealized = h => _reportGlow(_index, h),
+                }],
+            };
+            textEl = new BoxEl { ZStack = true, Children = [glow, wipe] };
+        }
+        else if (isActive)
+        {
+            // Active but line-synced (no per-word timing): bright + the same glow, no wipe.
+            var crisp = new TextEl(_line.Text)
+            {
+                Size = _fontSz, Weight = 700, Wrap = wrap, LineHeight = _lineHt, Color = Tok.TextPrimary,
+                OnRealized = h => _reportNode(_index, h),
+            };
+            var glow = new BoxEl
+            {
+                Blur = _centered ? 13f : 9f, HitTestVisible = false,
+                Children = [new TextEl(_line.Text) { Size = _fontSz, Weight = 700, Wrap = wrap, LineHeight = _lineHt, Color = Tok.TextPrimary with { A = 0.4f } }],
+            };
+            textEl = new BoxEl { ZStack = true, Children = [glow, crisp] };
         }
         else
         {
-            ColorF color = isActive ? Tok.TextPrimary : Tok.TextSecondary;
-            textEl = new TextEl(_line.Text) { Size = _fontSz, Weight = 700, Color = color, Wrap = _centered ? TextWrap.NoWrap : TextWrap.Wrap, LineHeight = _lineHt };
+            textEl = new TextEl(_line.Text)
+            {
+                Size = _fontSz, Weight = 700, Wrap = wrap, LineHeight = _lineHt, Color = Tok.TextSecondary,
+                OnRealized = h => _reportNode(_index, h),
+            };
         }
 
         return new BoxEl
@@ -281,7 +337,6 @@ sealed class LyricLineView : Component
             TransformOriginX = _centered ? 0.5f : 0f, TransformOriginY = 0.5f,   // scale about center (fullscreen) or left (rail)
             Cursor = CursorId.Hand, OnClick = _onSeek,
             Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
-            OnRealized = h => _reportNode(_index, h),
             Children = [textEl],
         };
     }

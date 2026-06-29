@@ -1037,6 +1037,7 @@ public sealed class TreeReconciler
                 var cb = t.Color.Thunk; var cs = t.Color.Signal;
                 AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).TextColor = cb is not null ? cb() : cs!.Value; _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
             }
+            t.OnRealized?.Invoke(node);
         }
         else if (el is ImageEl ime)
         {
@@ -1433,7 +1434,7 @@ public sealed class TreeReconciler
         switch (el)
         {
             case TextEl t:
-                return !t.Text.IsBound && !t.Color.IsBound;
+                return !t.Text.IsBound && !t.Color.IsBound && t.OnRealized is null;
             case SpanTextEl:
                 return true;   // plain leaf — WriteColumns rewrites every column incl. the span run/handlers
             case ImageEl im:
