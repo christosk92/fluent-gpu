@@ -508,6 +508,7 @@ float4 PSMain(VSOut i) : SV_Target
 
     private ColorF[] _gradColors = Array.Empty<ColorF>();
     private float[] _gradDy = Array.Empty<float>();
+    private float[] _gradScale = Array.Empty<float>();   // per-glyph scale pop at the wipe front (BetterLyrics char pop)
 
     /// <summary>Glyph-WIPE variant of <see cref="LayoutRun"/> (the <c>GlyphWipe</c> primitive): shapes/caches the run
     /// under the SAME <see cref="RunKey"/> (so re-using it costs no reshape), then computes a PER-GLYPH color + Y offset
@@ -545,13 +546,18 @@ float4 PSMain(VSOut i) : SV_Target
         if (count == 0) return;
         if (_gradColors.Length < count) _gradColors = new ColorF[count];
         if (_gradDy.Length < count) _gradDy = new float[count];
+        if (_gradScale.Length < count) _gradScale = new float[count];
 
         // Run-local x-extent from the glyph centers (the wipe axis); split/fade/float are fractions of it.
         float minX = float.MaxValue, maxX = float.MinValue;
         for (int i = 0; i < count; i++) { float cx = quads[i].DstX + quads[i].DstW * 0.5f; if (cx < minX) minX = cx; if (cx > maxX) maxX = cx; }
         float extent = MathF.Max(maxX - minX, 1e-3f);
         float fade = MathF.Max(softness, 1e-4f);
-        const float liftWindow = 0.18f;   // a just-passed glyph floats up, settling over this fraction of the run
+        // BetterLyrics per-char motion at the karaoke front (LyricsAnimator.cs): the SUNG run sits at the baseline while the
+        // unsung run is sunk by `lift` (≈10% line-height), each glyph rising into place as the wipe `a` sweeps it; and the
+        // glyph AT the split magnifies (scale pop ≈1.12), settling to 1.0 within `popWindow` of the front.
+        const float popWindow = 0.12f;
+        float popPeak = lift > 0f ? 0.12f : 0f;
         for (int i = 0; i < count; i++)
         {
             float gt = (quads[i].DstX + quads[i].DstW * 0.5f - minX) / extent;   // 0..1 along the run
@@ -561,10 +567,11 @@ float4 PSMain(VSOut i) : SV_Target
                 after.G + (before.G - after.G) * a,
                 after.B + (before.B - after.B) * a,
                 after.A + (before.A - after.A) * a);
-            float r = split - gt;   // recency (>0 = just passed): float up, settling over liftWindow
-            _gradDy[i] = lift > 0f && r >= 0f && r < liftWindow ? -lift * (1f - r / liftWindow) : 0f;
+            _gradDy[i] = lift * (1f - a);   // unsung sunk by `lift`, rising to the baseline (0) as it is swept
+            float d = MathF.Abs(split - gt);
+            _gradScale[i] = popPeak > 0f && d < popWindow ? 1f + popPeak * (1f - d / popWindow) : 1f;
         }
-        Replay(quads, _gradColors, forceColor: false, before, world, opacity, inMotion ? 0f : SnapDy(quads, world, dpiScale), outList, _gradDy.AsSpan(0, count));
+        Replay(quads, _gradColors, forceColor: false, before, world, opacity, inMotion ? 0f : SnapDy(quads, world, dpiScale), outList, _gradDy.AsSpan(0, count), _gradScale.AsSpan(0, count));
     }
 
     /// <summary>Wire the interner so the run cache can drop runs whose text id was reclaimed (resolves empty).</summary>
@@ -624,15 +631,21 @@ float4 PSMain(VSOut i) : SV_Target
     /// <paramref name="colors"/> (span runs): the per-quad span tint — A==0 inherits <paramref name="color"/>;
     /// <paramref name="forceColor"/> repaints every quad in <paramref name="color"/> regardless (the recorder's
     /// selected-text recolor re-emit, which must override span colors like WinUI's selection repaint).</summary>
-    private static void Replay(ReadOnlySpan<ShapedGlyph> glyphs, ColorF[]? colors, bool forceColor, ColorF color, Affine2D world, float opacity, float snapDy, List<GlyphInstance> outList, ReadOnlySpan<float> perGlyphDy = default)
+    private static void Replay(ReadOnlySpan<ShapedGlyph> glyphs, ColorF[]? colors, bool forceColor, ColorF color, Affine2D world, float opacity, float snapDy, List<GlyphInstance> outList, ReadOnlySpan<float> perGlyphDy = default, ReadOnlySpan<float> perGlyphScale = default)
     {
         for (int i = 0; i < glyphs.Length; i++)
         {
             ref readonly var s = ref glyphs[i];
             ColorF c = colors is not null && !forceColor && colors[i].A > 0f ? colors[i] : color;
+            float dx = s.DstX, dy = s.DstY + snapDy + (i < perGlyphDy.Length ? perGlyphDy[i] : 0f), dw = s.DstW, dh = s.DstH;
+            float sc = i < perGlyphScale.Length ? perGlyphScale[i] : 1f;
+            if (sc != 1f)   // scale the glyph quad about its own centre (UV unchanged → the cached bitmap magnifies)
+            {
+                dx += dw * (1f - sc) * 0.5f; dy += dh * (1f - sc) * 0.5f; dw *= sc; dh *= sc;
+            }
             outList.Add(new GlyphInstance
             {
-                DstX = s.DstX, DstY = s.DstY + snapDy + (i < perGlyphDy.Length ? perGlyphDy[i] : 0f), DstW = s.DstW, DstH = s.DstH,
+                DstX = dx, DstY = dy, DstW = dw, DstH = dh,
                 U0 = s.U0, V0 = s.V0, U1 = s.U1, V1 = s.V1,
                 R = c.R, G = c.G, B = c.B, A = c.A,
                 M11 = world.M11, M12 = world.M12, M21 = world.M21, M22 = world.M22, Dx = world.Dx, Dy = world.Dy, Opacity = opacity,
