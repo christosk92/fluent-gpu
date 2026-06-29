@@ -181,7 +181,7 @@ sealed class NowPlayingView : Component
             ? new BoxEl { Grow = 1f, Direction = 0, Children = [centerCol, QueueRail(accent, track)] }
             : centerCol;
 
-        return Shell(bg, [topBar, body], CoverBackdrop(track, bg, vp.Width, vp.Height));
+        return Shell(bg, [topBar, body], CoverBackdrop(track, bg, palette, vp.Width, vp.Height));
     }
 
     // The "Up next" rail (wide windows): now-playing + the live queue, each row playing that track on click.
@@ -268,7 +268,7 @@ sealed class NowPlayingView : Component
 
     // BetterLyrics-style cover backdrop: a heavily-downscaled (→ soft/blurry when upscaled) full-bleed album cover, dimmed
     // under a dark scrim for text readability. Cheap — a ~96px decode upscaled to fill, no per-frame Gaussian-blur pass.
-    Element CoverBackdrop(Track t, ColorF bg, float vpW, float vpH) => new BoxEl
+    Element CoverBackdrop(Track t, ColorF bg, Palette? palette, float vpW, float vpH) => new BoxEl
     {
         ZStack = true, Grow = 1f, ClipToBounds = true,
         Children =
@@ -278,7 +278,8 @@ sealed class NowPlayingView : Component
                 Grow = 1f, ClipToBounds = true, Opacity = 0.5f,
                 Children = [Surfaces.Artwork(t.Image, SeedOf(t), MathF.Max(vpW, 200f), MathF.Max(vpH, 200f), 0f, decodePx: 96)],
             },
-            new BoxEl { Grow = 1f, Fill = bg with { A = 0.58f } },
+            new BoxEl { Grow = 1f, Fill = bg with { A = 0.5f } },
+            Embed.Comp(() => new FluidBackdrop(palette)),   // animated palette aurora over the dimmed cover (BetterLyrics fluid)
         ],
     };
 
