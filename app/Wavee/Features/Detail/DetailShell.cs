@@ -22,7 +22,10 @@ readonly record struct DetailHandlers(
     Signal<string> Query, IReadSignal<TrackFilterFlags> Flags, Action<TrackFilterFlags> SetFlags,
     IReadSignal<int> Density, Action<int> SetDensity,
     // Playlist/queue mutations for THIS context (add the context's tracks to the queue / a user playlist).
-    Action AddToQueue, Action AddToPlaylist);
+    Action AddToQueue, Action AddToPlaylist,
+    // Open a related album / "Featured on" playlist card. Unlike Go (a bare route flip), these stash the card's partial
+    // model first so the destination takes DetailPage's in-place fast path instead of a full skeleton remount. See DetailNav.
+    Action<Album> OpenAlbum, Action<PlaylistSummary> OpenPlaylist);
 
 // The two-column detail scaffold (mounted only once data is Ready, so its lifecycle = the loaded page's lifecycle).
 // Owns: the art-derived backdrop wash + accent, the page-scoped Mica tint (set/cleared through the activation
@@ -68,6 +71,8 @@ sealed class DetailShell : Component
         var libBridge = UseContext(LibraryBridge.Slot);
         var go = UseContext(HistoryStore.NavCtx);
         var shellTint = UseContext(ShellTint.Slot);
+        var navPreview = UseContext(NavPreviewStore.Slot);   // in-app card nav stashes a preview → destination reconciles in place
+        var morph = UseContext(SharedTransition.Begin);      // connected-animation cover fly, same as a Home card
 
         var route = _route.Value;                      // subscribe → re-derive kind/cfg/morphKey on a detail-route swap (reused slot)
         var (kind, id) = DetailPage.ParseDetail(route);

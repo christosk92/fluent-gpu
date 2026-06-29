@@ -548,6 +548,22 @@ public sealed unsafe class D3D12Device : IGpuDevice
                     }
                     break;
                 }
+                case DrawOp.DrawGlyphRunGradient:
+                {
+                    var g = MemoryMarshal.Read<DrawGlyphRunGradientCmd>(cmds.Slice(pos));
+                    pos += Unsafe.SizeOf<DrawGlyphRunGradientCmd>();
+                    string s = _strings.Resolve(g.Text);
+                    if (s.Length > 0)
+                    {
+                        int before = _glyphInsts.Count;
+                        // Karaoke wipe: per-glyph color from the split, replayed through the SAME glyph PSO/batch (_glyphInsts).
+                        _glyphs!.LayoutRunGradient(g.Text, g.Family, s, _strings.Resolve(g.Family), g.FontSize, g.Weight, g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Wrap, g.Trim, g.MaxLines,
+                            g.CharSpacing, g.LineHeight, g.LineStacking, g.LineBounds, g.Played, g.Unplayed, g.Split, g.FadeFrac, _frameScale, g.Transform, g.Opacity, _glyphInsts,
+                            g.SpanRunId, g.InMotion != 0);
+                        _frameGlyphInstanceCount += _glyphInsts.Count - before;
+                    }
+                    break;
+                }
                 case DrawOp.PushClip:
                     // Tier-1 scissor clip. The headless path is the verified source of truth for clip *semantics*;
                     // wiring it onto the GPU (RSSetScissorRects between clip-broken batches, or a per-instance
@@ -1021,6 +1037,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
             {
                 case DrawOp.FillRoundRect: pos += Unsafe.SizeOf<FillRoundRectCmd>(); break;
                 case DrawOp.DrawGlyphRun: pos += Unsafe.SizeOf<DrawGlyphRunCmd>(); break;
+                case DrawOp.DrawGlyphRunGradient: pos += Unsafe.SizeOf<DrawGlyphRunGradientCmd>(); break;
                 case DrawOp.PushClip: pos += Unsafe.SizeOf<ClipCmd>(); break;
                 case DrawOp.PopClip: break;
                 case DrawOp.DrawImage: pos += Unsafe.SizeOf<DrawImageCmd>(); break;

@@ -45,3 +45,27 @@ static class DetailPreview
         _ => Loc.Get(Strings.Detail.Badge.Album),
     };
 }
+
+// Open a detail target the way a Home card does: stash the PARTIAL model the card already carries (cover/title/artist),
+// fire the connected-animation cover fly, then navigate. The stashed preview is the load-bearing bit — DetailPage.Take
+// finds it and reconciles the existing shell IN PLACE (the fast path) instead of mounting a throwaway full-page skeleton
+// and then the real shell (two mounts + a signal-graph teardown/rebuild). Any in-app card holding an Album/PlaylistSummary
+// should open through here so it gets the same cheap nav Home already does. `preview`/`morph` may be null (no-op then).
+static class DetailNav
+{
+    public static void OpenAlbum(NavPreviewStore? preview, Action<string>? morph, Action<string, string?> go, Album a)
+    {
+        string key = "album:" + a.Uri;
+        preview?.Set(key, DetailPreview.FromAlbum(a));
+        morph?.Invoke(key);
+        go(key, a.Name);
+    }
+
+    public static void OpenPlaylist(NavPreviewStore? preview, Action<string>? morph, Action<string, string?> go, PlaylistSummary p)
+    {
+        string key = "pl:" + p.Uri;
+        preview?.Set(key, DetailPreview.FromPlaylist(p));
+        morph?.Invoke(key);
+        go(key, p.Name);
+    }
+}

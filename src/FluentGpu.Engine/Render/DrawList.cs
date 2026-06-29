@@ -17,6 +17,9 @@ public enum DrawOp : int
     DrawPolylineStroke = 13,   // SDF stroked polyline with trim start/end (AnimatedIcon path-trim)
     DrawTabShape = 14,         // WinUI selected-tab shape: rounded-TOP rect + inverted (concave) bottom corner flares
                                // (TabViewItem::UpdateTabGeometry — microsoft-ui-xaml controls\dev\TabView\TabViewItem.cpp:98-123)
+    DrawGlyphRunGradient = 15, // a glyph run filled per-glyph by a karaoke WIPE (played/unplayed split along the run-local
+                               // x-axis). Reuses the glyph PSO (per-instance color); the per-glyph colors are computed at
+                               // REPLAY from the split, so the cache key (shaping) is unchanged. Decoded only when emitted.
 }
 
 /// <summary>How a <see cref="FillRoundRectCmd"/> fills its interior.</summary>
@@ -80,6 +83,14 @@ public readonly record struct FillRoundRectCmd(RectF Rect, CornerRadius4 Radii, 
 public readonly record struct DrawGlyphRunCmd(RectF Bounds, ColorF Color, StringId Text, StringId Family, float FontSize, int Weight, int Wrap, int Trim, int MaxLines,
     float CharSpacing, float LineHeight, int LineStacking, int LineBounds, Affine2D Transform, float Opacity,
     int SpanRunId = 0, int ForceColor = 0, int InMotion = 0);
+// A glyph run filled per-glyph by a karaoke WIPE: a glyph whose run-local-x CENTER is left of Split (0..1 along the run's
+// x-extent Bounds) is Played, right of Split is Unplayed, with a FadeFrac-wide soft blend straddling the split (the
+// boundary glyph lerps). Reuses the glyph PSO + Replay's per-instance color path — NO new shader/PSO. The per-glyph
+// colors are computed at replay from Split, so the shaping cache key is identical to the plain run (no reshape when the
+// split advances). The karaoke soft-wipe (A1, app/docs/wavee-betterlyrics-full-parity-canonical.md), per-glyph granularity.
+public readonly record struct DrawGlyphRunGradientCmd(RectF Bounds, StringId Text, StringId Family, float FontSize, int Weight, int Wrap, int Trim, int MaxLines,
+    float CharSpacing, float LineHeight, int LineStacking, int LineBounds, Affine2D Transform, float Opacity,
+    ColorF Played, ColorF Unplayed, float Split, float FadeFrac, int SpanRunId = 0, int InMotion = 0);
 // Tier-1 (scissor) clip: an axis-aligned DEVICE-space rect already intersected with the enclosing clip by the recorder.
 // The RHI sets the scissor to <see cref="DeviceRect"/> on PushClip and restores the previous on PopClip.
 // Tier-2 (rounded) clip: when <see cref="CornerRadius"/> > 0, <see cref="RoundedRect"/> is the clipping node's own
@@ -188,6 +199,19 @@ public sealed class DrawList
         WriteOp(DrawOp.DrawGlyphRun);
         WritePayload(new DrawGlyphRunCmd(bounds, color, text, family, fontSize, weight, wrap, trim, maxLines,
             charSpacing, lineHeight, lineStacking, lineBounds, transform, opacity, spanRunId, forceColor ? 1 : 0, inMotion ? 1 : 0));
+        PushSort(sortKey);
+    }
+
+    /// <summary>A glyph run filled by a karaoke wipe: <paramref name="split"/> (0..1 along the run's x-extent) divides
+    /// <paramref name="played"/> (left) from <paramref name="unplayed"/> (right), with a <paramref name="fadeFrac"/>-wide
+    /// soft blend at the boundary. Reuses the glyph pipeline (per-instance color computed at replay) — no new shader.</summary>
+    public void DrawGlyphRunGradient(in RectF bounds, StringId text, StringId family, float fontSize, int weight, int wrap, int trim, int maxLines,
+        float charSpacing, float lineHeight, int lineStacking, int lineBounds, in Affine2D transform, float opacity,
+        in ColorF played, in ColorF unplayed, float split, float fadeFrac, ulong sortKey = 0, int spanRunId = 0, bool inMotion = false)
+    {
+        WriteOp(DrawOp.DrawGlyphRunGradient);
+        WritePayload(new DrawGlyphRunGradientCmd(bounds, text, family, fontSize, weight, wrap, trim, maxLines,
+            charSpacing, lineHeight, lineStacking, lineBounds, transform, opacity, played, unplayed, split, fadeFrac, spanRunId, inMotion ? 1 : 0));
         PushSort(sortKey);
     }
 

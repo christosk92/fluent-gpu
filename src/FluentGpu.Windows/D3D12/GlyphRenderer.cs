@@ -506,6 +506,61 @@ float4 PSMain(VSOut i) : SV_Target
         Replay(baked, colors, forceColor, color, world, opacity, inMotion ? 0f : SnapDy(baked, world, dpiScale), outList);
     }
 
+    private ColorF[] _gradColors = Array.Empty<ColorF>();
+
+    /// <summary>Karaoke-wipe variant of <see cref="LayoutRun"/>: shapes/caches the run under the SAME <see cref="RunKey"/>
+    /// (so it shares the plain run's cache and re-using it costs no reshape), then computes a PER-GLYPH color from the
+    /// wipe <paramref name="split"/> (0..1 along the run's x-extent) — left of the split is <paramref name="played"/>,
+    /// right is <paramref name="unplayed"/>, with a <paramref name="fadeFrac"/>-wide soft blend straddling it — and
+    /// replays through the EXISTING per-instance-color path (no new shader/PSO). The split advancing per frame only
+    /// changes the computed colors, never the cache key, so there is no per-frame reshape.</summary>
+    public void LayoutRunGradient(StringId textId, StringId familyId, string text, string family, float size, int weight, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines,
+        float charSpacing, float lineHeight, int lineStacking, int lineBounds, ColorF played, ColorF unplayed, float split, float fadeFrac, float dpiScale, Affine2D world, float opacity, List<GlyphInstance> outList,
+        int spanRunId = 0, bool inMotion = false)
+    {
+        var key = MakeRunKey(textId, familyId, size, weight, maxWidth, wrap, trim, maxLines, originX, topY, dpiScale, charSpacing, lineHeight, lineStacking, lineBounds, spanRunId);
+
+        ShapedGlyph[] quadsArr; int count;
+        ref var hit = ref CollectionsMarshal.GetValueRefOrNullRef(_runCache, key);
+        if (!Unsafe.IsNullRef(ref hit))
+        {
+            hit.LastUsedFrame = _frame; _runsCached++;
+            quadsArr = hit.Glyphs; count = hit.Count;
+        }
+        else
+        {
+            _scratch.Clear();
+            ShapeInto(text, family, size, weight, originX, topY, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, dpiScale, _scratch);
+            count = _scratch.Count;
+            var arr = RentQuads(count);
+            for (int i = 0; i < count; i++) arr[i] = _scratch[i];
+            _runCache[key] = new ShapedRun { Glyphs = arr, Colors = null, Count = count, LastUsedFrame = _frame };
+            _runsShaped++;
+            quadsArr = arr;
+        }
+
+        var quads = quadsArr.AsSpan(0, count);
+        if (count == 0) return;
+        if (_gradColors.Length < count) _gradColors = new ColorF[count];
+
+        // Run-local x-extent from the glyph centers (the gradient axis); split/fade are fractions of it.
+        float minX = float.MaxValue, maxX = float.MinValue;
+        for (int i = 0; i < count; i++) { float cx = quads[i].DstX + quads[i].DstW * 0.5f; if (cx < minX) minX = cx; if (cx > maxX) maxX = cx; }
+        float extent = MathF.Max(maxX - minX, 1e-3f);
+        float fade = MathF.Max(fadeFrac, 1e-4f);
+        for (int i = 0; i < count; i++)
+        {
+            float gt = (quads[i].DstX + quads[i].DstW * 0.5f - minX) / extent;   // 0..1 along the run
+            float a = Math.Clamp((split - gt) / fade + 0.5f, 0f, 1f);            // 1 = played, 0 = unplayed (soft over `fade`)
+            _gradColors[i] = new ColorF(
+                unplayed.R + (played.R - unplayed.R) * a,
+                unplayed.G + (played.G - unplayed.G) * a,
+                unplayed.B + (played.B - unplayed.B) * a,
+                unplayed.A + (played.A - unplayed.A) * a);
+        }
+        Replay(quads, _gradColors, forceColor: false, played, world, opacity, inMotion ? 0f : SnapDy(quads, world, dpiScale), outList);
+    }
+
     /// <summary>Wire the interner so the run cache can drop runs whose text id was reclaimed (resolves empty).</summary>
     public void SetLivenessSource(StringTable strings) => _liveness = strings;
 
