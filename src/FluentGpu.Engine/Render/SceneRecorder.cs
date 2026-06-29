@@ -517,11 +517,11 @@ public static class SceneRecorder
                 int spanRunId = li.TextStyle.SpanRunId;
                 if (!p.Text.IsEmpty)
                 {
-                    if (p.KaraokePlayed.A > 0f)   // karaoke wipe (A1): per-glyph color from the split, via DrawGlyphRunGradient
+                    if (scene.TryGetGlyphWipe(node, out var wipe))   // glyph wipe (lyrics karaoke): per-glyph color + lift from the split
                         dl.DrawGlyphRunGradient(local, p.Text, li.TextStyle.FontFamily, effSize, li.TextStyle.Weight,
                             (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines,
                             li.TextStyle.CharSpacing, li.TextStyle.LineHeight, (int)li.TextStyle.Stacking, (int)li.TextStyle.LineBounds,
-                            world, opacity, p.KaraokePlayed, p.KaraokeUnplayed, p.KaraokeSplit, p.KaraokeFade, key, spanRunId, inMotion);
+                            world, opacity, wipe.Before, wipe.After, wipe.Split, wipe.Softness, wipe.Lift, key, spanRunId, inMotion);
                     else
                         dl.DrawGlyphRun(local, textColor, p.Text, li.TextStyle.FontFamily, effSize, li.TextStyle.Weight,
                             (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines,

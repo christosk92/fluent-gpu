@@ -122,13 +122,6 @@ public struct NodePaint
     public ColorF TextPressedColor;
     public ColorF TextDisabledColor;
     public ColorF TextFocusedColor;
-    // Karaoke wipe (A1): when KaraokePlayed.A > 0, the Text recorder emits DrawGlyphRunGradient — glyphs left of
-    // KaraokeSplit (0..1 along the run's x-extent) use KaraokePlayed, right use KaraokeUnplayed, soft over KaraokeFade.
-    // Off by default (KaraokePlayed.A == 0). Paint (not shaping), so advancing the split per frame triggers no reshape.
-    public ColorF KaraokePlayed;
-    public ColorF KaraokeUnplayed;
-    public float KaraokeSplit;
-    public float KaraokeFade;
     public StringId Text;
     /// <summary>Text decoration flags for a <see cref="VisualKind.Text"/> leaf (<see cref="UnderlineBit"/> |
     /// <see cref="StrikethroughBit"/>; 0 = none). The recorder emits the bars itself — FillRoundRect quads placed by

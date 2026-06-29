@@ -254,7 +254,8 @@ sealed class LyricLineView : Component
             textEl = new TextEl(_line.Text)
             {
                 Size = _fontSz, Weight = 700, Wrap = TextWrap.Wrap, LineHeight = _lineHt, Color = Tok.TextSecondary,
-                KaraokePlayed = Tok.TextPrimary, KaraokeUnplayed = Tok.TextSecondary, KaraokeSplit = split, KaraokeFade = 0.05f,
+                // The generic glyph-wipe primitive: swept text bright, not-yet dim, soft boundary, a per-glyph lift trailing it.
+                Wipe = new GlyphWipe(Before: Tok.TextPrimary, After: Tok.TextSecondary, Split: split, Softness: 0.05f, Lift: 5f),
             };
         }
         else

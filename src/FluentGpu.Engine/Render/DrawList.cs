@@ -83,14 +83,14 @@ public readonly record struct FillRoundRectCmd(RectF Rect, CornerRadius4 Radii, 
 public readonly record struct DrawGlyphRunCmd(RectF Bounds, ColorF Color, StringId Text, StringId Family, float FontSize, int Weight, int Wrap, int Trim, int MaxLines,
     float CharSpacing, float LineHeight, int LineStacking, int LineBounds, Affine2D Transform, float Opacity,
     int SpanRunId = 0, int ForceColor = 0, int InMotion = 0);
-// A glyph run filled per-glyph by a karaoke WIPE: a glyph whose run-local-x CENTER is left of Split (0..1 along the run's
-// x-extent Bounds) is Played, right of Split is Unplayed, with a FadeFrac-wide soft blend straddling the split (the
-// boundary glyph lerps). Reuses the glyph PSO + Replay's per-instance color path — NO new shader/PSO. The per-glyph
-// colors are computed at replay from Split, so the shaping cache key is identical to the plain run (no reshape when the
-// split advances). The karaoke soft-wipe (A1, app/docs/wavee-betterlyrics-full-parity-canonical.md), per-glyph granularity.
+// A glyph run filled by a left->right WIPE (the GlyphWipe primitive): a glyph whose run-local-x CENTER is left of Split
+// (0..1 along the run's x-extent Bounds) is painted Before, right of Split is After, with a Softness-wide soft blend
+// straddling the split; Lift floats a just-passed glyph up by Lift DIP (settling). Reuses the glyph PSO + per-instance
+// color/offset (NO new shader/PSO). The per-glyph values are computed at replay from Split, so the shaping cache key is
+// identical to the plain run (no reshape as the split advances). General text-reveal; the lyrics karaoke uses it.
 public readonly record struct DrawGlyphRunGradientCmd(RectF Bounds, StringId Text, StringId Family, float FontSize, int Weight, int Wrap, int Trim, int MaxLines,
     float CharSpacing, float LineHeight, int LineStacking, int LineBounds, Affine2D Transform, float Opacity,
-    ColorF Played, ColorF Unplayed, float Split, float FadeFrac, int SpanRunId = 0, int InMotion = 0);
+    ColorF Before, ColorF After, float Split, float Softness, float Lift, int SpanRunId = 0, int InMotion = 0);
 // Tier-1 (scissor) clip: an axis-aligned DEVICE-space rect already intersected with the enclosing clip by the recorder.
 // The RHI sets the scissor to <see cref="DeviceRect"/> on PushClip and restores the previous on PopClip.
 // Tier-2 (rounded) clip: when <see cref="CornerRadius"/> > 0, <see cref="RoundedRect"/> is the clipping node's own
@@ -202,16 +202,17 @@ public sealed class DrawList
         PushSort(sortKey);
     }
 
-    /// <summary>A glyph run filled by a karaoke wipe: <paramref name="split"/> (0..1 along the run's x-extent) divides
-    /// <paramref name="played"/> (left) from <paramref name="unplayed"/> (right), with a <paramref name="fadeFrac"/>-wide
-    /// soft blend at the boundary. Reuses the glyph pipeline (per-instance color computed at replay) — no new shader.</summary>
+    /// <summary>A glyph run filled by a left→right wipe (the <c>GlyphWipe</c> primitive): <paramref name="split"/>
+    /// (0..1 along the run's x-extent) divides <paramref name="before"/> (left) from <paramref name="after"/> (right),
+    /// with a <paramref name="softness"/>-wide soft boundary; <paramref name="lift"/> floats a just-passed glyph up.
+    /// Reuses the glyph pipeline (per-instance color/offset computed at replay) — no new shader.</summary>
     public void DrawGlyphRunGradient(in RectF bounds, StringId text, StringId family, float fontSize, int weight, int wrap, int trim, int maxLines,
         float charSpacing, float lineHeight, int lineStacking, int lineBounds, in Affine2D transform, float opacity,
-        in ColorF played, in ColorF unplayed, float split, float fadeFrac, ulong sortKey = 0, int spanRunId = 0, bool inMotion = false)
+        in ColorF before, in ColorF after, float split, float softness, float lift, ulong sortKey = 0, int spanRunId = 0, bool inMotion = false)
     {
         WriteOp(DrawOp.DrawGlyphRunGradient);
         WritePayload(new DrawGlyphRunGradientCmd(bounds, text, family, fontSize, weight, wrap, trim, maxLines,
-            charSpacing, lineHeight, lineStacking, lineBounds, transform, opacity, played, unplayed, split, fadeFrac, spanRunId, inMotion ? 1 : 0));
+            charSpacing, lineHeight, lineStacking, lineBounds, transform, opacity, before, after, split, softness, lift, spanRunId, inMotion ? 1 : 0));
         PushSort(sortKey);
     }
 

@@ -507,15 +507,17 @@ float4 PSMain(VSOut i) : SV_Target
     }
 
     private ColorF[] _gradColors = Array.Empty<ColorF>();
+    private float[] _gradDy = Array.Empty<float>();
 
-    /// <summary>Karaoke-wipe variant of <see cref="LayoutRun"/>: shapes/caches the run under the SAME <see cref="RunKey"/>
-    /// (so it shares the plain run's cache and re-using it costs no reshape), then computes a PER-GLYPH color from the
-    /// wipe <paramref name="split"/> (0..1 along the run's x-extent) — left of the split is <paramref name="played"/>,
-    /// right is <paramref name="unplayed"/>, with a <paramref name="fadeFrac"/>-wide soft blend straddling it — and
-    /// replays through the EXISTING per-instance-color path (no new shader/PSO). The split advancing per frame only
-    /// changes the computed colors, never the cache key, so there is no per-frame reshape.</summary>
+    /// <summary>Glyph-WIPE variant of <see cref="LayoutRun"/> (the <c>GlyphWipe</c> primitive): shapes/caches the run
+    /// under the SAME <see cref="RunKey"/> (so re-using it costs no reshape), then computes a PER-GLYPH color + Y offset
+    /// from the wipe <paramref name="split"/> (0..1 along the run's x-extent) — left of the split is
+    /// <paramref name="before"/>, right is <paramref name="after"/>, with a <paramref name="softness"/>-wide soft
+    /// boundary and a <paramref name="lift"/>-DIP per-glyph float trailing it — and replays through the EXISTING
+    /// per-instance color/transform path (no new shader/PSO). The split advancing per frame only changes the computed
+    /// per-glyph values, never the cache key, so there is no per-frame reshape.</summary>
     public void LayoutRunGradient(StringId textId, StringId familyId, string text, string family, float size, int weight, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines,
-        float charSpacing, float lineHeight, int lineStacking, int lineBounds, ColorF played, ColorF unplayed, float split, float fadeFrac, float dpiScale, Affine2D world, float opacity, List<GlyphInstance> outList,
+        float charSpacing, float lineHeight, int lineStacking, int lineBounds, ColorF before, ColorF after, float split, float softness, float lift, float dpiScale, Affine2D world, float opacity, List<GlyphInstance> outList,
         int spanRunId = 0, bool inMotion = false)
     {
         var key = MakeRunKey(textId, familyId, size, weight, maxWidth, wrap, trim, maxLines, originX, topY, dpiScale, charSpacing, lineHeight, lineStacking, lineBounds, spanRunId);
@@ -542,23 +544,27 @@ float4 PSMain(VSOut i) : SV_Target
         var quads = quadsArr.AsSpan(0, count);
         if (count == 0) return;
         if (_gradColors.Length < count) _gradColors = new ColorF[count];
+        if (_gradDy.Length < count) _gradDy = new float[count];
 
-        // Run-local x-extent from the glyph centers (the gradient axis); split/fade are fractions of it.
+        // Run-local x-extent from the glyph centers (the wipe axis); split/fade/float are fractions of it.
         float minX = float.MaxValue, maxX = float.MinValue;
         for (int i = 0; i < count; i++) { float cx = quads[i].DstX + quads[i].DstW * 0.5f; if (cx < minX) minX = cx; if (cx > maxX) maxX = cx; }
         float extent = MathF.Max(maxX - minX, 1e-3f);
-        float fade = MathF.Max(fadeFrac, 1e-4f);
+        float fade = MathF.Max(softness, 1e-4f);
+        const float liftWindow = 0.18f;   // a just-passed glyph floats up, settling over this fraction of the run
         for (int i = 0; i < count; i++)
         {
             float gt = (quads[i].DstX + quads[i].DstW * 0.5f - minX) / extent;   // 0..1 along the run
-            float a = Math.Clamp((split - gt) / fade + 0.5f, 0f, 1f);            // 1 = played, 0 = unplayed (soft over `fade`)
+            float a = Math.Clamp((split - gt) / fade + 0.5f, 0f, 1f);            // 1 = before (swept), 0 = after (soft over `fade`)
             _gradColors[i] = new ColorF(
-                unplayed.R + (played.R - unplayed.R) * a,
-                unplayed.G + (played.G - unplayed.G) * a,
-                unplayed.B + (played.B - unplayed.B) * a,
-                unplayed.A + (played.A - unplayed.A) * a);
+                after.R + (before.R - after.R) * a,
+                after.G + (before.G - after.G) * a,
+                after.B + (before.B - after.B) * a,
+                after.A + (before.A - after.A) * a);
+            float r = split - gt;   // recency (>0 = just passed): float up, settling over liftWindow
+            _gradDy[i] = lift > 0f && r >= 0f && r < liftWindow ? -lift * (1f - r / liftWindow) : 0f;
         }
-        Replay(quads, _gradColors, forceColor: false, played, world, opacity, inMotion ? 0f : SnapDy(quads, world, dpiScale), outList);
+        Replay(quads, _gradColors, forceColor: false, before, world, opacity, inMotion ? 0f : SnapDy(quads, world, dpiScale), outList, _gradDy.AsSpan(0, count));
     }
 
     /// <summary>Wire the interner so the run cache can drop runs whose text id was reclaimed (resolves empty).</summary>
@@ -618,7 +624,7 @@ float4 PSMain(VSOut i) : SV_Target
     /// <paramref name="colors"/> (span runs): the per-quad span tint — A==0 inherits <paramref name="color"/>;
     /// <paramref name="forceColor"/> repaints every quad in <paramref name="color"/> regardless (the recorder's
     /// selected-text recolor re-emit, which must override span colors like WinUI's selection repaint).</summary>
-    private static void Replay(ReadOnlySpan<ShapedGlyph> glyphs, ColorF[]? colors, bool forceColor, ColorF color, Affine2D world, float opacity, float snapDy, List<GlyphInstance> outList)
+    private static void Replay(ReadOnlySpan<ShapedGlyph> glyphs, ColorF[]? colors, bool forceColor, ColorF color, Affine2D world, float opacity, float snapDy, List<GlyphInstance> outList, ReadOnlySpan<float> perGlyphDy = default)
     {
         for (int i = 0; i < glyphs.Length; i++)
         {
@@ -626,7 +632,7 @@ float4 PSMain(VSOut i) : SV_Target
             ColorF c = colors is not null && !forceColor && colors[i].A > 0f ? colors[i] : color;
             outList.Add(new GlyphInstance
             {
-                DstX = s.DstX, DstY = s.DstY + snapDy, DstW = s.DstW, DstH = s.DstH,
+                DstX = s.DstX, DstY = s.DstY + snapDy + (i < perGlyphDy.Length ? perGlyphDy[i] : 0f), DstW = s.DstW, DstH = s.DstH,
                 U0 = s.U0, V0 = s.V0, U1 = s.U1, V1 = s.V1,
                 R = c.R, G = c.G, B = c.B, A = c.A,
                 M11 = world.M11, M12 = world.M12, M21 = world.M21, M22 = world.M22, Dx = world.Dx, Dy = world.Dy, Opacity = opacity,

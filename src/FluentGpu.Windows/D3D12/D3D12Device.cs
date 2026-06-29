@@ -558,7 +558,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                         int before = _glyphInsts.Count;
                         // Karaoke wipe: per-glyph color from the split, replayed through the SAME glyph PSO/batch (_glyphInsts).
                         _glyphs!.LayoutRunGradient(g.Text, g.Family, s, _strings.Resolve(g.Family), g.FontSize, g.Weight, g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Wrap, g.Trim, g.MaxLines,
-                            g.CharSpacing, g.LineHeight, g.LineStacking, g.LineBounds, g.Played, g.Unplayed, g.Split, g.FadeFrac, _frameScale, g.Transform, g.Opacity, _glyphInsts,
+                            g.CharSpacing, g.LineHeight, g.LineStacking, g.LineBounds, g.Before, g.After, g.Split, g.Softness, g.Lift, _frameScale, g.Transform, g.Opacity, _glyphInsts,
                             g.SpanRunId, g.InMotion != 0);
                         _frameGlyphInstanceCount += _glyphInsts.Count - before;
                     }

@@ -73,6 +73,14 @@ public readonly record struct GradientSpec(GradientShape Shape, float AngleDeg, 
     public static GradientSpec Vertical(ColorF top, ColorF bottom) => new(GradientShape.Linear, 90f, [new GradientStop(0f, top), new GradientStop(1f, bottom)]);
 }
 
+/// <summary>A left→right WIPE fill for a glyph run — a general text-reveal effect (the lyrics karaoke uses it, but it is
+/// app-neutral: progress text, sweep reveals, …). Glyphs whose run-local-x center is left of <see cref="Split"/> (0..1
+/// along the run's x-extent) are painted <see cref="Before"/>, glyphs right of it <see cref="After"/>, with a
+/// <see cref="Softness"/>-wide soft boundary; <see cref="Lift"/> floats a just-passed glyph up by Lift DIP (settling
+/// behind the boundary). Carried in a sparse scene side-table and emitted as <c>DrawGlyphRunGradient</c> (reuses the
+/// glyph PSO via per-instance color/offset — no new shader). Advancing <see cref="Split"/> per frame is reshape-free.</summary>
+public readonly record struct GlyphWipe(ColorF Before, ColorF After, float Split, float Softness = 0.06f, float Lift = 0f);
+
 /// <summary>
 /// A per-node acrylic (frosted glass): the engine samples the canvas behind the node, resolves transparent backdrop
 /// through <see cref="Fallback"/>, blurs it (<see cref="BlurSigma"/>), then applies WinUI's luminosity/tint recipe.

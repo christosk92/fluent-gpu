@@ -130,6 +130,7 @@ public sealed class SceneStore : ISceneBackend
     private readonly Dictionary<int, TextSpan[]> _spanText = new();
     private readonly Dictionary<int, (int Start, int End)> _textSelection = new();
     private readonly ColdSlab<ColorF> _selectionHighlight = new();   // GEN-17 (wired)
+    private readonly ColdSlab<GlyphWipe> _glyphWipes = new();        // sparse per-node glyph wipe (general text-reveal; lyrics karaoke)
     // E5-L2 drag-drop side-tables (sparse, O(sources)/O(targets), keyed by node index): the reconciler writes them
     // from BoxEl.Draggable / BoxEl.DropTarget; Input.DragDropContext reads them at promotion / per pointer move.
     private readonly Dictionary<int, DragSource> _dragSources = new();
@@ -319,6 +320,7 @@ public sealed class SceneStore : ISceneBackend
             if (_spanText.Count != 0) _spanText.Remove(idx);
             if (_textSelection.Count != 0) _textSelection.Remove(idx);
             _selectionHighlight.Remove(idx);
+            _glyphWipes.Remove(idx);
         }
         if (_dragSources.Count != 0) _dragSources.Remove(idx);
         if (_dropTargets.Count != 0) _dropTargets.Remove(idx);
@@ -606,6 +608,16 @@ public sealed class SceneStore : ISceneBackend
 
     public bool TryGetSpanText(NodeHandle h, out TextSpan[] spans)
         => _spanText.TryGetValue((int)h.Raw.Index, out spans!);
+
+    /// <summary>Attach (or clear, when null) a node's <see cref="GlyphWipe"/> — the sparse carrier for a glyph-run wipe
+    /// (the lyrics karaoke). Read by the recorder's Text case → emits <c>DrawGlyphRunGradient</c>. Only wiped nodes pay.</summary>
+    public void SetGlyphWipe(NodeHandle h, GlyphWipe? w)
+    {
+        int idx = (int)h.Raw.Index;
+        if (w is null) _glyphWipes.Remove(idx);
+        else _glyphWipes.GetOrAdd(idx) = w.Value;
+    }
+    public bool TryGetGlyphWipe(NodeHandle h, out GlyphWipe w) => _glyphWipes.TryGet((int)h.Raw.Index, out w);
 
     /// <summary>Swap a text node's span-run id with ownership accounting (the scene row owns one table ref plus one
     /// StringTable ref per span family — mirroring the <c>paint.Text</c> discipline). Reconciler rewrite path; the
