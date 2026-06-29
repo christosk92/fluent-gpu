@@ -396,7 +396,10 @@ sealed class LibraryDetailPane : Component
         }
         return new DetailHandlers(Play, () => Play(0), Shuffle, PlayContext, go, Tok.AccentDefault,
             _sort, s => _sort.Value = s, _query, _flags, f => _flags.Value = f, _density, d => _density.Value = d,
-            AddToQueue, AddToPlaylist);
+            AddToQueue, AddToPlaylist,
+            // The embedded TrackList has no trailing shelves, so these are never invoked here; route through DetailNav
+            // (no preview/morph store) so behaviour stays a plain nav if that ever changes.
+            a => DetailNav.OpenAlbum(null, null, go, a), p => DetailNav.OpenPlaylist(null, null, go, p));
     }
 
     Element Hero(DetailModel m) => new BoxEl

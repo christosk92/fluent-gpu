@@ -187,7 +187,9 @@ sealed class DetailShell : Component
 
         // SetSort / SetDensity are hoisted local functions; the rail + chrome toolbars read all list-view controls off here.
         var handlers = new DetailHandlers(Play, () => Play(0), Shuffle, PlayContext, go, accent, _sort, SetSort,
-            _query, _filterFlags, f => _filterFlags.Value = f, _density, SetDensity, AddToQueue, AddToPlaylist);
+            _query, _filterFlags, f => _filterFlags.Value = f, _density, SetDensity, AddToQueue, AddToPlaylist,
+            a => DetailNav.OpenAlbum(navPreview, morph, go, a),
+            p => DetailNav.OpenPlaylist(navPreview, morph, go, p));
 
         // Viewport-size context signal — resolved UNCONDITIONALLY here (rules of hooks): the positional-hook cursor must
         // see the SAME hook sequence on every render, but the branches below differ (single-column / vertical / two-column),

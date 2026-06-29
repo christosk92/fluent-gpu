@@ -516,10 +516,18 @@ public static class SceneRecorder
                 // overlays the per-range styles from SpanRunTable.Shared and tints per-span colors over textColor.
                 int spanRunId = li.TextStyle.SpanRunId;
                 if (!p.Text.IsEmpty)
-                    dl.DrawGlyphRun(local, textColor, p.Text, li.TextStyle.FontFamily, effSize, li.TextStyle.Weight,
-                        (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines,
-                        li.TextStyle.CharSpacing, li.TextStyle.LineHeight, (int)li.TextStyle.Stacking, (int)li.TextStyle.LineBounds,
-                        world, opacity, key, spanRunId, inMotion: inMotion);
+                {
+                    if (p.KaraokePlayed.A > 0f)   // karaoke wipe (A1): per-glyph color from the split, via DrawGlyphRunGradient
+                        dl.DrawGlyphRunGradient(local, p.Text, li.TextStyle.FontFamily, effSize, li.TextStyle.Weight,
+                            (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines,
+                            li.TextStyle.CharSpacing, li.TextStyle.LineHeight, (int)li.TextStyle.Stacking, (int)li.TextStyle.LineBounds,
+                            world, opacity, p.KaraokePlayed, p.KaraokeUnplayed, p.KaraokeSplit, p.KaraokeFade, key, spanRunId, inMotion);
+                    else
+                        dl.DrawGlyphRun(local, textColor, p.Text, li.TextStyle.FontFamily, effSize, li.TextStyle.Weight,
+                            (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines,
+                            li.TextStyle.CharSpacing, li.TextStyle.LineHeight, (int)li.TextStyle.Stacking, (int)li.TextStyle.LineBounds,
+                            world, opacity, key, spanRunId, inMotion: inMotion);
+                }
 
                 // (b1) span-run decoration bars (per-LINE, per span — the rich-text refinement of (b2) below): the
                 // text seam published the laid bar rects on the run at measure (SpanRunRects — link bands are input's;

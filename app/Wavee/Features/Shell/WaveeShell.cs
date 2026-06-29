@@ -68,6 +68,7 @@ sealed class WaveeShell : Component
     internal static Action? ProbeBack, ProbeForward, ProbeTheme;
     internal static Action<string>? ProbeOpenTab;
     internal static Action<string, string?, bool>? ProbeCardNav;   // replicate a Home-card click: (key, arg, doMorph=Hero fly)
+    internal static Action<Wavee.Core.Album>? ProbeOpenAlbum;      // replicate a related-album card click: DetailNav.OpenAlbum (stash preview + nav)
     internal static Action<bool>? ProbeSidebarCompact;
     internal static Action? ProbeSidebarDragBegin, ProbeSidebarDragEnd;
     internal static Action<float>? ProbeSidebarDragWidth;
@@ -93,6 +94,9 @@ sealed class WaveeShell : Component
                 if (doMorph && !Diag.EnvFlag("WAVEE_PB_NOMORPH")) _morphBegin?.Invoke(key);   // the Hero cover fly
                 GoNav(key, arg);
             };
+            // The EXACT related-album-card path (DetailTrailing → h.OpenAlbum → DetailNav.OpenAlbum): stash the card's
+            // partial model + fire the fly, then nav. Lets the probe measure album→album on the post-fix (in-place) path.
+            ProbeOpenAlbum = a => DetailNav.OpenAlbum(_navPreview, _morphBegin, GoNav, a);
             ProbeSidebarCompact = compact =>
             {
                 _sidebarCompact.Value = compact;

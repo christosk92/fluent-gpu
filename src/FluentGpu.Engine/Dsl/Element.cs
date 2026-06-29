@@ -459,6 +459,14 @@ public sealed record TextEl(Prop<string> Text) : Element
     /// <summary>Implicit brush transition for the resting <see cref="Color"/>: a re-render that changes it on this LIVE
     /// node cross-fades over this duration (WinUI BrushTransition, 83ms in templates). NaN = snap.</summary>
     public float BrushTransitionMs { get; init; } = float.NaN;
+    /// <summary>Karaoke wipe (A1): when <see cref="KaraokePlayed"/> has A&gt;0, the text renders as a per-glyph wipe —
+    /// glyphs left of <see cref="KaraokeSplit"/> (0..1 along the run's x-extent) use <see cref="KaraokePlayed"/>, glyphs
+    /// right of it use <see cref="KaraokeUnplayed"/>, with a <see cref="KaraokeFade"/>-wide soft blend straddling the
+    /// split. Off by default (A==0). Advancing <see cref="KaraokeSplit"/> per frame is reshape-free (paint, not shaping).</summary>
+    public ColorF KaraokePlayed { get; init; }
+    public ColorF KaraokeUnplayed { get; init; }
+    public float KaraokeSplit { get; init; }
+    public float KaraokeFade { get; init; } = 0.06f;
     /// <summary>Read-only text selection (rtb-02): mouse drag selects, double-click selects the word, triple-click all,
     /// Ctrl+C copies via the clipboard seam; the highlight reuses the editor's selection-rect path. Default FALSE —
     /// WinUI TextBlock selection is opt-in (TextBlock.cpp:583 IsTextSelectionEnabled property change creates the

@@ -2339,6 +2339,14 @@ public sealed class TreeReconciler
                 paint.TextPressedColor = t.PressedColor;
                 paint.TextDisabledColor = t.DisabledColor;
                 paint.TextFocusedColor = t.FocusedColor;
+                // Karaoke wipe (A1): carry the per-glyph wipe params via paint; mark dirty when the split advances so the
+                // active line re-records each frame (reshape-free — the wipe rides DrawGlyphRunGradient, same RunKey).
+                if (paint.KaraokeSplit != t.KaraokeSplit || paint.KaraokePlayed != t.KaraokePlayed || paint.KaraokeUnplayed != t.KaraokeUnplayed)
+                    _scene.Mark(node, NodeFlags.PaintDirty);
+                paint.KaraokePlayed = t.KaraokePlayed;
+                paint.KaraokeUnplayed = t.KaraokeUnplayed;
+                paint.KaraokeSplit = t.KaraokeSplit;
+                paint.KaraokeFade = t.KaraokeFade;
                 paint.TextDecorations = (byte)((t.Underline ? NodePaint.UnderlineBit : 0)
                                              | (t.Strikethrough ? NodePaint.StrikethroughBit : 0));
                 _scene.SetDynamicText(node, t.DynamicText);

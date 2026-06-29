@@ -252,7 +252,7 @@ sealed class AlbumTrailing : Component
         {
             var v = versions[i];
             items[i] = new MenuFlyoutItem(VersionLabel(v), Icons.MusicNote,
-                Invoke: () => h.Go("album:" + v.Uri, v.Name));
+                Invoke: () => h.OpenAlbum(v));
         }
         return new BoxEl
         {
@@ -420,7 +420,7 @@ sealed class AlbumTrailing : Component
             PagedShelf.Create(
                 pls.Count,
                 cardAt: (i, w) => MediaCard.Shelf(pls[i].Cover, pls[i].Name, pls[i].OwnerName, pls[i].Uri,
-                    () => h.Go("pl:" + pls[i].Uri, pls[i].Name), () => h.PlayContext(pls[i].Uri), w),
+                    () => h.OpenPlaylist(pls[i]), () => h.PlayContext(pls[i].Uri), w),
                 measured: true,
                 header: WaveeType.RailHeader(Loc.Get(Strings.Detail.FeaturedOn))),
         ],
@@ -438,7 +438,7 @@ sealed class AlbumTrailing : Component
             PagedShelf.Create(
                 albums.Count,
                 cardAt: (i, w) => MediaCard.Shelf(albums[i].Cover, albums[i].Name, AlbumSubtitle(albums[i]), albums[i].Uri,
-                    () => h.Go("album:" + albums[i].Uri, albums[i].Name), () => h.PlayContext(albums[i].Uri), w),
+                    () => h.OpenAlbum(albums[i]), () => h.PlayContext(albums[i].Uri), w),
                 measured: true,
                 header: WaveeType.RailHeader(header)),
         ],

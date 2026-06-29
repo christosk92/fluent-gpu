@@ -612,6 +612,41 @@ internal static class WaveeNavProbe
             }
         }
 
+        // ── Phase 0b: ALBUM → ALBUM (the reported related-albums hitch). Two sub-phases over DISTINCT heavy album pages
+        //    (cover + tracks + related/similar/merch trailing shelves): SKELETON = today's bare related-card nav (no preview
+        //    → DetailPage.Skel.Region full-page remount on every hop); PREVIEW = the fix (a related card now opens via
+        //    DetailNav.OpenAlbum, stashing the card's partial model → DetailPage reuses the mounted shell in place). Same
+        //    routes, same settle frames, started from album land (a reused detail slot) — so the delta IS the remount the
+        //    fix removes. Distinct album indices per sub-phase so the second isn't warmed by the first's data/image cache. ──
+        var albumSkel = new Phase("album skel");
+        var albumPrev = new Phase("album preview");
+        if (WaveeShell.ProbeOpenAlbum is not null)
+        {
+            const int AlbumSettle = 12;
+            var skelAlbums = new List<Wavee.Core.Album>(8);
+            var prevAlbums = new List<Wavee.Core.Album>(8);
+            for (int i = 0; i < 8; i++) { skelAlbums.Add(Wavee.Core.FakeData.Album(120 + i)); prevAlbums.Add(Wavee.Core.FakeData.Album(140 + i)); }
+            Console.Error.WriteLine("[wavee-nav-probe] album→album (skeleton vs preview, 8 hops each)");
+
+            // OLD path: enter album land, then hop album→album via BARE nav (no preview) — skeleton remount each hop.
+            Nav("home", null); Settle(10);
+            Nav("album:" + skelAlbums[0].Uri, skelAlbums[0].Name); Settle(AlbumSettle);
+            for (int i = 1; i < skelAlbums.Count && !window.IsClosed; i++)
+            {
+                Nav("album:" + skelAlbums[i].Uri, skelAlbums[i].Name);   // bare GoNav — no preview → Skel.Region remount
+                for (int f = 0; f < AlbumSettle && !window.IsClosed; f++) Measure(albumSkel, skelAlbums[i].Uri);
+            }
+
+            // FIXED path: same shape, but each hop opens via DetailNav.OpenAlbum (stash preview + nav) — reused-shell fast path.
+            Nav("home", null); Settle(10);
+            WaveeShell.ProbeOpenAlbum(prevAlbums[0]); Settle(AlbumSettle);
+            for (int i = 1; i < prevAlbums.Count && !window.IsClosed; i++)
+            {
+                WaveeShell.ProbeOpenAlbum(prevAlbums[i]);                // the fixed related-card path
+                for (int f = 0; f < AlbumSettle && !window.IsClosed; f++) Measure(albumPrev, prevAlbums[i].Uri);
+            }
+        }
+
         // ── Phase 1: NAV-SETTLE across all route types (2 sweeps). ──
         var navSettle = new Phase("nav-settle");
         const int SettleFrames = 14;
@@ -794,7 +829,7 @@ internal static class WaveeNavProbe
         }
 
         // ── Report ──
-        var phases = new[] { idle, scroll, backfwd, connNo, connFly, homeDetail, navSettle, hammer, theme };
+        var phases = new[] { idle, scroll, backfwd, connNo, connFly, albumSkel, albumPrev, homeDetail, navSettle, hammer, theme };
         var all = new Phase("ALL");
         foreach (var p in phases) { all.Ms.AddRange(p.Ms); all.OverBudget += p.OverBudget; all.OverBudgetGc += p.OverBudgetGc; }
 

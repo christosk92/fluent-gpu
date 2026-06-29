@@ -35,8 +35,9 @@ sealed class LyricsView : Component
     readonly FloatSignal _viewportW = new(0f);   // live viewport width — lets the centered (fullscreen) column fill + center
     // Resolver output — drives per-line emphasis (each line subscribes). -1 = before the first line.
     readonly Signal<int> _activeLine = new(-1);
-    // Sung-syllable (word) count for the ACTIVE line — drives the word-by-word highlight. Only the active line reads it.
-    readonly Signal<int> _playedWords = new(0);
+    // Smooth playback ms — published every frame by the ticker; the ACTIVE word-by-word line reads it to advance its
+    // karaoke wipe split (so only that one line re-renders per frame; the wipe rides DrawGlyphRunGradient → no reshape).
+    readonly FloatSignal _nowMs = new(0f);
 
     // Live layout handles read by the ticker (the active line's arranged rect vs the viewport's → the scroll target).
     NodeHandle _viewport;
@@ -110,7 +111,7 @@ sealed class LyricsView : Component
         {
             int idx = i;
             var line = lines[i];
-            lineKids[i] = Embed.Comp(() => new LyricLineView(idx, line, _activeLine, _playedWords, fontSz, lineHt, centered, ReportLineNode, () => SeekToLine(idx)))
+            lineKids[i] = Embed.Comp(() => new LyricLineView(idx, line, _activeLine, _nowMs, fontSz, lineHt, centered, ReportLineNode, () => SeekToLine(idx)))
                 with { Key = "ll" + idx };
         }
 
@@ -165,14 +166,8 @@ sealed class LyricsView : Component
         int active = ResolveLine(doc.Lines, nowMs);
         if (active != _activeLine.Peek()) _activeLine.Value = active;   // value-gated → re-render lines (emphasis)
 
-        // Word-by-word: how many syllables of the active line have started (only the active line subscribes to this).
-        int played = 0;
-        if (active >= 0)
-        {
-            var syl = doc.Lines[active].Syllables;
-            for (int i = 0; i < syl.Count; i++) { if (syl[i].StartMs <= nowMs) played = i + 1; else break; }
-        }
-        if (played != _playedWords.Peek()) _playedWords.Value = played;
+        // Publish the smooth ms every frame so the active word-by-word line advances its karaoke wipe (only that line reads it).
+        _nowMs.Value = nowMs;
 
         var scene = Context.Scene;
         if (scene is null || active < 0 || (uint)active >= (uint)_lineNodes.Length) return;
@@ -220,17 +215,17 @@ sealed class LyricLineView : Component
     readonly int _index;
     readonly LyricLine _line;
     readonly Signal<int> _activeLine;
-    readonly Signal<int> _playedWords;
+    readonly FloatSignal _nowMs;
     readonly float _fontSz;
     readonly float _lineHt;
     readonly bool _centered;
     readonly Action<int, NodeHandle> _reportNode;
     readonly Action _onSeek;
 
-    public LyricLineView(int index, LyricLine line, Signal<int> activeLine, Signal<int> playedWords,
+    public LyricLineView(int index, LyricLine line, Signal<int> activeLine, FloatSignal nowMs,
         float fontSz, float lineHt, bool centered, Action<int, NodeHandle> reportNode, Action onSeek)
     {
-        _index = index; _line = line; _activeLine = activeLine; _playedWords = playedWords;
+        _index = index; _line = line; _activeLine = activeLine; _nowMs = nowMs;
         _fontSz = fontSz; _lineHt = lineHt; _centered = centered;
         _reportNode = reportNode; _onSeek = onSeek;
     }
@@ -252,15 +247,15 @@ sealed class LyricLineView : Component
         Element textEl;
         if (isActive && _line.IsWordByWord && _line.Syllables.Count > 0)
         {
-            // Discrete word-by-word karaoke: played words bright, unplayed dim — re-mints only the active line on each
-            // word boundary (subscribing to _playedWords HERE keeps non-active lines off the word cadence). The soft
-            // sweeping gradient wipe is the A1 engine upgrade (DrawGlyphRunGradient).
-            int played = _playedWords.Value;
-            var syl = _line.Syllables;
-            var spans = new TextSpan[syl.Count];
-            for (int i = 0; i < syl.Count; i++)
-                spans[i] = new TextSpan(syl[i].Text, Weight: 700, Color: i < played ? Tok.TextPrimary : Tok.TextSecondary);
-            textEl = new SpanTextEl(spans) { Size = _fontSz, Weight = 700, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, LineHeight = _lineHt };
+            // Karaoke SOFT WIPE (A1): one flat run colored per-glyph by the played split (DrawGlyphRunGradient), advancing
+            // smoothly with the clock. Subscribing to _nowMs HERE means only the active line re-renders per frame; the
+            // wipe carries on paint (KaraokeSplit), so the run never reshapes as the split sweeps.
+            float split = ComputeSplit(_line, (long)_nowMs.Value);
+            textEl = new TextEl(_line.Text)
+            {
+                Size = _fontSz, Weight = 700, Wrap = TextWrap.Wrap, LineHeight = _lineHt, Color = Tok.TextSecondary,
+                KaraokePlayed = Tok.TextPrimary, KaraokeUnplayed = Tok.TextSecondary, KaraokeSplit = split, KaraokeFade = 0.05f,
+            };
         }
         else
         {
@@ -277,6 +272,25 @@ sealed class LyricLineView : Component
             OnRealized = h => _reportNode(_index, h),
             Children = [textEl],
         };
+    }
+
+    // Played fraction (0..1) along the line from the sung syllables + the smooth clock — the karaoke wipe split.
+    static float ComputeSplit(LyricLine line, long now)
+    {
+        var syl = line.Syllables;
+        int total = 0;
+        for (int i = 0; i < syl.Count; i++) total += Math.Max(1, syl[i].Text.Length);
+        if (total == 0) return 0f;
+        float played = 0f;
+        for (int i = 0; i < syl.Count; i++)
+        {
+            int len = Math.Max(1, syl[i].Text.Length);
+            long s = syl[i].StartMs, e = syl[i].EndMs;
+            if (now >= e) { played += len; continue; }
+            if (now >= s) played += len * Math.Clamp((float)(now - s) / Math.Max(1L, e - s), 0f, 1f);
+            break;
+        }
+        return Math.Clamp(played / total, 0f, 1f);
     }
 }
 
