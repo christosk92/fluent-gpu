@@ -32,6 +32,7 @@ sealed class LyricsView : Component
 
     // Scroll follow: bound to the column Transform; eased toward the active line each frame by the ticker.
     readonly FloatSignal _scrollY = new(0f);
+    readonly FloatSignal _viewportW = new(0f);   // live viewport width — lets the centered (fullscreen) column fill + center
     // Resolver output — drives per-line emphasis (each line subscribes). -1 = before the first line.
     readonly Signal<int> _activeLine = new(-1);
     // Sung-syllable (word) count for the ACTIVE line — drives the word-by-word highlight. Only the active line reads it.
@@ -44,7 +45,11 @@ sealed class LyricsView : Component
     LyricsDocument? _doc;     // the built doc the ticker resolves against (peek-only off the UI thread-of-record)
     PlaybackBridge? _b;
 
-    const float FocalBand = 0.4f;   // active line parked at 40% of the viewport height
+    readonly bool _large;            // fullscreen surface (large, centered) vs the compact rail
+    readonly Func<bool>? _visible;   // mount-the-ticker gate; null => use ShellUi.RailOpen (the rail case)
+    float _band = 0.40f;             // focal band (fraction of viewport height) the active line parks at
+
+    public LyricsView(bool large = false, Func<bool>? visible = null) { _large = large; _visible = visible; }
 
     public override Element Render()
     {
@@ -56,7 +61,7 @@ sealed class LyricsView : Component
 
         var track = b?.CurrentTrack.Value;                 // subscribe → reload on track change
         bool playing = b?.IsPlaying.Value ?? false;        // subscribe (kept for future gating)
-        bool open = ui?.RailOpen.Value ?? false;           // subscribe → gate the ticker
+        bool open = _visible is not null ? _visible() : (ui?.RailOpen.Value ?? false);   // gate the ticker (rail uses RailOpen)
         long posTick = b?.PositionMs.Value ?? 0L;          // subscribe → re-anchor the smooth clock each tick
         string trackId = track?.Id ?? "";
 
@@ -92,12 +97,20 @@ sealed class LyricsView : Component
 
         _ = _activeLine.Value;   // subscribe so a new active line re-renders the column (per-line emphasis re-seeds)
 
+        // Surface style: the compact left-aligned rail vs the large, centered fullscreen view.
+        float fontSz = _large ? 34f : 21f;
+        float lineHt = _large ? 44f : 27f;
+        bool centered = _large;
+        _band = _large ? 0.42f : 0.40f;
+        float padX = _large ? 48f : 18f;
+        float padY = _large ? 340f : 240f;
+
         var lineKids = new Element[lines.Count];
         for (int i = 0; i < lines.Count; i++)
         {
             int idx = i;
             var line = lines[i];
-            lineKids[i] = Embed.Comp(() => new LyricLineView(idx, line, _activeLine, _playedWords, ReportLineNode, () => SeekToLine(idx)))
+            lineKids[i] = Embed.Comp(() => new LyricLineView(idx, line, _activeLine, _playedWords, fontSz, lineHt, centered, ReportLineNode, () => SeekToLine(idx)))
                 with { Key = "ll" + idx };
         }
 
@@ -105,7 +118,9 @@ sealed class LyricsView : Component
         // padding so the first/last lines can still reach the focal band.
         var column = new BoxEl
         {
-            Direction = 1, Gap = 8f, Padding = new Edges4(18f, 240f, 18f, 240f),
+            Direction = 1, Gap = _large ? 14f : 8f, Padding = new Edges4(padX, padY, padX, padY),
+            AlignItems = centered ? FlexAlign.Center : FlexAlign.Stretch,
+            Width = Prop.Of(() => _large ? _viewportW.Value : float.NaN),   // fullscreen: fill width so centering works
             Transform = Prop.Of(() => Affine2D.Translation(0f, _scrollY.Value)),
             Children = lineKids,
         };
@@ -116,6 +131,7 @@ sealed class LyricsView : Component
         {
             Grow = 1f, MinHeight = 0f, ClipToBounds = true, ZStack = true,
             OnRealized = h => _viewport = h,
+            OnBoundsChanged = r => { if (r.W != _viewportW.Peek()) _viewportW.Value = r.W; },
             Children = ticker is null ? [column] : [column, ticker],
         };
     }
@@ -167,7 +183,7 @@ sealed class LyricsView : Component
         // On-screen Y of the line = layoutY + scrollY; we want that at viewport.Y + band ⇒ targetScroll = band-anchor - layoutY.
         RectF vp = scene.AbsoluteRect(_viewport);
         RectF lr = scene.AbsoluteRect(line);
-        float target = (vp.Y + vp.H * FocalBand) - (lr.Y + lr.H * 0.5f);
+        float target = (vp.Y + vp.H * _band) - (lr.Y + lr.H * 0.5f);
         float cur = _scrollY.Peek();
         float next = cur + (target - cur) * 0.16f;          // exponential ease toward the focal target
         if (MathF.Abs(next - cur) < 0.05f) next = target;
@@ -201,19 +217,21 @@ sealed class LyricsView : Component
 // view's ticker can read the active line's arranged rect for the scroll follow.
 sealed class LyricLineView : Component
 {
-    const float FontSz = 21f;
-    const float LineHt = 27f;
-
     readonly int _index;
     readonly LyricLine _line;
     readonly Signal<int> _activeLine;
     readonly Signal<int> _playedWords;
+    readonly float _fontSz;
+    readonly float _lineHt;
+    readonly bool _centered;
     readonly Action<int, NodeHandle> _reportNode;
     readonly Action _onSeek;
 
-    public LyricLineView(int index, LyricLine line, Signal<int> activeLine, Signal<int> playedWords, Action<int, NodeHandle> reportNode, Action onSeek)
+    public LyricLineView(int index, LyricLine line, Signal<int> activeLine, Signal<int> playedWords,
+        float fontSz, float lineHt, bool centered, Action<int, NodeHandle> reportNode, Action onSeek)
     {
         _index = index; _line = line; _activeLine = activeLine; _playedWords = playedWords;
+        _fontSz = fontSz; _lineHt = lineHt; _centered = centered;
         _reportNode = reportNode; _onSeek = onSeek;
     }
 
@@ -242,18 +260,18 @@ sealed class LyricLineView : Component
             var spans = new TextSpan[syl.Count];
             for (int i = 0; i < syl.Count; i++)
                 spans[i] = new TextSpan(syl[i].Text, Weight: 700, Color: i < played ? Tok.TextPrimary : Tok.TextSecondary);
-            textEl = new SpanTextEl(spans) { Size = FontSz, Weight = 700, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, LineHeight = LineHt };
+            textEl = new SpanTextEl(spans) { Size = _fontSz, Weight = 700, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, LineHeight = _lineHt };
         }
         else
         {
             ColorF color = isActive ? Tok.TextPrimary : Tok.TextSecondary;
-            textEl = new TextEl(_line.Text) { Size = FontSz, Weight = 700, Color = color, Wrap = TextWrap.Wrap, LineHeight = LineHt };
+            textEl = new TextEl(_line.Text) { Size = _fontSz, Weight = 700, Color = color, Wrap = TextWrap.Wrap, LineHeight = _lineHt };
         }
 
         return new BoxEl
         {
             Direction = 1, Padding = new Edges4(2f, 5f, 2f, 5f),
-            TransformOriginX = 0f, TransformOriginY = 0.5f,    // scale about the left edge (text stays anchored left)
+            TransformOriginX = _centered ? 0.5f : 0f, TransformOriginY = 0.5f,   // scale about center (fullscreen) or left (rail)
             Cursor = CursorId.Hand, OnClick = _onSeek,
             Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
             OnRealized = h => _reportNode(_index, h),

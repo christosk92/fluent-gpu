@@ -51,6 +51,7 @@ sealed class NowPlayingView : Component
         bool canPrev = _b.CanSkipPrev.Value;
         var lib = UseContext(LibraryBridge.Slot);
         bool liked = track is not null && (lib?.IsSaved(track.Uri) ?? false);
+        var (showLyrics, setShowLyrics) = UseState(Diag.EnvFlag("WAVEE_LYRICS_FULLSCREEN"));   // fullscreen lyrics mode (replaces the hero)
 
         ColorF accent = palette is { } p0 ? WaveePalette.Accent(p0) : Tok.AccentDefault;
         ColorF bg = palette is { } p1 ? WaveePalette.BackgroundDark(p1) : WaveePalette.BackgroundDark(WaveePalette.Neutral);
@@ -74,7 +75,7 @@ sealed class NowPlayingView : Component
                         new TextEl(ContextLabel(_b.CurrentContext.Value)) { Size = 13f, Weight = 600, Color = Tok.TextPrimary },
                     ],
                 },
-                new BoxEl { Width = 40f },   // balance the chevron so the label is truly centered
+                PlayerBarContent.Transport(Mdl.Lyrics, () => setShowLyrics(!showLyrics), track is not null, showLyrics, accent, 40f, 18f),
             ],
         };
 
@@ -160,11 +161,20 @@ sealed class NowPlayingView : Component
             ],
         };
 
+        // Fullscreen lyrics mode swaps the hero for the large, centered lyrics view (kept above the seek/transport).
+        Element heroArea = showLyrics
+            ? new BoxEl
+            {
+                Grow = 1f, MinHeight = 0f, AlignSelf = FlexAlign.Stretch, ClipToBounds = true,
+                Children = [Embed.Comp(() => new LyricsView(large: true, visible: () => true))],
+            }
+            : hero;
+
         var centerCol = new BoxEl
         {
             Grow = 1f, Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Gap = 22f,
             Padding = new Edges4(16f, 0f, 16f, 24f),
-            Children = [hero, seekRow, transportRow, footer],
+            Children = [heroArea, seekRow, transportRow, footer],
         };
 
         Element body = showQueueRail
