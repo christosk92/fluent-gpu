@@ -267,12 +267,14 @@ sealed class LyricLineView : Component
         bool isActive = _index == active;
         int dist = active < 0 ? 6 : Math.Abs(_index - active);
 
-        // Emphasis (BetterLyrics): the active line is full-size, opaque and SHARP; neighbours shrink, dim, AND blur with
-        // distance (depth-of-field). All ride springs that re-seed only when the distance bucket changes (deps) then settle
-        // on the compositor — smooth, no per-frame re-render.
-        float scale = isActive ? 1f : 0.86f;
-        float opacity = isActive ? 1f : dist == 1 ? 0.5f : dist == 2 ? 0.34f : dist == 3 ? 0.24f : 0.16f;
-        float blur = (isActive || dist > 6) ? 0f : MathF.Min(1.2f + dist * 1.5f, 7.5f);   // DoF: progressive blur on neighbours
+        // Emphasis — the exact BetterLyrics values (LyricsAnimator.cs): a continuous distance factor (0 at the active line
+        // → 1 at the viewport edge, ≈5 lines out) drives scale 1.0→0.75 (_highlightedScale→_defaultScale), Gaussian blur
+        // 0→5, and a linear opacity fade. The active line reads full-size/sharp/opaque; neighbours shrink, blur and recede.
+        // All ride springs that re-seed only when the distance bucket changes (deps) then settle on the compositor.
+        float f = MathF.Min(dist / 5f, 1f);
+        float scale = isActive ? 1f : 1f - 0.25f * f;
+        float opacity = isActive ? 1f : MathF.Max(0.12f, (1f - f) * 0.95f);
+        float blur = (isActive || dist > 6) ? 0f : 5f * f;   // DoF: Gaussian blur 0→5 with distance (BetterLyrics cap)
 
         UseSpring(AnimChannel.ScaleX, scale, SpringParams.Default, dist);
         UseSpring(AnimChannel.ScaleY, scale, SpringParams.Default, dist);
