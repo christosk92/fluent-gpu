@@ -56,6 +56,13 @@ sealed class WaveeShell : Component
     static readonly LayoutTransition SidebarReflow = new(
         TransitionChannels.Size, TransitionDynamics.Tween(Motion.ControlFast, Easing.SmoothOut), SizeMode.Reflow);
 
+    // The right-rail open/close reflow. A critically-damped spring (damping 1.0 ⇒ NO overshoot, so the content never
+    // over-shrinks) instead of the front-loaded ControlFast ease: the content column re-solves along a smooth, evenly-
+    // paced trajectory, so the reflow reads as ONE unified motion rather than the per-frame text re-wraps / card resizes
+    // bunching into the fast early phase (the "steppy" feel).
+    static readonly LayoutTransition RailReflow = new(
+        TransitionChannels.Size, TransitionDynamics.Spring(0.22f, 1f), SizeMode.Reflow);
+
     // The shell receives its persisted settings through the IAppSettings interface (provided by the composition root,
     // Services). It never sees the concrete store — no "ForUnpackaged"/registry/publisher detail leaks in here.
     static string HistoryFilePath() => Path.Combine(
@@ -276,7 +283,7 @@ sealed class WaveeShell : Component
                             {
                                 Direction = 1, Shrink = 0f, ClipToBounds = true, Fill = Prop.Of(() => WaveeColors.Sidebar),
                                 Width = Prop.Of(() => _shellUi.RailOpen.Value ? _shellUi.RailWidth.Value : 0f),
-                                Animate = SidebarReflow,
+                                Animate = RailReflow,
                                 Children = [ Embed.Comp(() => new RightRail()) ],
                             },
                         ],
