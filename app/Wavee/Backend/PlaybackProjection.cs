@@ -35,7 +35,11 @@ public sealed record ClusterDelta(
     IReadOnlyList<RemoteTrack> NextTracks,
     // Restrictions on the active track (ads / first-last) + our device's volume (0..65535, -1 = unknown). Trailing defaults
     // so existing constructions are unaffected.
-    bool DisallowSkipPrev = false, bool DisallowSkipNext = false, bool DisallowSeeking = false, int OurVolume0_65535 = -1);
+    bool DisallowSkipPrev = false, bool DisallowSkipNext = false, bool DisallowSeeking = false, int OurVolume0_65535 = -1,
+    // Content playback rate (spoken-word media); 1.0 = normal. Trailing default so existing constructions are unaffected.
+    double PlaybackSpeed = 1.0,
+    // The ACTIVE device's volume (0..65535, -1 = unknown) — the slider follows the active device, not just us.
+    int ActiveVolume0_65535 = -1);
 
 public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, IDisposable
 {
@@ -44,6 +48,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
 
     readonly string _ourDeviceId;
     readonly Func<long> _now;
+    readonly Func<long> _serverNow;   // estimated server-clock Unix ms (<=0 ⇒ unsynced); read only at cluster fold
     readonly SimpleSubject<IPlaybackState> _changes = new();
     readonly SimpleSubject<long> _positionTicks = new();
     readonly object _gate = new();
@@ -68,6 +73,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     RepeatMode _repeat;
     double _volume = 0.7;
     long _posMs, _posAnchorWall, _durMs;
+    double _speed = 1.0;   // playback rate folded from the cluster (remote) / 1.0 (local); applied in Pos()
     Palette? _palette;
     IReadOnlyList<QueueEntry> _queue = Array.Empty<QueueEntry>();
     bool _canSkipNext = true, _canSkipPrev = true, _canSeek = true;   // from cluster restrictions (viewer); true when local
@@ -75,10 +81,13 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     long _lastLocalCmdWall = long.MinValue;
     int _inFlightSeq;
 
-    public NowPlayingProjection(string ourDeviceId, Func<long>? clock = null)
+    public NowPlayingProjection(string ourDeviceId, Func<long>? clock = null, Func<long>? serverNowUnixMs = null)
     {
         _ourDeviceId = ourDeviceId;
         _now = clock ?? (() => Environment.TickCount64);
+        // Estimated server-clock "now" in Unix ms, used only to age remote snapshots at fold. Default returns 0 (the
+        // "unsynced" sentinel) so the offset-dependent network term stays off until a server clock is wired in.
+        _serverNow = serverNowUnixMs ?? (() => 0L);
     }
 
     /// <summary>True when the cluster's active device is us (the controller's local-vs-remote branch keys on this).</summary>
@@ -112,10 +121,25 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
     static readonly System.ComponentModel.PropertyChangedEventArgs AllChanged = new(null);
 
-    long Pos() => _isPlaying ? Math.Min(_durMs <= 0 ? long.MaxValue : _durMs, _posMs + (_now() - _posAnchorWall)) : _posMs;
+    long Pos() => _isPlaying ? Math.Clamp(_posMs + (long)((_now() - _posAnchorWall) * _speed), 0, _durMs <= 0 ? long.MaxValue : _durMs) : _posMs;
+
+    // Clamp a content playback rate to Spotify's spoken-word range; invalid/zero ⇒ normal speed.
+    static double NormalizeSpeed(double v) => v <= 0 || double.IsNaN(v) || double.IsInfinity(v) ? 1.0 : Math.Clamp(v, 0.5, 3.5);
 
     /// <summary>Allow the app to set a palette derived from the current art (off the slab path).</summary>
     public void SetPalette(Palette? p) { lock (_gate) _palette = p; FireChanges(); }
+
+    /// <summary>The Connect controller pushes QueueCore's snapshot here after a local queue change, so IPlaybackState.Queue
+    /// (and the PutState next-up) reflect OUR local queue while we're the active device. OnCluster won't overwrite it while
+    /// we're active (local wins); a viewer's queue still comes from the cluster.</summary>
+    public void SetLocalQueue(IReadOnlyList<QueueEntry> queue) { lock (_gate) _queue = queue; FireChanges(); }
+
+    /// <summary>Controller pushes the local shuffle/repeat after a change so IPlaybackState + PutState reflect them while
+    /// we're active (OnCluster won't overwrite them while active — local wins).</summary>
+    public void SetLocalOptions(bool shuffle, RepeatMode repeat) { lock (_gate) { _shuffle = shuffle; _repeat = repeat; } FireChanges(); }
+
+    /// <summary>Controller pushes the local volume after a change (so PutState carries it). 0..1.</summary>
+    public void SetLocalVolume(double volume01) { lock (_gate) _volume = Math.Clamp(volume01, 0, 1); FireChanges(); }
 
     // ── Remote (cluster) fold — viewer mode + reconciliation ─────────────────────────────────────────────────────────
     public void OnCluster(in ClusterDelta c)
@@ -128,6 +152,8 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
             // a contradicting cluster revert our optimistic play-state. As a viewer, the cluster is always the truth.
             bool suppressPlayState = weActive && _lastLocalCmdWall != long.MinValue && (_now() - _lastLocalCmdWall) < LocalCmdWindowMs;
 
+            // Detect track change BEFORE merging — a fresh track's Timestamp can lag the prior track, so we must not age it.
+            bool isNewTrack = c.HasTrack && (_track is null || !string.Equals(_track.Uri, c.Track.Uri, StringComparison.Ordinal));
             if (c.HasTrack) _track = MergeClusterTrack(_track, MapTrack(c.Track));
             _contextUri = c.ContextUri;
             _durMs = c.DurationMs > 0 ? c.DurationMs : (c.HasTrack ? c.Track.DurationMs : _durMs);
@@ -138,15 +164,27 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
                 _isPlaying = active && c.IsPlaying && !c.IsPaused;
                 _isBuffering = c.IsBuffering;
             }
-            _shuffle = c.Shuffle;
-            _repeat = c.Repeat;
+            if (!weActive) { _shuffle = c.Shuffle; _repeat = c.Repeat; }   // active: local owns shuffle/repeat (SetLocalOptions)
             _canSkipNext = !c.DisallowSkipNext;
             _canSkipPrev = !c.DisallowSkipPrev;
             _canSeek = !c.DisallowSeeking;
-            if (c.OurVolume0_65535 >= 0) _volume = c.OurVolume0_65535 / 65535.0;
-            _posMs = c.PositionAsOfMs;
+            // The slider follows the ACTIVE device's volume; suppress only within our own local-command window (so our
+            // optimistic set isn't snapped back by a stale echo) — a genuine remote change, from any device, flows through.
+            bool inLocalWindow = _lastLocalCmdWall != long.MinValue && (_now() - _lastLocalCmdWall) < LocalCmdWindowMs;
+            if (!inLocalWindow && c.ActiveVolume0_65535 >= 0) _volume = c.ActiveVolume0_65535 / 65535.0;
+            // The remote position is a snapshot AS OF c.TimestampMs; by the time we fold it, it is already stale. Re-project
+            // it to "now" as two isolated terms, then anchor in the monotonic domain so Pos() interpolates forward smoothly.
+            //   serverSideAge — pure server-domain Δ (sample→emit); correct with NO clock sync, even fully offline.
+            //   networkAge    — transit since the server emitted the cluster; needs a synced server clock (<=0 ⇒ skipped).
+            // No aging while paused (position is frozen) or on a fresh near-zero track (its Timestamp may lag).
+            _speed = NormalizeSpeed(c.PlaybackSpeed);
+            long serverSideAge = c.ServerTimestampMs > 0 && c.TimestampMs > 0 ? Math.Max(0, c.ServerTimestampMs - c.TimestampMs) : 0;
+            long serverNow = _serverNow();
+            long networkAge = serverNow > 0 && c.ServerTimestampMs > 0 ? Math.Max(0, serverNow - c.ServerTimestampMs) : 0;
+            long age = !_isPlaying || (isNewTrack && c.PositionAsOfMs <= 1000) ? 0 : serverSideAge + networkAge;
+            _posMs = c.PositionAsOfMs + (long)Math.Round(age * _speed);
             _posAnchorWall = _now();
-            _queue = MapQueue(c.NextTracks);
+            if (!weActive) _queue = MapQueue(c.NextTracks);   // viewer: cluster queue. Active: keep the local queue (SetLocalQueue).
         }
         FireChanges();
         RestartTicker();
@@ -203,12 +241,21 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
             {
                 case EvKind.Started:
                 case EvKind.Resumed:
-                case EvKind.TrackChanged: _isPlaying = true; _isBuffering = false; break;
+                case EvKind.TrackChanged:
+                    _isPlaying = true; _isBuffering = false;
+                    _canSkipNext = _canSkipPrev = _canSeek = true;   // local playback → full local control
+                    _speed = 1.0; _posMs = e.AtMs; _posAnchorWall = _now();
+                    break;
                 case EvKind.Paused:
-                case EvKind.Ended: _isPlaying = false; break;
+                case EvKind.Ended:
+                case EvKind.BecameInactive:
+                    _isPlaying = false; _speed = 1.0; _posMs = e.AtMs; _posAnchorWall = _now();
+                    break;
+                case EvKind.Seeked:
+                    _posMs = e.AtMs; _posAnchorWall = _now();
+                    break;
+                // OptionsChanged / VolumeChanged / QueueChanged: shuffle/repeat/volume/queue arrive via SetLocal* — just notify.
             }
-            _canSkipNext = _canSkipPrev = _canSeek = true;   // local playback → full local control
-            _posMs = e.AtMs; _posAnchorWall = _now();
         }
         FireChanges();
         RestartTicker();
@@ -226,7 +273,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
                 case AudioHostSignalKind.Buffering: _isBuffering = true; break;
                 case AudioHostSignalKind.Ended: _isPlaying = false; break;
             }
-            _posMs = s.PositionMs; _posAnchorWall = _now();
+            _speed = 1.0; _posMs = s.PositionMs; _posAnchorWall = _now();
         }
         if (structural) { FireChanges(); RestartTicker(); }
         else _positionTicks.OnNext(s.PositionMs);

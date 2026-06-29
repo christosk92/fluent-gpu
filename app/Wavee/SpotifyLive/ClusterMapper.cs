@@ -42,6 +42,8 @@ public static class ClusterMapper
         bool noPrev = r is not null && r.DisallowSkippingPrevReasons.Count > 0;
         bool noSeek = r is not null && r.DisallowSeekingReasons.Count > 0;
         int ourVol = cluster.Device.TryGetValue(ourDeviceId, out var ourDev) ? (int)ourDev.Volume : -1;
+        int activeVol = !string.IsNullOrEmpty(cluster.ActiveDeviceId) && cluster.Device.TryGetValue(cluster.ActiveDeviceId, out var actDev)
+            ? (int)actDev.Volume : ourVol;   // the slider follows the ACTIVE device; fall back to ours when nobody's active
 
         return new ClusterDelta(
             cluster.ActiveDeviceId ?? "",
@@ -51,7 +53,9 @@ public static class ClusterMapper
             ps?.PositionAsOfTimestamp ?? 0, ps?.Timestamp ?? 0, cluster.ServerTimestampMs, ps?.Duration ?? 0,
             opts?.ShufflingContext ?? false, repeat,
             devices, next,
-            noPrev, noNext, noSeek, ourVol);
+            noPrev, noNext, noSeek, ourVol,
+            ps?.PlaybackSpeed ?? 1.0,
+            activeVol);
     }
 
     static RemoteTrack MapTrack(P.ProvidedTrack t, long fallbackDuration)
@@ -89,15 +93,17 @@ public sealed class ClusterIngest : IDisposable
     readonly LiveConnectDevices _devices;
     readonly string _ourDeviceId;
     readonly Action<string>? _log;
+    readonly Action<long>? _onServerTimestamp;   // feeds the server-clock estimator a free passive sample per cluster
     readonly IDisposable _sub;
 
     public ClusterIngest(ITransport transport, NowPlayingProjection projection, LiveConnectDevices devices,
-        string ourDeviceId, Action<string>? log = null)
+        string ourDeviceId, Action<string>? log = null, Action<long>? onServerTimestamp = null)
     {
         _projection = projection;
         _devices = devices;
         _ourDeviceId = ourDeviceId;
         _log = log;
+        _onServerTimestamp = onServerTimestamp;
         _sub = transport.Events("hm://connect-state/v1/cluster").Subscribe(Observers.From<WireEvent>(OnEvent));
     }
 
@@ -123,6 +129,7 @@ public sealed class ClusterIngest : IDisposable
     void Apply(P.Cluster cluster)
     {
         var delta = ClusterMapper.Map(cluster, _ourDeviceId);
+        _onServerTimestamp?.Invoke(delta.ServerTimestampMs);   // refresh the clock BEFORE the fold reads its offset
         _devices.Update(delta.Devices);
         _projection.OnCluster(delta);
     }

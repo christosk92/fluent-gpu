@@ -254,7 +254,7 @@ sealed class TrackList : Component
         // SkelReveal.None: the ItemsView owns its entrance (per-row ItemCollectionTransition adds); the engine lingers
         // the shimmer across that entrance so the gray rows cross-dissolve INTO the real rows at the same positions —
         // no shimmer→empty→rows gap, and no exit-timing to hand-tune here.
-        Element list = Skel.Region(_full, () => RowsShimmer(set, tracks, rowH), _ => RealList(), reveal: SkelReveal.None);
+        Element list = Skel.Region(_full, () => RowsShimmer(set, tracks, rowH), _ => RealList(), reveal: SkelReveal.None, smoothResize: false);
 
         // Key the list by tier + density + filter → any of those REMOUNTS it (a clean, shape-stable slot template with
         // the right column set / row height / filtered window). Sort is NOT in the key — each bound row re-skins itself

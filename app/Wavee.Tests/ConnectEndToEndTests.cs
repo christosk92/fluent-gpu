@@ -13,16 +13,13 @@ namespace Wavee.Tests;
 // Gen0, not zero; the engine's phase-6-13 tripwire never touches it).
 public class ConnectEndToEndTests
 {
-    static Track Trk(string uri) => new(uri[(uri.LastIndexOf(':') + 1)..], uri, "T:" + uri,
-        Array.Empty<ArtistRef>(), new AlbumRef("", "", ""), 60000, false, null);
-
     [Fact]
     public async Task PlayThenPause_ThroughRealSilentHost_ReflectsInProjection()
     {
         var host = new SilentAudioHost();
         var proj = new NowPlayingProjection("us");
         using var c = new PlaybackController(host, new StubTrackResolver(), proj,
-            (_, _) => Task.FromResult<IReadOnlyList<Track>>(new[] { Trk("spotify:track:a") }), "us");
+            new FakeContextResolver("spotify:track:a"), "us");
 
         await c.PlayAsync("spotify:playlist:p");
         await Task.Delay(50);

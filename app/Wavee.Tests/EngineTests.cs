@@ -113,7 +113,7 @@ public class MutationTests
 
     sealed class FailTransport : ITransport
     {
-        public Task<Resp> Request(Channel ch, string route, ReadOnlyMemory<byte> body, CancellationToken ct = default)
+        public Task<Resp> Request(Channel ch, string route, ReadOnlyMemory<byte> body, CancellationToken ct = default, string? method = null)
             => Task.FromResult(new Resp(false, [], 500));
         public IObservable<WireEvent> Events(string p) => new SimpleSubject<WireEvent>();
         public IObservable<WireRequest> Requests(string p) => new SimpleSubject<WireRequest>();

@@ -36,7 +36,7 @@ public sealed partial class RenderContext
     private IDisposable? UseRegistration(Func<IDisposable?> register)
     {
         DisposableCell cell;
-        if (!_mounted) { cell = new DisposableCell { Disposable = register() }; _cells.Add(cell); }
+        if (!_mounted) { cell = new DisposableCell { Disposable = register() }; AddCell(cell, cleanupCapable: true); }
         else cell = (DisposableCell)_cells[_cursor];
         _cursor++;
         return cell.Disposable;
@@ -156,7 +156,7 @@ public sealed partial class RenderContext
         if (!_mounted)
         {
             cell = new ReactiveEffectCell();
-            _cells.Add(cell);
+            AddCell(cell, cleanupCapable: true);
             if (opts.Async is not null)
             {
                 var st = new AsyncFieldState<T>(opts, server, validating, UsePost());

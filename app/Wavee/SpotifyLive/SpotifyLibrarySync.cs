@@ -58,7 +58,7 @@ public static class SpotifyLibrarySync
         var dealerHosts = ApResolver.ParseHosts(dealerJson, "dealer");
         if (dealerHosts.Count == 0) { log("No dealer host — skipping the real-time listen."); return 0; }
 
-        using var transport = new LiveDealerTransport(dealerHosts[0].Split(':')[0], _ => Task.FromResult(live.AccessToken), live.Pipeline, () => live.BaseUrl, log);
+        using var transport = new LiveDealerTransport(dealerHosts, _ => Task.FromResult(live.AccessToken), live.Pipeline, () => live.BaseUrl, log);
         using var router = new DealerRouter(transport, store,
             uri => { log("  push: " + uri + " (re-syncing)"); _ = playlistFetcher.FetchPlaylistAsync(uri, ct); },
             set => { foreach (var s in Sets) _ = collectionFetcher.FetchSetAsync(s, ct); });

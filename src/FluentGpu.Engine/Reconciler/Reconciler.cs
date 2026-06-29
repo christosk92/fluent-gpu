@@ -61,6 +61,7 @@ public sealed class TreeReconciler
     private readonly Dictionary<int, (Element[] Prev, int Len)> _forState = new();   // last realized children per ForEl node
     private readonly Dictionary<int, float> _childStagger = new();                   // node → per-child Enter stagger (ms): a parent's Element.Stagger, read by SynthesizeDeclarative
     private readonly Dictionary<string, NodeHandle> _keyNode = new();                 // MorphId → node: the shared-layout anchor a RelativeTo follower FLIPs against
+    private readonly Dictionary<int, string> _morphKeyByNode = new();                 // node → MorphId; gates shared-element teardown to actual participants
     private readonly Dictionary<int, string> _relativeKey = new();                    // follower node → the MorphId key it FLIPs relative to (Element.RelativeTo)
     // Skeleton-loading: per SkelRegionEl node, the last branch (0 none / 1 shimmer / 2 real / 3 failed), the last-mounted
     // child element (for ReconcileSingleChild's type-compare), and the reveal-group token (for the group coordinator).
@@ -1627,9 +1628,13 @@ public sealed class TreeReconciler
     {
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) UnmountSubtree(c);
 
-        SaveScroll(node);   // persist this viewport's offset for its ScrollKey so a cold revisit can restore it
-        Connected?.CaptureOnLeave(node, removeTag: true);   // shared-element: a tagged node leaving captures its reverse snapshot
         int idx = (int)node.Raw.Index;
+        SaveScroll(node);   // persist this viewport's offset for its ScrollKey so a cold revisit can restore it
+        if (_morphKeyByNode.Remove(idx, out string? morphKey))
+        {
+            RemoveMorphKey(node, morphKey);
+            Connected?.CaptureOnLeave(node, removeTag: true);   // shared-element: only tagged nodes participate
+        }
         if (_keepAliveState.Remove(idx, out var kas))
         {
             foreach (var ex in kas.Entries.Values)
@@ -1799,13 +1804,31 @@ public sealed class TreeReconciler
         return target;
     }
 
+    private void RemoveMorphKey(NodeHandle node, string key)
+    {
+        if (_keyNode.TryGetValue(key, out NodeHandle current) && current.Equals(node)) _keyNode.Remove(key);
+    }
+
     private void WriteColumns(NodeHandle node, Element el, bool isMount, Element? old = null)
     {
         // Shared-element (connected-animation) tag: a node carrying MorphId is a Hero participant — its laid-out rect +
         // art are tracked so they fly between routes. Runs for every element type (cover Image, skeleton/cover Box).
-        if (el.MorphId is { Length: > 0 } morphKey) { Connected?.NoteTagged(node, morphKey); _keyNode[morphKey] = node; }
+        int nodeIdx = (int)node.Raw.Index;
+        if (el.MorphId is { Length: > 0 } morphKey)
+        {
+            if (_morphKeyByNode.TryGetValue(nodeIdx, out string? oldMorphKey) && oldMorphKey != morphKey)
+                RemoveMorphKey(node, oldMorphKey);
+            _morphKeyByNode[nodeIdx] = morphKey;
+            Connected?.NoteTagged(node, morphKey);
+            _keyNode[morphKey] = node;
+        }
+        else if (_morphKeyByNode.Remove(nodeIdx, out string? oldMorphKey))
+        {
+            RemoveMorphKey(node, oldMorphKey);
+            Connected?.CaptureOnLeave(node, removeTag: true);
+        }
         // FLIP relativeTarget: record the follower → anchor-key link (resolved live by ResolveRelativeTarget at capture).
-        if (el.RelativeTo is { Length: > 0 } relKey) _relativeKey[(int)node.Raw.Index] = relKey; else _relativeKey.Remove((int)node.Raw.Index);
+        if (el.RelativeTo is { Length: > 0 } relKey) _relativeKey[nodeIdx] = relKey; else _relativeKey.Remove(nodeIdx);
 
         // Generic scroll-driven bindings (sticky / overscroll-stretch / parallax / fade / collapse / shy / pull-to-refresh):
         // compiled to POD ScrollBind rows for every element type, replacing the old per-feature StickyTop/ScrollStretchHeader passes.

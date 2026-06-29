@@ -17,11 +17,7 @@ public class ConnectControllerTests
 {
     static readonly IReadOnlyDictionary<string, string> NoHeaders = new Dictionary<string, string>();
 
-    static Track Trk(string uri) => new(uri[(uri.LastIndexOf(':') + 1)..], uri, "T:" + uri,
-        Array.Empty<ArtistRef>(), new AlbumRef("", "", ""), 60000, false, null);
-
-    static Func<string, CancellationToken, Task<IReadOnlyList<Track>>> Ctx(params string[] uris)
-        => (_, _) => Task.FromResult<IReadOnlyList<Track>>(uris.Select(Trk).ToArray());
+    static IContextResolver Ctx(params string[] uris) => new FakeContextResolver(uris);
 
     sealed class RecordingAudioHost : IAudioHost
     {
@@ -44,10 +40,14 @@ public class ConnectControllerTests
     sealed class RecordingOutbound : IOutboundControl
     {
         public readonly List<(string Target, string Json)> Sent = new();
+        public readonly List<(string Target, int Volume)> Volumes = new();
         public string? LastTarget => Sent.Count > 0 ? Sent[^1].Target : null;
         public string? LastJson => Sent.Count > 0 ? Sent[^1].Json : null;
-        public Task SendAsync(string targetDeviceId, string commandJson, CancellationToken ct = default)
-        { Sent.Add((targetDeviceId, commandJson)); return Task.CompletedTask; }
+        public int? LastVolume => Volumes.Count > 0 ? Volumes[^1].Volume : null;
+        public Task<OutboundResult> SendAsync(string targetDeviceId, string commandJson, CancellationToken ct = default)
+        { Sent.Add((targetDeviceId, commandJson)); return Task.FromResult(new OutboundResult(true, "ack-test", 200)); }
+        public Task<OutboundResult> SetVolumeAsync(string targetDeviceId, int volume0_65535, CancellationToken ct = default)
+        { Volumes.Add((targetDeviceId, volume0_65535)); return Task.FromResult(new OutboundResult(true, "ack-test", 200)); }
     }
 
     static ClusterDelta Cluster(string active, RemoteTrack? track = null, long pos = 0, bool playing = false) =>
@@ -58,7 +58,7 @@ public class ConnectControllerTests
     static RemoteTrack Remote(string uri, long dur = 200000) => new(uri, "G", "A", "spotify:artist:a", "Al", "spotify:album:al", null, dur);
 
     PlaybackController Make(out RecordingAudioHost host, out NowPlayingProjection proj, out RecordingOutbound outbound,
-        Func<string, CancellationToken, Task<IReadOnlyList<Track>>>? ctx = null, Func<long>? clock = null)
+        IContextResolver? ctx = null, Func<long>? clock = null)
     {
         host = new RecordingAudioHost();
         proj = new NowPlayingProjection("us", clock ?? (() => 0));
@@ -117,10 +117,11 @@ public class ConnectControllerTests
         await c.SeekAsync(4242);
         await c.SetVolumeAsync(0.5);
         await c.PlayAsync("spotify:playlist:p");
-        Assert.Empty(host.Calls.Where(x => x is "pause" or "play"));   // nothing driven locally
+        Assert.DoesNotContain(host.Calls, x => x is "pause" or "play");   // nothing driven locally
         Assert.Contains(outbound.Sent, s => s.Json.Contains("pause"));
         Assert.Contains(outbound.Sent, s => s.Json.Contains("seek_to") && s.Json.Contains("4242"));
-        Assert.Contains(outbound.Sent, s => s.Json.Contains("set_volume"));
+        Assert.Equal((int)System.Math.Round(0.5 * 65535), outbound.LastVolume);   // volume via the dedicated connect/volume PUT
+        Assert.DoesNotContain(outbound.Sent, s => s.Json.Contains("set_volume"));  // NOT a player/command verb
         Assert.Contains(outbound.Sent, s => s.Json.Contains("\"endpoint\":\"play\"") && s.Json.Contains("spotify:playlist:p"));
         Assert.All(outbound.Sent, s => Assert.Equal("other-device", s.Target));
     }
@@ -175,5 +176,152 @@ public class ConnectControllerTests
         c.HandleRemoteCommand(cmd);                 // ...but an inbound REQUEST is for us → drive local
         await Task.Delay(20);
         Assert.Contains("pause", host.Calls);
+    }
+
+    // ── Phase A: inbound play resolves the context (+ skip_to / embedded pages) ───────────────────────────────────────
+    static void Dispatch(PlaybackController c, string commandJson)
+    {
+        ConnectCommand.TryParse(new WireRequest("k", "hm://connect-state/v1/player/command",
+            Encoding.UTF8.GetBytes(commandJson), NoHeaders), out var cmd);
+        c.HandleRemoteCommand(cmd);
+    }
+
+    [Fact]
+    public async Task InboundPlay_Context_ResolvesAndPlaysFirstTrack()
+    {
+        using var c = Make(out var host, out _, out _, ctx: new FakeContextResolver("spotify:track:a", "spotify:track:b"));
+        Dispatch(c, "{\"command\":{\"endpoint\":\"play\",\"context\":{\"uri\":\"spotify:playlist:p\"}}}");
+        await Task.Delay(30);
+        Assert.Contains("load:spotify:track:a", host.Calls);
+        Assert.Contains("play", host.Calls);
+    }
+
+    [Fact]
+    public async Task InboundPlay_SkipToUid_StartsAtThatTrack()
+    {
+        using var c = Make(out var host, out _, out _, ctx: new FakeContextResolver("spotify:track:a", "spotify:track:b", "spotify:track:c"));
+        Dispatch(c, "{\"command\":{\"endpoint\":\"play\",\"context\":{\"uri\":\"spotify:playlist:p\"},\"prepare_play_options\":{\"skip_to\":{\"track_uid\":\"uid2\"}}}}");
+        await Task.Delay(30);
+        Assert.Contains("load:spotify:track:c", host.Calls);   // uid2 → index 2
+    }
+
+    [Fact]
+    public async Task InboundPlay_SkipToIndex_StartsAtThatTrack()
+    {
+        using var c = Make(out var host, out _, out _, ctx: new FakeContextResolver("spotify:track:a", "spotify:track:b", "spotify:track:c"));
+        Dispatch(c, "{\"command\":{\"endpoint\":\"play\",\"context\":{\"uri\":\"spotify:playlist:p\"},\"prepare_play_options\":{\"skip_to\":{\"track_index\":1}}}}");
+        await Task.Delay(30);
+        Assert.Contains("load:spotify:track:b", host.Calls);
+    }
+
+    [Fact]
+    public async Task InboundPlay_EmbeddedPages_PlayVerbatim_OverResolver()
+    {
+        using var c = Make(out var host, out _, out _, ctx: new FakeContextResolver("spotify:track:x"));   // the resolver's fixed list
+        Dispatch(c, "{\"command\":{\"endpoint\":\"play\",\"context\":{\"uri\":\"spotify:playlist:p\",\"pages\":[{\"tracks\":[{\"uri\":\"spotify:track:e1\",\"uid\":\"u1\"},{\"uri\":\"spotify:track:e2\",\"uid\":\"u2\"}]}]}}}");
+        await Task.Delay(30);
+        Assert.Contains("load:spotify:track:e1", host.Calls);          // embedded pages win
+        Assert.DoesNotContain("load:spotify:track:x", host.Calls);
+    }
+
+    // ── Phase B: the queue verbs (add_to_queue / set_queue / set_options) + prev<3s ──────────────────────────────────
+    const string PlayP = "{\"command\":{\"endpoint\":\"play\",\"context\":{\"uri\":\"spotify:playlist:p\"}}}";
+
+    [Fact]
+    public async Task InboundAddToQueue_WhenIdle_StartsPlayingIt()
+    {
+        using var c = Make(out var host, out var proj, out _, ctx: new FakeContextResolver());   // empty context → idle
+        Dispatch(c, "{\"command\":{\"endpoint\":\"add_to_queue\",\"track\":{\"uri\":\"spotify:track:q1\",\"uid\":\"uq1\"}}}");
+        await Task.Delay(30);
+        Assert.Contains("load:spotify:track:q1", host.Calls);
+        Assert.Equal("spotify:track:q1", proj.CurrentTrack!.Uri);
+    }
+
+    [Fact]
+    public async Task InboundAddToQueue_WhilePlaying_EnqueuesIntoUpNext()
+    {
+        using var c = Make(out _, out var proj, out _, ctx: new FakeContextResolver("spotify:track:a", "spotify:track:b"));
+        Dispatch(c, PlayP);
+        await Task.Delay(30);
+        Dispatch(c, "{\"command\":{\"endpoint\":\"add_to_queue\",\"track\":{\"uri\":\"spotify:track:q1\",\"uid\":\"uq1\"}}}");
+        await Task.Delay(30);
+        Assert.Contains(proj.Queue, e => e.Bucket == QueueBucket.UserQueue && e.Track.Uri == "spotify:track:q1");
+    }
+
+    [Fact]
+    public async Task InboundSetQueue_ReplacesUpNext()
+    {
+        using var c = Make(out _, out var proj, out _, ctx: new FakeContextResolver("spotify:track:a", "spotify:track:b"));
+        Dispatch(c, PlayP);
+        await Task.Delay(20);
+        Dispatch(c, "{\"command\":{\"endpoint\":\"add_to_queue\",\"track\":{\"uri\":\"spotify:track:old\"}}}");
+        await Task.Delay(20);
+        Dispatch(c, "{\"command\":{\"endpoint\":\"set_queue\",\"next_tracks\":[{\"uri\":\"spotify:track:n1\",\"uid\":\"u1\"},{\"uri\":\"spotify:track:n2\",\"uid\":\"u2\"}]}}");
+        await Task.Delay(30);
+        var uq = proj.Queue.Where(e => e.Bucket == QueueBucket.UserQueue).Select(e => e.Track.Uri).ToArray();
+        Assert.Equal(new[] { "spotify:track:n1", "spotify:track:n2" }, uq);   // 'old' replaced
+    }
+
+    [Fact]
+    public async Task InboundSetOptions_RepeatTrack_NextStaysOnSameTrack()
+    {
+        using var c = Make(out var host, out _, out _, ctx: new FakeContextResolver("spotify:track:a", "spotify:track:b"));
+        Dispatch(c, PlayP);
+        await Task.Delay(20);
+        Dispatch(c, "{\"command\":{\"endpoint\":\"set_options\",\"repeating_track\":true}}");
+        await Task.Delay(20);
+        host.Calls.Clear();
+        Dispatch(c, "{\"command\":{\"endpoint\":\"skip_next\"}}");
+        await Task.Delay(30);
+        Assert.Contains("load:spotify:track:a", host.Calls);   // repeat-one → reloads a, not b
+    }
+
+    [Fact]
+    public async Task InboundSkipPrev_After3s_RestartsCurrentTrack()
+    {
+        using var c = Make(out var host, out _, out _, ctx: new FakeContextResolver("spotify:track:a", "spotify:track:b"));
+        Dispatch(c, PlayP);
+        await Task.Delay(20);
+        host.PositionMs = 5000;
+        host.Calls.Clear();
+        Dispatch(c, "{\"command\":{\"endpoint\":\"skip_prev\"}}");
+        await Task.Delay(30);
+        Assert.Contains("seek:0", host.Calls);
+        Assert.DoesNotContain(host.Calls, x => x.StartsWith("load:"));
+    }
+
+    [Fact]
+    public async Task InboundSkipPrev_Within3s_StepsToPrevTrack()
+    {
+        using var c = Make(out var host, out _, out _, ctx: new FakeContextResolver("spotify:track:a", "spotify:track:b"));
+        Dispatch(c, "{\"command\":{\"endpoint\":\"play\",\"context\":{\"uri\":\"spotify:playlist:p\"},\"prepare_play_options\":{\"skip_to\":{\"track_index\":1}}}}");
+        await Task.Delay(20);   // current = b
+        host.PositionMs = 1000;
+        host.Calls.Clear();
+        Dispatch(c, "{\"command\":{\"endpoint\":\"skip_prev\"}}");
+        await Task.Delay(30);
+        Assert.Contains("load:spotify:track:a", host.Calls);   // stepped back to a
+    }
+
+    // ── Volume parity: dedicated connect/volume endpoint + read the ACTIVE device's volume + react to remote changes ───
+    [Fact]
+    public async Task RemoteActive_SetVolume_UsesConnectVolumeEndpoint_NotPlayerCommand()
+    {
+        using var c = Make(out _, out var proj, out var outbound);
+        proj.OnCluster(Cluster("other-device"));
+        await c.SetVolumeAsync(0.25);
+        Assert.Equal((int)System.Math.Round(0.25 * 65535), outbound.LastVolume);
+        Assert.Equal("other-device", outbound.Volumes[^1].Target);
+        Assert.Empty(outbound.Sent);   // no player/command verb at all
+    }
+
+    [Fact]
+    public void Cluster_ActiveDeviceVolume_DrivesSlider_AndRemoteChangeReacts()
+    {
+        var proj = new NowPlayingProjection("us", () => 1_000_000);   // clock far ahead → outside any local-command window
+        proj.OnCluster(Cluster("other-device") with { ActiveVolume0_65535 = 32768 });
+        Assert.Equal(0.5, proj.Volume, 2);   // the active device's volume drives the slider
+        proj.OnCluster(Cluster("other-device") with { ActiveVolume0_65535 = 13107 });   // a remote controller turned it down
+        Assert.Equal(0.2, proj.Volume, 2);   // reacted to the remote change
     }
 }

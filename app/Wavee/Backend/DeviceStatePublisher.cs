@@ -13,13 +13,13 @@ namespace Wavee.Backend;
 // publish discipline (when, dedup, ids, reason) stays proto-free + unit-testable. WaveeMusic does this inside its god-class;
 // here it's one focused IPlaybackProjection that also owns the NewConnection announce — one writer, one message_id sequence.
 
-public enum PutStateReasonKind { NewConnection, PlayerStateChanged }
+public enum PutStateReasonKind { NewConnection, PlayerStateChanged, VolumeChanged, BecameInactive }
 
 /// <summary>Proto-free snapshot of OUR local playback, handed to the builder to populate the player_state.</summary>
 public readonly record struct LocalPlaybackSnapshot(
     string TrackUri, string TrackUid, string? ContextUri, long PositionMs, long DurationMs,
     bool IsPlaying, bool IsPaused, bool Shuffle, RepeatMode Repeat, IReadOnlyList<string> NextUris,
-    string SessionId, string PlaybackId, long HasBeenPlayingForMs, long StartedPlayingAtMs);
+    string SessionId, string PlaybackId, long HasBeenPlayingForMs, long StartedPlayingAtMs, double Volume01 = 0.0);
 
 public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
 {
@@ -77,13 +77,23 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
                 if (_startedPlayingAtMs == 0) _startedPlayingAtMs = _now();
             }
         }
-        else if (e.Kind == EvKind.Ended)
+        else if (e.Kind is EvKind.Ended or EvKind.BecameInactive)
         {
             lock (_gate) _startedPlayingAtMs = 0;
         }
-        bool isActive = _state.CurrentTrack is not null && e.Kind != EvKind.Ended;
-        _ = PublishAsync(PutStateReasonKind.PlayerStateChanged, isActive);
+        bool isActive = _state.CurrentTrack is not null && e.Kind is not (EvKind.Ended or EvKind.BecameInactive);
+        var reason = e.Kind switch
+        {
+            EvKind.VolumeChanged => PutStateReasonKind.VolumeChanged,
+            EvKind.BecameInactive => PutStateReasonKind.BecameInactive,
+            _ => PutStateReasonKind.PlayerStateChanged,
+        };
+        _ = PublishAsync(reason, isActive);
     }
+
+    /// <summary>Publish a final is_active=false (BecameInactive) — called on logout/dispose so a controller sees a clean
+    /// hand-off rather than a stale active device. Best-effort (the transport may already be tearing down).</summary>
+    public void PublishInactive() => _ = PublishAsync(PutStateReasonKind.BecameInactive, false);
 
     bool IsLocallyPlaying() => _state.CurrentTrack is not null && _state.IsPlaying;
 
@@ -96,8 +106,12 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
         uint mid;
         lock (_gate)
         {
-            // Dedup repeat player-state publishes with identical salient fields (avoid PutState spam on no-op events).
-            string key = reason + "|" + isActive + "|" + (snap?.TrackUri ?? "") + "|" + (snap?.IsPlaying ?? false);
+            // Dedup repeat publishes with identical salient fields (avoid PutState spam on no-op events). The key spans
+            // every field a controller renders, so a real change (pause/seek/shuffle/repeat/volume/queue/track) always
+            // gets through but a duplicate of the same state collapses.
+            string key = reason + "|" + isActive + "|" + (snap?.TrackUri ?? "") + "|" + (snap?.TrackUid ?? "")
+                + "|" + (snap?.IsPlaying ?? false) + "|" + (snap?.Shuffle ?? false) + "|" + (snap?.Repeat ?? RepeatMode.Off)
+                + "|" + ((snap?.PositionMs ?? 0) / 1000) + "|" + (int)Math.Round((snap?.Volume01 ?? 0) * 100) + "|" + NextSig(snap);
             if (reason == PutStateReasonKind.PlayerStateChanged && key == _lastPublishKey) return;
             _lastPublishKey = key;
             mid = ++_messageId;
@@ -118,16 +132,24 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
         var t = _state.CurrentTrack;
         if (t is null) return null;
         var next = new List<string>();
-        foreach (var qe in _state.Queue) if (qe.Bucket == QueueBucket.NextUp) next.Add(qe.Track.Uri);
+        string trackUid = "";
+        foreach (var qe in _state.Queue)
+        {
+            if (qe.Bucket == QueueBucket.NowPlaying) trackUid = qe.Uid;          // our current track's context uid
+            else next.Add(qe.Track.Uri);                                        // user queue + context next-up → next_tracks (in order)
+        }
         long started, hasBeen; string sid, pid;
         lock (_gate)
         {
             started = _startedPlayingAtMs; sid = _sessionId; pid = _playbackId;
             hasBeen = started > 0 && _state.IsPlaying ? Math.Max(0, _now() - started) : 0;
         }
-        return new LocalPlaybackSnapshot(t.Uri, "", _state.ContextUri, _state.PositionMs, _state.DurationMs,
-            _state.IsPlaying, !_state.IsPlaying, _state.IsShuffle, _state.Repeat, next, sid, pid, hasBeen, started);
+        return new LocalPlaybackSnapshot(t.Uri, trackUid, _state.ContextUri, _state.PositionMs, _state.DurationMs,
+            _state.IsPlaying, !_state.IsPlaying, _state.IsShuffle, _state.Repeat, next, sid, pid, hasBeen, started, _state.Volume);
     }
+
+    static string NextSig(LocalPlaybackSnapshot? snap) =>
+        snap is { } s && s.NextUris.Count > 0 ? s.NextUris.Count + ":" + s.NextUris[0] : "0";
 
     static string NewId() => Guid.NewGuid().ToString("N");
 

@@ -72,9 +72,26 @@ public sealed class LiveSessionHost : IAsyncDisposable
         var dealerHosts = ApResolver.ParseHosts(dealerJson, "dealer");
         if (dealerHosts.Count == 0) { log("no dealer host — live session not started"); if (!ct.IsCancellationRequested) report.Report(adapter.Terminal(credExisted: true)); live.ApChannel?.Dispose(); return null; }
 
-        // The transport's token provider RE-MINTS on reconnect/expiry (not a captured constant).
-        var transport = new LiveDealerTransport(dealerHosts[0].Split(':')[0], live.TokenProvider, live.Pipeline, () => live.BaseUrl, log);
-        var connect = new LiveConnect(transport, live.DeviceId, live.ApChannel, resolveContext: null, log: log);
+        // The transport's token provider RE-MINTS on reconnect/expiry (not a captured constant). The WHOLE dealer host
+        // list is passed (failover across hosts), and a Connectivity signal is driven by the socket lifecycle so a drop
+        // shows in the UI as "Reconnecting…" (not silent stale playback) — surfaced via svc.Connectivity on go-live.
+        var connectivity = new Connectivity();
+        var transport = new LiveDealerTransport(dealerHosts, live.TokenProvider, live.Pipeline, () => live.BaseUrl, log, connectivity);
+
+        // Context resolution (inbound Connect play + UI play) needs the metadata stack to hydrate the resolved order, so
+        // build it up front — over the SAME store the catalog reads — and hand the controller a unified context resolver.
+        // (extendedMetadata + metadata are reused below for the on-open fetcher + now-playing enrichment → one cache.)
+        Wavee.Backend.Metadata.ExtendedMetadataSource? extendedMetadata = null;
+        Wavee.Backend.Metadata.MetadataService? metadata = null;
+        IContextResolver? contexts = null;
+        if (svc.RealStore is { } mdStore)
+        {
+            extendedMetadata = new Wavee.Backend.Metadata.ExtendedMetadataSource(live.Pipeline, () => live.BaseUrl, () => live.Session);
+            metadata = new Wavee.Backend.Metadata.MetadataService(extendedMetadata, mdStore, () => live.Session);
+            contexts = new LiveContextResolver(transport, metadata, mdStore, log);
+        }
+
+        var connect = new LiveConnect(transport, live.DeviceId, live.ApChannel, contexts, log: log);
         transport.Start();
         // Profile (name + avatar) and the account email fetched in PARALLEL before go-live, so CurrentUser is complete on
         // the first render (no refresh hook). Both are best-effort — a failure just omits that field.
@@ -93,24 +110,23 @@ public sealed class LiveSessionHost : IAsyncDisposable
         // GoLive so a logout fired in the go-live window still tears the host down (not a no-op).
         if (ct.IsCancellationRequested) { await host.DisposeAsync().ConfigureAwait(false); return null; }
         svc.AttachLive(host, live.CredStore!);
-        svc.GoLive(connect.Controller, connect.Devices, liveSession);
+        svc.GoLive(connect.Controller, connect.Devices, liveSession, connectivity);
         report.Report(new LoginSnapshot(LoginPhase.Authenticated, User: liveSession.CurrentUser));
         log("Live Connect session active — Wavee is a controllable device, mirrors now-playing, and shows the live account.");
 
         // Live data wiring into the SAME store the catalog reads (InMemoryStore is lock-guarded → safe off-thread):
-        if (svc.RealStore is { } store)
+        if (svc.RealStore is { } store && metadata is { } md && extendedMetadata is { } em)
         {
             // (a) fetch playlist/album TRACKS the first time a detail page opens (the sync stored headers only). The real
             //     hydrator (MetadataService over the extended-metadata batch) replaces the no-op that left lists empty.
-            var extendedMetadata = new Wavee.Backend.Metadata.ExtendedMetadataSource(live.Pipeline, () => live.BaseUrl, () => live.Session);
-            var metadata = new Wavee.Backend.Metadata.MetadataService(extendedMetadata, store, () => live.Session);
-            var fetcher = new PlaylistFetcher(live.Pipeline, () => live.BaseUrl, store, (uris, c) => metadata.SyncAllAsync(uris, c));
+            //     em + md were built above for the context resolver — reuse them so the whole session shares one cache.
+            var fetcher = new PlaylistFetcher(live.Pipeline, () => live.BaseUrl, store, (uris, c) => md.SyncAllAsync(uris, c));
             // Pathfinder (GraphQL) for rich catalog reads with no protobuf equivalent — the artist overview, on open.
             var pathfinder = new PathfinderClient(live.TokenProvider, _ => Task.FromResult(live.ClientToken), log);
             var homeCache = new LiveHomeCache(pathfinder);
             // Below-the-fold album enrichment (about-artist / merch / similar via Pathfinder; recommended playlists via the
             // SAME extended-metadata source, kinds 151→205) — installed into the switchable service the album pages hold.
-            svc.AlbumEnrichment.SetInner(new SpotifyAlbumEnrichmentService(pathfinder, extendedMetadata, store, log));
+            svc.AlbumEnrichment.SetInner(new SpotifyAlbumEnrichmentService(pathfinder, em, store, log));
             if (svc.RealLibrarySource is { } libSrc)
             {
                 libSrc.OnDemandFetch = async (uri, c) =>
@@ -130,7 +146,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
             connect.Projection.TrackResolver = async (uri, c) =>
             {
                 if (!uri.StartsWith("spotify:track:", StringComparison.Ordinal)) return null;
-                return await ResolveNowPlayingTrackAsync(uri, metadata, pathfinder, store, c).ConfigureAwait(false);
+                return await ResolveNowPlayingTrackAsync(uri, md, pathfinder, store, c).ConfigureAwait(false);
             };
 
             // (b) hydrate playlist HEADERS (name/cover) so the home + sidebar show names; for cover-less playlists also
@@ -541,6 +557,10 @@ public sealed class LiveSessionHost : IAsyncDisposable
             if (s.CurrentTrack is { } t)
                 log("  bridge now-playing: " + t.Title + " — " + (s.IsPlaying ? "playing" : "paused") + " (active=" + (s.ActiveDeviceId ?? "") + ")");
         }));
+        // Observability proof: the realtime (dealer socket) link status — toggle your network to see Reconnecting → Online.
+        using var connSub = svc.Connectivity.StatusChanged.Subscribe(Observers.From<Wavee.Core.ConnectionStatus>(
+            s => log("  realtime link: " + s)));
+        log("  realtime link: " + svc.Connectivity.Status);
 
         // Stage 1 verification: open the first rootlist playlist + an album through the catalog (fires OnDemandFetch).
         string? plUri = null, alUri = null, arUri = null;
@@ -574,8 +594,12 @@ public sealed class LiveSessionHost : IAsyncDisposable
         var sg = await svc.Library.SuggestAsync("aras", ct).ConfigureAwait(false);
         log($"  suggest 'aras' → {sg.Count}: {string.Join(" | ", System.Linq.Enumerable.Take(sg, 6))}");
 
-        log("Listening 25s (control Wavee from your phone's Connect picker to drive commands)...");
-        try { await Task.Delay(TimeSpan.FromSeconds(25), ct).ConfigureAwait(false); } catch { }
+        log("SMOKE TEST — Wavee is now a live Connect device. In the next 90s:");
+        log("  1) open Spotify on your phone/web → device picker → confirm \"Wavee\" appears;");
+        log("  2) transfer to Wavee + play a playlist/album/Liked Songs → watch now-playing + the queue below;");
+        log("  3) pause/seek/next/shuffle/repeat from the phone → each logs an inbound 'connect command' + a put-state;");
+        log("  4) (optional) toggle airplane mode briefly → watch 'realtime link: Reconnecting' then 'Online'.");
+        try { await Task.Delay(TimeSpan.FromSeconds(90), ct).ConfigureAwait(false); } catch { }
         return 0;
     }
 }

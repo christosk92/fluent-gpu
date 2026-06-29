@@ -39,6 +39,9 @@ public sealed class Services
     public IMusicLibrary Library { get; }
     public IPlaybackPlayer Player { get; }
     public IConnectDevices Devices { get; }
+    /// <summary>Realtime (dealer socket) connection status — so the UI can surface "Reconnecting…" on a network drop
+    /// instead of silently going stale. Driven by the live transport's socket lifecycle; offline until go-live.</summary>
+    public IConnectivity Connectivity { get; }
     public ILyricsProvider Lyrics { get; }
     /// <summary>Progressive, below-the-fold album data. Stable wrapper; the live Spotify implementation is installed
     /// after login while mounted pages keep the same service identity.</summary>
@@ -61,6 +64,7 @@ public sealed class Services
         Library = library;
         Player = player;
         Devices = devices;
+        Connectivity = new Wavee.Backend.SwitchableConnectivity(new Wavee.Backend.Connectivity());
         Lyrics = lyrics;
         AlbumEnrichment = new SwitchableAlbumEnrichmentService(new CatalogAlbumEnrichmentService(library));
         Settings = settings;
@@ -176,11 +180,12 @@ public sealed class Services
 
     /// <summary>Swap the playback player + Connect device roster to a live backend at runtime. The PlaybackBridge bound to
     /// the switchable facades re-points without a rebuild (no-op if this Services wasn't built with switchables).</summary>
-    public void GoLive(IPlaybackPlayer player, IConnectDevices devices, ISpotifySession? session = null)
+    public void GoLive(IPlaybackPlayer player, IConnectDevices devices, ISpotifySession? session = null, IConnectivity? connectivity = null)
     {
         (Player as Wavee.Backend.SwitchablePlayer)?.SetInner(player);
         (Devices as Wavee.Backend.SwitchableDevices)?.SetInner(devices);
         if (session is not null) (Session as Wavee.Backend.SwitchableSession)?.SetInner(session);
+        if (connectivity is not null) (Connectivity as Wavee.Backend.SwitchableConnectivity)?.SetInner(connectivity);
         Log.Info("app", "playback backend swapped to LIVE (Connect device + now-playing + remote control + account active)");
     }
 
@@ -200,6 +205,7 @@ public sealed class Services
         (Player as Wavee.Backend.SwitchablePlayer)?.SetInner(new FakePlaybackProvider());
         (Devices as Wavee.Backend.SwitchableDevices)?.SetInner(new FakeConnectDevices());
         (Session as Wavee.Backend.SwitchableSession)?.SetInner(new FakeSpotifySession());
+        (Connectivity as Wavee.Backend.SwitchableConnectivity)?.SetInner(new Wavee.Backend.Connectivity());
         LiveHost = null;
         CredStore = null;
         Log.Info("app", "session torn down → offline (switchables back to fakes)");

@@ -138,7 +138,7 @@ static class Program
         // Services (svc.GoLive) and log the now-playing the UI bridge sees through the switchable. Usage: --connect-live
         if (Array.IndexOf(args, "--connect-live") >= 0)
         {
-            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(2));
+            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(3));
             int code = Wavee.SpotifyLive.LiveSessionHost.RunAsync(Console.Error.WriteLine, cts.Token).GetAwaiter().GetResult();
             Environment.Exit(code);
         }

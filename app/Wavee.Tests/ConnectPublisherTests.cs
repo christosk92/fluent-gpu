@@ -48,6 +48,17 @@ public class ConnectPublisherTests
             Proj.OnEvent(e);
             Publisher.OnEvent(e);
         }
+
+        // Emit a state event for the CURRENT track (mirrors the controller's EmitState).
+        public void Emit(EvKind kind, long atMs = 0)
+        {
+            var e = new PlaybackEvent(kind, Proj.CurrentTrack, atMs);
+            Proj.OnEvent(e);
+            Publisher.OnEvent(e);
+        }
+        public void SetOptions(bool shuffle, RepeatMode repeat) => Proj.SetLocalOptions(shuffle, repeat);
+        public void SetVolume(double v) => Proj.SetLocalVolume(v);
+        public void SetQueue(params QueueEntry[] q) => Proj.SetLocalQueue(q);
     }
 
     [Fact]
@@ -105,5 +116,77 @@ public class ConnectPublisherTests
         var sessions = h.Built.FindAll(b => b.StartsWith("PlayerStateChanged")).ConvertAll(b => b.Split('|')[3]);
         Assert.Equal(2, sessions.Count);
         Assert.NotEqual(sessions[0], sessions[1]);   // different context → different session id
+    }
+
+    // ── Phase C: PutState now publishes on EVERY salient local change (not just track boundaries) ─────────────────────
+    [Fact]
+    public async Task Pause_Publishes()
+    {
+        var h = new Harness();
+        h.Connect("c1"); h.Play("spotify:track:a"); h.Emit(EvKind.Paused);
+        await Task.Delay(20);
+        Assert.Equal(3, h.Transport.PublishCount);   // NewConnection + Started + Paused
+    }
+
+    [Fact]
+    public async Task Seek_Publishes()
+    {
+        var h = new Harness();
+        h.Connect("c1"); h.Play("spotify:track:a"); h.Emit(EvKind.Seeked, 5000);
+        await Task.Delay(20);
+        Assert.Equal(3, h.Transport.PublishCount);   // position jumped → not deduped
+    }
+
+    [Fact]
+    public async Task OptionsChange_Publishes()
+    {
+        var h = new Harness();
+        h.Connect("c1"); h.Play("spotify:track:a");
+        h.SetOptions(true, RepeatMode.Context); h.Emit(EvKind.OptionsChanged);
+        await Task.Delay(20);
+        Assert.Equal(3, h.Transport.PublishCount);   // shuffle/repeat changed → not deduped
+    }
+
+    [Fact]
+    public async Task VolumeChange_Publishes_WithVolumeChangedReason()
+    {
+        var h = new Harness();
+        h.Connect("c1"); h.Play("spotify:track:a");
+        h.SetVolume(0.25); h.Emit(EvKind.VolumeChanged);
+        await Task.Delay(20);
+        Assert.Equal(3, h.Transport.PublishCount);
+        Assert.StartsWith("VolumeChanged|", Encoding.UTF8.GetString(h.Transport.LastPublishBody!));
+    }
+
+    [Fact]
+    public async Task QueueChange_Publishes()
+    {
+        var h = new Harness();
+        h.Connect("c1"); h.Play("spotify:track:a");
+        h.SetQueue(new QueueEntry("now", T("spotify:track:a"), QueueBucket.NowPlaying, false, "u0"),
+                   new QueueEntry("q0", T("spotify:track:q"), QueueBucket.UserQueue, false, "uq"));
+        h.Emit(EvKind.QueueChanged);
+        await Task.Delay(20);
+        Assert.Equal(3, h.Transport.PublishCount);   // up-next changed → not deduped
+    }
+
+    [Fact]
+    public async Task BecameInactive_Publishes_IsActiveFalse()
+    {
+        var h = new Harness();
+        h.Connect("c1"); h.Play("spotify:track:a"); h.Emit(EvKind.BecameInactive);
+        await Task.Delay(20);
+        Assert.StartsWith("BecameInactive|False|", Encoding.UTF8.GetString(h.Transport.LastPublishBody!));
+    }
+
+    [Fact]
+    public async Task NoOpRepeatOfSameState_StaysDeduped()
+    {
+        var h = new Harness();
+        h.Connect("c1");
+        h.Play("spotify:track:a", EvKind.Started);
+        h.Emit(EvKind.OptionsChanged);   // options unchanged (default) + same track/pos → identical key
+        await Task.Delay(20);
+        Assert.Equal(2, h.Transport.PublishCount);   // NewConnection + the one Started; the no-op OptionsChanged collapses
     }
 }

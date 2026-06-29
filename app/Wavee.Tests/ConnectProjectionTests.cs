@@ -13,10 +13,10 @@ public class ConnectProjectionTests
         new(uri, title, "Artist", "spotify:artist:a", "Album", "spotify:album:al", "https://img/x", dur);
 
     static ClusterDelta Cluster(string active, bool playing, RemoteTrack? track = null, long pos = 0,
-        IReadOnlyList<ConnectDeviceRow>? devices = null) =>
+        IReadOnlyList<ConnectDeviceRow>? devices = null, long tsMs = 0, long serverTsMs = 0, double speed = 1.0) =>
         new(active, track is not null, track ?? default, "spotify:playlist:ctx",
-            playing, !playing, false, pos, 0, 0, track?.DurationMs ?? 0, false, RepeatMode.Off,
-            devices ?? Array.Empty<ConnectDeviceRow>(), Array.Empty<RemoteTrack>());
+            playing, !playing, false, pos, tsMs, serverTsMs, track?.DurationMs ?? 0, false, RepeatMode.Off,
+            devices ?? Array.Empty<ConnectDeviceRow>(), Array.Empty<RemoteTrack>(), PlaybackSpeed: speed);
 
     [Fact]
     public void OnCluster_ViewerMode_FoldsTrackPlayStateContext_AndAnchorsPosition()
@@ -38,6 +38,68 @@ public class ConnectProjectionTests
 
         now = 3000;
         Assert.Equal(7000, p.PositionMs);   // 5000 + (3000-1000), anchored at receipt
+    }
+
+    [Fact]
+    public void OnCluster_AgesSnapshotByServerSideDelta()
+    {
+        long now = 0;
+        var p = new NowPlayingProjection("us", () => now);
+        // position 5000 sampled at ts=1000, cluster emitted at serverTs=3000 → 2000ms stale at fold (no clock sync needed).
+        p.OnCluster(Cluster("other", playing: true, Trk("spotify:track:t1", "Song", 200000), pos: 5000, tsMs: 1000, serverTsMs: 3000));
+        Assert.Equal(7000, p.PositionMs);   // 5000 + serverSideAge(2000); no monotonic elapse yet
+    }
+
+    [Fact]
+    public void OnCluster_SyncedServerClock_AddsNetworkTransit()
+    {
+        long now = 0, serverNow = 0;
+        var p = new NowPlayingProjection("us", () => now, () => serverNow);
+        serverNow = 3500;   // synced clock says server-now is 500ms past the cluster's emit time → +500 transit
+        p.OnCluster(Cluster("other", playing: true, Trk("spotify:track:t", "T", 200000), pos: 5000, tsMs: 1000, serverTsMs: 3000));
+        Assert.Equal(7500, p.PositionMs);   // 5000 + serverSideAge(2000) + networkAge(500)
+    }
+
+    [Fact]
+    public void OnCluster_NewTrackNearZero_IgnoresStaleTimestamp()
+    {
+        long now = 0;
+        var p = new NowPlayingProjection("us", () => now);
+        p.OnCluster(Cluster("other", playing: true, Trk("spotify:track:a", "A", 200000), pos: 120000, tsMs: 1000, serverTsMs: 2000));
+        // New track starts at ~0 but its Timestamp lags badly → must anchor at the snapshot, not jump forward by the Δ.
+        p.OnCluster(Cluster("other", playing: true, Trk("spotify:track:b", "B", 200000), pos: 300, tsMs: 1000, serverTsMs: 60000));
+        Assert.Equal(300, p.PositionMs);
+    }
+
+    [Fact]
+    public void Pos_AppliesPlaybackSpeed()
+    {
+        long now = 1000;
+        var p = new NowPlayingProjection("us", () => now);
+        p.OnCluster(Cluster("other", playing: true, Trk("spotify:track:t", "T", 600000), pos: 10000, speed: 2.0));
+        now = 3000;   // 2000ms monotonic elapse at 2× → +4000
+        Assert.Equal(14000, p.PositionMs);
+    }
+
+    [Fact]
+    public void Pos_ClampsToDuration()
+    {
+        long now = 0;
+        var p = new NowPlayingProjection("us", () => now);
+        p.OnCluster(Cluster("other", playing: true, Trk("spotify:track:t", "T", 5000), pos: 4000));
+        now = 10000;   // would be 14000 but duration is 5000
+        Assert.Equal(5000, p.PositionMs);
+    }
+
+    [Fact]
+    public void Pos_Paused_ReturnsFrozenSnapshot_NoAging()
+    {
+        long now = 0;
+        var p = new NowPlayingProjection("us", () => now);
+        // Paused remote, with a large server-side Δ: must NOT age (frozen) and must not interpolate.
+        p.OnCluster(Cluster("other", playing: false, Trk("spotify:track:t", "T", 200000), pos: 8000, tsMs: 1000, serverTsMs: 5000));
+        now = 100000;
+        Assert.Equal(8000, p.PositionMs);
     }
 
     [Fact]
@@ -111,7 +173,7 @@ public class ConnectProjectionTests
         p.OnCluster(new ClusterDelta("other", true, Trk("spotify:ad:x", "Ad", 30000), "ctx",
             true, false, false, 0, 0, 0, 30000, false, RepeatMode.Off,
             Array.Empty<ConnectDeviceRow>(), Array.Empty<RemoteTrack>(),
-            DisallowSkipPrev: true, DisallowSkipNext: true, DisallowSeeking: true, OurVolume0_65535: 16384));
+            DisallowSkipPrev: true, DisallowSkipNext: true, DisallowSeeking: true, OurVolume0_65535: 16384, ActiveVolume0_65535: 16384));
         Assert.False(p.CanSkipNext);    // ad → skip disabled
         Assert.False(p.CanSkipPrev);
         Assert.False(p.CanSeek);

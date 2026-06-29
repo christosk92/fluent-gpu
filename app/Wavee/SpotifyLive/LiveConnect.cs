@@ -27,16 +27,20 @@ public sealed class LiveConnect : IDisposable
     readonly ClusterIngest _ingest;
     readonly ConnectCommandRouter _commands;
     readonly SilentAudioHost _host;
+    readonly SpotifyServerClock _clock;   // server-clock skew estimator → corrects remote-position aging
     readonly ApConnection? _apChannel;   // owned: the adopted login socket
 
     public LiveConnect(ITransport transport, string deviceId, ApConnection? apChannel,
-        Func<string, CancellationToken, Task<IReadOnlyList<Track>>>? resolveContext = null, Action<string>? log = null)
+        IContextResolver? contexts = null, Action<string>? log = null)
     {
         _apChannel = apChannel;
 
-        Projection = new NowPlayingProjection(deviceId);
+        // Server-clock estimator: probes GET /melody/v1/time over the authenticated spclient pipeline; its corrected
+        // "server now" feeds the projection's remote-position aging (the offset-dependent transit term).
+        _clock = new SpotifyServerClock(ct => FetchServerTimeMs(transport, ct), log);
+        Projection = new NowPlayingProjection(deviceId, serverNowUnixMs: _clock.ServerNowUnixMs);
         Devices = new LiveConnectDevices();
-        _ingest = new ClusterIngest(transport, Projection, Devices, deviceId, log);
+        _ingest = new ClusterIngest(transport, Projection, Devices, deviceId, log, _clock.ObservePassive);
 
         var builder = new ConnectStateBuilder(deviceId, "Wavee");
         _connect = new ConnectService(transport);   // connection-id capture only
@@ -46,27 +50,44 @@ public sealed class LiveConnect : IDisposable
             (reason, snap, mid, isActive) => builder.BuildPutState(reason, snap, mid, isActive),
             onCluster: _ingest.OnAnnounceResponse, log: log);
 
-        var keySource = new LiveAudioKeySource(() => _apChannel);
-        var resolver = new LiveTrackResolver(transport, keySource, log);
         _host = new SilentAudioHost();
+        // Control-plane milestone: a duration-only track resolver (no CDN/key) drives the silent host — the resolved
+        // context's hydrated DurationMs feeds the synthetic clock. The real CDN+key LiveTrackResolver lands with the audio
+        // host (it would otherwise hit the not-yet-wired audio-key pipeline); _apChannel stays owned for that day.
+        var resolver = new StubTrackResolver();
         var outbound = new LiveOutboundControl(transport, deviceId);
         // Play-history telemetry (Recently Played) + the PutState publisher both fan off the controller's event log.
         var telemetry = new TelemetryProjection(new GaboTelemetry(log), () => Projection.ContextUri);
         Controller = new PlaybackController(_host, resolver, Projection,
-            resolveContext ?? ((_, _) => Task.FromResult<IReadOnlyList<Track>>(Array.Empty<Track>())),
-            deviceId, outbound, new IPlaybackProjection[] { telemetry, _publisher }, log);
+            contexts ?? EmptyContextResolver.Instance,
+            deviceId, outbound, new IPlaybackProjection[] { telemetry, _publisher }, log,
+            SpotifyClientIdentity.XpuiSnapshotVersion);   // play_origin.feature_version
 
         _commands = new ConnectCommandRouter(transport, cmd => Controller.HandleRemoteCommand(cmd), log);
         Devices.TransferHandler = (id, c) => Controller.TransferToAsync(id, c);
+        _clock.Start();
+    }
+
+    // Fetch the server's wall clock (Unix ms) over the authenticated spclient pipeline. GET /melody/v1/time → {"timestamp": ms}.
+    // Tolerates a seconds-resolution payload (scaled to ms) so a unit change on the endpoint can't silently corrupt the offset.
+    static async Task<long> FetchServerTimeMs(ITransport transport, CancellationToken ct)
+    {
+        var resp = await transport.Request(Channel.Spclient, "/melody/v1/time", default, ct).ConfigureAwait(false);
+        if (!resp.Ok || resp.Body is null || resp.Body.Length == 0) return 0;
+        using var doc = System.Text.Json.JsonDocument.Parse(resp.Body);
+        if (!doc.RootElement.TryGetProperty("timestamp", out var t) || !t.TryGetInt64(out var ms) || ms <= 0) return 0;
+        return ms < 100_000_000_000L ? ms * 1000 : ms;   // < ~1973 in ms ⇒ the payload was seconds; scale up
     }
 
     public void Dispose()
     {
+        try { _publisher.PublishInactive(); } catch { }   // best-effort clean is_active=false hand-off on logout
         _commands.Dispose();
         _publisher.Dispose();
         _connect.Dispose();
         _ingest.Dispose();
         Controller.Dispose();
+        _clock.Dispose();
         _apChannel?.Dispose();
         Projection.Dispose();
         try { _host.DisposeAsync().AsTask().GetAwaiter().GetResult(); } catch { }

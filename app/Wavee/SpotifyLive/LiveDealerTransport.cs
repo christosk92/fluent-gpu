@@ -18,26 +18,35 @@ namespace Wavee.SpotifyLive;
 // drop. The socket is live-only (the user's run verifies it); the frame decode + the routing it feeds are unit-tested.
 public sealed class LiveDealerTransport : ITransport, IDisposable
 {
-    readonly string _dealerHost;
+    readonly IReadOnlyList<string> _dealerHosts;
     readonly Func<CancellationToken, Task<string>> _accessToken;
     readonly IHttpExchange _spclient;
     readonly Func<string> _spclientBaseUrl;
     readonly Action<string>? _log;
+    readonly Connectivity? _conn;
     readonly SimpleSubject<WireEvent> _events = new();
     readonly SimpleSubject<WireRequest> _requests = new();
     readonly SemaphoreSlim _sendLock = new(1, 1);
     readonly CancellationTokenSource _cts = new();
     ClientWebSocket? _ws;
     Task? _loop;
+    long _lastRecvTick;   // monotonic ms of the last frame received (any type) — the half-open watchdog reads this
 
-    public LiveDealerTransport(string dealerHost, Func<CancellationToken, Task<string>> accessToken,
-        IHttpExchange spclient, Func<string> spclientBaseUrl, Action<string>? log = null)
+    // Half-open watchdog thresholds. A dead TCP socket can leave ReceiveAsync blocked with NO exception (the "not even
+    // observed" case); we ping every 30 s, and if NO frame (not even the pong) arrives within DeadAfterMs the link is
+    // dead → abort it (unblocks ReceiveAsync → reconnect).
+    const int PingIntervalMs = 30_000;
+    const int DeadAfterMs = 70_000;
+
+    public LiveDealerTransport(IReadOnlyList<string> dealerHosts, Func<CancellationToken, Task<string>> accessToken,
+        IHttpExchange spclient, Func<string> spclientBaseUrl, Action<string>? log = null, Connectivity? connectivity = null)
     {
-        _dealerHost = dealerHost;
+        _dealerHosts = dealerHosts;
         _accessToken = accessToken;
         _spclient = spclient;
         _spclientBaseUrl = spclientBaseUrl;
         _log = log;
+        _conn = connectivity;
     }
 
     /// <summary>Start the connect + receive loop (idempotent). Reconnects with a fresh token + exponential backoff.</summary>
@@ -46,13 +55,13 @@ public sealed class LiveDealerTransport : ITransport, IDisposable
     public IObservable<WireEvent> Events(string topicPrefix) => new FilteredEvents(_events, topicPrefix);
     public IObservable<WireRequest> Requests(string identPrefix) => new FilteredRequests(_requests, identPrefix);
 
-    public async Task<Resp> Request(Channel ch, string route, ReadOnlyMemory<byte> body, CancellationToken ct = default)
+    public async Task<Resp> Request(Channel ch, string route, ReadOnlyMemory<byte> body, CancellationToken ct = default, string? method = null)
     {
         var url = _spclientBaseUrl() + route;
-        var method = body.IsEmpty ? "GET" : "POST";
+        var verb = method ?? (body.IsEmpty ? "GET" : "POST");
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         if (!body.IsEmpty) headers["Content-Type"] = "application/protobuf";
-        using var resp = await _spclient.SendAsync(new HttpReq(method, url, headers, body.IsEmpty ? null : body.ToArray()), ct).ConfigureAwait(false);
+        using var resp = await _spclient.SendAsync(new HttpReq(verb, url, headers, body.IsEmpty ? null : body.ToArray()), ct).ConfigureAwait(false);
         using var ms = new MemoryStream();
         await resp.Body.CopyToAsync(ms, ct).ConfigureAwait(false);
         return new Resp(resp.Status is >= 200 and < 300, ms.ToArray(), resp.Status);
@@ -97,25 +106,36 @@ public sealed class LiveDealerTransport : ITransport, IDisposable
         int attempt = 0;
         while (!ct.IsCancellationRequested)
         {
+            string host = HostAt(attempt);   // rotate hosts across attempts (failover) — a bad dealer doesn't pin us
+            _conn?.Set(attempt == 0 ? ConnectionStatus.Connecting : ConnectionStatus.Reconnecting);
             try
             {
                 var token = await _accessToken(ct).ConfigureAwait(false);
                 using var ws = new ClientWebSocket();
                 _ws = ws;
-                await ws.ConnectAsync(new Uri($"wss://{_dealerHost}/?access_token={Uri.EscapeDataString(token)}"), ct).ConfigureAwait(false);
-                attempt = 0;   // a clean connect resets the backoff ladder
-                _log?.Invoke("dealer connected (" + _dealerHost + ")");
-                using var keepalive = StartKeepalive(ct);
+                await ws.ConnectAsync(new Uri($"wss://{host}/?access_token={Uri.EscapeDataString(token)}"), ct).ConfigureAwait(false);
+                attempt = 0;   // a clean connect resets the backoff ladder + host rotation
+                System.Threading.Volatile.Write(ref _lastRecvTick, Environment.TickCount64);
+                _conn?.Set(ConnectionStatus.Online);
+                _log?.Invoke("dealer connected (" + host + ")");
+                using var keepalive = StartKeepalive(ws, ct);
                 await ReceiveLoop(ws, ct).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             catch (Exception ex) { _log?.Invoke("dealer disconnected: " + ex.Message); }
+            if (ct.IsCancellationRequested) break;
+            _conn?.Set(ConnectionStatus.Reconnecting);
             // exponential backoff: 3, 6, 12, 24 → cap 30s (a fresh token is minted on the next loop via _accessToken).
             int secs = System.Math.Min(30, 3 * (1 << System.Math.Min(attempt, 4)));
             attempt++;
-            try { await Task.Delay(TimeSpan.FromSeconds(secs), ct).ConfigureAwait(false); } catch { return; }
+            try { await Task.Delay(TimeSpan.FromSeconds(secs), ct).ConfigureAwait(false); } catch { break; }
         }
+        _conn?.Set(ConnectionStatus.Offline);
     }
+
+    // Round-robin the dealer hosts across reconnect attempts (strip any :port). Falls back to a sane default if empty.
+    string HostAt(int attempt) =>
+        _dealerHosts.Count == 0 ? "dealer.spotify.com" : _dealerHosts[attempt % _dealerHosts.Count].Split(':')[0];
 
     async Task ReceiveLoop(ClientWebSocket ws, CancellationToken ct)
     {
@@ -132,12 +152,15 @@ public sealed class LiveDealerTransport : ITransport, IDisposable
                 frame.Write(buffer, 0, result.Count);
             } while (!result.EndOfMessage);
 
+            System.Threading.Volatile.Write(ref _lastRecvTick, Environment.TickCount64);   // any frame = the link is alive
             var f = DealerFrameParser.Parse(frame.GetBuffer().AsSpan(0, (int)frame.Length));
             switch (f.Type)
             {
                 case DealerFrameType.Ping:
                     await SendTextAsync("{\"type\":\"pong\"}").ConfigureAwait(false);
                     break;
+                case DealerFrameType.Pong:
+                    break;   // our keepalive's pong — the activity timestamp above already refreshed the watchdog
                 case DealerFrameType.Message when f.Uri is { Length: > 0 } uri:
                     _events.OnNext(new WireEvent(uri, f.Payload, f.Headers));
                     break;
@@ -151,7 +174,7 @@ public sealed class LiveDealerTransport : ITransport, IDisposable
 
     static readonly IReadOnlyDictionary<string, string> EmptyHeaders = new Dictionary<string, string>();
 
-    IDisposable StartKeepalive(CancellationToken ct)
+    IDisposable StartKeepalive(ClientWebSocket ws, CancellationToken ct)
     {
         var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _ = Task.Run(async () =>
@@ -160,7 +183,15 @@ public sealed class LiveDealerTransport : ITransport, IDisposable
             {
                 while (!cts.IsCancellationRequested)
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(30), cts.Token).ConfigureAwait(false);
+                    await Task.Delay(PingIntervalMs, cts.Token).ConfigureAwait(false);
+                    // Half-open watchdog: no frame at all (not even a pong to our pings) in DeadAfterMs ⇒ the TCP socket is
+                    // dead-but-not-closed. Abort it → the blocked ReceiveAsync throws → RunAsync reconnects (Reconnecting).
+                    if (Environment.TickCount64 - System.Threading.Volatile.Read(ref _lastRecvTick) > DeadAfterMs)
+                    {
+                        _log?.Invoke("dealer half-open (no traffic) — forcing reconnect");
+                        try { ws.Abort(); } catch { }
+                        return;
+                    }
                     await SendTextAsync("{\"type\":\"ping\"}").ConfigureAwait(false);
                 }
             }
@@ -183,7 +214,9 @@ public sealed class LiveDealerTransport : ITransport, IDisposable
 
     public void Dispose()
     {
+        _conn?.Set(ConnectionStatus.Offline);
         _cts.Cancel();
+        try { _ws?.Abort(); } catch { }
         try { _ws?.Dispose(); } catch { }
         _sendLock.Dispose();
         _cts.Dispose();

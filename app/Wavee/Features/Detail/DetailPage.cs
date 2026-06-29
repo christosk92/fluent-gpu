@@ -70,7 +70,8 @@ sealed class DetailPage : Component
             // Pass the SHARED loadable (Ready when content runs), not a fresh Loadable.Ready(m): the shell is REUSED
             // across detail routes, so it must read the one re-driven loadable — a per-render wrapper would leave the
             // reused shell pinned to the first album's value.
-            content: _ => new BoxEl { Grow = 1f, Direction = 0, Children = [ Embed.Comp(() => new DetailShell(_route, model)) ] });
+            content: _ => new BoxEl { Grow = 1f, Direction = 0, Children = [ Embed.Comp(() => new DetailShell(_route, model)) ] },
+            smoothResize: false);
     }
 
     // Album cfg is release-kind-dependent (single = one-track layout, compilation = various-artists rows); playlist/liked fixed.

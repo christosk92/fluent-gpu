@@ -285,35 +285,46 @@ public sealed class SceneStore : ISceneBackend
         _dragCompleted[idx] = null;
         _dragCanceled[idx] = null;
         ClearDynamicText(idx);
-        _scroll.Remove(idx);
-        _extents.Remove(idx);
+        NodeFlags flags = _flags[idx];
+        if ((flags & NodeFlags.Scrollable) != 0)
+        {
+            _scroll.Remove(idx);
+            _extents.Remove(idx);
+            _scrollObs.Remove(idx);
+        }
         _grids.Remove(idx);
-        _hitPassThrough.Remove(idx);
-        _interact.Remove(idx);
-        _shadows.Remove(idx);
-        _arcs.Remove(idx);
-        _polylines.Remove(idx);
-        _gradients.Remove(idx);
-        _borderBrushes.Remove(idx);
-        _hoverGradients.Remove(idx);
-        _pressedGradients.Remove(idx);
-        _hoverBorderBrushes.Remove(idx);
-        _pressedBorderBrushes.Remove(idx);
-        _acrylics.Remove(idx);
-        _edgeFades.Remove(idx);
-        _measureCache.Remove(idx);
-        _brushAnims.Remove(idx);
-        _textEdits.Remove(idx);
-        _textEditSelRects.Remove(idx);
-        _textEditUnderlineRects.Remove(idx);
-        _spanText.Remove(idx);
-        _textSelection.Remove(idx);
-        _selectionHighlight.Remove(idx);
-        _dragSources.Remove(idx);
-        _dropTargets.Remove(idx);
-        _gestureSubs.Remove(idx);   // drop the node's UseGesture declaration with it (handler closures released)
+        if (_hitPassThrough.Count != 0) _hitPassThrough.Remove(idx);
+        if ((flags & NodeFlags.InteractionAnim) != 0) _interact.Remove(idx);
+        if ((flags & NodeFlags.SparsePaint) != 0)
+        {
+            _shadows.Remove(idx);
+            _arcs.Remove(idx);
+            _polylines.Remove(idx);
+            _gradients.Remove(idx);
+            _borderBrushes.Remove(idx);
+            _hoverGradients.Remove(idx);
+            _pressedGradients.Remove(idx);
+            _hoverBorderBrushes.Remove(idx);
+            _pressedBorderBrushes.Remove(idx);
+            _acrylics.Remove(idx);
+            _edgeFades.Remove(idx);
+            _brushAnims.Remove(idx);
+        }
+        if (_paint[idx].VisualKind == VisualKind.Text)
+        {
+            _measureCache.Remove(idx);
+            if (_textEdits.Count != 0) _textEdits.Remove(idx);
+            if (_textEditSelRects.Count != 0) _textEditSelRects.Remove(idx);
+            if (_textEditUnderlineRects.Count != 0) _textEditUnderlineRects.Remove(idx);
+            if (_spanText.Count != 0) _spanText.Remove(idx);
+            if (_textSelection.Count != 0) _textSelection.Remove(idx);
+            _selectionHighlight.Remove(idx);
+        }
+        if (_dragSources.Count != 0) _dragSources.Remove(idx);
+        if (_dropTargets.Count != 0) _dropTargets.Remove(idx);
+        if (_gestureSubs.Count != 0) _gestureSubs.Remove(idx);   // drop the node's UseGesture declaration with it (handler closures released)
         if (DragGhost == node) DragGhost = NodeHandle.Null;   // a freed ghost must not linger in the recorder's top band
-        if ((_flags[idx] & NodeFlags.ConnectedOverlay) != 0) RemoveOverlay(node);   // a freed overlay must not linger in the band
+        if ((flags & NodeFlags.ConnectedOverlay) != 0) RemoveOverlay(node);   // a freed overlay must not linger in the band
         OnFreeIndex?.Invoke(idx);   // symmetric teardown of INDEX-keyed external side-tables (AnimEngine transitions / ScrollAnimator timers)
         _gen[idx]++;
         if (_gen[idx] == 0) _gen[idx] = 1;
@@ -508,7 +519,12 @@ public sealed class SceneStore : ISceneBackend
 
     // ── implicit brush transitions (WinUI BrushTransition; phase-7 advanced) ──────────────────────
     public bool HasBrushAnims => _brushAnims.Count > 0;
-    public void SetBrushAnim(NodeHandle h, in BrushAnim ba) => _brushAnims.GetOrAdd((int)h.Raw.Index) = ba;
+    public void SetBrushAnim(NodeHandle h, in BrushAnim ba)
+    {
+        int idx = (int)h.Raw.Index;
+        _flags[idx] |= NodeFlags.SparsePaint;
+        _brushAnims.GetOrAdd(idx) = ba;
+    }
     public bool TryGetBrushAnim(NodeHandle h, out BrushAnim ba) => _brushAnims.TryGet((int)h.Raw.Index, out ba);
 
     /// <summary>Set the brush cross-fade progress, driven by the unified engine's <c>AnimChannel.BrushFade</c> track

@@ -101,6 +101,7 @@ public sealed class ConnectStateBuilder
     public byte[] BuildPutState(PutStateReasonKind reason, LocalPlaybackSnapshot? snap, uint messageId, bool isActive, long? nowMs = null)
     {
         long ts = nowMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        if (snap is { } sv) SetVolume((int)Math.Round(Math.Clamp(sv.Volume01, 0, 1) * MaxVolume));   // DeviceInfo.Volume from our live volume
         var ps = snap is { } s ? BuildPlayerState(s, ts) : new ProtoPlayerState { Timestamp = ts };
         var req = new PutStateRequest
         {
@@ -112,7 +113,13 @@ public sealed class ConnectStateBuilder
                 PrivateDeviceInfo = new PrivateDeviceInfo { Platform = SpotifyClientIdentity.GetPrivateDevicePlatform() },
             },
             IsActive = isActive,
-            PutStateReason = reason == PutStateReasonKind.NewConnection ? PutStateReason.NewConnection : PutStateReason.PlayerStateChanged,
+            PutStateReason = reason switch
+            {
+                PutStateReasonKind.NewConnection => PutStateReason.NewConnection,
+                PutStateReasonKind.VolumeChanged => PutStateReason.VolumeChanged,
+                PutStateReasonKind.BecameInactive => PutStateReason.BecameInactive,
+                _ => PutStateReason.PlayerStateChanged,
+            },
             MessageId = messageId,
             ClientSideTimestamp = (ulong)ts,
         };
