@@ -34,6 +34,8 @@ sealed class LyricsView : Component
     readonly FloatSignal _scrollY = new(0f);
     // Resolver output — drives per-line emphasis (each line subscribes). -1 = before the first line.
     readonly Signal<int> _activeLine = new(-1);
+    // Sung-syllable (word) count for the ACTIVE line — drives the word-by-word highlight. Only the active line reads it.
+    readonly Signal<int> _playedWords = new(0);
 
     // Live layout handles read by the ticker (the active line's arranged rect vs the viewport's → the scroll target).
     NodeHandle _viewport;
@@ -94,8 +96,8 @@ sealed class LyricsView : Component
         for (int i = 0; i < lines.Count; i++)
         {
             int idx = i;
-            string text = lines[i].Text;
-            lineKids[i] = Embed.Comp(() => new LyricLineView(idx, text, _activeLine, ReportLineNode, () => SeekToLine(idx)))
+            var line = lines[i];
+            lineKids[i] = Embed.Comp(() => new LyricLineView(idx, line, _activeLine, _playedWords, ReportLineNode, () => SeekToLine(idx)))
                 with { Key = "ll" + idx };
         }
 
@@ -147,6 +149,15 @@ sealed class LyricsView : Component
         int active = ResolveLine(doc.Lines, nowMs);
         if (active != _activeLine.Peek()) _activeLine.Value = active;   // value-gated → re-render lines (emphasis)
 
+        // Word-by-word: how many syllables of the active line have started (only the active line subscribes to this).
+        int played = 0;
+        if (active >= 0)
+        {
+            var syl = doc.Lines[active].Syllables;
+            for (int i = 0; i < syl.Count; i++) { if (syl[i].StartMs <= nowMs) played = i + 1; else break; }
+        }
+        if (played != _playedWords.Peek()) _playedWords.Value = played;
+
         var scene = Context.Scene;
         if (scene is null || active < 0 || (uint)active >= (uint)_lineNodes.Length) return;
         var line = _lineNodes[active];
@@ -190,15 +201,20 @@ sealed class LyricsView : Component
 // view's ticker can read the active line's arranged rect for the scroll follow.
 sealed class LyricLineView : Component
 {
+    const float FontSz = 21f;
+    const float LineHt = 27f;
+
     readonly int _index;
-    readonly string _text;
+    readonly LyricLine _line;
     readonly Signal<int> _activeLine;
+    readonly Signal<int> _playedWords;
     readonly Action<int, NodeHandle> _reportNode;
     readonly Action _onSeek;
 
-    public LyricLineView(int index, string text, Signal<int> activeLine, Action<int, NodeHandle> reportNode, Action onSeek)
+    public LyricLineView(int index, LyricLine line, Signal<int> activeLine, Signal<int> playedWords, Action<int, NodeHandle> reportNode, Action onSeek)
     {
-        _index = index; _text = text; _activeLine = activeLine; _reportNode = reportNode; _onSeek = onSeek;
+        _index = index; _line = line; _activeLine = activeLine; _playedWords = playedWords;
+        _reportNode = reportNode; _onSeek = onSeek;
     }
 
     public override Element Render()
@@ -215,7 +231,24 @@ sealed class LyricLineView : Component
         UseSpring(AnimChannel.ScaleY, scale, SpringParams.Default, dist);
         UseSpring(AnimChannel.Opacity, opacity, SpringParams.Default, dist);
 
-        ColorF color = isActive ? Tok.TextPrimary : Tok.TextSecondary;
+        Element textEl;
+        if (isActive && _line.IsWordByWord && _line.Syllables.Count > 0)
+        {
+            // Discrete word-by-word karaoke: played words bright, unplayed dim — re-mints only the active line on each
+            // word boundary (subscribing to _playedWords HERE keeps non-active lines off the word cadence). The soft
+            // sweeping gradient wipe is the A1 engine upgrade (DrawGlyphRunGradient).
+            int played = _playedWords.Value;
+            var syl = _line.Syllables;
+            var spans = new TextSpan[syl.Count];
+            for (int i = 0; i < syl.Count; i++)
+                spans[i] = new TextSpan(syl[i].Text, Weight: 700, Color: i < played ? Tok.TextPrimary : Tok.TextSecondary);
+            textEl = new SpanTextEl(spans) { Size = FontSz, Weight = 700, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, LineHeight = LineHt };
+        }
+        else
+        {
+            ColorF color = isActive ? Tok.TextPrimary : Tok.TextSecondary;
+            textEl = new TextEl(_line.Text) { Size = FontSz, Weight = 700, Color = color, Wrap = TextWrap.Wrap, LineHeight = LineHt };
+        }
 
         return new BoxEl
         {
@@ -224,13 +257,7 @@ sealed class LyricLineView : Component
             Cursor = CursorId.Hand, OnClick = _onSeek,
             Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
             OnRealized = h => _reportNode(_index, h),
-            Children =
-            [
-                new TextEl(_text)
-                {
-                    Size = 21f, Weight = 700, Color = color, Wrap = TextWrap.Wrap, LineHeight = 27f,
-                },
-            ],
+            Children = [textEl],
         };
     }
 }

@@ -531,10 +531,10 @@ public static class FakeData
             var syl = new List<LyricSyllable>();
             long w = t;
             foreach (var word in words) { syl.Add(new LyricSyllable(w, w + 400, word + " ")); w += 450; }
-            doc.Add(new LyricLine(t, line, syl));
+            doc.Add(new LyricLine(t, line, syl, EndMs: w, IsWordByWord: true));
             t += 3600;
         }
-        return new LyricsDocument(trackId, IsSynced: true, doc);
+        return new LyricsDocument(trackId, IsSynced: true, doc, Sync: LyricsSyncKind.Syllable);
     }
 
     public static QueueEntry[] DefaultQueue()
