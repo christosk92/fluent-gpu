@@ -359,12 +359,23 @@ public sealed class LiveSessionHost : IAsyncDisposable
             catch { return null; }
         }
 
-        var sources = new Wavee.Backend.Lyrics.ILyricCandidateSource[]
+        var sources = new System.Collections.Generic.List<Wavee.Backend.Lyrics.ILyricCandidateSource>
         {
             new Wavee.Backend.Lyrics.Sources.AmllTtmlDbSource(http),
             new Wavee.Backend.Lyrics.Sources.SpotifyNativeLyricsSource(SpotifyGet, baseUrl),
             new Wavee.Backend.Lyrics.Sources.LrcLibSource(http),
         };
+        // Grey providers (docs plan §6) — ENABLED: widen word/syllable coverage beyond AMLL with the reverse-engineered
+        // CJK APIs (QQ QRC, NetEase YRC, Kugou KRC) + Musixmatch richsync. The reranker still validates each against the
+        // Spotify reference, so a wrong/ mistimed grey candidate can't win.
+        var opt = Wavee.Backend.Lyrics.LyricsOptions.Default with { EnableGreyProviders = true, PerSourceTimeoutMs = 8000 };
+        if (opt.EnableGreyProviders)
+        {
+            sources.Add(new Wavee.Backend.Lyrics.Sources.MusixmatchSource());
+            sources.Add(new Wavee.Backend.Lyrics.Sources.QqMusicSource());
+            sources.Add(new Wavee.Backend.Lyrics.Sources.NeteaseSource());
+            sources.Add(new Wavee.Backend.Lyrics.Sources.KugouSource());
+        }
 
         Task<Wavee.Backend.Lyrics.LyricsRequest?> Resolve(string trackId, CancellationToken c)
         {
@@ -381,7 +392,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
         }
 
         return new Wavee.Backend.Lyrics.AggregatingLyricsProvider(
-            sources, Resolve, Wavee.Backend.Lyrics.LyricsOptions.Default, referenceSourceId: "spotify",
+            sources, Resolve, opt, referenceSourceId: "spotify",
             log: s => WaveeLog.Instance.Info("lyrics", s));
     }
 
