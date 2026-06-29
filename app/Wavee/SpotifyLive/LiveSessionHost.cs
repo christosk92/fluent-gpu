@@ -110,7 +110,8 @@ public sealed class LiveSessionHost : IAsyncDisposable
         // GoLive so a logout fired in the go-live window still tears the host down (not a no-op).
         if (ct.IsCancellationRequested) { await host.DisposeAsync().ConfigureAwait(false); return null; }
         svc.AttachLive(host, live.CredStore!);
-        svc.GoLive(connect.Controller, connect.Devices, liveSession, connectivity);
+        var lyrics = BuildLiveLyrics(live.Pipeline, () => live.BaseUrl, connect.Controller);
+        svc.GoLive(connect.Controller, connect.Devices, liveSession, connectivity, lyrics);
         report.Report(new LoginSnapshot(LoginPhase.Authenticated, User: liveSession.CurrentUser));
         log("Live Connect session active — Wavee is a controllable device, mirrors now-playing, and shows the live account.");
 
@@ -332,6 +333,56 @@ public sealed class LiveSessionHost : IAsyncDisposable
         {
             throw new TimeoutException($"Spotify {facet} search timed out.");
         }
+    }
+
+    // The real lyrics feed (docs/lyrics-aggregator-reranker-plan.md): fan out to AMLL (word-synced TTML by track id),
+    // Spotify-native (the rerank reference + a line candidate, via the authed spclient), and LRCLIB (clean metadata
+    // fallback); the reranker validates content/timing and picks the best. The request is resolved from the live
+    // now-playing track (what the lyrics view asks for). Grey CJK/Musixmatch sources stay off by default (LyricsOptions).
+    static Wavee.Backend.Lyrics.AggregatingLyricsProvider BuildLiveLyrics(
+        Wavee.Backend.Spotify.IHttpExchange pipeline, Func<string> baseUrl, IPlaybackPlayer controller)
+    {
+        var http = new Wavee.Backend.Lyrics.SharedHttpLyricFetch();
+
+        async Task<string?> SpotifyGet(string url, CancellationToken c)
+        {
+            try
+            {
+                var headers = new System.Collections.Generic.Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    { ["Accept"] = "application/json", ["app-platform"] = "WebPlayer" };
+                using var resp = await pipeline.SendAsync(new Wavee.Backend.Spotify.HttpReq("GET", url, headers, null), c).ConfigureAwait(false);
+                if (resp.Status != 200) return null;
+                using var reader = new System.IO.StreamReader(resp.Body);
+                return await reader.ReadToEndAsync(c).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch { return null; }
+        }
+
+        var sources = new Wavee.Backend.Lyrics.ILyricCandidateSource[]
+        {
+            new Wavee.Backend.Lyrics.Sources.AmllTtmlDbSource(http),
+            new Wavee.Backend.Lyrics.Sources.SpotifyNativeLyricsSource(SpotifyGet, baseUrl),
+            new Wavee.Backend.Lyrics.Sources.LrcLibSource(http),
+        };
+
+        Task<Wavee.Backend.Lyrics.LyricsRequest?> Resolve(string trackId, CancellationToken c)
+        {
+            var t = controller.State.CurrentTrack;
+            if (t is not null && (t.Id == trackId || t.Uri == "spotify:track:" + trackId))
+            {
+                var artists = new System.Collections.Generic.List<string>(t.Artists.Count);
+                foreach (var a in t.Artists) artists.Add(a.Name);
+                return Task.FromResult<Wavee.Backend.Lyrics.LyricsRequest?>(new Wavee.Backend.Lyrics.LyricsRequest(
+                    trackId, "spotify:track:" + trackId, t.Title, artists, t.Album.Name, t.DurationMs,
+                    Isrc: null, Market: "from_token", HasSpotifyLyrics: null));
+            }
+            return Task.FromResult<Wavee.Backend.Lyrics.LyricsRequest?>(null);
+        }
+
+        return new Wavee.Backend.Lyrics.AggregatingLyricsProvider(
+            sources, Resolve, Wavee.Backend.Lyrics.LyricsOptions.Default, referenceSourceId: "spotify",
+            log: s => WaveeLog.Instance.Info("lyrics", s));
     }
 
     // The signed-in user's profile (display name + avatar) via spclient user-profile-view — the cluster/login only give

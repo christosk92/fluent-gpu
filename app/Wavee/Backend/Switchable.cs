@@ -156,3 +156,19 @@ public sealed class LiveSpotifySession : ISpotifySession
     public Task<bool> ConnectAsync(CancellationToken ct = default) => Task.FromResult(true);
     public Task LogoutAsync(CancellationToken ct = default) { Status = AuthStatus.LoggedOut; CurrentUser = null; _status.OnNext(AuthStatus.LoggedOut); return Task.CompletedTask; }
 }
+
+/// <summary>Stable lyrics facade (docs/lyrics-aggregator-reranker-plan.md §11): the UI binds <c>svc.Lyrics</c> once; on
+/// live login the composition root swaps the fake provider for the real <c>AggregatingLyricsProvider</c> via SetInner,
+/// without rebuilding the app tree. Mirrors <see cref="SwitchablePlayer"/>.</summary>
+public sealed class SwitchableLyrics : ILyricsProvider
+{
+    readonly object _gate = new();
+    ILyricsProvider _inner;
+    public SwitchableLyrics(ILyricsProvider inner) => _inner = inner;
+    public void SetInner(ILyricsProvider inner) { lock (_gate) _inner = inner; }
+    public Task<LyricsDocument?> GetLyricsAsync(string trackId, CancellationToken ct = default)
+    {
+        ILyricsProvider cur; lock (_gate) cur = _inner;
+        return cur.GetLyricsAsync(trackId, ct);
+    }
+}
