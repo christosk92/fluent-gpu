@@ -181,7 +181,7 @@ sealed class NowPlayingView : Component
             ? new BoxEl { Grow = 1f, Direction = 0, Children = [centerCol, QueueRail(accent, track)] }
             : centerCol;
 
-        return Shell(bg, [topBar, body]);
+        return Shell(bg, [topBar, body], CoverBackdrop(track, bg, vp.Width, vp.Height));
     }
 
     // The "Up next" rail (wide windows): now-playing + the live queue, each row playing that track on click.
@@ -250,13 +250,35 @@ sealed class NowPlayingView : Component
 
     // Full-bleed BELOW the title bar: the top 48px stays transparent + pass-through so the window caption (min/max/close +
     // drag) keeps working while the immersive view fills the rest.
-    BoxEl Shell(ColorF bg, Element[] children) => new BoxEl
+    BoxEl Shell(ColorF bg, Element[] children, Element? backdrop = null) => new BoxEl
     {
         Grow = 1f, Direction = 1,
         Children =
         [
             new BoxEl { Height = TitleBar.ExpandedHeight, HitTestPassThrough = true },
-            new BoxEl { Grow = 1f, Direction = 1, Fill = bg, ClipToBounds = true, Children = children },
+            new BoxEl
+            {
+                Grow = 1f, ZStack = true, ClipToBounds = true, Fill = bg,
+                Children = backdrop is null
+                    ? [new BoxEl { Grow = 1f, Direction = 1, Children = children }]
+                    : [backdrop, new BoxEl { Grow = 1f, Direction = 1, Children = children }],
+            },
+        ],
+    };
+
+    // BetterLyrics-style cover backdrop: a heavily-downscaled (→ soft/blurry when upscaled) full-bleed album cover, dimmed
+    // under a dark scrim for text readability. Cheap — a ~96px decode upscaled to fill, no per-frame Gaussian-blur pass.
+    Element CoverBackdrop(Track t, ColorF bg, float vpW, float vpH) => new BoxEl
+    {
+        ZStack = true, Grow = 1f, ClipToBounds = true,
+        Children =
+        [
+            new BoxEl
+            {
+                Grow = 1f, ClipToBounds = true, Opacity = 0.5f,
+                Children = [Surfaces.Artwork(t.Image, SeedOf(t), MathF.Max(vpW, 200f), MathF.Max(vpH, 200f), 0f, decodePx: 96)],
+            },
+            new BoxEl { Grow = 1f, Fill = bg with { A = 0.58f } },
         ],
     };
 
