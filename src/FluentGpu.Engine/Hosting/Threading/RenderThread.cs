@@ -77,8 +77,14 @@ public sealed class RenderThread : IDisposable
         _wake.Set();
     }
 
+    private bool _disposed;
+
+    /// <summary>Stop + join the render thread. Idempotent (a pre-capture quiesce may call it before AppHost.Dispose).
+    /// After this returns the render thread is gone, so the caller (UI) is the sole GPU-ComPtr owner again.</summary>
     public void Dispose()
     {
+        if (_disposed) return;
+        _disposed = true;
         _running = false;
         _wake.Set();               // unblock the loop so it can observe !_running and exit
         _thread.Join(1000);

@@ -342,6 +342,13 @@ public sealed class AppHost : IDisposable
     // arena (PickFreeSlot guarantees the UI is not writing that slot). Force-sync (Step 4) blocks the UI in DrainSync;
     // async (Step 5) presents on its own timeline. Device/swapchain CREATION + UploadImage staging + resize/device-lost
     // are still UI-side — the documented async residuals (landing plan §9); force-sync makes those splits safe meanwhile.
+    /// <summary>Stop + join the fgpu-render thread so the UI thread becomes the SOLE GPU-ComPtr owner again — required
+    /// before a one-shot UI-thread GPU op like <c>CaptureBgra</c> (--screenshot), which resets the command allocator +
+    /// fence the render thread is otherwise using (the async capture race). No-op when no render thread; the host must
+    /// not paint after this (Dispose's join is idempotent). This is the screenshot-path stand-in for the full async
+    /// capture coordination (landing plan §9); it does not make windowed async safe (UploadImage/resize still race).</summary>
+    public void QuiesceRenderThread() => _renderThread?.Dispose();
+
     private void SubmitPresentOnRenderThread(Threading.RenderFrame rf)
     {
         Threading.ThreadGuard.AssertRender();
