@@ -18932,6 +18932,52 @@ static class Slice
                 $"bytes={bytesMatch} seq=({s0},{s1},{s2}) latest={latest} gatedBefore={gatedBefore} reclaimsAfter={reclaimsAfter} pending={ledger.PendingCount}");
         }
 
+        // ── seam.race (deterministic real-thread soak): the consume-gated quarantine (§5.3) must hold ACROSS the volatile
+        // publish/consume handshake under a STALLED reader — the invariant the async flip (Step 5) depends on. A consumer
+        // thread (bound Render) is event-gated so the producer controls exactly when a consume happens (no sleeps ⇒
+        // deterministic, not flaky): while the reader is held, a slot freed at seq p is NOT reclaimed; once the reader's
+        // TryAcquire advances LastConsumedSeq past p + Quarantine-1, it is. A second real thread exercises the
+        // cross-thread Volatile release/acquire, which single-thread logic cannot. ──
+        {
+            var raceSeam = new FluentGpu.Hosting.Threading.SceneFramePublisher();
+            var raceArenas = new FluentGpu.Hosting.Threading.DrawListArenaRing();
+            var raceLedger = new FluentGpu.Hosting.Threading.QuarantineLedger(64);
+            FluentGpu.Hosting.Threading.ThreadGuard.BindCurrent(FluentGpu.Hosting.Threading.ThreadGuard.ThreadRole.Ui);
+            var go = new System.Threading.SemaphoreSlim(0);
+            var did = new System.Threading.SemaphoreSlim(0);
+            var raceFlags = new bool[2];   // [0]=stop, [1]=consumer TryAcquire failed
+            var consumer = new System.Threading.Thread(() =>
+            {
+                FluentGpu.Hosting.Threading.ThreadGuard.BindCurrent(FluentGpu.Hosting.Threading.ThreadGuard.ThreadRole.Render);
+                while (true)
+                {
+                    go.Wait();
+                    if (raceFlags[0]) { did.Release(); return; }
+                    if (!raceSeam.TryAcquire(out _)) raceFlags[1] = true;
+                    did.Release();
+                }
+            }) { IsBackground = true, Name = "seam-race-consumer" };
+            consumer.Start();
+
+            System.Span<byte> raceOne = stackalloc byte[] { 7 };
+            System.ReadOnlySpan<ulong> raceNone = default;
+            int ra = raceArenas.WriteFront(raceOne, raceNone); ulong rp1 = raceSeam.Publish(ra, 1, 0, default); raceArenas.Rotate();
+            raceLedger.OnFreed(100, rp1);                                        // freed while producing rp1
+            ra = raceArenas.WriteFront(raceOne, raceNone); raceSeam.Publish(ra, 1, 0, default); raceArenas.Rotate();
+            ra = raceArenas.WriteFront(raceOne, raceNone); raceSeam.Publish(ra, 1, 0, default); raceArenas.Rotate();
+            bool raceGatedWhileStalled = !raceLedger.TryReclaim(raceSeam.LastConsumedSeq, out _);  // reader held ⇒ LastConsumedSeq 0 ⇒ gated
+
+            go.Release(); did.Wait();                                            // reader acquires the latest ⇒ LastConsumedSeq passes rp1 + Quarantine-1
+            bool raceReclaimsAfter = raceLedger.TryReclaim(raceSeam.LastConsumedSeq, out int raceGot) && raceGot == 100;
+
+            raceFlags[0] = true; go.Release(); did.Wait(); consumer.Join(1000);
+            go.Dispose(); did.Dispose();
+
+            Check("gate.seam.race the consume-gated quarantine holds across the cross-thread publish/consume handshake under a stalled reader — a slot freed at seq p stays quarantined until the consumer thread's LastConsumedSeq passes p + Quarantine-1 (deterministic real-thread seam.race soak)",
+                raceGatedWhileStalled && raceReclaimsAfter && !raceFlags[1],
+                $"gatedWhileStalled={raceGatedWhileStalled} reclaimsAfter={raceReclaimsAfter} consumerAcquireFailed={raceFlags[1]} lastConsumed={raceSeam.LastConsumedSeq}");
+        }
+
         // ── decode.cancel-reclaim: the DecodeScheduler cancellation map must not grow with cancels (the WaveeMusic 10k-row
         // scroll cancels rows constantly). Two paths, both must end at CanceledPending==0:
         //   (A) cancel-before-claim — the dominant scroll case. With both workers parked inside a barrier-held codec, the
