@@ -94,6 +94,10 @@ public sealed unsafe class D3D12Device : IGpuDevice
     // blur group is an opacity group with Sigma > 0: its RT is separable-Gaussian-blurred before the flat composite.
     private readonly List<int> _layerKinds = new(8);
     private readonly List<(int Slot, PushLayerCmd L, ulong PinHash)> _opacityGroups = new(4);
+
+    public int LastBlurCacheHit => _blurCacheHit;
+    public int LastBlurCacheMiss => _blurCacheMiss;
+    public int LastOpacityGroups => _opacity?.GroupsThisFrame ?? 0;
     private GlyphRenderer? _glyphs;
     private ImageTextureStore? _imageTextures;
     private ImagePipeline? _imagePipe;

@@ -24,6 +24,25 @@ static class LyricsFx
 
 sealed class LyricsView : Component
 {
+    internal readonly record struct FrameDiagnostics(long NowMs, long AuthMs, int ActiveLine, int VoiceLine, bool ActiveChanged, bool VoiceChanged, bool ScrollSnapped, bool Playing, int LineCount);
+    internal static FrameDiagnostics LastFrameDiagnostics { get; private set; }
+
+    // ── Probe seam (WAVEE_LYRICS_ADVANCE_PROBE) ──────────────────────────────────────────────────────────────────────
+    // The redesigned lyrics-advance probe drives the media clock SYNCHRONOUSLY (one advance == the frame that records its
+    // scroll settle) so the async 16 ms ticker's decoupling can't smear the correlation. ProbeSyncMode silences the timer
+    // (StartTimer no-ops); ProbeStep injects the clock via OnFrame; ProbeForceSnapped skips the one-time instant-jump latch
+    // so the first measured advance is a real ProgrammaticMode spring (the settle-frame path BUG1 lives on).
+    internal static bool ProbeSyncMode;
+    internal static LyricsView? ProbeActive;
+    internal void ProbeStep(long nowMs) => OnFrame(forceVisual: true, probeNowMs: nowMs);
+    internal void ProbeForceSnapped() => _scrollSnapped = true;
+    internal NodeHandle ProbeViewport => _viewportNode;
+    internal int ProbeActiveLine => _activeLine.Peek();
+    internal int ProbeLineCount => _doc?.Lines.Count ?? 0;
+    internal long ProbeLineStartMs(int i) => _doc is { } d && (uint)i < (uint)d.Lines.Count ? d.Lines[i].StartMs : 0L;
+    internal NodeHandle ProbeLineNode(int i) => _lineNodes is { } ln && (uint)i < (uint)ln.Length ? ln[i] : default;
+    internal NodeHandle ProbeGlowNode(int i) => _glowNodes is { } gn && (uint)i < (uint)gn.Length ? gn[i] : default;
+
     // The karaoke wipe advances on this cadence (the ticker period + the OnFrame throttle gate). 16 ms ≈ 60 Hz (was 33 =
     // 30 Hz). The wipe is AMBIENT motion, so the host ambient cap (Program.cs ambientFps / FG_ANIM_FPS) must ALSO allow
     // ≥60 or RecommendedWaitMs throttles the sweep back down — both were raised together once per-frame cost got cheap.
@@ -382,7 +401,7 @@ sealed class LyricsView : Component
         _ = b.Player.SeekAsync(ms);
     }
 
-    internal void OnFrame(bool forceVisual = false)
+    internal void OnFrame(bool forceVisual = false, long probeNowMs = long.MinValue)
     {
         var b = _b; var doc = _doc;
         if (b is null || doc is null || doc.Lines.Count == 0) return;
@@ -398,7 +417,15 @@ sealed class LyricsView : Component
         long wallMs = Environment.TickCount64;
         bool playing = b.IsPlaying.Peek();
         long nowMs;
-        if (!playing)
+        if (probeNowMs != long.MinValue)
+        {
+            // Probe sync-advance (WAVEE_LYRICS_ADVANCE_PROBE): the probe owns the media clock, so a line advance and the
+            // RunFrame that records the resulting scroll SETTLE are the same frame (the async 16 ms Timer is silenced by
+            // ProbeSyncMode). Deterministic + free of the ticker decoupling — the basis of the trustworthy re-probe.
+            nowMs = probeNowMs; auth = probeNowMs; playing = true;
+            _baseWall = wallMs; _basePos = probeNowMs; _offset = 0f; _lastAuthMs = probeNowMs; _lastDisplay = probeNowMs;
+        }
+        else if (!playing)
         {
             // Paused: the snapshot is the truth. Pin the base to it so a later RESUME doesn't leak the pause gap into the
             // wall delta, and a paused scrub follows immediately.
@@ -442,7 +469,8 @@ sealed class LyricsView : Component
         int voiceLine = ResolveLine(doc.Lines, nowMs);          // wipe + glow (on true time)
         bool activeChanged = active != _activeLine.Peek();
         if (activeChanged) _activeLine.Value = active;
-        if (voiceLine != _voiceLine.Peek()) _voiceLine.Value = voiceLine;
+        bool voiceChanged = voiceLine != _voiceLine.Peek();
+        if (voiceChanged) _voiceLine.Value = voiceLine;
         _nowMs.Value = nowMs;
 
         var scene = Context.Scene;
@@ -461,6 +489,7 @@ sealed class LyricsView : Component
 
         if (!_scrollSnapped || activeChanged || forceVisual)
             ScrollActiveIntoView(scene, active);
+        LastFrameDiagnostics = new(nowMs, auth, active, voiceLine, activeChanged, voiceChanged, _scrollSnapped, playing, doc.Lines.Count);
 
         // The karaoke wipe/glow live on the VOICE line (true time), which trails the emphasis line during the lead window.
         if ((uint)voiceLine >= (uint)_lineNodes.Length) return;
@@ -750,27 +779,39 @@ sealed class LyricLineView : Component
         // The karaoke wipe sub-tree renders on the active line AND the voice line — during the ~140 ms lead the voice line
         // (still being sung) trails the emphasis line, but its fill must keep running. Emphasis (scale/opacity) follows
         // `active`; the wipe split follows true time via _nowMs.
-        if ((isActive || isVoice) && _line.IsWordByWord && _line.Syllables.Count > 0)
+        // Word-by-word line: ALWAYS a two-child ZStack [glow, main], in EVERY state (active / voice / dimmed). The two
+        // nodes mount ONCE and only their PROPERTIES toggle, so a line LEAVING the voice slot (the row just above active
+        // during the ~140 ms lead) is an in-place update — NOT the BoxEl↔TextEl child-type swap that forced a Remove+Mount,
+        // re-shaped the glyph run + missed the blur cache = the one-frame flicker on the lines above active. The main
+        // text's glyphs never re-shape on that transition (its string is unchanged), and because both nodes persist,
+        // OnRealized (which fires only on mount) keeps the wipe/glow node reports (_reportNode/_reportGlow, read by
+        // OnFrame) valid across every transition WITHOUT a remount. (Line-synced lines keep the isActive/else shapes below.)
+        if (_line.IsWordByWord && _line.Syllables.Count > 0)
         {
-            float split = ComputeSplit(_line, (long)_nowMs.Peek());
-            var wipe = LineText(_line.Text, Tok.TextPrimary) with
-            {
-                Color = Tok.TextSecondary,
-                // Lift cut 0.1 -> 0.03 of line height: BetterLyrics' float is a TRANSIENT per-glyph rise that settles to 0,
-                // so a static whole-line lift at 0.1 reads ~3x too strong ("dy too much"). 0.03 is a subtle lift-into-focus.
-                Wipe = new GlyphWipe(Before: Tok.TextPrimary, After: Tok.TextPrimary with { A = 0.4f }, Split: split, Softness: soft, Lift: _lineHt * 0.03f),
-                OnRealized = h => _reportNode(_index, h),
-            };
-            // Soft glow = a blurred copy of the played glyphs UNDER the crisp wipe. It carries NO static Blur element
-            // property (TextEl has none); instead OnFrame drives its NodePaint.BlurSigma every frame — a constant BASE
-            // sigma on all tiers (the cheap glow signature), plus a HELD-syllable BLOOM (>=700 ms) on the discrete tiers.
-            // BlurSigma>0 makes any node a self-blur group, so this one TextEl both carries the wipe AND is the glow.
-            var glow = LineText(_line.Text, Tok.TextPrimary) with
-            {
-                Wipe = new GlyphWipe(Before: Tok.TextPrimary, After: Tok.TextPrimary with { A = 0f }, Split: split, Softness: 0.14f),
-                OnRealized = h => _reportGlow(_index, h),
-            };
-            textEl = new BoxEl { ZStack = true, Children = [glow, wipe] };
+            bool lit = isActive || isVoice;
+            float split = lit ? ComputeSplit(_line, (long)_nowMs.Peek()) : 0f;
+            // Soft glow = a blurred copy of the played glyphs UNDER the main text; OnFrame drives its NodePaint.BlurSigma
+            // (base + held-syllable bloom) while it is the voice line. Empty string when dimmed so a peripheral line pays
+            // no second glyph run — it re-shapes once as it ENTERS the voice slot (one line, entering focus), never on the
+            // line leaving it (the flicker case).
+            Element glow = lit
+                ? LineText(_line.Text, Tok.TextPrimary) with
+                  {
+                      Wipe = new GlyphWipe(Before: Tok.TextPrimary, After: Tok.TextPrimary with { A = 0f }, Split: split, Softness: 0.14f),
+                      OnRealized = h => _reportGlow(_index, h),
+                  }
+                : LineText("", Tok.TextPrimary) with { OnRealized = h => _reportGlow(_index, h) };
+            // Main text: base Secondary; when lit the wipe reveals Primary up to Split (Lift cut to 0.03·lineHeight — a
+            // subtle lift-into-focus, BetterLyrics' transient per-glyph rise). When dimmed it is the plain Secondary text
+            // (no wipe) — the SAME node updated in place, so its glyphs do not re-bake as it leaves the voice slot.
+            Element main = lit
+                ? LineText(_line.Text, Tok.TextSecondary) with
+                  {
+                      Wipe = new GlyphWipe(Before: Tok.TextPrimary, After: Tok.TextPrimary with { A = 0.4f }, Split: split, Softness: soft, Lift: _lineHt * 0.03f),
+                      OnRealized = h => _reportNode(_index, h),
+                  }
+                : LineText(_line.Text, Tok.TextSecondary) with { OnRealized = h => _reportNode(_index, h) };
+            textEl = new BoxEl { ZStack = true, Children = [glow, main] };
         }
         else if (isActive)
         {
@@ -889,6 +930,7 @@ sealed class LyricsTicker : ReactiveComponent
     public override Element Setup()
     {
         Owner.ResetScrollSnap();
+        LyricsView.ProbeActive = Owner;   // probe hook (harmless otherwise): the live instance the advance-probe drives
         var bridge = UseContextSignal(PlaybackBridge.Slot);
         var post = UsePost();
         UseSignalEffect(() =>
@@ -914,6 +956,7 @@ sealed class LyricsTicker : ReactiveComponent
 
     void StartTimer(Action<Action> post)
     {
+        if (LyricsView.ProbeSyncMode) return;   // probe drives OnFrame synchronously via ProbeStep — no async ticker
         if (_timer is not null) return;
         int generation = Interlocked.Increment(ref _timerGeneration);
         _timer = new Timer(_ => post(() =>

@@ -13,6 +13,9 @@ sealed class WaveeApp : Component
 {
     readonly Services _services;
 
+    internal static PlaybackBridge? ProbePlayback;
+    internal static Services? ProbeServices;
+
     // The composition root passes the settings store created early (so the theme is seeded before the first frame);
     // null in tests falls back to the store Services creates itself.
     public WaveeApp(IAppSettings? settings = null) => _services = Services.UseRealBackend ? Services.CreateReal(settings) : Services.CreateFake(settings);
@@ -22,6 +25,14 @@ sealed class WaveeApp : Component
         var bridge = _services.Playback;
         var libBridge = _services.LibraryBridge;
         var store = _services.LibraryStore;
+        if (Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_PROBE") || Diag.EnvFlag("WAVEE_HOME_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_NAV_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE"))
+        {
+            ProbePlayback = bridge;
+            ProbeServices = _services;
+            // Silence the async lyrics ticker BEFORE it can mount so the advance-probe alone drives OnFrame synchronously
+            // (deterministic, timer-decoupling-free). Set here at the root so it is true before the rail/ticker renders.
+            if (Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE")) LyricsView.ProbeSyncMode = true;
+        }
 
         // Follow the OS dark-mode / accent live WHILE the user hasn't pinned an explicit theme (mode == System). The host
         // relays WM_SETTINGCHANGE on the UI thread; we re-read the OS state, apply it, and animate the in-place re-theme.

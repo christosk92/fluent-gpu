@@ -428,6 +428,11 @@ public sealed class ScrollAnimator
             bool syncMoved = sc.ScrollMoved;
             sc.ScrollMoved = false;
             bool movingNow = flinging || syncMoved || bandActive || MathF.Abs(tgt - off) > 0.5f;
+            // Persist the record-phase self-blur (DoF) defer gate: TRUE only while this is a USER scroll in motion this
+            // frame (fling/wheel-chase/drag/band), NOT a ProgrammaticMode bring-into-view ease. movingNow is already false
+            // on the programmatic SETTLE frame (off==tgt), so this reads false there — the settle no longer defers, which
+            // (with the recorder keying off this) fixes the whole-panel DoF dropout on a lyric line-advance auto-scroll.
+            sc.UserScrollActive = movingNow && sc.ScrollMode != ProgrammaticMode;
             bool over = sc.PointerOver;
             bool lane = sc.PointerOverScrollbar;
 

@@ -18,7 +18,13 @@ public readonly record struct TextEditStyle(ColorF SelectionFill, ColorF Selecte
     public bool Enabled => SelectionFill.A > 0f || CaretColor.A > 0f;
 }
 
-public readonly record struct SceneRecordStats(int NodesVisited, int DrawnNodeCount, int CulledNodeCount, RectF Damage = default);
+public readonly record struct SceneRecordStats(int NodesVisited, int DrawnNodeCount, int CulledNodeCount, RectF Damage = default)
+{
+    public int BlurCandidateCount { get; init; }
+    public int BlurGroupCount { get; init; }
+    public int BlurSuppressedByScrollCount { get; init; }
+    public int EdgeFadeGroupCount { get; init; }
+}
 
 /// <summary>
 /// Phase 8 (record): walks the retained SceneStore and emits the DrawList. Composites like a browser — each node's
@@ -52,6 +58,10 @@ public static class SceneRecorder
         public int NodesVisited;
         public int DrawnNodeCount;
         public int CulledNodeCount;
+        public int BlurCandidateCount;
+        public int BlurGroupCount;
+        public int BlurSuppressedByScrollCount;
+        public int EdgeFadeGroupCount;
         public RectF Damage;       // union of this frame's changed-node device bounds → the acrylic backdrop-cache damage region
         public bool HasDamage;
 
@@ -65,7 +75,13 @@ public static class SceneRecorder
             Damage = new RectF(x0, y0, x1 - x0, y1 - y0);
         }
 
-        public readonly SceneRecordStats ToStats() => new(NodesVisited, DrawnNodeCount, CulledNodeCount, HasDamage ? Damage : default);
+        public readonly SceneRecordStats ToStats() => new(NodesVisited, DrawnNodeCount, CulledNodeCount, HasDamage ? Damage : default)
+        {
+            BlurCandidateCount = this.BlurCandidateCount,
+            BlurGroupCount = this.BlurGroupCount,
+            BlurSuppressedByScrollCount = this.BlurSuppressedByScrollCount,
+            EdgeFadeGroupCount = this.EdgeFadeGroupCount,
+        };
     }
 
     /// <param name="skipRoots">Subtree roots EXCLUDED from this record pass — out-of-bounds popup wrappers that render
@@ -245,14 +261,18 @@ public static class SceneRecorder
         // dropped (rendered crisp inline) and snaps back on the settle frame — the content is translating, so re-blurring
         // it on every forced submit (a scroll defeats skip-submit) is wasted and the cross-frame pin cache can't hit a
         // moving rect. Scoped to the scrolling viewport (a sibling rail stays blurred; its stationary pins still hit).
-        // EXCLUDES ProgrammaticMode: the per-line auto-scroll bring-into-view ease (LyricsView.ScrollActiveIntoView) must
-        // KEEP the DoF — dropping it there makes the blur visibly vanish on every line change. Keys off the viewport
-        // CONTENT node's TransformDirty (only ScrollAnimator writes that), never this node's own scale/blur spring.
+        // Keys off ScrollState.UserScrollActive (ScrollAnimator.Tick sets it = movingNow && mode != ProgrammaticMode), NOT
+        // the raw mode. The auto-scroll bring-into-view ease KEEPS the DoF (mode == Programmatic ⇒ not user); crucially so
+        // do its SETTLE frame (off==tgt ⇒ movingNow false, though the mode has already flipped 2→0 while still emitting
+        // that tick's final content-transform write) and a stationary relayout that re-asserts the content transform —
+        // both left UserScrollActive false. Gating on the raw mode dropped the blur on those frames, so the whole panel's
+        // DoF visibly vanished for one frame on every line change. The content-node TransformDirty guard confirms the
+        // content actually translated this frame (only ScrollAnimator/Input write that), never this node's own scale/blur spring.
         bool scrollInMotion = parentScrollInMotion;
         if (!scrollInMotion && (flags & NodeFlags.Scrollable) != 0 && scene.HasScroll(node))
         {
             ref var scrollState = ref scene.ScrollRef(node);
-            if (scrollState.ScrollMode != FluentGpu.Animation.ScrollAnimator.ProgrammaticMode)   // auto-scroll keeps the blur; only a user drag/wheel/fling defers
+            if (scrollState.UserScrollActive)   // only a real user scroll (wheel/fling/drag/band) defers — never a programmatic auto-scroll, its settle, or a relayout
             {
                 var scrollContent = scrollState.ContentNode;
                 if (!scrollContent.IsNull && scene.IsLive(scrollContent) && (scene.Flags(scrollContent) & NodeFlags.TransformDirty) != 0)
@@ -333,7 +353,15 @@ public static class SceneRecorder
         // group alpha and blurs via its own sigma. Explicit (BoxEl/ScrollEl.EdgeFade) or a scroller's AutoEdgeFade.
         EdgeFadeSpec edgeFade = default;
         bool isEdgeFade = overlapsClip && TryResolveEdgeFade(scene, node, flags, maybeSparsePaint, out edgeFade);
-        bool isBlurGroup = !isEdgeFade && p.BlurSigma > 0.01f && overlapsClip && !scrollInMotion;
+        if (isEdgeFade) stats.EdgeFadeGroupCount++;
+        bool isBlurCandidate = !isEdgeFade && p.BlurSigma > 0.01f && overlapsClip;
+        if (isBlurCandidate)
+        {
+            stats.BlurCandidateCount++;
+            if (scrollInMotion) stats.BlurSuppressedByScrollCount++;
+        }
+        bool isBlurGroup = isBlurCandidate && !scrollInMotion;
+        if (isBlurGroup) stats.BlurGroupCount++;
         bool isOpacityGroup = !isEdgeFade && !isBlurGroup && p.OpacityGroup && opacity < 0.999f && overlapsClip;
         if (isEdgeFade)
         {

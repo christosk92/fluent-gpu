@@ -22,6 +22,10 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public int NodesVisited { get; init; }
     public int DrawNodeCount { get; init; }
     public int CulledNodeCount { get; init; }
+    public int BlurCandidateCount { get; init; }
+    public int BlurGroupCount { get; init; }
+    public int BlurSuppressedByScrollCount { get; init; }
+    public int EdgeFadeGroupCount { get; init; }
     public double Fps { get; init; }
     public double FrameMs { get; init; }
     public int ComponentsRendered { get; init; }
@@ -39,6 +43,18 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     // command-build cost. Lets a probe attribute a 27 ms "submit" spike to the stall vs the build without an external profiler.
     public double FenceWaitMs { get; init; }
     public double PresentMs { get; init; }
+    // This frame actually submitted + presented (skip-submit did NOT elide it). A probe uses it to see how often a
+    // "static" scene is force-presented anyway (a sustained loop animation marking TransformDirty defeats skip-submit).
+    public bool Presented { get; init; }
+    // Probe-only record-time scroll capture (all default 0/false; populated only when AppHost.ProbeLyricsViewport /
+    // ProbeMainViewport are set). Captured INSIDE RunFrame right after record, BEFORE ClearTransformDirty wipes the
+    // content-node TransformDirty bit — so a probe can read the exact state that drove SceneRecorder's DoF-defer decision
+    // (the post-RunFrame read always shows content-dirty == 0, which is why the previous probe couldn't attribute it).
+    public int LyricsScrollMode { get; init; }
+    public bool LyricsUserScrollActive { get; init; }
+    public bool LyricsContentDirtyAtRecord { get; init; }
+    public int MainScrollMode { get; init; }
+    public bool MainContentDirtyAtRecord { get; init; }
 }
 
 /// <summary>
@@ -283,6 +299,23 @@ public sealed class AppHost : IDisposable
         _diagFrames = 0;
         _diagWindowStart = now;
         _diagProcStart = proc;
+    }
+
+    /// <summary>Probe-only (default Null = off): a scroll viewport whose record-time ScrollMode / UserScrollActive /
+    /// content-node TransformDirty are snapshotted into <see cref="FrameStats"/> each frame, captured BEFORE the per-frame
+    /// ClearTransformDirty so the DoF-defer inputs are observable. Set by WaveeNavProbe's lyrics-advance probe.</summary>
+    public NodeHandle ProbeLyricsViewport;
+    public NodeHandle ProbeMainViewport;
+
+    private void CaptureProbeScroll(NodeHandle vp, out int mode, out bool userScroll, out bool contentDirty)
+    {
+        mode = 0; userScroll = false; contentDirty = false;
+        if (vp.IsNull || !_scene.IsLive(vp) || !_scene.HasScroll(vp)) return;
+        ref var sc = ref _scene.ScrollRef(vp);
+        mode = sc.ScrollMode;
+        userScroll = sc.UserScrollActive;
+        var c = sc.ContentNode;
+        contentDirty = !c.IsNull && _scene.IsLive(c) && (_scene.Flags(c) & NodeFlags.TransformDirty) != 0;
     }
 
     private bool _frameNeeded = true;        // a frame is required (reactive work pending, input, resize, …)
@@ -1215,6 +1248,10 @@ public sealed class AppHost : IDisposable
                 CollectionsMarshal.AsSpan(_popupSkipRoots)); // 8 record
             SceneRecorder.RecordDetached(_scene, _drawList, _images, _connected.Detached, _scene.OverlayClip);   // 8 detached fly snapshots (flag-gated rebuild; no-op when none)
             RecordPopupWindows(in focus, in textEdit);         // 8b record each popup window's subtree DrawList
+            // 8b′ probe capture (WAVEE_LYRICS_ADVANCE_PROBE): snapshot the designated viewports' scroll state HERE — before
+            // the ClearTransformDirty below wipes the content-node TransformDirty bit that drove this frame's DoF defer.
+            CaptureProbeScroll(ProbeLyricsViewport, out int probeLyMode, out bool probeLyUser, out bool probeLyDirty);
+            CaptureProbeScroll(ProbeMainViewport, out int probeMainMode, out bool _, out bool probeMainDirty);
             // 8c consume the frame's motion bits (the glyph-snap gate read them during record). A motion frame queues ONE
             // settle frame: the last moved frame recorded its text unsnapped, so the trailing static record re-snaps crisp.
             bool transformWrote = _scene.AnyTransformWrote;
@@ -1273,6 +1310,10 @@ public sealed class AppHost : IDisposable
                 NodesVisited = recordStats.NodesVisited,
                 DrawNodeCount = recordStats.DrawnNodeCount,
                 CulledNodeCount = recordStats.CulledNodeCount,
+                BlurCandidateCount = recordStats.BlurCandidateCount,
+                BlurGroupCount = recordStats.BlurGroupCount,
+                BlurSuppressedByScrollCount = recordStats.BlurSuppressedByScrollCount,
+                EdgeFadeGroupCount = recordStats.EdgeFadeGroupCount,
                 Fps = _fps,
                 FrameMs = _frameMs,
                 ComponentsRendered = componentsRendered,
@@ -1283,6 +1324,12 @@ public sealed class AppHost : IDisposable
                 SubmitMs = ToMs(tSubmit - tRecord),     // command build + GPU submit + present (total; ~0 on a skipped frame)
                 FenceWaitMs = skipSubmit ? 0.0 : _device.LastFenceWaitMs,  // of which: UI-thread stall on the frame fence + latency waitable
                 PresentMs = ToMs(tSubmit - tSubmitDone),// of which: the Present() call (0 on a skipped frame)
+                Presented = !skipSubmit,
+                LyricsScrollMode = probeLyMode,
+                LyricsUserScrollActive = probeLyUser,
+                LyricsContentDirtyAtRecord = probeLyDirty,
+                MainScrollMode = probeMainMode,
+                MainContentDirtyAtRecord = probeMainDirty,
             };
             PublishFrameStats(LastStats);
             if (_frameClockSig.HasSubscribers) _frameClockSig.Value = ++_frameClock;   // drive per-frame pollers (overlay close) only when watched

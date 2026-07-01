@@ -254,6 +254,13 @@ public struct ScrollState
                                           // Set by Input.SetScrollOffset on a real move; consumed every Tick. Reveals FadeT only —
                                           // never PointerOver/ExpandT (a content pan is not a lane hover), so the bar idle-hides
                                           // naturally on the move stopping (the WinUI TouchIndicator shows through a manipulation).
+    public bool UserScrollActive;         // set by ScrollAnimator.Tick each frame = the viewport is in USER-scroll motion
+                                          // (fling / mouse-wheel chase / touch-drag / overscroll band) this frame — i.e.
+                                          // movingNow && ScrollMode != ProgrammaticMode. FALSE for a programmatic bring-into-view
+                                          // ease, its SETTLE frame (off==tgt), a stationary relayout that re-asserts the content
+                                          // transform, and at rest. SceneRecorder's self-blur (DoF) defer keys off THIS so the
+                                          // auto-scroll settle + relayout no longer drop the whole panel's blur for one frame
+                                          // on a lyric line-advance (the DoF-dropout bug). Only a real user scroll defers.
 
     // ── Predicate channel (generic scroll-binding model — design/plans/generic-hookable-scroll-engine-design.md §3.5/§7).
     // A fixed bitfield recomputed AFTER the integrator settles, struct-compared to ScrollFlagsPrev so a managed OnFlag
