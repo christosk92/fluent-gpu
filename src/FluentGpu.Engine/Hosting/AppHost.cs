@@ -1913,7 +1913,17 @@ public sealed class AppHost : IDisposable
         if (s.Width == _lastSize.Width && s.Height == _lastSize.Height && scale == _lastScale) return false;
         _lastSize = s;
         _lastScale = scale;
-        _swapchain.Resize(s);
+        // Step 2 (async resize rendezvous): D3D12Swapchain.Resize does a fenced WaitForGpu + releases the back buffers +
+        // ResizeBuffers + recreates RTVs — all mutating ComPtrs the render thread reads in submit/present. Under async,
+        // PARK the render loop (mutual exclusion) around the unchanged Resize. Default + force-sync take the else branch
+        // (no render thread running concurrently — force-sync's UI is the only toucher between publishes), byte-identical.
+        if (_renderThread is not null && s_renderAsync)
+        {
+            _renderThread.Quiesce();
+            try { _swapchain.Resize(s); }
+            finally { _renderThread.Resume(); }
+        }
+        else _swapchain.Resize(s);
         _needFullLayout = true;
         return true;
     }

@@ -82,7 +82,11 @@ internal static partial class WaveeResizeProbe
             var settle = host.RunFrame();                        // drains any follow-up frame requested by the resize paint
             AddRow(csv, i, width, "settle", ElapsedMs(start), settle);
 
-            if (Contains(screenshots, width))
+            // Skip the inline capture under FG_RENDER_ASYNC: CaptureBgra resets the shared command allocator + fence on
+            // the UI thread, which would race the async render thread (the same capture race --screenshot solves via
+            // QuiesceRenderThread). This isolates the Step 2 resize RENDEZVOUS (the async safety surface) from that
+            // orthogonal probe-harness capture race — the resize storm + modal bursts below run capture-free either way.
+            if (!Diag.EnvFlag("FG_RENDER_ASYNC") && Contains(screenshots, width))
             {
                 host.RunFrame();
                 string png = $@"C:\tmp\wavee-resize-{width}.png";

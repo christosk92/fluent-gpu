@@ -22,6 +22,13 @@ public sealed class RenderThread : IDisposable
     private readonly Action<RenderFrame> _submitPresent;   // runs ON this thread: (suppress vsync?) → SubmitDrawList(arena) → Present
     private readonly AutoResetEvent _wake = new(false);
     private readonly AutoResetEvent _done = new(false);
+    // Step 2 (async resize rendezvous): a non-destructive park/resume handshake. The UI parks this loop (mutual exclusion)
+    // before it mutates the swapchain/back-buffers/fence in Resize, then resumes it. _resizeIdle = loop → UI "I am parked,
+    // no ComPtr touch in flight"; _resumeResize = UI → loop "Resize done, proceed". The AutoResetEvent Set/WaitOne pair is
+    // a full memory barrier, publishing the UI's advanced fence/back-buffer/frame-index writes to the loop before it un-parks.
+    private readonly AutoResetEvent _resizeIdle = new(false);
+    private readonly AutoResetEvent _resumeResize = new(false);
+    private int _resizeQuiesce;
     private readonly bool _async;                          // Step 5: false = force-sync (UI blocks in DrainSync); true = async (WakeAsync, UI proceeds)
     private volatile bool _running = true;
     private ulong _presentAck;
@@ -46,6 +53,16 @@ public sealed class RenderThread : IDisposable
         {
             _wake.WaitOne();
             if (!_running) break;
+            // Step 2: a resize is pending. Park HERE (before any TryAcquire/submit/present ComPtr touch), tell the UI the
+            // loop is idle, and block until the UI finishes the fenced swapchain Resize + calls Resume. Then re-loop and
+            // wait for the next real wake (the post-resize full-relayout republish).
+            if (Volatile.Read(ref _resizeQuiesce) != 0)
+            {
+                _resizeIdle.Set();
+                _resumeResize.WaitOne();
+                Volatile.Write(ref _resizeQuiesce, 0);
+                continue;
+            }
             // Acquire the LATEST published frame (DropOldest coalesce — intermediate publishes since the last wake are
             // dropped, §11). One AutoResetEvent wake ⇒ one latest-frame present; the arena the UI is now writing is a
             // DIFFERENT ring slot than the published one this reads, so there is no torn read.
@@ -77,6 +94,26 @@ public sealed class RenderThread : IDisposable
         _wake.Set();
     }
 
+    /// <summary>UI thread, ASYNC (Step 2): PARK the render loop before mutating the swapchain in Resize, and BLOCK until
+    /// it confirms it is idle (no submit/present in flight) — mutual exclusion so the UI's fenced <c>ResizeBuffers</c> +
+    /// back-buffer release can't race a concurrent present. Pair with <see cref="Resume"/> in a try/finally. The final
+    /// pre-park frame (if the loop was mid-submit) completes at the OLD size before the park; the stale published frame is
+    /// dropped (DropOldest) and the post-resize relayout republishes at the new size.</summary>
+    public void Quiesce()
+    {
+        ThreadGuard.AssertUi();
+        Volatile.Write(ref _resizeQuiesce, 1);
+        _wake.Set();               // nudge the loop so it reaches the quiesce gate even if idle-parked on _wake
+        _resizeIdle.WaitOne();     // acquire barrier: the loop is now parked on _resumeResize
+    }
+
+    /// <summary>UI thread, ASYNC (Step 2): release the render loop after the swapchain Resize completed.</summary>
+    public void Resume()
+    {
+        ThreadGuard.AssertUi();
+        _resumeResize.Set();
+    }
+
     private bool _disposed;
 
     /// <summary>Stop + join the render thread. Idempotent (a pre-capture quiesce may call it before AppHost.Dispose).
@@ -87,8 +124,11 @@ public sealed class RenderThread : IDisposable
         _disposed = true;
         _running = false;
         _wake.Set();               // unblock the loop so it can observe !_running and exit
+        _resumeResize.Set();       // Step 2: also release a loop parked mid-quiesce, so teardown can't hit the Join timeout
         _thread.Join(1000);
         _wake.Dispose();
         _done.Dispose();
+        _resizeIdle.Dispose();
+        _resumeResize.Dispose();
     }
 }
