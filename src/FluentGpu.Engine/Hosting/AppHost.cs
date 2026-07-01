@@ -114,6 +114,13 @@ public sealed class AppHost : IDisposable
     private readonly FlexLayout _layout;
     private readonly LayoutInvalidator _invalidator;
     private readonly DrawList _drawList = new();
+    // Render-thread seam (Cut A, submit-only; docs/plans/render-thread-seam-landing-plan.md · design/subsystems/threading-render-seam.md).
+    // STEP 1 — single-thread pass-through: the UI records into _drawList, copies it into a render-readable arena, then
+    // PUBLISHes + ACQUIREs it on THIS (UI) thread and submits from the acquired arena — byte-identical to a direct
+    // submit, no behaviour/perf change. This only establishes the seam SHAPE so the later (soak-gated) render-thread
+    // spawn — which moves submit/present/the GPU fence-wait stall off the UI thread — is an additive change, not a rewrite.
+    private readonly Threading.DrawListArenaRing _renderArenas = new();
+    private readonly Threading.SceneFramePublisher _renderSeam = new();
     private readonly InputDispatcher _dispatcher;
     private readonly InputEventRing _ring = new();
     private readonly IFrameTimeSource _frameTime;
@@ -986,6 +993,11 @@ public sealed class AppHost : IDisposable
     /// skips the device's frame-latency throttle so the WndProc thread isn't blocked up to a vblank.</summary>
     public FrameStats Paint(int clicks = 0, bool keepAlive = false)
     {
+        // Paint is reached BOTH from RunFrame (already bound) AND synchronously from the WndProc PaintRequested repaint
+        // (live-resize, line ~789) which is NOT — so bind the current (message/UI) thread here too. Paint is always the
+        // UI thread; the render-thread seam's AssertUi (DrawListArenaRing.WriteFront / SceneFramePublisher.Publish) runs
+        // on this path, so both entries must be bound. Idempotent for the same role; erased from Release with ThreadGuard.
+        Threading.ThreadGuard.BindCurrent(Threading.ThreadGuard.ThreadRole.Ui);
         if (_inPaint) { _frameAfterPaint = true; return LastStats; }
         _inPaint = true;
         _reconciler.FrameEpoch++;   // one tick per paint — caps a warming virtual list's cold-realize grow to 1 batch/frame
@@ -1286,8 +1298,18 @@ public sealed class AppHost : IDisposable
             else
             {
                 if (keepAlive) _device.SuppressVsyncOnce();
-                _device.SubmitDrawList(_drawList.Bytes, _drawList.SortKeys,
-                    new FrameInfo(_window.ClientSizePx, _window.Scale, Clear, recordStats.Damage)); // 10 submit
+                // Render-thread seam (Cut A, Step 1 — single-thread pass-through): copy the finished DrawList into a
+                // render-readable arena, PUBLISH it, ACQUIRE it (same thread today; the render thread post-spawn), and
+                // submit from the acquired arena. Byte-identical to a direct submit — establishes the seam shape only.
+                var submitInfo = new FrameInfo(_window.ClientSizePx, _window.Scale, Clear, recordStats.Damage);
+                int arena = _renderArenas.WriteFront(_drawList.Bytes, _drawList.SortKeys);
+                _renderSeam.Publish(arena, _drawList.Bytes.Length, _drawList.SortKeys.Length, in submitInfo);
+                if (_renderSeam.TryAcquire(out var rf))
+                {
+                    _device.SubmitDrawList(_renderArenas.Bytes(rf.ArenaIndex, rf.ByteLen),
+                        _renderArenas.SortKeys(rf.ArenaIndex, rf.SortLen), in rf.Submit); // 10 submit
+                    _renderArenas.Rotate();
+                }
                 tSubmitDone = Stopwatch.GetTimestamp();        // boundary: SubmitDrawList done, Present not yet called
                 _swapchain.Present();                          // 11 present
                 if (maybeUnchanged) _lastPresentedDrawListHash = dlHash;   // track the stream only across quiet runs (active frames don't hash)

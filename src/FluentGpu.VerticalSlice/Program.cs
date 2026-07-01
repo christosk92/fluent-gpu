@@ -18889,6 +18889,49 @@ static class Slice
                 worstAlloc == 0 && appliedEvery, $"worstHotAlloc={worstAlloc}B @frame{idx} appliedEvery={appliedEvery}");
         }
 
+        // ── seam.publish-consume (render-thread seam, Cut A, Step 1 — single-thread foundation): the publish/consume
+        // ordering + the consume-gated quarantine are the concurrency-critical logic, verified here BEFORE the render
+        // thread exists (the plan's "single-thread-correct first"). Asserts (1) a published frame round-trips
+        // byte-identically, (2) the consumer is handed the LATEST publish when several coalesce (DropOldest, §11), and
+        // (3) the QuarantineLedger reclaims a slot freed at seq p ONLY once LastConsumedSeq passes p + Quarantine-1 (§5). ──
+        {
+            FluentGpu.Hosting.Threading.ThreadGuard.BindCurrent(FluentGpu.Hosting.Threading.ThreadGuard.ThreadRole.Ui);
+            var arenas = new FluentGpu.Hosting.Threading.DrawListArenaRing();
+            var seam = new FluentGpu.Hosting.Threading.SceneFramePublisher();
+
+            // (1) round-trip byte-identity
+            Span<byte> cmds = stackalloc byte[] { 1, 2, 3, 4, 5, 6, 7 };
+            Span<ulong> keys = stackalloc ulong[] { 0xAABB, 0xCCDD };
+            int a0 = arenas.WriteFront(cmds, keys);
+            ulong s0 = seam.Publish(a0, cmds.Length, keys.Length, default);
+            bool acq = seam.TryAcquire(out var f0);
+            bool bytesMatch = acq
+                && arenas.Bytes(f0.ArenaIndex, f0.ByteLen).SequenceEqual(cmds)
+                && arenas.SortKeys(f0.ArenaIndex, f0.SortLen).SequenceEqual(keys);
+            bool seqMatch = f0.PublishSeq == s0 && seam.LastConsumedSeq == s0;
+            arenas.Rotate();
+
+            // (2) DropOldest coalesce — two publishes without a consume → acquire returns the newest
+            ReadOnlySpan<ulong> noKeys = default;
+            int a1 = arenas.WriteFront(stackalloc byte[] { 11 }, noKeys); ulong s1 = seam.Publish(a1, 1, 0, default); arenas.Rotate();
+            int a2 = arenas.WriteFront(stackalloc byte[] { 22 }, noKeys); ulong s2 = seam.Publish(a2, 1, 0, default); arenas.Rotate();
+            bool latest = seam.TryAcquire(out var f2) && f2.PublishSeq == s2 && s2 == s1 + 1 && s1 == s0 + 1;
+
+            // (3) consume-gated quarantine — freed at p, reclaimable only when LastConsumedSeq > p + Quarantine-1
+            var ledger = new FluentGpu.Hosting.Threading.QuarantineLedger(16);
+            ulong pFree = seam.PublishSeq;                 // freed while producing the just-published frame (== LastConsumedSeq now)
+            ledger.OnFreed(42, pFree);
+            bool gatedBefore = !ledger.TryReclaim(seam.LastConsumedSeq, out _);   // consumer has not moved strictly past p yet
+            Span<byte> one = stackalloc byte[] { 0 };
+            for (ulong need = pFree + (ulong)FluentGpu.Hosting.Threading.QuarantinePolicy.Quarantine; seam.LastConsumedSeq < need;)
+            { int a = arenas.WriteFront(one, noKeys); seam.Publish(a, 1, 0, default); seam.TryAcquire(out _); arenas.Rotate(); }
+            bool reclaimsAfter = ledger.TryReclaim(seam.LastConsumedSeq, out int reclaimed) && reclaimed == 42 && ledger.PendingCount == 0;
+
+            Check("gate.seam.publish-consume (Cut A) round-trips a published frame byte-identically, hands the consumer the LATEST publish (DropOldest coalesce), and the consume-gated QuarantineLedger reclaims a freed slot ONLY after LastConsumedSeq passes its free-seq + Quarantine-1",
+                bytesMatch && seqMatch && latest && gatedBefore && reclaimsAfter,
+                $"bytes={bytesMatch} seq=({s0},{s1},{s2}) latest={latest} gatedBefore={gatedBefore} reclaimsAfter={reclaimsAfter} pending={ledger.PendingCount}");
+        }
+
         // ── decode.cancel-reclaim: the DecodeScheduler cancellation map must not grow with cancels (the WaveeMusic 10k-row
         // scroll cancels rows constantly). Two paths, both must end at CanceledPending==0:
         //   (A) cancel-before-claim — the dominant scroll case. With both workers parked inside a barrier-held codec, the

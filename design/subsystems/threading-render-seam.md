@@ -45,6 +45,16 @@ And the blunt operational truth carried from the plan: **production safety == CI
 from the shipping NativeAOT binary, so in the customer's hands these hazards are caught by the corpus the
 team maintained, not by the running app.
 
+> **Implementation note (2026-07-01) — landing as Cut A.** Per `docs/plans/render-thread-seam-landing-plan.md` §2 the
+> seam is being landed as **Cut A (submit-only)**: the per-frame carrier is a `RenderFrame` naming a finished DrawList in
+> a `DrawListArenaRing`, and **record stays on the UI thread** (already sub-ms + zero-alloc; the measured stall is in
+> submit/present). The **Cut B** `SceneFrame`/`SnapshotColumns` design in §2.1/§3 — record-on-render — remains the
+> eventual target *only if* record ever shows on the UI-thread budget; the sections below describe it and are reconciled
+> to Cut A section-by-section as the seam lands. **Step 1 (foundation) is LANDED single-thread + gate-green**
+> (`SceneFramePublisher` + `DrawListArenaRing` + `QuarantineLedger` + `QuarantinePolicy`, wired as a UI-thread
+> pass-through in `AppHost.Paint`; `Quarantine` logically 0). The `ThreadGuard`, quarantine-derivation (§5.1), publisher
+> ordering (§2.2), 3-slot rule (§2.3) and arena-ring rationale (§6) apply to both cuts unchanged.
+
 ---
 
 ## 1. The 3-thread topology + single-writer confinement table

@@ -128,3 +128,9 @@ New gates to author (the headless `VerticalSlice` alone cannot cover concurrency
    `ConcurrentRecord` golden (single-pass variant) to `FluentGpu.VerticalSlice`.
 4. Author the `seam.race` soak harness (out-of-band from the headless slice; GPU-capable).
 5. Steps 4–5 on a GPU machine, behind the green soak.
+
+## 9. Landed (status)
+
+- **Cut A chosen** (submit-only) — owner decision (§2/§39). The seam carries the finished DrawList, not a `SnapshotColumns`; record stays on the UI thread.
+- **Step 1 — LANDED (2026-07-01), single-thread, gate-green.** New `src/FluentGpu.Engine/Hosting/Threading/`: `QuarantinePolicy` (derived `Quarantine = RenderInFlightDepth + 1`), `RenderFrame` (Cut A carrier — arena-index + `FrameInfo`), `DrawListArenaRing` (≥3 pinned arenas, geometric grow, zero-alloc steady), `SceneFramePublisher` (triple-buffer + both-directions-volatile + `PickFreeSlot`), `QuarantineLedger` (consume-gated reclaim). Wired into `AppHost.Paint` as a **single-thread pass-through**: record → `WriteFront` copy → `Publish` → `TryAcquire` (same thread) → `SubmitDrawList` from the acquired arena → `Rotate`. Byte-identical to a direct submit; `Quarantine` logically 0. `ThreadGuard` now binds `Ui` at the top of `Paint` (covers the WndProc `PaintRequested` repaint path, not just `RunFrame`). Verified: `gate.seam.publish-consume` golden + **534 VerticalSlice checks green** (zero-alloc tripwire held), real-D3D12 `--screenshot` renders identically through the seam.
+- **Not yet landed:** Step 4 (spawn the `fgpu-render` thread; migrate submit/present/**the GPU fence-wait stall** + uploads + ComPtr ownership off the UI thread; retire-fence handshake) and Step 5 (flip `Quarantine 0→2`, soak-gated on real GPU). The BUG3 smoothness win arrives with Step 4.
