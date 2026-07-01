@@ -135,6 +135,11 @@ public sealed class AppHost : IDisposable
     private static readonly int s_forceLostFrame =
         int.TryParse(System.Environment.GetEnvironmentVariable("FG_FORCE_DEVICE_LOST"), out int __fl) && __fl > 0 ? __fl : -1;
     private int _frameOrdinal;
+    // The effective async gate: s_renderAsync AND a REAL (non-headless) GPU backend. The render thread offloads real GPU
+    // submit/present; a headless (test) backend has none, and its device seam methods (DrainImageJobs/RecoverDevice/…) are
+    // no-ops — so headless always stays on the deterministic synchronous inline path regardless of the flag. Every async
+    // branch keys off THIS, not s_renderAsync directly, so the VerticalSlice headless gates are unperturbed by the flip.
+    private readonly bool _asyncActive;
     private readonly InputDispatcher _dispatcher;
     private readonly InputEventRing _ring = new();
     private readonly IFrameTimeSource _frameTime;
@@ -207,11 +212,23 @@ public sealed class AppHost : IDisposable
     // submit/present onto it (FORCE-SYNC in Step 4 — the UI still blocks). The engine ships the proven single-thread
     // inline path until the seam.race soak is green; this flag is the staged flip mechanism, not a user quality knob.
     private static readonly bool s_renderThread = Diag.EnvFlag("FG_RENDER_THREAD");
-    // Step 5 async flip (EXPERIMENTAL, default OFF): FG_RENDER_ASYNC makes the render thread present on its own timeline
-    // (the UI does not block) — the actual smoothness win. Implies the render thread. NOT production-safe until the
-    // UploadImage producer→consumer handoff + the resize/device-lost rendezvous land and the fuzzed GPU soak is green
-    // over the required streak (landing plan §9); the arena reuse is already safe (PickFreeSlot), the residuals are not.
-    private static readonly bool s_renderAsync = Diag.EnvFlag("FG_RENDER_ASYNC");
+    // Step 5 async flip — NOW DEFAULT ON. The render thread presents on its OWN timeline (the UI never blocks on the GPU
+    // fence/present) — the actual scrolling-smoothness win. The four async races are closed + verified on real D3D12:
+    // Step 1 image upload/evict handoff, Step 2 resize rendezvous, Step 3 windowed-popups-off, Step 4 device-lost detect
+    // + recovery. ESCAPE HATCH: FG_RENDER_ASYNC=0 (or false/off/no) reverts to the proven single-thread inline path at
+    // RUNTIME — no rebuild — if a field GPU/driver issue surfaces. Honest residual: the sustained-load TDR/hung class
+    // (~minutes) is soak territory, not single-run provable (landing plan §9) — but Step 4 now RECOVERS from device loss
+    // rather than crashing, so async-default is strictly more robust to GPU faults than the old single-thread default.
+    private static readonly bool s_renderAsync = AsyncDefaultOn();
+    private static bool AsyncDefaultOn()
+    {
+        string? v = System.Environment.GetEnvironmentVariable("FG_RENDER_ASYNC");
+        if (string.IsNullOrWhiteSpace(v)) return true;   // DEFAULT ON (unset ⇒ async)
+        return !v.Equals("0", System.StringComparison.OrdinalIgnoreCase)
+            && !v.Equals("false", System.StringComparison.OrdinalIgnoreCase)
+            && !v.Equals("off", System.StringComparison.OrdinalIgnoreCase)
+            && !v.Equals("no", System.StringComparison.OrdinalIgnoreCase);
+    }
     private readonly WakeDiagnostics? _wakeDiag;
     private readonly MemCensus? _memCensus;
 
@@ -372,7 +389,7 @@ public sealed class AppHost : IDisposable
             _device.SubmitDrawList(_renderSeam.Bytes(rf), _renderSeam.SortKeys(rf), in rf.Submit);
             _swapchain.Present();
         }
-        catch (System.Exception) when (s_renderAsync)
+        catch (System.Exception) when (_asyncActive)
         {
             // Step 4: a submit/present threw on the render thread. If the device is lost, record it (the UI recover gate
             // fires next frame) and SWALLOW — an unobserved background exception here would kill the process. A
@@ -625,12 +642,13 @@ public sealed class AppHost : IDisposable
     {
         _app = app;
         _window = window;
+        _asyncActive = s_renderAsync && window.Handle.Kind != NativeHandleKind.Headless;   // headless never goes async (see field)
         // Step 3 (async): windowed out-of-bounds popups submit + present on the UI thread (RecordPopupWindows), sharing
         // the one device/queue/fence/command-list with the render thread — a concurrent submit source that would race the
         // async loop and defeat the device-level submit/present confinement assert. Gate them OFF under async: flyouts/menus
         // fall back to in-window clamped placement (the overlay's existing fallback). Removes the last UI-thread GPU submit,
         // making the Step 0 assert unconditionally valid. Default + force-sync keep windowed popups (no async overlap).
-        PopupWindowsEnabled = (window.Handle.Kind == NativeHandleKind.Headless || device.SupportsSecondarySwapchains) && !s_renderAsync;
+        PopupWindowsEnabled = (window.Handle.Kind == NativeHandleKind.Headless || device.SupportsSecondarySwapchains) && !_asyncActive;
         _device = device;
         _root = root;
         _strings = strings;
@@ -822,7 +840,7 @@ public sealed class AppHost : IDisposable
         _scene.OnFreeIndex = OnSceneSlotFreed;
         _reconciler.Images = _images;
         _reconciler.ImageEpoch = _imageEpoch;
-        if (s_renderAsync)
+        if (_asyncActive)
         {
             // ASYNC (Step 1): the UI thread must not touch the device. The pixel sink COPIES the transient decode pixels
             // into a rented ArrayPool buffer and enqueues it (optimistically admitting Ready); the render thread stages it
@@ -873,13 +891,15 @@ public sealed class AppHost : IDisposable
         // Render-thread seam (Step 4, force-sync): spawn the fgpu-render thread that runs submit/present off the UI
         // thread. Default OFF — ships single-thread until the seam.race soak is green. The thread just waits on its wake
         // event until the first Paint drains it, so constructing it here (before the first frame) is safe.
-        if (s_renderThread || s_renderAsync)
+        // Spawn the render thread ONLY for a real (non-headless) backend — headless has no GPU work to offload and its
+        // device seam methods are no-ops, so it stays on the deterministic synchronous inline path.
+        if ((s_renderThread || s_renderAsync) && window.Handle.Kind != NativeHandleKind.Headless)
         {
             // Step 4: under async, wire the device-lost recovery rendezvous — arm the backend to SIGNAL loss (not throw on
             // the render thread) + bound its fence waits, and give the render loop a recover gate (_device.RecoverDevice
             // under render confinement) + a thread-safe UI wake to nudge the UI out of its clean block on RecoverDone.
-            if (s_renderAsync) { _deviceLost = new Threading.DeviceLostCoordinator(); _device.EnableAsyncDeviceLostSignaling(); }
-            _renderThread = new Threading.RenderThread(_renderSeam, SubmitPresentOnRenderThread, async: s_renderAsync,
+            if (_asyncActive) { _deviceLost = new Threading.DeviceLostCoordinator(); _device.EnableAsyncDeviceLostSignaling(); }
+            _renderThread = new Threading.RenderThread(_renderSeam, SubmitPresentOnRenderThread, async: _asyncActive,
                 deviceLost: _deviceLost, recover: _deviceLost is null ? null : _device.RecoverDevice, windowWake: _deviceLost is null ? null : _window.Wake);
             _device.MarkRenderConfined();
         }
@@ -980,14 +1000,14 @@ public sealed class AppHost : IDisposable
 
         // Step 4 fault injection (FG_FORCE_DEVICE_LOST=<frameN>): force a controlled DEVICE_REMOVED so the next submit
         // fails and the recovery rendezvous below is exercised on real hardware.
-        if (s_forceLostFrame > 0 && s_renderAsync && ++_frameOrdinal == s_forceLostFrame)
+        if (s_forceLostFrame > 0 && _asyncActive && ++_frameOrdinal == s_forceLostFrame)
             _device.InjectDeviceLost();
 
         // Step 4 (async): device-lost recovery handshake. The render thread records a lost reason (a failed submit/present
         // or a bounded fence-wait timeout on a removed device). On the 0→1 edge: dirty the whole tree + relayout, ask the
         // render thread to rebuild (waking it so it reaches the recover gate), then BLOCK (render nothing) until RecoverDone
         // — then re-realize resident images and fall through to a full re-recorded frame against the rebuilt device.
-        if (_deviceLost is { } dl && s_renderAsync)
+        if (_deviceLost is { } dl && _asyncActive)
         {
             if (dl.RecoverRequest == 0 && _device.PollDeviceLost() != 0)
             {
@@ -1439,7 +1459,7 @@ public sealed class AppHost : IDisposable
                 _renderSeam.Publish(_drawList.Bytes, _drawList.SortKeys, in submitInfo, suppressVsync: keepAlive);
                 if (_renderThread is not null)
                 {
-                    if (s_renderAsync) _renderThread.WakeAsync();   // async: UI does NOT wait (present happens later, render-side)
+                    if (_asyncActive) _renderThread.WakeAsync();   // async: UI does NOT wait (present happens later, render-side)
                     else _renderThread.DrainSync();                  // force-sync: block until the render thread presented
                     tSubmitDone = Stopwatch.GetTimestamp();          // async: present is off-thread; force-sync collapses the boundary
                 }
@@ -1983,7 +2003,7 @@ public sealed class AppHost : IDisposable
         // ResizeBuffers + recreates RTVs — all mutating ComPtrs the render thread reads in submit/present. Under async,
         // PARK the render loop (mutual exclusion) around the unchanged Resize. Default + force-sync take the else branch
         // (no render thread running concurrently — force-sync's UI is the only toucher between publishes), byte-identical.
-        if (_renderThread is not null && s_renderAsync)
+        if (_renderThread is not null && _asyncActive)
         {
             _renderThread.Quiesce();
             try { _swapchain.Resize(s); }
