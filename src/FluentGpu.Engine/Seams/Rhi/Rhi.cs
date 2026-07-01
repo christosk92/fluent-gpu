@@ -31,6 +31,11 @@ public interface IGpuDevice : IDisposable
     /// <summary>Record + batch + submit the per-frame DrawList. <paramref name="drawList"/> is the POD command stream.</summary>
     void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx);
 
+    /// <summary>Render-thread seam (Step 0): the host calls this once it has spawned the render thread so the backend can
+    /// arm its submit/present thread-confinement assert (a stray UI-thread submit/present then throws under FGGUARD).
+    /// No-op by default (headless / single-thread backends have nothing to confine).</summary>
+    void MarkRenderConfined() { }
+
     /// <summary>Diagnostic: wall-time (ms) spent BLOCKED on GPU fences — the frame fence (<c>WaitForFrame</c>) plus the
     /// present-latency waitable — inside the most recent <see cref="SubmitDrawList(ReadOnlySpan{byte}, ReadOnlySpan{ulong}, in FrameInfo)"/>.
     /// This UI-thread stall is what dominates measured "submit" time today (the render-thread seam will move it off the UI

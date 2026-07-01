@@ -823,7 +823,7 @@ public sealed class AppHost : IDisposable
         // Render-thread seam (Step 4, force-sync): spawn the fgpu-render thread that runs submit/present off the UI
         // thread. Default OFF — ships single-thread until the seam.race soak is green. The thread just waits on its wake
         // event until the first Paint drains it, so constructing it here (before the first frame) is safe.
-        if (s_renderThread || s_renderAsync) _renderThread = new Threading.RenderThread(_renderSeam, SubmitPresentOnRenderThread, async: s_renderAsync);
+        if (s_renderThread || s_renderAsync) { _renderThread = new Threading.RenderThread(_renderSeam, SubmitPresentOnRenderThread, async: s_renderAsync); _device.MarkRenderConfined(); }
 
         // Opt-in diagnostics tools (constructed only when their flag is set; the host tick paths short-circuit otherwise).
         if (s_wakeDiag) _wakeDiag = new WakeDiagnostics();

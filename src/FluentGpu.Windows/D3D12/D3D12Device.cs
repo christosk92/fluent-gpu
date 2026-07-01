@@ -204,6 +204,16 @@ public sealed unsafe class D3D12Device : IGpuDevice
         if ((int)hr < 0) throw new InvalidOperationException($"{what} failed: 0x{(uint)hr:X8}");
     }
 
+    // Render-thread-seam confinement tripwire (seam Step 0). Armed (via MarkRenderConfined) once the render thread owns
+    // submit/present — i.e. when AppHost spawns it for FG_RENDER_THREAD (force-sync) or FG_RENDER_ASYNC. While armed, a
+    // SubmitDrawList/Present from any thread but Render throws deterministically UNDER FGGUARD, so a stray UI-side GPU
+    // touch in async is caught in CI, never shipped. Inert in the default single-thread build (_renderConfined stays
+    // false ⇒ the assert is a no-op), and the whole thing erases in Release (the [Conditional] + ThreadGuard vanish).
+    private bool _renderConfined;
+    public void MarkRenderConfined() => _renderConfined = true;
+    [System.Diagnostics.Conditional("FGGUARD")]
+    private void AssertSubmitThread() { if (_renderConfined) FluentGpu.Hosting.Threading.ThreadGuard.AssertRender(); }
+
     private void InitDevice()
     {
         uint flags = 0;
@@ -423,6 +433,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
     {
         if (target is not D3D12Swapchain sc || sc.Device != this || sc.Disposed)
             throw new InvalidOperationException("Submit target is not a live D3D12 swapchain from this device.");
+        AssertSubmitThread();   // seam Step 0: when render-confined (force-sync/async), only the render thread may submit
         Activate(sc);
         // Normally throttle to present cadence before producing this frame. A keep-alive repaint fired from inside an
         // OS modal move/size loop (host called SuppressLatencyWaitOnce) skips it so the WndProc thread isn't blocked
@@ -1261,6 +1272,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
     internal void Present(D3D12Swapchain target)
     {
         if (target.Disposed) return;
+        AssertSubmitThread();   // seam Step 0: when render-confined (force-sync/async), only the render thread may present
         Activate(target);
         // A keep-alive repaint fired from inside an OS modal move/size loop (host called SuppressVsyncOnce) presents at
         // SyncInterval 0 so the WndProc thread isn't blocked up to a vblank — the live-resize/move hitch. On the composited
