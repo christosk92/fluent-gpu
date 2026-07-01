@@ -37,6 +37,7 @@ public sealed class RenderThread : IDisposable
     private readonly bool _async;                          // Step 5: false = force-sync (UI blocks in DrainSync); true = async (WakeAsync, UI proceeds)
     private volatile bool _running = true;
     private ulong _presentAck;
+    private static readonly bool s_trace = FluentGpu.Foundation.Diag.EnvFlag("FG_DL_TRACE");   // device-lost recovery trace
 
     public RenderThread(SceneFramePublisher publisher, Action<RenderFrame> submitPresent, bool async = false,
                         DeviceLostCoordinator? deviceLost = null, Action? recover = null, Action? windowWake = null)
@@ -67,9 +68,12 @@ public sealed class RenderThread : IDisposable
             // done, and nudge the UI out of its clean block. No resize/present can be pending (the UI blocks both).
             if (_deviceLost is { } dl && dl.RecoverRequest != 0 && dl.RecoverDone == 0)
             {
-                _recover?.Invoke();
-                dl.RecoverDone = 1;
+                if (s_trace) Console.Error.WriteLine("[dl] render: recover gate — invoking RecoverDevice");
+                try { _recover?.Invoke(); }
+                catch (Exception ex) { Console.Error.WriteLine($"[dl] render: RecoverDevice THREW: {ex}"); }
+                dl.RecoverDone = 1;   // set even on failure so the UI unblocks (it re-detects if still lost) — never hang
                 _windowWake?.Invoke();
+                if (s_trace) Console.Error.WriteLine("[dl] render: RecoverDone set + UI nudged");
                 continue;
             }
             // Step 2: a resize is pending. Park HERE (before any TryAcquire/submit/present ComPtr touch), tell the UI the

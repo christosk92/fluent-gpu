@@ -134,6 +134,7 @@ public sealed class AppHost : IDisposable
     private readonly Threading.DeviceLostCoordinator? _deviceLost;
     private static readonly int s_forceLostFrame =
         int.TryParse(System.Environment.GetEnvironmentVariable("FG_FORCE_DEVICE_LOST"), out int __fl) && __fl > 0 ? __fl : -1;
+    private static readonly bool s_dlTrace = Diag.EnvFlag("FG_DL_TRACE");   // device-lost recovery trace (diagnosis)
     private int _frameOrdinal;
     // The effective async gate: s_renderAsync AND a REAL (non-headless) GPU backend. The render thread offloads real GPU
     // submit/present; a headless (test) backend has none, and its device seam methods (DrainImageJobs/RecoverDevice/…) are
@@ -1001,7 +1002,10 @@ public sealed class AppHost : IDisposable
         // Step 4 fault injection (FG_FORCE_DEVICE_LOST=<frameN>): force a controlled DEVICE_REMOVED so the next submit
         // fails and the recovery rendezvous below is exercised on real hardware.
         if (s_forceLostFrame > 0 && _asyncActive && ++_frameOrdinal == s_forceLostFrame)
+        {
+            if (s_dlTrace) System.Console.Error.WriteLine($"[dl] UI: injecting device loss at frame {_frameOrdinal}");
             _device.InjectDeviceLost();
+        }
 
         // Step 4 (async): device-lost recovery handshake. The render thread records a lost reason (a failed submit/present
         // or a bounded fence-wait timeout on a removed device). On the 0→1 edge: dirty the whole tree + relayout, ask the
@@ -1011,6 +1015,7 @@ public sealed class AppHost : IDisposable
         {
             if (dl.RecoverRequest == 0 && _device.PollDeviceLost() != 0)
             {
+                if (s_dlTrace) System.Console.Error.WriteLine($"[dl] UI: detected reason=0x{_device.PollDeviceLost():X} at frame {_frameOrdinal} → requesting recover");
                 _scene.MarkAllPaintDirty();
                 _needFullLayout = true;
                 dl.RecoverRequest = 1;
@@ -1020,6 +1025,7 @@ public sealed class AppHost : IDisposable
             {
                 if (dl.RecoverDone != 0)
                 {
+                    if (s_dlTrace) System.Console.Error.WriteLine($"[dl] UI: observed RecoverDone at frame {_frameOrdinal} → re-realizing images + resuming");
                     dl.RecoverDone = 0;
                     dl.RecoverRequest = 0;
                     _images.ReRealizeAllResident();   // re-decode resident art → re-upload to the fresh store (Step-1 handoff)
