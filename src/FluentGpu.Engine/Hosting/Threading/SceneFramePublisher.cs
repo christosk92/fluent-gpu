@@ -38,13 +38,13 @@ public sealed class SceneFramePublisher
 
     /// <summary>UI thread: publish a recorded frame. Returns its monotonic publish seq (the quarantine key for anything
     /// freed while producing it). Zero-alloc.</summary>
-    public ulong Publish(int arenaIndex, int byteLen, int sortLen, in FrameInfo submit)
+    public ulong Publish(int arenaIndex, int byteLen, int sortLen, in FrameInfo submit, bool suppressVsync = false)
     {
         ThreadGuard.AssertUi();
         int consumed = Volatile.Read(ref _consumeIdx);              // ACQUIRE — what the consumer is/was reading
         int free = PickFreeSlot(_publishedIdx, consumed);           // never the published-not-consumed nor the consuming slot
         ulong seq = ++_publishSeq;
-        _slots[free] = new RenderFrame { PublishSeq = seq, ArenaIndex = arenaIndex, ByteLen = byteLen, SortLen = sortLen, Submit = submit };
+        _slots[free] = new RenderFrame { PublishSeq = seq, ArenaIndex = arenaIndex, ByteLen = byteLen, SortLen = sortLen, Submit = submit, SuppressVsync = suppressVsync };
         Volatile.Write(ref _publishedIdx, free);                    // RELEASE — makes the slot stores visible-before
         return seq;
     }

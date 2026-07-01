@@ -50,7 +50,7 @@ team maintained, not by the running app.
 > a `DrawListArenaRing`, and **record stays on the UI thread** (already sub-ms + zero-alloc; the measured stall is in
 > submit/present). The **Cut B** `SceneFrame`/`SnapshotColumns` design in §2.1/§3 — record-on-render — remains the
 > eventual target *only if* record ever shows on the UI-thread budget; the sections below describe it and are reconciled
-> to Cut A section-by-section as the seam lands. **Step 1 (foundation) is LANDED single-thread + gate-green**
+> to Cut A section-by-section as the seam lands. **Steps 1 (foundation) + 4 (force-sync render thread, default-off behind `FG_RENDER_THREAD`; `RenderThread` submits/presents while the UI blocks in `DrainSync` — the async flip is Step 5, soak-gated) are LANDED + gate-green**
 > (`SceneFramePublisher` + `DrawListArenaRing` + `QuarantineLedger` + `QuarantinePolicy`, wired as a UI-thread
 > pass-through in `AppHost.Paint`; `Quarantine` logically 0). The `ThreadGuard`, quarantine-derivation (§5.1), publisher
 > ordering (§2.2), 3-slot rule (§2.3) and arena-ring rationale (§6) apply to both cuts unchanged.

@@ -121,6 +121,10 @@ public sealed class AppHost : IDisposable
     // spawn — which moves submit/present/the GPU fence-wait stall off the UI thread — is an additive change, not a rewrite.
     private readonly Threading.DrawListArenaRing _renderArenas = new();
     private readonly Threading.SceneFramePublisher _renderSeam = new();
+    // STEP 4 (force-sync): the dedicated render thread, constructed only when FG_RENDER_THREAD is set. null ⇒ the Step-1
+    // single-thread inline pass-through (the default shipping path). It runs submit/present off the UI thread but the UI
+    // still blocks on it (no async overlap until the soak-gated Step 5 flip).
+    private readonly Threading.RenderThread? _renderThread;
     private readonly InputDispatcher _dispatcher;
     private readonly InputEventRing _ring = new();
     private readonly IFrameTimeSource _frameTime;
@@ -189,6 +193,10 @@ public sealed class AppHost : IDisposable
     // One line per modal-loop tick to stderr — total/ensureSize/layout/submit+present ms — gated entirely so the normal
     // hot path and the zero-alloc gates are untouched (no work, no allocation, when the flag is off).
     private static readonly bool s_resizeDiag = Diag.EnvFlag("FG_RESIZE_DIAG");
+    // Render-thread seam rollout gate (Step 4/5), default OFF: FG_RENDER_THREAD spawns the fgpu-render thread and routes
+    // submit/present onto it (FORCE-SYNC in Step 4 — the UI still blocks). The engine ships the proven single-thread
+    // inline path until the seam.race soak is green; this flag is the staged flip mechanism, not a user quality knob.
+    private static readonly bool s_renderThread = Diag.EnvFlag("FG_RENDER_THREAD");
     private readonly WakeDiagnostics? _wakeDiag;
     private readonly MemCensus? _memCensus;
 
@@ -323,6 +331,20 @@ public sealed class AppHost : IDisposable
         userScroll = sc.UserScrollActive;
         var c = sc.ContentNode;
         contentDirty = !c.IsNull && _scene.IsLive(c) && (_scene.Flags(c) & NodeFlags.TransformDirty) != 0;
+    }
+
+    // Runs ON the fgpu-render thread (bound Render) when FG_RENDER_THREAD is set — the sole toucher of the device/
+    // swapchain ComPtrs for submit+present in that mode. FORCE-SYNC (Step 4): the UI is blocked in RenderThread.DrainSync,
+    // so the two threads never run concurrently. (Device/swapchain CREATION still happens UI-side — the documented
+    // residual for the full ComPtr-ownership migration; force-sync makes that split safe until the migration lands.)
+    private void SubmitPresentOnRenderThread(Threading.RenderFrame rf)
+    {
+        Threading.ThreadGuard.AssertRender();
+        if (rf.SuppressVsync) _device.SuppressVsyncOnce();
+        _device.SubmitDrawList(_renderArenas.Bytes(rf.ArenaIndex, rf.ByteLen),
+            _renderArenas.SortKeys(rf.ArenaIndex, rf.SortLen), in rf.Submit);
+        _swapchain.Present();
+        _renderArenas.Rotate();
     }
 
     private bool _frameNeeded = true;        // a frame is required (reactive work pending, input, resize, …)
@@ -787,6 +809,11 @@ public sealed class AppHost : IDisposable
         // frame-latency throttle wait — otherwise each fires a full vblank-class stall inline on the WndProc thread
         // (the drag-start / live-resize hitch). Live resize still paints synchronously; it just no longer blocks.
         _window.PaintRequested = () => Paint(0, keepAlive: true);
+
+        // Render-thread seam (Step 4, force-sync): spawn the fgpu-render thread that runs submit/present off the UI
+        // thread. Default OFF — ships single-thread until the seam.race soak is green. The thread just waits on its wake
+        // event until the first Paint drains it, so constructing it here (before the first frame) is safe.
+        if (s_renderThread) _renderThread = new Threading.RenderThread(_renderSeam, SubmitPresentOnRenderThread);
 
         // Opt-in diagnostics tools (constructed only when their flag is set; the host tick paths short-circuit otherwise).
         if (s_wakeDiag) _wakeDiag = new WakeDiagnostics();
@@ -1297,21 +1324,30 @@ public sealed class AppHost : IDisposable
             }
             else
             {
-                if (keepAlive) _device.SuppressVsyncOnce();
-                // Render-thread seam (Cut A, Step 1 — single-thread pass-through): copy the finished DrawList into a
-                // render-readable arena, PUBLISH it, ACQUIRE it (same thread today; the render thread post-spawn), and
-                // submit from the acquired arena. Byte-identical to a direct submit — establishes the seam shape only.
+                // Render-thread seam (Cut A): the UI records into _drawList, copies it into a render-readable arena, and
+                // PUBLISHes it. Step 1 (inline, default): the UI submits from the acquired arena — byte-identical to a
+                // direct submit. Step 4 (FG_RENDER_THREAD): the fgpu-render thread does SuppressVsync + submit + present
+                // and the UI BLOCKS in DrainSync (force-sync — no overlap yet; the async flip that wins is Step 5).
                 var submitInfo = new FrameInfo(_window.ClientSizePx, _window.Scale, Clear, recordStats.Damage);
                 int arena = _renderArenas.WriteFront(_drawList.Bytes, _drawList.SortKeys);
-                _renderSeam.Publish(arena, _drawList.Bytes.Length, _drawList.SortKeys.Length, in submitInfo);
-                if (_renderSeam.TryAcquire(out var rf))
+                _renderSeam.Publish(arena, _drawList.Bytes.Length, _drawList.SortKeys.Length, in submitInfo, suppressVsync: keepAlive);
+                if (_renderThread is not null)
                 {
-                    _device.SubmitDrawList(_renderArenas.Bytes(rf.ArenaIndex, rf.ByteLen),
-                        _renderArenas.SortKeys(rf.ArenaIndex, rf.SortLen), in rf.Submit); // 10 submit
-                    _renderArenas.Rotate();
+                    _renderThread.DrainSync();                 // render thread: SuppressVsync + SubmitDrawList + Present + Rotate; UI blocks until presented
+                    tSubmitDone = Stopwatch.GetTimestamp();    // force-sync collapses the submit/present boundary (the accurate split returns with the async flip, Step 5)
                 }
-                tSubmitDone = Stopwatch.GetTimestamp();        // boundary: SubmitDrawList done, Present not yet called
-                _swapchain.Present();                          // 11 present
+                else
+                {
+                    if (keepAlive) _device.SuppressVsyncOnce();
+                    if (_renderSeam.TryAcquire(out var rf))
+                    {
+                        _device.SubmitDrawList(_renderArenas.Bytes(rf.ArenaIndex, rf.ByteLen),
+                            _renderArenas.SortKeys(rf.ArenaIndex, rf.SortLen), in rf.Submit); // 10 submit
+                        _renderArenas.Rotate();
+                    }
+                    tSubmitDone = Stopwatch.GetTimestamp();     // boundary: SubmitDrawList done, Present not yet called
+                    _swapchain.Present();                       // 11 present (UI thread)
+                }
                 if (maybeUnchanged) _lastPresentedDrawListHash = dlHash;   // track the stream only across quiet runs (active frames don't hash)
                 hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
                 tSubmit = Stopwatch.GetTimestamp();
@@ -1854,6 +1890,8 @@ public sealed class AppHost : IDisposable
 
     public void Dispose()
     {
+        _renderThread?.Dispose();   // Step 4: stop + join the fgpu-render thread before tearing down the device it submits to
+
         // Detach the activation-redirect subscription so a disposed host's IPlatformApp keeps no callback into it.
         if (_onActivationRedirected is { } onAct) { _app.ActivationRedirected -= onAct; _onActivationRedirected = null; }
         if (_onSystemColorsChanged is { } onSys) { _app.SystemColorsChanged -= onSys; _onSystemColorsChanged = null; }

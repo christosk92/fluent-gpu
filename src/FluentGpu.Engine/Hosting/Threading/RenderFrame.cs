@@ -31,4 +31,9 @@ public struct RenderFrame
 
     /// <summary>POD submit context (target size, DPI scale, clear color, damage) — the <see cref="IGpuDevice.SubmitDrawList(System.ReadOnlySpan{byte},System.ReadOnlySpan{ulong},in FrameInfo)"/> args.</summary>
     public FrameInfo Submit;
+
+    /// <summary>This frame was a modal-loop / live-resize repaint: suppress the present-latency wait so the present is a
+    /// cheap tear-free hand-off (the <c>keepAlive</c> path). Applied on the render thread just before submit so the
+    /// vsync-suppress (a ComPtr touch) is render-thread-confined.</summary>
+    public bool SuppressVsync;
 }
