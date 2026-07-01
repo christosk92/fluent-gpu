@@ -18896,25 +18896,20 @@ static class Slice
         // (3) the QuarantineLedger reclaims a slot freed at seq p ONLY once LastConsumedSeq passes p + Quarantine-1 (§5). ──
         {
             FluentGpu.Hosting.Threading.ThreadGuard.BindCurrent(FluentGpu.Hosting.Threading.ThreadGuard.ThreadRole.Ui);
-            var arenas = new FluentGpu.Hosting.Threading.DrawListArenaRing();
             var seam = new FluentGpu.Hosting.Threading.SceneFramePublisher();
 
-            // (1) round-trip byte-identity
+            // (1) round-trip byte-identity (the publisher owns the per-slot arena; Bytes(rf) reads the acquired slot)
             Span<byte> cmds = stackalloc byte[] { 1, 2, 3, 4, 5, 6, 7 };
             Span<ulong> keys = stackalloc ulong[] { 0xAABB, 0xCCDD };
-            int a0 = arenas.WriteFront(cmds, keys);
-            ulong s0 = seam.Publish(a0, cmds.Length, keys.Length, default);
+            ulong s0 = seam.Publish(cmds, keys, default);
             bool acq = seam.TryAcquire(out var f0);
-            bool bytesMatch = acq
-                && arenas.Bytes(f0.ArenaIndex, f0.ByteLen).SequenceEqual(cmds)
-                && arenas.SortKeys(f0.ArenaIndex, f0.SortLen).SequenceEqual(keys);
+            bool bytesMatch = acq && seam.Bytes(f0).SequenceEqual(cmds) && seam.SortKeys(f0).SequenceEqual(keys);
             bool seqMatch = f0.PublishSeq == s0 && seam.LastConsumedSeq == s0;
-            arenas.Rotate();
 
             // (2) DropOldest coalesce — two publishes without a consume → acquire returns the newest
             ReadOnlySpan<ulong> noKeys = default;
-            int a1 = arenas.WriteFront(stackalloc byte[] { 11 }, noKeys); ulong s1 = seam.Publish(a1, 1, 0, default); arenas.Rotate();
-            int a2 = arenas.WriteFront(stackalloc byte[] { 22 }, noKeys); ulong s2 = seam.Publish(a2, 1, 0, default); arenas.Rotate();
+            ulong s1 = seam.Publish(stackalloc byte[] { 11 }, noKeys, default);
+            ulong s2 = seam.Publish(stackalloc byte[] { 22 }, noKeys, default);
             bool latest = seam.TryAcquire(out var f2) && f2.PublishSeq == s2 && s2 == s1 + 1 && s1 == s0 + 1;
 
             // (3) consume-gated quarantine — freed at p, reclaimable only when LastConsumedSeq > p + Quarantine-1
@@ -18924,7 +18919,7 @@ static class Slice
             bool gatedBefore = !ledger.TryReclaim(seam.LastConsumedSeq, out _);   // consumer has not moved strictly past p yet
             Span<byte> one = stackalloc byte[] { 0 };
             for (ulong need = pFree + (ulong)FluentGpu.Hosting.Threading.QuarantinePolicy.Quarantine; seam.LastConsumedSeq < need;)
-            { int a = arenas.WriteFront(one, noKeys); seam.Publish(a, 1, 0, default); seam.TryAcquire(out _); arenas.Rotate(); }
+            { seam.Publish(one, noKeys, default); seam.TryAcquire(out _); }
             bool reclaimsAfter = ledger.TryReclaim(seam.LastConsumedSeq, out int reclaimed) && reclaimed == 42 && ledger.PendingCount == 0;
 
             Check("gate.seam.publish-consume (Cut A) round-trips a published frame byte-identically, hands the consumer the LATEST publish (DropOldest coalesce), and the consume-gated QuarantineLedger reclaims a freed slot ONLY after LastConsumedSeq passes its free-seq + Quarantine-1",
@@ -18940,7 +18935,6 @@ static class Slice
         // cross-thread Volatile release/acquire, which single-thread logic cannot. ──
         {
             var raceSeam = new FluentGpu.Hosting.Threading.SceneFramePublisher();
-            var raceArenas = new FluentGpu.Hosting.Threading.DrawListArenaRing();
             var raceLedger = new FluentGpu.Hosting.Threading.QuarantineLedger(64);
             FluentGpu.Hosting.Threading.ThreadGuard.BindCurrent(FluentGpu.Hosting.Threading.ThreadGuard.ThreadRole.Ui);
             var go = new System.Threading.SemaphoreSlim(0);
@@ -18961,10 +18955,10 @@ static class Slice
 
             System.Span<byte> raceOne = stackalloc byte[] { 7 };
             System.ReadOnlySpan<ulong> raceNone = default;
-            int ra = raceArenas.WriteFront(raceOne, raceNone); ulong rp1 = raceSeam.Publish(ra, 1, 0, default); raceArenas.Rotate();
+            ulong rp1 = raceSeam.Publish(raceOne, raceNone, default);
             raceLedger.OnFreed(100, rp1);                                        // freed while producing rp1
-            ra = raceArenas.WriteFront(raceOne, raceNone); raceSeam.Publish(ra, 1, 0, default); raceArenas.Rotate();
-            ra = raceArenas.WriteFront(raceOne, raceNone); raceSeam.Publish(ra, 1, 0, default); raceArenas.Rotate();
+            raceSeam.Publish(raceOne, raceNone, default);
+            raceSeam.Publish(raceOne, raceNone, default);
             bool raceGatedWhileStalled = !raceLedger.TryReclaim(raceSeam.LastConsumedSeq, out _);  // reader held ⇒ LastConsumedSeq 0 ⇒ gated
 
             go.Release(); did.Wait();                                            // reader acquires the latest ⇒ LastConsumedSeq passes rp1 + Quarantine-1

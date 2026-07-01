@@ -19,16 +19,18 @@ public sealed class RenderThread : IDisposable
 {
     private readonly Thread _thread;
     private readonly SceneFramePublisher _publisher;
-    private readonly Action<RenderFrame> _submitPresent;   // runs ON this thread: (suppress vsync?) → SubmitDrawList(arena) → Present → Rotate
+    private readonly Action<RenderFrame> _submitPresent;   // runs ON this thread: (suppress vsync?) → SubmitDrawList(arena) → Present
     private readonly AutoResetEvent _wake = new(false);
     private readonly AutoResetEvent _done = new(false);
+    private readonly bool _async;                          // Step 5: false = force-sync (UI blocks in DrainSync); true = async (WakeAsync, UI proceeds)
     private volatile bool _running = true;
     private ulong _presentAck;
 
-    public RenderThread(SceneFramePublisher publisher, Action<RenderFrame> submitPresent)
+    public RenderThread(SceneFramePublisher publisher, Action<RenderFrame> submitPresent, bool async = false)
     {
         _publisher = publisher;
         _submitPresent = submitPresent;
+        _async = async;
         _thread = new Thread(Loop) { Name = "fgpu-render", IsBackground = true };
         _thread.Start();
     }
@@ -44,23 +46,35 @@ public sealed class RenderThread : IDisposable
         {
             _wake.WaitOne();
             if (!_running) break;
+            // Acquire the LATEST published frame (DropOldest coalesce — intermediate publishes since the last wake are
+            // dropped, §11). One AutoResetEvent wake ⇒ one latest-frame present; the arena the UI is now writing is a
+            // DIFFERENT ring slot than the published one this reads, so there is no torn read.
             if (_publisher.TryAcquire(out var rf))   // consumer side (bound Render here)
             {
                 _submitPresent(rf);
                 Volatile.Write(ref _presentAck, rf.PublishSeq);
             }
-            _done.Set();
+            if (!_async) _done.Set();   // force-sync only: unblock the UI's DrainSync
         }
     }
 
     /// <summary>UI thread, FORCE-SYNC (Step 4): wake the render thread and block until it has submitted+presented the
-    /// just-published frame. Step 5 replaces this with a non-blocking publish (the UI proceeds; the render thread runs
-    /// ahead) once the soak is green.</summary>
+    /// just-published frame.</summary>
     public void DrainSync()
     {
         ThreadGuard.AssertUi();
         _wake.Set();
         _done.WaitOne();
+    }
+
+    /// <summary>UI thread, ASYNC (Step 5): wake the render thread and RETURN immediately — the UI proceeds while the
+    /// render thread submits/presents on its own timeline (the smoothness win: the GPU fence-wait stall no longer bounds
+    /// back to the UI thread). EXPERIMENTAL / default-off — safe shipping additionally requires the UploadImage
+    /// producer→consumer handoff + the resize/device-lost rendezvous + a green GPU soak (landing plan §9).</summary>
+    public void WakeAsync()
+    {
+        ThreadGuard.AssertUi();
+        _wake.Set();
     }
 
     public void Dispose()

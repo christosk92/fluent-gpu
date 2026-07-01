@@ -119,7 +119,6 @@ public sealed class AppHost : IDisposable
     // PUBLISHes + ACQUIREs it on THIS (UI) thread and submits from the acquired arena — byte-identical to a direct
     // submit, no behaviour/perf change. This only establishes the seam SHAPE so the later (soak-gated) render-thread
     // spawn — which moves submit/present/the GPU fence-wait stall off the UI thread — is an additive change, not a rewrite.
-    private readonly Threading.DrawListArenaRing _renderArenas = new();
     private readonly Threading.SceneFramePublisher _renderSeam = new();
     // STEP 4 (force-sync): the dedicated render thread, constructed only when FG_RENDER_THREAD is set. null ⇒ the Step-1
     // single-thread inline pass-through (the default shipping path). It runs submit/present off the UI thread but the UI
@@ -197,6 +196,11 @@ public sealed class AppHost : IDisposable
     // submit/present onto it (FORCE-SYNC in Step 4 — the UI still blocks). The engine ships the proven single-thread
     // inline path until the seam.race soak is green; this flag is the staged flip mechanism, not a user quality knob.
     private static readonly bool s_renderThread = Diag.EnvFlag("FG_RENDER_THREAD");
+    // Step 5 async flip (EXPERIMENTAL, default OFF): FG_RENDER_ASYNC makes the render thread present on its own timeline
+    // (the UI does not block) — the actual smoothness win. Implies the render thread. NOT production-safe until the
+    // UploadImage producer→consumer handoff + the resize/device-lost rendezvous land and the fuzzed GPU soak is green
+    // over the required streak (landing plan §9); the arena reuse is already safe (PickFreeSlot), the residuals are not.
+    private static readonly bool s_renderAsync = Diag.EnvFlag("FG_RENDER_ASYNC");
     private readonly WakeDiagnostics? _wakeDiag;
     private readonly MemCensus? _memCensus;
 
@@ -333,18 +337,17 @@ public sealed class AppHost : IDisposable
         contentDirty = !c.IsNull && _scene.IsLive(c) && (_scene.Flags(c) & NodeFlags.TransformDirty) != 0;
     }
 
-    // Runs ON the fgpu-render thread (bound Render) when FG_RENDER_THREAD is set — the sole toucher of the device/
-    // swapchain ComPtrs for submit+present in that mode. FORCE-SYNC (Step 4): the UI is blocked in RenderThread.DrainSync,
-    // so the two threads never run concurrently. (Device/swapchain CREATION still happens UI-side — the documented
-    // residual for the full ComPtr-ownership migration; force-sync makes that split safe until the migration lands.)
+    // Runs ON the fgpu-render thread (bound Render) when FG_RENDER_THREAD / FG_RENDER_ASYNC is set — the sole toucher of
+    // the device/swapchain ComPtrs for submit+present in that mode. Reads the frame's bytes from the publisher's per-slot
+    // arena (PickFreeSlot guarantees the UI is not writing that slot). Force-sync (Step 4) blocks the UI in DrainSync;
+    // async (Step 5) presents on its own timeline. Device/swapchain CREATION + UploadImage staging + resize/device-lost
+    // are still UI-side — the documented async residuals (landing plan §9); force-sync makes those splits safe meanwhile.
     private void SubmitPresentOnRenderThread(Threading.RenderFrame rf)
     {
         Threading.ThreadGuard.AssertRender();
         if (rf.SuppressVsync) _device.SuppressVsyncOnce();
-        _device.SubmitDrawList(_renderArenas.Bytes(rf.ArenaIndex, rf.ByteLen),
-            _renderArenas.SortKeys(rf.ArenaIndex, rf.SortLen), in rf.Submit);
+        _device.SubmitDrawList(_renderSeam.Bytes(rf), _renderSeam.SortKeys(rf), in rf.Submit);
         _swapchain.Present();
-        _renderArenas.Rotate();
     }
 
     private bool _frameNeeded = true;        // a frame is required (reactive work pending, input, resize, …)
@@ -813,7 +816,7 @@ public sealed class AppHost : IDisposable
         // Render-thread seam (Step 4, force-sync): spawn the fgpu-render thread that runs submit/present off the UI
         // thread. Default OFF — ships single-thread until the seam.race soak is green. The thread just waits on its wake
         // event until the first Paint drains it, so constructing it here (before the first frame) is safe.
-        if (s_renderThread) _renderThread = new Threading.RenderThread(_renderSeam, SubmitPresentOnRenderThread);
+        if (s_renderThread || s_renderAsync) _renderThread = new Threading.RenderThread(_renderSeam, SubmitPresentOnRenderThread, async: s_renderAsync);
 
         // Opt-in diagnostics tools (constructed only when their flag is set; the host tick paths short-circuit otherwise).
         if (s_wakeDiag) _wakeDiag = new WakeDiagnostics();
@@ -1023,7 +1026,8 @@ public sealed class AppHost : IDisposable
         // Paint is reached BOTH from RunFrame (already bound) AND synchronously from the WndProc PaintRequested repaint
         // (live-resize, line ~789) which is NOT — so bind the current (message/UI) thread here too. Paint is always the
         // UI thread; the render-thread seam's AssertUi (DrawListArenaRing.WriteFront / SceneFramePublisher.Publish) runs
-        // on this path, so both entries must be bound. Idempotent for the same role; erased from Release with ThreadGuard.
+        // on this path, so both entries must be bound (the seam's AssertUi in SceneFramePublisher.Publish runs here).
+        // Idempotent for the same role; erased from Release with ThreadGuard.
         Threading.ThreadGuard.BindCurrent(Threading.ThreadGuard.ThreadRole.Ui);
         if (_inPaint) { _frameAfterPaint = true; return LastStats; }
         _inPaint = true;
@@ -1324,27 +1328,25 @@ public sealed class AppHost : IDisposable
             }
             else
             {
-                // Render-thread seam (Cut A): the UI records into _drawList, copies it into a render-readable arena, and
-                // PUBLISHes it. Step 1 (inline, default): the UI submits from the acquired arena — byte-identical to a
-                // direct submit. Step 4 (FG_RENDER_THREAD): the fgpu-render thread does SuppressVsync + submit + present
-                // and the UI BLOCKS in DrainSync (force-sync — no overlap yet; the async flip that wins is Step 5).
+                // Render-thread seam (Cut A): the UI records into _drawList and PUBLISHes it (copied into a FREE slot's
+                // render-readable arena — PickFreeSlot makes the arena reuse safe for every mode). Step 1 (inline,
+                // default): the UI submits from the acquired arena — byte-identical to a direct submit. Step 4
+                // (FG_RENDER_THREAD): the fgpu-render thread submits/presents; the UI BLOCKS in DrainSync (force-sync).
+                // Step 5 (FG_RENDER_ASYNC): the UI WakeAsyncs and PROCEEDS — the render thread presents on its own
+                // timeline (the smoothness win: the GPU fence-wait no longer bounds back to the UI thread).
                 var submitInfo = new FrameInfo(_window.ClientSizePx, _window.Scale, Clear, recordStats.Damage);
-                int arena = _renderArenas.WriteFront(_drawList.Bytes, _drawList.SortKeys);
-                _renderSeam.Publish(arena, _drawList.Bytes.Length, _drawList.SortKeys.Length, in submitInfo, suppressVsync: keepAlive);
+                _renderSeam.Publish(_drawList.Bytes, _drawList.SortKeys, in submitInfo, suppressVsync: keepAlive);
                 if (_renderThread is not null)
                 {
-                    _renderThread.DrainSync();                 // render thread: SuppressVsync + SubmitDrawList + Present + Rotate; UI blocks until presented
-                    tSubmitDone = Stopwatch.GetTimestamp();    // force-sync collapses the submit/present boundary (the accurate split returns with the async flip, Step 5)
+                    if (s_renderAsync) _renderThread.WakeAsync();   // async: UI does NOT wait (present happens later, render-side)
+                    else _renderThread.DrainSync();                  // force-sync: block until the render thread presented
+                    tSubmitDone = Stopwatch.GetTimestamp();          // async: present is off-thread; force-sync collapses the boundary
                 }
                 else
                 {
                     if (keepAlive) _device.SuppressVsyncOnce();
                     if (_renderSeam.TryAcquire(out var rf))
-                    {
-                        _device.SubmitDrawList(_renderArenas.Bytes(rf.ArenaIndex, rf.ByteLen),
-                            _renderArenas.SortKeys(rf.ArenaIndex, rf.SortLen), in rf.Submit); // 10 submit
-                        _renderArenas.Rotate();
-                    }
+                        _device.SubmitDrawList(_renderSeam.Bytes(rf), _renderSeam.SortKeys(rf), in rf.Submit); // 10 submit
                     tSubmitDone = Stopwatch.GetTimestamp();     // boundary: SubmitDrawList done, Present not yet called
                     _swapchain.Present();                       // 11 present (UI thread)
                 }
