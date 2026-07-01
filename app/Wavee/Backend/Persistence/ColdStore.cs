@@ -10,6 +10,9 @@ namespace Wavee.Backend.Persistence;
 // in-memory tier-1 (CachedStore) bulk-loads from here on startup and dual-writes every mutation back, write-behind.
 
 public readonly record struct ColdEntity(string Uri, EntityKind Kind, byte[] Payload);
+/// <summary>One persisted video↔audio association blob (JSON of <c>VideoAssociation</c>), keyed by entity uri in its
+/// OWN table (it shares the track uri, so it can't live in the entity store).</summary>
+public readonly record struct ColdVideoAssoc(string Uri, byte[] Payload);
 public readonly record struct ColdSaved(string SetId, string Uri, SyncState Sync);
 /// <summary>One ordered playlist-membership row: the stable per-row <paramref name="ItemId"/> (survives reorder),
 /// the referenced entity <paramref name="ItemUri"/>, and the per-membership add facts.</summary>
@@ -23,6 +26,10 @@ public interface IColdStore : IDisposable
     IEnumerable<ColdSaved> LoadAllSaved();   // unordered library-set membership (collection_items), per active account
     void UpsertEntity(string uri, EntityKind kind, byte[] payload);   // non-blocking (write-behind)
     void UpsertSaved(string setId, string uri, bool saved, SyncState sync);
+
+    // Video↔audio associations: their own keyed-by-uri table (the file-id map survives restarts). Write-behind like entities.
+    IEnumerable<ColdVideoAssoc> LoadAllVideoAssociations();
+    void UpsertVideoAssociation(string uri, byte[] payload);   // non-blocking (write-behind)
 
     // Per-set sync token (the opaque collection delta cursor / playlist-style revision). null = never synced.
     string? GetCollectionRevision(string setId);

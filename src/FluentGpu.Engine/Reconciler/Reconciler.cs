@@ -1630,6 +1630,7 @@ public sealed class TreeReconciler
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) UnmountSubtree(c);
 
         int idx = (int)node.Raw.Index;
+        Anim?.CancelAll(node);
         SaveScroll(node);   // persist this viewport's offset for its ScrollKey so a cold revisit can restore it
         if (_morphKeyByNode.Remove(idx, out string? morphKey))
         {

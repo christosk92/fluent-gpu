@@ -74,11 +74,14 @@ public readonly record struct GradientSpec(GradientShape Shape, float AngleDeg, 
 }
 
 /// <summary>A left→right WIPE fill for a glyph run — a general text-reveal effect (the lyrics karaoke uses it, but it is
-/// app-neutral: progress text, sweep reveals, …). Glyphs whose run-local-x center is left of <see cref="Split"/> (0..1
-/// along the run's x-extent) are painted <see cref="Before"/>, glyphs right of it <see cref="After"/>, with a
-/// <see cref="Softness"/>-wide soft boundary; <see cref="Lift"/> floats a just-passed glyph up by Lift DIP (settling
-/// behind the boundary). Carried in a sparse scene side-table and emitted as <c>DrawGlyphRunGradient</c> (reuses the
-/// glyph PSO via per-instance color/offset — no new shader). Advancing <see cref="Split"/> per frame is reshape-free.</summary>
+/// app-neutral: progress text, sweep reveals, …). <see cref="Split"/> (0..1) is a fraction of the run's content IN
+/// READING ORDER: the replay lays a wrapped run's visual lines END-TO-END (line 1 left→right, then line 2, …) over glyph
+/// EDGES (first glyph's left edge → last glyph's right edge), so a glyph before <see cref="Split"/> in reading order is
+/// painted <see cref="Before"/> and one after it <see cref="After"/>, with a <see cref="Softness"/>-wide soft boundary the
+/// replay remaps so <see cref="Split"/>==1 fully clears the run's trailing edge (and ==0 leaves it wholly unsung);
+/// <see cref="Lift"/> floats a just-passed glyph up by Lift DIP (settling behind the boundary). Carried in a sparse scene
+/// side-table and emitted as <c>DrawGlyphRunGradient</c> (reuses the glyph PSO via per-instance color/offset — no new
+/// shader). Advancing <see cref="Split"/> per frame is reshape-free.</summary>
 public readonly record struct GlyphWipe(ColorF Before, ColorF After, float Split, float Softness = 0.06f, float Lift = 0f);
 
 /// <summary>

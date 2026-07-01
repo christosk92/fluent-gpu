@@ -48,7 +48,8 @@ internal static class WaveeNavProbe
         bool trackShot = Diag.EnvFlag("WAVEE_TRACKLIST_SHOT");
         bool heroShot = Diag.EnvFlag("WAVEE_HERO_SHOT");
         bool homeScroll = Diag.EnvFlag("WAVEE_HOME_SCROLL_PROBE");
-        if (!Diag.EnvFlag("WAVEE_NAV_PROBE") && !connStress && !trackShot && !heroShot && !homeScroll) return false;
+        bool lyricsProbe = Diag.EnvFlag("WAVEE_LYRICS_PROBE");
+        if (!Diag.EnvFlag("WAVEE_NAV_PROBE") && !connStress && !trackShot && !heroShot && !homeScroll && !lyricsProbe) return false;
         if (window is not Win32Window w || device is not D3D12Device gpu)
         {
             Console.Error.WriteLine("[wavee-nav-probe] unavailable: requires Win32Window + D3D12Device");
@@ -68,6 +69,7 @@ internal static class WaveeNavProbe
         else if (trackShot) RunTrackListShot(host, w, gpu);
         else if (connStress) RunConnStress(host, w, gpu);
         else if (homeScroll) RunHomeScrollProbe(host, w, gpu);
+        else if (lyricsProbe) RunLyricsProbe(host, w, gpu);
         else Run(host, w, gpu);
         return true;
     }
@@ -530,6 +532,116 @@ internal static class WaveeNavProbe
         catch (Exception ex)
         {
             Console.Error.WriteLine($"[{tag}] failed to write {path}: {ex.Message}");
+        }
+    }
+
+    // WAVEE_LYRICS_PROBE=1 (run with WAVEE_LYRICS_OPEN=1 to open the rail and --fake for the 40-line synced doc): measure
+    // the lyrics surface, which renders ~10-13 per-line depth-of-field self-blur layers every frame. Reports the perceived
+    // FPS at REAL vsync (GPU stalls included) AND the vsync-suppressed CPU work breakdown (flush/layout/anim/record/submit)
+    // + the rendered-frame count (the idle-spin signal), for an IDLE (paused) hold and a wheel SCROLL through the lines.
+    static void RunLyricsProbe(AppHost host, Win32Window window, D3D12Device gpu)
+    {
+        void FrameFree() { if (!window.IsClosed) { gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce(); host.RunFrame(); } }
+        void Settle(int n) { for (int i = 0; i < n && !window.IsClosed; i++) FrameFree(); }
+
+        // Optional resolution stress (WAVEE_PROBE_W/H): the layered-path submit + blit scale with the canvas pixel area,
+        // so a high-DPI / large window is where the lyrics blur actually drops frames — reproduce it here.
+        int pw = int.TryParse(Environment.GetEnvironmentVariable("WAVEE_PROBE_W"), out var w0) ? w0 : 0;
+        int ph = int.TryParse(Environment.GetEnvironmentVariable("WAVEE_PROBE_H"), out var h0) ? h0 : 0;
+        if (pw > 200 && ph > 200) { window.SetClientSize(pw, ph); Console.Error.WriteLine($"[lyrics-probe] window -> {pw}x{ph}"); }
+
+        Console.Error.WriteLine("[lyrics-probe] warmup (rail opens via WAVEE_LYRICS_OPEN; lyrics doc loads)");
+        Settle(60);
+        System.Threading.Thread.Sleep(500);     // FakeData.GetLyricsAsync Task.Delay(150) + paint settle
+        Settle(80);
+        GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+
+        var vp = FindLyricsViewport(host.Scene);
+        if (vp.IsNull)
+        {
+            Console.Error.WriteLine("[lyrics-probe] NO lyrics viewport found (rail not open / no current track / doc empty). Scrollers seen:");
+            DumpScrollers(host.Scene);
+            return;
+        }
+        var vr = host.Scene.AbsoluteRect(vp);
+        host.Scene.TryGetScroll(vp, out var s0);
+        Console.Error.WriteLine($"[lyrics-probe] lyrics viewport rect=({vr.X:0},{vr.Y:0} {vr.W:0}x{vr.H:0}) content={s0.ContentH:0} viewH={s0.ViewportH:0}");
+
+        MeasureLyrics("IDLE  ", host, window, gpu, null);
+
+        float vh = s0.ViewportH > 20f ? s0.ViewportH : vr.H;
+        var pos = new Point2(vr.X + vr.W * 0.5f, vr.Y + vh * 0.5f);
+        window.QueueInput(new InputEvent(InputKind.PointerMove, pos, 0, 0));
+        Settle(2);
+        MeasureLyrics("SCROLL", host, window, gpu, i => window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, ((i / 18) & 1) == 0 ? +50f : -50f)));
+
+        Console.Error.WriteLine("[lyrics-probe] done");
+    }
+
+    static void MeasureLyrics(string tag, AppHost host, Win32Window window, D3D12Device gpu, Action<int>? inject)
+    {
+        // (1) perceived FPS at TRUE vsync cadence (present waits for the vblank → a GPU-bound frame stretches the interval).
+        var iv = new List<double>(260);
+        long prev = Stopwatch.GetTimestamp();
+        for (int i = 0; i < 220 && !window.IsClosed; i++)
+        {
+            inject?.Invoke(i);
+            host.RunFrame();
+            long now = Stopwatch.GetTimestamp();
+            iv.Add((now - prev) * 1000.0 / Stopwatch.Frequency); prev = now;
+        }
+        var a = iv.ToArray(); double tot = 0, worst = 0; foreach (var v in a) { tot += v; if (v > worst) worst = v; }
+        double mean = a.Length > 0 ? tot / a.Length : 0; int o16 = 0, o33 = 0; foreach (var v in a) { if (v > 16.7) o16++; if (v > 33.3) o33++; }
+
+        // (2) vsync-suppressed CPU work breakdown + rendered-frame count (IDLE should render ~0 — a spin renders ~all).
+        double sFrame = 0, sFlush = 0, sLayout = 0, sAnim = 0, sRecord = 0, sSubmit = 0, wWorst = 0;
+        int rendered = 0, total = 0, g0 = GC.CollectionCount(0); long alloc0 = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 160 && !window.IsClosed; i++)
+        {
+            inject?.Invoke(i);
+            gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce();
+            var s = host.RunFrame();
+            total++;
+            if (s.Rendered || s.DrawCommandCount > 0)
+            {
+                rendered++;
+                sFrame += s.FrameMs; sFlush += s.FlushMs; sLayout += s.LayoutMs; sAnim += s.AnimMs; sRecord += s.RecordMs; sSubmit += s.SubmitMs;
+                if (s.FrameMs > wWorst) wWorst = s.FrameMs;
+            }
+        }
+        int dg0 = GC.CollectionCount(0) - g0;
+        int den = Math.Max(1, rendered);
+        double allocKb = (GC.GetAllocatedBytesForCurrentThread() - alloc0) / 1024.0 / den;
+        Console.Error.WriteLine($"[lyrics-fps] {tag} perceived(vsync): {a.Length}f mean {mean:0.0}ms ({(mean > 0 ? 1000.0 / mean : 0):0}fps) worst {worst:0.0}ms | <60fps={o16} <30fps={o33}");
+        Console.Error.WriteLine($"             work(no-vsync): rendered {rendered}/{total} | frame {sFrame / den:0.00}ms (worst {wWorst:0.00}) = flush {sFlush / den:0.00} + layout {sLayout / den:0.00} + anim {sAnim / den:0.00} + record {sRecord / den:0.00} + submit {sSubmit / den:0.00} | alloc {allocKb:0.0}KB/f gen0={dg0}");
+    }
+
+    static NodeHandle FindLyricsViewport(FluentGpu.Scene.SceneStore scene)
+    {
+        var best = default(NodeHandle); float bestX = -1f;
+        var stack = new Stack<NodeHandle>(); if (!scene.Root.IsNull) stack.Push(scene.Root);
+        while (stack.Count > 0)
+        {
+            var n = stack.Pop(); if (n.IsNull || !scene.IsLive(n)) continue;
+            if (scene.HasScroll(n) && scene.TryGetScroll(n, out var sc) && sc.ViewportH > 50f && sc.ContentH > sc.ViewportH + 1f)
+            {
+                var r = scene.AbsoluteRect(n);
+                if (r.X > bestX) { bestX = r.X; best = n; }   // rightmost content scroller = the lyrics rail (right side)
+            }
+            for (var c = scene.FirstChild(n); !c.IsNull; c = scene.NextSibling(c)) stack.Push(c);
+        }
+        return best;
+    }
+
+    static void DumpScrollers(FluentGpu.Scene.SceneStore scene)
+    {
+        var stack = new Stack<NodeHandle>(); if (!scene.Root.IsNull) stack.Push(scene.Root);
+        while (stack.Count > 0)
+        {
+            var n = stack.Pop(); if (n.IsNull || !scene.IsLive(n)) continue;
+            if (scene.HasScroll(n) && scene.TryGetScroll(n, out var sc))
+            { var r = scene.AbsoluteRect(n); Console.Error.WriteLine($"  scroller rect=({r.X:0},{r.Y:0} {r.W:0}x{r.H:0}) viewH={sc.ViewportH:0} contentH={sc.ContentH:0}"); }
+            for (var c = scene.FirstChild(n); !c.IsNull; c = scene.NextSibling(c)) stack.Push(c);
         }
     }
 

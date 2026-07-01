@@ -35,25 +35,30 @@ namespace FluentGpu.Rhi.D3D12;
 /// (it animates), so the blur shader computes the gaussian weights per-frame from a σ uniform (unlike the acrylic
 /// compositor's fixed 30-DIP kernel, which is tuned for a static backdrop blur). needs-pixels: the blurred GPU pixels
 /// are a --shot manual check; the headless harness asserts the LayerKind.Blur opcode + BlurSigma on HeadlessGpuDevice.
-/// LastLayers. Perf note (honest): the blur runs over the full canvas-sized group RT; a per-layer-rect bucket (like the
-/// acrylic LayerPool) is a deferred optimization.
+/// LastLayers. Perf: the RT stays canvas-sized (group content can extend past the layer rect), but the two blur passes
+/// are SCISSORED to the layer's device rect + the kernel's ±3σ tap halo (<see cref="BlurInPlace"/>) — pixel-identical to
+/// a full-canvas blur (the kernel output is zero past that halo) at a fraction of the fill for a small surface (a
+/// one-line lyrics glow is a ~44 px band, not the whole window).
 /// </summary>
 internal sealed unsafe class OpacityLayerCompositor : IDisposable
 {
-    private const int MaxPool = 4;            // ≥ max opacity-group nesting depth per frame
+    private const int MaxPool = 32;           // CANVAS-sized transient group slots + small REGION-sized blur-cache PINS (one pool)
     private const int TrimIdleFrames = 600;   // free entries idle this long (~10 s) are retired (fence-gated release)
 
     private ID3D12Device* _device;
-    private uint _w, _h;                      // canvas size (physical px) — every pooled RT matches it
+    private uint _w, _h;                      // canvas size (physical px) — transient slots match it; PINS are region-sized
 
     private struct PoolEntry
     {
         public ID3D12Resource* Res;            // null = empty slot
         public D3D12_RESOURCE_STATES State;    // tracked in record order (single DIRECT queue serializes execution)
-        public uint W, H;
+        public uint W, H;                      // RT dims — canvas for a transient slot, the blur region for a PIN
         public ulong LastUseFence;
         public int IdleFrames;
         public bool InUse;
+        public ulong PinHash;                  // 0 = transient slot; else the blur-cache content hash this slot retains
+        public bool BlurReady;                 // (pins) the RT currently holds the FINAL blurred result for PinHash
+        public int RegionX, RegionY;           // (pins) physical-px screen origin of the retained blur region (for the composite)
     }
     private readonly PoolEntry[] _pool = new PoolEntry[MaxPool];
 
@@ -108,12 +113,18 @@ float4 BlurPS(V i) : SV_Target
     int R = (int)min(ceil(sigma * 3.0), 32.0);   // ±3σ support, capped
     float4 acc = gSrc.Sample(gSamp, i.uv);        // centre tap, weight 1
     float wsum = 1.0;
-    [loop] for (int k = 1; k <= R; k++)
+    // LINEAR-SAMPLED Gaussian: fold each adjacent tap pair (k, k+1) into ONE bilinear fetch at the weight-interpolated
+    // offset (a LINEAR sampler returns w0*texel_k + w1*texel_{k+1}), halving the texture fetches for an identical kernel
+    // — the standard separable-blur optimization. The LINEAR sampler (BuildBlurPipeline) makes the midpoint fetch exact.
+    [loop] for (int k = 1; k <= R; k += 2)
     {
-        float w = exp(-(float)(k * k) * inv2s2);
-        acc += gSrc.Sample(gSamp, i.uv + step * k) * w;
-        acc += gSrc.Sample(gSamp, i.uv - step * k) * w;
-        wsum += 2.0 * w;
+        float w0 = exp(-(float)(k * k) * inv2s2);
+        float w1 = (k + 1 <= R) ? exp(-(float)((k + 1) * (k + 1)) * inv2s2) : 0.0;
+        float wp = w0 + w1;
+        float off = wp > 1e-8 ? (k * w0 + (k + 1) * w1) / wp : (float)k;   // bilinear midpoint → exact pair weight
+        acc += gSrc.Sample(gSamp, i.uv + step * off) * wp;
+        acc += gSrc.Sample(gSamp, i.uv - step * off) * wp;
+        wsum += 2.0 * wp;
     }
     return acc / wsum;
 }
@@ -500,7 +511,7 @@ float4 PSMain(V i) : SV_Target
         for (int i = 0; i < MaxPool; i++)
         {
             ref var e = ref _pool[i];
-            if (e.Res == null || e.InUse || e.W != _w || e.H != _h) continue;
+            if (e.Res == null || e.InUse || e.W != _w || e.H != _h || e.PinHash != 0) continue;   // never grab a retained pin as a transient slot
             best = i; break;
         }
         if (best < 0)
@@ -509,10 +520,15 @@ float4 PSMain(V i) : SV_Target
             for (int i = 0; i < MaxPool; i++) if (_pool[i].Res == null) { slot = i; break; }
             if (slot < 0)
             {
+                // Evict the LRU non-in-use slot, preferring an UNPINNED (transient) victim — a displaced blur-cache pin
+                // merely re-blurs the next time it is needed, whereas evicting a transient slot loses nothing.
                 for (int i = 0; i < MaxPool; i++)
                 {
                     if (_pool[i].InUse) continue;
-                    if (slot < 0 || _pool[i].LastUseFence < _pool[slot].LastUseFence) slot = i;
+                    if (slot < 0) { slot = i; continue; }
+                    bool iUn = _pool[i].PinHash == 0, sUn = _pool[slot].PinHash == 0;
+                    if (iUn != sUn) { if (iUn) slot = i; continue; }
+                    if (_pool[i].LastUseFence < _pool[slot].LastUseFence) slot = i;
                 }
                 if (slot < 0) throw new InvalidOperationException("opacity-layer pool exhausted (group nesting deeper than MaxPool)");
                 _retired.Add(new Retired { Res = _pool[slot].Res, Fence = _pool[slot].LastUseFence });
@@ -598,23 +614,149 @@ float4 PSMain(V i) : SV_Target
     /// <summary>Return the slot to the free list (same-queue reuse needs no fence).</summary>
     public void Release(int slot) => _pool[slot].InUse = false;
 
+    // ── Cross-frame BLUR CACHE (capable + WEAK GPUs go idle/cool when STATIONARY instead of re-blurring every submit) ────
+    // A self-blur whose subtree draw-bytes + σ are byte-identical to a previous frame's reuses that frame's RETAINED,
+    // already-blurred pixels (a "pin"), keyed by a content hash the caller (D3D12Device) folds from the layer's drawlist
+    // segment. Stationary lyrics — the dimmed neighbours unchanged — then skip the subtree render + BOTH Gaussian passes
+    // and just re-composite the pin. KEY DESIGN: a pin is a small REGION-SIZED RT (the blur's DeviceRect + ±3σ halo, e.g.
+    // ~340×120 px for a rail line ≈ 160 KB), NOT a full-canvas RT (33 MB at 4K) — so 16 stationary lines pin in a few MB,
+    // and a momentary scroll recurrence can't thrash VRAM (the canvas-sized-pin design did, regressing 4K scroll). The pin
+    // is filled by a CopyTextureRegion out of the transient scratch right after the normal miss composite, so the render +
+    // blur path is UNCHANGED (no device-viewport translation) and a HIT is provably PIXEL-IDENTICAL to a miss (bit-exact
+    // copy; the UV[0,1] composite over the region viewport samples the same texel centres). Pins share the pool with the
+    // canvas transient slots (PinHash != 0 ⇒ retained), LRU-evicted under pressure (unpinned victims first) and trimmed
+    // when idle (surface closed). Only the blur tiers create pins; the whole path is gated by FG_BLUR_CACHE.
+
+    /// <summary>The physical-px box a self-blur actually writes: DeviceRect (DIP × <paramref name="scale"/>) inflated by
+    /// the kernel's ±min(ceil(3σ),32)px tap halo, clamped to the canvas. The region a pin must capture + composite —
+    /// identical to <see cref="BlurInPlace"/>'s scissor, so the pinned strip is exactly the blurred strip.</summary>
+    private void RegionBox(in PushLayerCmd L, float scale, out int minX, out int minY, out int maxX, out int maxY)
+    {
+        int rTaps = (int)MathF.Min(MathF.Ceiling(L.BlurSigma * 3f), 32f);
+        minX = Math.Max(0, (int)MathF.Floor(L.DeviceRect.X * scale) - rTaps);
+        minY = Math.Max(0, (int)MathF.Floor(L.DeviceRect.Y * scale) - rTaps);
+        maxX = Math.Min((int)_w, (int)MathF.Ceiling((L.DeviceRect.X + L.DeviceRect.W) * scale) + rTaps);
+        maxY = Math.Min((int)_h, (int)MathF.Ceiling((L.DeviceRect.Y + L.DeviceRect.H) * scale) + rTaps);
+    }
+
+    /// <summary>A valid (already-blurred) region pin for <paramref name="hash"/>, refreshed into this frame's SRV bank,
+    /// or -1. The pin is left PIXEL_SHADER_RESOURCE between frames, so the caller composites it with no barrier.</summary>
+    public int FindPin(ulong hash)
+    {
+        if (hash == 0) return -1;
+        for (int i = 0; i < MaxPool; i++)
+        {
+            ref var e = ref _pool[i];
+            if (e.Res == null || e.InUse || e.PinHash != hash || !e.BlurReady) continue;
+            e.IdleFrames = 0;
+            CreateSrv(e.Res, SrvCpu(PoolSrvSlot(i)));   // refresh THIS frame's parity bank for the composite
+            return i;
+        }
+        return -1;
+    }
+
+    /// <summary>Cache-MISS completion: COPY the just-blurred region out of the transient scratch slot
+    /// <paramref name="scratchSlot"/> into a small, REGION-SIZED retained pin keyed by <paramref name="hash"/>, so next
+    /// frame's <see cref="FindPin"/> composites it without re-rendering+re-blurring. Reuses this hash's existing pin RT if
+    /// the region size still matches; else allocates (evicting an unpinned victim first). The scratch holds the final
+    /// blurred subtree (PIXEL_SHADER_RESOURCE after <see cref="BlurInPlace"/> + the miss composite); this leaves it in
+    /// COPY_SOURCE (the next <see cref="Acquire"/> transitions it back). A no-op (just re-blurs next frame) if the pool is
+    /// momentarily full of in-use scratch.</summary>
+    public void RetainPinFromScratch(ID3D12GraphicsCommandList* cmd, int scratchSlot, ulong hash, in PushLayerCmd L, float scale, ulong frameFence)
+    {
+        RegionBox(in L, scale, out int minX, out int minY, out int maxX, out int maxY);
+        uint rw = (uint)Math.Max(1, maxX - minX), rh = (uint)Math.Max(1, maxY - minY);
+
+        int slot = -1;
+        for (int i = 0; i < MaxPool; i++)   // reuse this hash's existing same-size pin if it survived
+            if (_pool[i].Res != null && !_pool[i].InUse && _pool[i].PinHash == hash && _pool[i].W == rw && _pool[i].H == rh) { slot = i; break; }
+        if (slot < 0) for (int i = 0; i < MaxPool; i++) if (_pool[i].Res == null) { slot = i; break; }   // cold growth
+        if (slot < 0)
+        {
+            for (int i = 0; i < MaxPool; i++)   // LRU evict, preferring an UNPINNED (transient) victim
+            {
+                if (_pool[i].InUse) continue;
+                if (slot < 0) { slot = i; continue; }
+                bool iUn = _pool[i].PinHash == 0, sUn = _pool[slot].PinHash == 0;
+                if (iUn != sUn) { if (iUn) slot = i; continue; }
+                if (_pool[i].LastUseFence < _pool[slot].LastUseFence) slot = i;
+            }
+            if (slot < 0) return;   // pool momentarily all in-use scratch — skip the pin (re-blurs next frame, no correctness loss)
+        }
+        ref var e = ref _pool[slot];
+        if (e.Res != null && (e.W != rw || e.H != rh))   // wrong-size RT (different region) → retire (fence-gated) + reallocate
+        {
+            _retired.Add(new Retired { Res = e.Res, Fence = e.LastUseFence });
+            e = default;
+        }
+        if (e.Res == null)
+        {
+            e.Res = CreateTarget(rw, rh, $"OpacityLayer.Pin[{slot}]");
+            e.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            e.W = rw; e.H = rh;
+        }
+
+        // COPY the scratch's [minX,minY → maxX,maxY] strip to the pin's (0,0). Bit-exact (same format, no resample).
+        Barrier(cmd, _pool[scratchSlot].Res, ref _pool[scratchSlot].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE);
+        Barrier(cmd, e.Res, ref e.State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST);
+        D3D12_TEXTURE_COPY_LOCATION dst = default; dst.pResource = e.Res; dst.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX; dst.Anonymous.SubresourceIndex = 0;
+        D3D12_TEXTURE_COPY_LOCATION src = default; src.pResource = _pool[scratchSlot].Res; src.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX; src.Anonymous.SubresourceIndex = 0;
+        D3D12_BOX b = new() { left = (uint)minX, top = (uint)minY, front = 0, right = (uint)maxX, bottom = (uint)maxY, back = 1 };
+        cmd->CopyTextureRegion(&dst, 0, 0, 0, &src, &b);
+        Barrier(cmd, e.Res, ref e.State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
+        e.PinHash = hash; e.BlurReady = true; e.InUse = false; e.IdleFrames = 0; e.LastUseFence = frameFence;
+        e.RegionX = minX; e.RegionY = minY;
+    }
+
+    /// <summary>Composite a cache-HIT REGION pin over the currently-bound target at its screen position. The pin holds the
+    /// blurred DeviceRect+halo strip; set the viewport to that screen rect so the fullscreen-triangle's UV[0,1] maps the
+    /// whole pin onto the same pixels the miss composite wrote (PIXEL-IDENTICAL). Restores the full-canvas viewport after,
+    /// preserving the device's invariant (it sets the viewport ONCE); the caller re-applies its enclosing clip.</summary>
+    public void CompositePinnedBlur(ID3D12GraphicsCommandList* cmd, int slot, float alpha, in PushLayerCmd L, float scale)
+    {
+        RegionBox(in L, scale, out int minX, out int minY, out int maxX, out int maxY);
+        int rw = maxX - minX, rh = maxY - minY;
+        if (rw <= 0 || rh <= 0) return;
+        D3D12_VIEWPORT vp = new() { TopLeftX = minX, TopLeftY = minY, Width = rw, Height = rh, MaxDepth = 1 };
+        RECT box = new() { left = minX, top = minY, right = maxX, bottom = maxY };
+        cmd->RSSetViewports(1, &vp);
+        cmd->RSSetScissorRects(1, &box);
+        Composite(cmd, slot, alpha);
+        SetViewport(cmd, _w, _h);   // restore the full-canvas viewport (+ full scissor; the caller re-applies its clip)
+    }
+
     /// <summary>Separable-Gaussian-blur the group RT <paramref name="groupSlot"/> IN PLACE (the Expressive Motion Kit
     /// self-blur). The slot holds the subtree at full alpha; this leases a scratch RT, blurs H (group → scratch) then V
     /// (scratch → group) at dynamic σ <paramref name="sigma"/> px, releases the scratch, and leaves the group readable
-    /// (PIXEL_SHADER_RESOURCE) for the caller's <see cref="Composite"/>. Leaves the FULL viewport set (the two passes
-    /// cover the whole canvas-sized RT) — the caller composites fullscreen afterward.</summary>
-    public void BlurInPlace(ID3D12GraphicsCommandList* cmd, int groupSlot, float sigma, ulong frameFence)
+    /// (PIXEL_SHADER_RESOURCE) for the caller's <see cref="Composite"/>.
+    /// Both passes are SCISSORED to <paramref name="L"/>.DeviceRect × <paramref name="scale"/> inflated by the kernel's
+    /// tap radius (±min(ceil(3σ),32) px — the same cap BlurHlsl uses), NOT the whole canvas. The subtree's pixels live
+    /// inside DeviceRect and the kernel output is identically zero past that halo, so every non-zero tap the V pass reads
+    /// was written by the H pass inside the scissor — the result is pixel-identical to the old full-canvas blur while
+    /// touching only the layer's strip. The full viewport is kept so the fullscreen-triangle's SV_Position↔texel mapping
+    /// (canvas-sized 1:1 RT) is unchanged; only rasterization is clipped. Leaves the tight scissor set — the composite
+    /// that follows only needs the same region (content ⊆ it), and the caller restores the enclosing clip afterward.</summary>
+    public void BlurInPlace(ID3D12GraphicsCommandList* cmd, int groupSlot, float sigma, ulong frameFence, in PushLayerCmd L, float scale)
     {
-        int scratch = Acquire(cmd, frameFence);   // leased + cleared + bound as RT (the pass-H output)
-        // pass H: group (SRV) → scratch (RT)
+        // The halo-inflated device rect (RegionBox = DeviceRect×scale ± ±min(ceil(3σ),32)px) — MUST match BlurHlsl's R so
+        // the scissor keeps every non-zero tap, and MUST match the blur-cache pin region (RetainPinFromScratch copies it).
+        RegionBox(in L, scale, out int minX, out int minY, out int maxX, out int maxY);
+        if (maxX <= minX || maxY <= minY) { BeginRead(cmd, groupSlot); return; }   // off-screen / degenerate — nothing to blur
+        RECT box = new() { left = minX, top = minY, right = maxX, bottom = maxY };
+
+        int scratch = Acquire(cmd, frameFence);   // leased + cleared (WHOLE RT → transparent outside the scissor) + bound
+        // pass H: group (SRV) → scratch (RT), clipped to the halo-inflated device rect
         BeginRead(cmd, groupSlot);
         Bind(cmd, scratch);
-        SetViewport(cmd, _w, _h);
+        SetViewport(cmd, _w, _h);                 // full viewport (1:1 mapping); the scissor below bounds the work
+        cmd->RSSetScissorRects(1, &box);
         BlurPass(cmd, groupSlot, sigma, 1f, 0f);
-        // pass V: scratch (SRV) → group (RT)
+        // pass V: scratch (SRV) → group (RT), same scissor
         BeginRead(cmd, scratch);
         Bind(cmd, groupSlot);
         SetViewport(cmd, _w, _h);
+        cmd->RSSetScissorRects(1, &box);
         BlurPass(cmd, scratch, sigma, 0f, 1f);
         // leave the group readable for the composite; the scratch returns to the free list (same-queue reuse, no fence)
         BeginRead(cmd, groupSlot);

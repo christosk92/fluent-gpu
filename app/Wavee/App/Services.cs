@@ -46,6 +46,9 @@ public sealed class Services
     /// <summary>Progressive, below-the-fold album data. Stable wrapper; the live Spotify implementation is installed
     /// after login while mounted pages keep the same service identity.</summary>
     public SwitchableAlbumEnrichmentService AlbumEnrichment { get; }
+    /// <summary>Music-video detection + the video↔audio file-id map (extended-metadata, etag-cached). Stable wrapper; the
+    /// live Spotify implementation is installed after login. Offline it is a no-op (<see cref="NoVideoService"/>).</summary>
+    public SwitchableVideoService Video { get; }
     public PlaybackBridge Playback { get; }
     /// <summary>The Mutations facet bridge (saved/liked/followed → engine Signal). Read via <see cref="LibraryBridge.Slot"/>.</summary>
     public LibraryBridge LibraryBridge { get; }
@@ -67,6 +70,7 @@ public sealed class Services
         Connectivity = new Wavee.Backend.SwitchableConnectivity(new Wavee.Backend.Connectivity());
         Lyrics = lyrics;
         AlbumEnrichment = new SwitchableAlbumEnrichmentService(new CatalogAlbumEnrichmentService(library));
+        Video = new SwitchableVideoService(new NoVideoService());
         Settings = settings;
         Playback = new PlaybackBridge(player, devices, session);
         LibraryBridge = new LibraryBridge(mutations, userPlaylists);

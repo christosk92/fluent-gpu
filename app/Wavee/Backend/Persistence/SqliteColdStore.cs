@@ -28,8 +28,9 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
     // Prepared once, reused across batches: Microsoft.Data.Sqlite has no cross-command statement cache, so rebuilding the
     // commands + parameters every drain re-compiles statements and allocates per batch (and the steady-state drain often
     // processes a batch of 1).
-    SqliteCommand? _entityCmd, _savedUpCmd, _savedDelCmd, _revCmd;
+    SqliteCommand? _entityCmd, _savedUpCmd, _savedDelCmd, _revCmd, _videoCmd;
     SqliteParameter _eu = null!, _ek = null!, _ep = null!;
+    SqliteParameter _vu = null!, _vp = null!;
     SqliteParameter _sa = null!, _ss = null!, _su = null!, _sy = null!;
     SqliteParameter _da = null!, _ds = null!, _du = null!;
     SqliteParameter _ra = null!, _rs = null!, _rr = null!, _rt = null!;
@@ -43,6 +44,8 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
         _conn.Open();
         Exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
         Exec("CREATE TABLE IF NOT EXISTS entities(uri TEXT PRIMARY KEY, kind INTEGER NOT NULL, payload BLOB NOT NULL);");
+        // Video↔audio associations: own table (shares the track uri with `entities`, so it can't reuse that PK).
+        Exec("CREATE TABLE IF NOT EXISTS video_assoc(uri TEXT PRIMARY KEY, payload BLOB NOT NULL);");
         Exec("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);");
         Exec("CREATE TABLE IF NOT EXISTS collection_items(account TEXT NOT NULL, set_id TEXT NOT NULL, item_uri TEXT NOT NULL, " +
              "added_at INTEGER NOT NULL DEFAULT 0, position INTEGER, sync INTEGER NOT NULL, PRIMARY KEY(account, set_id, item_uri));");
@@ -112,6 +115,20 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
             using var r = c.ExecuteReader();
             while (r.Read())
                 list.Add(new ColdEntity(r.GetString(0), (EntityKind)r.GetInt32(1), r.GetFieldValue<byte[]>(2)));
+        }
+        return list;
+    }
+
+    public IEnumerable<ColdVideoAssoc> LoadAllVideoAssociations()
+    {
+        var list = new List<ColdVideoAssoc>(256);
+        lock (_connLock)
+        {
+            using var c = _conn.CreateCommand();
+            c.CommandText = "SELECT uri, payload FROM video_assoc;";
+            using var r = c.ExecuteReader();
+            while (r.Read())
+                list.Add(new ColdVideoAssoc(r.GetString(0), r.GetFieldValue<byte[]>(1)));
         }
         return list;
     }
@@ -262,6 +279,7 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
     }
 
     public void UpsertEntity(string uri, EntityKind kind, byte[] payload) => _queue.Writer.TryWrite(WriteOp.Entity(uri, (int)kind, payload));
+    public void UpsertVideoAssociation(string uri, byte[] payload) => _queue.Writer.TryWrite(WriteOp.VideoAssoc(uri, payload));
     public void UpsertSaved(string setId, string uri, bool saved, SyncState sync) => _queue.Writer.TryWrite(WriteOp.Saved(setId, uri, saved, (int)sync));
     public void SetCollectionRevision(string setId, string? revision, long syncedAt) => _queue.Writer.TryWrite(WriteOp.Revision(setId, revision, syncedAt));
 
@@ -293,6 +311,11 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
         _ek = _entityCmd.Parameters.Add("$k", SqliteType.Integer);
         _ep = _entityCmd.Parameters.Add("$p", SqliteType.Blob);
 
+        _videoCmd = _conn.CreateCommand();
+        _videoCmd.CommandText = "INSERT INTO video_assoc(uri,payload) VALUES($u,$p) ON CONFLICT(uri) DO UPDATE SET payload=excluded.payload;";
+        _vu = _videoCmd.Parameters.Add("$u", SqliteType.Text);
+        _vp = _videoCmd.Parameters.Add("$p", SqliteType.Blob);
+
         _savedUpCmd = _conn.CreateCommand();
         _savedUpCmd.CommandText = "INSERT INTO collection_items(account,set_id,item_uri,added_at,position,sync) VALUES($a,$s,$u,0,NULL,$y) " +
                                   "ON CONFLICT(account,set_id,item_uri) DO UPDATE SET sync=excluded.sync;";
@@ -323,6 +346,7 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
             EnsureCommands();
             using var tx = _conn.BeginTransaction();
             _entityCmd!.Transaction = tx;
+            _videoCmd!.Transaction = tx;
             _savedUpCmd!.Transaction = tx;
             _savedDelCmd!.Transaction = tx;
             _revCmd!.Transaction = tx;
@@ -331,6 +355,7 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
                 switch (op.Op)
                 {
                     case OpKind.Entity: _eu.Value = op.A; _ek.Value = op.Kind; _ep.Value = op.Payload!; _entityCmd.ExecuteNonQuery(); break;
+                    case OpKind.VideoAssoc: _vu.Value = op.A; _vp.Value = op.Payload!; _videoCmd.ExecuteNonQuery(); break;
                     case OpKind.SavedSet: _sa.Value = _account; _ss.Value = op.A; _su.Value = op.B!; _sy.Value = op.Kind; _savedUpCmd.ExecuteNonQuery(); break;
                     case OpKind.SavedRemove: _da.Value = _account; _ds.Value = op.A; _du.Value = op.B!; _savedDelCmd.ExecuteNonQuery(); break;
                     case OpKind.Revision: _ra.Value = _account; _rs.Value = op.A; _rr.Value = (object?)op.B ?? DBNull.Value; _rt.Value = op.L; _revCmd.ExecuteNonQuery(); break;
@@ -427,13 +452,14 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
         // a mid-ExecuteNonQuery dispose corrupts/crashes. Leaking on shutdown is the safer choice (the process is exiting).
         if (!drained) return;
         _entityCmd?.Dispose();
+        _videoCmd?.Dispose();
         _savedUpCmd?.Dispose();
         _savedDelCmd?.Dispose();
         _revCmd?.Dispose();
         _conn.Dispose();
     }
 
-    enum OpKind : byte { Entity, SavedSet, SavedRemove, Revision, Flush }
+    enum OpKind : byte { Entity, VideoAssoc, SavedSet, SavedRemove, Revision, Flush }
 
     readonly struct WriteOp
     {
@@ -449,6 +475,7 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
         { Op = op; A = a; B = b; Kind = kind; L = l; Payload = payload; Done = done; }
 
         public static WriteOp Entity(string uri, int kind, byte[] payload) => new(OpKind.Entity, uri, null, kind, 0, payload, null);
+        public static WriteOp VideoAssoc(string uri, byte[] payload) => new(OpKind.VideoAssoc, uri, null, 0, 0, payload, null);
         public static WriteOp Saved(string set, string uri, bool saved, int sync) => new(saved ? OpKind.SavedSet : OpKind.SavedRemove, set, uri, sync, 0, null, null);
         public static WriteOp Revision(string setId, string? revision, long syncedAt) => new(OpKind.Revision, setId, revision, 0, syncedAt, null, null);
         public static WriteOp FlushMarker(TaskCompletionSource done) => new(OpKind.Flush, "", null, 0, 0, null, done);

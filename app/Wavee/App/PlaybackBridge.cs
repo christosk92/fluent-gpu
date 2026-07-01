@@ -1,5 +1,6 @@
 using FluentGpu.Hooks;
 using FluentGpu.Signals;
+using Wavee.Backend;
 using Wavee.Core;
 
 namespace Wavee;
@@ -22,6 +23,11 @@ public sealed class PlaybackBridge
     readonly ISpotifySession _session;
     readonly List<IDisposable> _subs = [];
     bool _active;
+    // Optional store probe for async per-track enrichment (the music-video association lands AFTER the track resolves).
+    // Wired by the live bootstrap via AttachStore; null on the fake backend → CurrentTrackHasVideo stays false.
+    IStore? _store;
+    Action<Action>? _post;
+    bool _storeWired;
 
     // ── UI signals (read by components) ─────────────────────────────────────────────────────────────────────────────
     public Signal<Track?> CurrentTrack { get; } = new(null);
@@ -59,6 +65,14 @@ public sealed class PlaybackBridge
     /// panel as a top layer. Lives on the bridge so any component under the playback context can open/close it.</summary>
     public Signal<bool> Expanded { get; } = new(false);
 
+    /// <summary>The now-playing track has an accompanying music video (the <c>VideoService</c> association, detected
+    /// asynchronously after the track resolves). Drives the player-bar video button's visibility. Fed by the optional
+    /// store probe (<see cref="AttachStore"/>); the fake backend has none, so it stays false.</summary>
+    public Signal<bool> CurrentTrackHasVideo { get; } = new(false);
+    /// <summary>UI-only swap intent: the user picked "video" for the now-playing track. The actual video surface/host is a
+    /// follow-up — for now this is the seam the player-bar button toggles (reset on every track change).</summary>
+    public Signal<bool> PreferVideo { get; } = new(false);
+
     // ── intents (UI → Core) ─────────────────────────────────────────────────────────────────────────────────────────
     public IPlaybackPlayer Player => _player;
     public IConnectDevices DeviceControl => _devices;
@@ -77,6 +91,7 @@ public sealed class PlaybackBridge
     {
         if (_active) return;
         _active = true;
+        _post = post;
         _subs.Add(_state.Changes.Subscribe(s => post(() => PushState(s))));
         _subs.Add(_state.PositionTicks.Subscribe(ms => post(() => PushPosition(ms))));
         _subs.Add(_devices.DevicesChanged.Subscribe(d => post(() => Devices.Value = d)));
@@ -85,6 +100,38 @@ public sealed class PlaybackBridge
             Auth.Value = st;
             User.Value = _session.CurrentUser;            // profile chip (name/avatar) follows the session
         })));
+        WireStore();   // if a store was attached before mount, start observing it now
+    }
+
+    /// <summary>Attach the persistent store so the bridge can reflect async per-track enrichment (music video). Wired by
+    /// the live bootstrap; safe to call before or after <see cref="Activate"/> (the store subscription is added once the
+    /// post delegate is known). The fake backend never calls this, so the video signal stays false.</summary>
+    public void AttachStore(IStore store)
+    {
+        _store = store;
+        WireStore();
+    }
+
+    // Observe store changes for the CURRENT track's uri (or a bulk sync) and recompute the has-video signal. Detection is
+    // fire-and-forget, so the association lands after the track is already playing — this is what lights the button up.
+    void WireStore()
+    {
+        if (_storeWired || _store is not { } store || _post is not { } post) return;
+        _storeWired = true;
+        _subs.Add(store.Changes.Subscribe(c => post(() =>
+        {
+            if (c.IsBulk || (CurrentTrack.Value is { } t && c.Uri == t.Uri)) RecomputeHasVideo();
+        })));
+        post(RecomputeHasVideo);   // initial compute for whatever is playing now
+    }
+
+    void RecomputeHasVideo()
+    {
+        var uri = CurrentTrack.Value?.Uri;
+        bool has = false;
+        if (!string.IsNullOrEmpty(uri) && _store is { } store)
+            has = (store.GetVideoAssociation(uri)?.HasVideo ?? false) || (store.GetTrack(uri)?.HasVideo ?? false);
+        CurrentTrackHasVideo.Value = has;
     }
 
     /// <summary>An <see cref="ILoginProgress"/> the live-login bootstrap reports to off the UI thread; each snapshot is
@@ -98,7 +145,10 @@ public sealed class PlaybackBridge
 
     void PushState(IPlaybackState s)
     {
+        var prevUri = CurrentTrack.Value?.Uri;
         CurrentTrack.Value = s.CurrentTrack;
+        if (s.CurrentTrack?.Uri != prevUri) PreferVideo.Value = false;   // a new track resets the swap toggle
+        RecomputeHasVideo();                                            // reflect the new track's cached video state (if any)
         CurrentContext.Value = s.ContextUri;
         IsPlaying.Value = s.IsPlaying;
         IsBuffering.Value = s.IsBuffering;

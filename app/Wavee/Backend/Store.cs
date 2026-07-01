@@ -39,6 +39,10 @@ public interface IStore
     Show? GetShow(string uri);
     void UpsertEpisode(Episode e);
     Episode? GetEpisode(string uri);
+    // video↔audio associations (the music-video data side; persisted + etag-revalidated). NOT an entity kind — it is
+    // keyed by the SAME entity uri as the Track, so it lives in its own side table rather than the entity store.
+    void UpsertVideoAssociation(VideoAssociation a);
+    VideoAssociation? GetVideoAssociation(string uri);
     // library sets (collections) + per-item sync state
     void SetSaved(string setId, string uri, bool saved, SyncState sync);
     bool IsSaved(string setId, string uri);
@@ -78,6 +82,7 @@ static class StoreEntityMerge
             Origin = incoming.Origin != TrackOrigin.Streamed || current.Origin == TrackOrigin.Streamed ? incoming.Origin : current.Origin,
             Availability = incoming.Availability != Availability.Playable ? incoming.Availability : current.Availability,
             Source = incoming.Source ?? current.Source,
+            Isrc = incoming.Isrc ?? current.Isrc,   // keep a known ISRC across a later thin upsert (cluster/library write)
         };
     }
 
@@ -130,6 +135,9 @@ static class StoreEntityMerge
             AppearsOn = Has(incoming.AppearsOn) ? incoming.AppearsOn : current.AppearsOn,
             Pinned = incoming.Pinned ?? current.Pinned,
             Extras = incoming.Extras ?? current.Extras,
+            Palette = incoming.Palette ?? current.Palette,   // a thin write (no palette) must not drop a full-overview palette
+            // Keep the newer freshness stamp: a full-overview write carries UtcNow; a thin write carries default → keeps current.
+            FetchedAt = incoming.FetchedAt > current.FetchedAt ? incoming.FetchedAt : current.FetchedAt,
         };
     }
 
@@ -167,6 +175,7 @@ public sealed class InMemoryStore : IStore
     readonly Dictionary<string, Playlist> _playlists = new();
     readonly Dictionary<string, Show> _shows = new();
     readonly Dictionary<string, Episode> _episodes = new();
+    readonly Dictionary<string, VideoAssociation> _videoAssoc = new();
     readonly Dictionary<string, long> _versions = new();
     readonly Dictionary<(string set, string uri), SyncState> _saved = new();
     readonly Dictionary<string, HashSet<string>> _savedBySet = new();   // set → uris, so SavedUris is O(set), not O(all-saved)
@@ -264,6 +273,11 @@ public sealed class InMemoryStore : IStore
     public Show? GetShow(string uri) { lock (_gate) return _shows.TryGetValue(uri, out var s) ? s : null; }
     public void UpsertEpisode(Episode e) { lock (_gate) _episodes[e.Uri] = e; Bump(e.Uri); }
     public Episode? GetEpisode(string uri) { lock (_gate) return _episodes.TryGetValue(uri, out var e) ? e : null; }
+
+    // A full replace (each fetch yields the complete association; a 304 keeps the prior record with a bumped FetchedAt,
+    // handled by the caller). No Bump — this is side-table data; the rendered has-video signal is Track.HasVideo.
+    public void UpsertVideoAssociation(VideoAssociation a) { lock (_gate) _videoAssoc[a.Uri] = a; }
+    public VideoAssociation? GetVideoAssociation(string uri) { lock (_gate) return _videoAssoc.TryGetValue(uri, out var a) ? a : null; }
 
     public void SetSaved(string setId, string uri, bool saved, SyncState sync)
     {

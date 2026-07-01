@@ -36,6 +36,7 @@ public sealed class CachedStore : IStore, IDisposable
         _maxResidentPlaylists = maxResidentPlaylists;
         _maxResidentBytes = maxResidentBytes;
         foreach (var e in _cold.LoadAllEntities()) Replay(e);                                  // entities → memory
+        foreach (var v in _cold.LoadAllVideoAssociations()) ReplayVideo(v);                     // + the video↔audio map
         foreach (var s in _cold.LoadAllSaved()) _hot.SetSaved(s.SetId, s.Uri, true, s.Sync);   // + library state
     }
 
@@ -80,6 +81,12 @@ public sealed class CachedStore : IStore, IDisposable
         catch (JsonException) { /* skip a corrupt row — it's re-fetchable */ }
     }
 
+    void ReplayVideo(in ColdVideoAssoc v)
+    {
+        try { var a = JsonSerializer.Deserialize(v.Payload, EntityJson.Default.VideoAssociation); if (a != null) _hot.UpsertVideoAssociation(a); }
+        catch (JsonException) { /* skip a corrupt row — it's re-fetchable */ }
+    }
+
     // reads → the full in-memory mirror (no disk)
     public Track? GetTrack(string uri) => _hot.GetTrack(uri);
     public IReadOnlyList<Track> QueryTracks(string? text = null, TrackSort sort = TrackSort.None, int limit = 200) => _hot.QueryTracks(text, sort, limit);
@@ -88,6 +95,7 @@ public sealed class CachedStore : IStore, IDisposable
     public Playlist? GetPlaylist(string uri) => _hot.GetPlaylist(uri);
     public Show? GetShow(string uri) => _hot.GetShow(uri);
     public Episode? GetEpisode(string uri) => _hot.GetEpisode(uri);
+    public VideoAssociation? GetVideoAssociation(string uri) => _hot.GetVideoAssociation(uri);
     public bool IsSaved(string setId, string uri) => _hot.IsSaved(setId, uri);
     public IReadOnlyList<string> SavedUris(string setId) => _hot.SavedUris(setId);
 
@@ -180,6 +188,7 @@ public sealed class CachedStore : IStore, IDisposable
     }
     public void UpsertPlaylist(Playlist p) { _hot.UpsertPlaylist(p); var thin = p.Tracks is null ? p : p with { Tracks = null }; _cold.UpsertEntity(p.Uri, EntityKind.Playlist, JsonSerializer.SerializeToUtf8Bytes(thin, EntityJson.Default.Playlist)); }
     public void UpsertShow(Show s) { _hot.UpsertShow(s); _cold.UpsertEntity(s.Uri, EntityKind.Show, JsonSerializer.SerializeToUtf8Bytes(s, EntityJson.Default.Show)); }
+    public void UpsertVideoAssociation(VideoAssociation a) { _hot.UpsertVideoAssociation(a); _cold.UpsertVideoAssociation(a.Uri, JsonSerializer.SerializeToUtf8Bytes(a, EntityJson.Default.VideoAssociation)); }
     public void UpsertEpisode(Episode e) { _hot.UpsertEpisode(e); _cold.UpsertEntity(e.Uri, EntityKind.Episode, JsonSerializer.SerializeToUtf8Bytes(e, EntityJson.Default.Episode)); }
     public void SetSaved(string setId, string uri, bool saved, SyncState sync) { _hot.SetSaved(setId, uri, saved, sync); _cold.UpsertSaved(setId, uri, saved, sync); }
 
@@ -195,4 +204,5 @@ public sealed class CachedStore : IStore, IDisposable
 [JsonSerializable(typeof(Playlist))]
 [JsonSerializable(typeof(Show))]
 [JsonSerializable(typeof(Episode))]
+[JsonSerializable(typeof(VideoAssociation))]
 internal partial class EntityJson : JsonSerializerContext { }

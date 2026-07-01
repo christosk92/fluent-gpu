@@ -2,12 +2,15 @@ namespace Wavee.Core;
 
 public enum RepeatMode { Off, Context, Track }
 
+public readonly record struct PlaybackContextTrack(string Uri, string Uid = "");
+
 /// <summary>Playback command surface. The real implementation marshals these to the out-of-process
 /// x64 AudioHost over a named pipe; the fake implementation is in-process. State is observed via
 /// <see cref="IPlaybackState"/>, never returned from commands.</summary>
 public interface IPlaybackPlayer
 {
     Task PlayAsync(string contextUri, int startIndex = 0, CancellationToken ct = default);
+    Task PlayOrderedAsync(string contextUri, IReadOnlyList<PlaybackContextTrack> tracks, int startIndex = 0, CancellationToken ct = default);
     Task PlayTrackAsync(string trackUri, CancellationToken ct = default);
     Task PauseAsync(CancellationToken ct = default);
     Task ResumeAsync(CancellationToken ct = default);
@@ -21,6 +24,8 @@ public interface IPlaybackPlayer
     Task RemoveFromQueueAsync(string entryId, CancellationToken ct = default);
     /// <summary>Append a track to the user-queue (the "Add to queue" affordance).</summary>
     Task EnqueueAsync(string trackUri, CancellationToken ct = default);
+    /// <summary>Insert tracks at the FRONT of the user-queue ("play next" — before already-queued items).</summary>
+    Task PlayNextAsync(IReadOnlyList<PlaybackContextTrack> tracks, CancellationToken ct = default);
     IPlaybackState State { get; }
 }
 

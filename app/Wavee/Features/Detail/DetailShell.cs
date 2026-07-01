@@ -25,7 +25,11 @@ readonly record struct DetailHandlers(
     Action AddToQueue, Action AddToPlaylist,
     // Open a related album / "Featured on" playlist card. Unlike Go (a bare route flip), these stash the card's partial
     // model first so the destination takes DetailPage's in-place fast path instead of a full skeleton remount. See DetailNav.
-    Action<Album> OpenAlbum, Action<PlaylistSummary> OpenPlaylist);
+    Action<Album> OpenAlbum, Action<PlaylistSummary> OpenPlaylist,
+    // A 1-element cell the TrackList fills with "play the VISIBLE (sorted/filtered) order from the top"; the rail's big
+    // Play late-binds through it (null until the list mounts → falls back to Play(0)). Optional so other constructions
+    // (LibraryPage) compile unchanged.
+    Action?[]? PlayAllOverride = null);
 
 // The two-column detail scaffold (mounted only once data is Ready, so its lifecycle = the loaded page's lifecycle).
 // Owns: the art-derived backdrop wash + accent, the page-scoped Mica tint (set/cleared through the activation
@@ -186,10 +190,13 @@ sealed class DetailShell : Component
         void SetDensity(int d) { _density.Value = d; settings?.Set(WaveeSettings.RowDensity, d); }   // app-wide
 
         // SetSort / SetDensity are hoisted local functions; the rail + chrome toolbars read all list-view controls off here.
-        var handlers = new DetailHandlers(Play, () => Play(0), Shuffle, PlayContext, go, accent, _sort, SetSort,
+        var playAllOverride = new Action?[1];   // TrackList fills [0] with the visible-order play; the rail's Play late-binds through it
+        var handlers = new DetailHandlers(Play, () => { var ov = playAllOverride[0]; if (ov is not null) ov(); else Play(0); },
+            Shuffle, PlayContext, go, accent, _sort, SetSort,
             _query, _filterFlags, f => _filterFlags.Value = f, _density, SetDensity, AddToQueue, AddToPlaylist,
             a => DetailNav.OpenAlbum(navPreview, morph, go, a),
-            p => DetailNav.OpenPlaylist(navPreview, morph, go, p));
+            p => DetailNav.OpenPlaylist(navPreview, morph, go, p),
+            playAllOverride);
 
         // Viewport-size context signal — resolved UNCONDITIONALLY here (rules of hooks): the positional-hook cursor must
         // see the SAME hook sequence on every render, but the branches below differ (single-column / vertical / two-column),

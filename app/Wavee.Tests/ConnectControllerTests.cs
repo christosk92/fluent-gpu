@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Wavee.Backend;
@@ -139,6 +140,60 @@ public class ConnectControllerTests
     }
 
     [Fact]
+    public async Task RemoteActive_Enqueue_SendsAddToQueueTrackObject_NotFlatUri()
+    {
+        using var c = Make(out _, out var proj, out var outbound);
+        proj.OnCluster(Cluster("other-device"));
+        await c.EnqueueAsync("spotify:track:x");
+        using var doc = JsonDocument.Parse(outbound.LastJson!);
+        var cmd = doc.RootElement.GetProperty("command");
+        Assert.Equal("add_to_queue", cmd.GetProperty("endpoint").GetString());
+        Assert.Equal("spotify:track:x", cmd.GetProperty("track").GetProperty("uri").GetString());
+        Assert.False(cmd.TryGetProperty("uri", out _));   // NOT the legacy flat command.uri
+        Assert.Equal("other-device", outbound.LastTarget);
+    }
+
+    [Fact]
+    public async Task RemoteActive_PlayOrdered_EmbedsVisibleOrder_AndSkipTo()
+    {
+        using var c = Make(out _, out var proj, out var outbound);
+        proj.OnCluster(Cluster("other-device"));
+        await c.PlayOrderedAsync("spotify:playlist:p", new[]
+        {
+            new PlaybackContextTrack("spotify:track:c", "uc"),
+            new PlaybackContextTrack("spotify:track:a", "ua"),
+            new PlaybackContextTrack("spotify:track:b", "ub"),
+        }, startIndex: 1);
+
+        using var doc = JsonDocument.Parse(outbound.LastJson!);
+        var cmd = doc.RootElement.GetProperty("command");
+        Assert.Equal("play", cmd.GetProperty("endpoint").GetString());
+        var tracks = cmd.GetProperty("context").GetProperty("pages")[0].GetProperty("tracks");
+        Assert.Equal("spotify:track:c", tracks[0].GetProperty("uri").GetString());   // visible order, verbatim
+        Assert.Equal("spotify:track:a", tracks[1].GetProperty("uri").GetString());
+        Assert.Equal("spotify:track:b", tracks[2].GetProperty("uri").GetString());
+        var skip = cmd.GetProperty("prepare_play_options").GetProperty("skip_to");
+        Assert.Equal("spotify:track:a", skip.GetProperty("track_uri").GetString());  // startIndex 1
+        Assert.Equal("ua", skip.GetProperty("track_uid").GetString());
+        Assert.Equal(1, skip.GetProperty("track_index").GetInt32());
+    }
+
+    [Fact]
+    public async Task Local_PlayOrdered_HonorsEmbeddedOrder_NotResolver()
+    {
+        // Resolver's fixed list is [x]; the visible order is [b,a]. Local play must honor the SUPPLIED order.
+        using var c = Make(out var host, out _, out _, ctx: new FakeContextResolver("spotify:track:x"));
+        await c.PlayOrderedAsync("spotify:playlist:p", new[]
+        {
+            new PlaybackContextTrack("spotify:track:b", "ub"),
+            new PlaybackContextTrack("spotify:track:a", "ua"),
+        }, startIndex: 0);
+        await Task.Delay(30);
+        Assert.Contains("load:spotify:track:b", host.Calls);        // embedded order honored
+        Assert.DoesNotContain("load:spotify:track:x", host.Calls);  // NOT the resolver's list
+    }
+
+    [Fact]
     public async Task AnotherDeviceBecomesActive_StopsLocalPlayback()
     {
         using var c = Make(out var host, out var proj, out _);
@@ -260,6 +315,126 @@ public class ConnectControllerTests
         await Task.Delay(30);
         var uq = proj.Queue.Where(e => e.Bucket == QueueBucket.UserQueue).Select(e => e.Track.Uri).ToArray();
         Assert.Equal(new[] { "spotify:track:n1", "spotify:track:n2" }, uq);   // 'old' replaced
+    }
+
+    [Fact]
+    public async Task InboundSetQueue_OnlyQueueProviderRows_BecomeUserQueue()
+    {
+        using var c = Make(out _, out var proj, out _, ctx: new FakeContextResolver("spotify:track:a", "spotify:track:b"));
+        Dispatch(c, PlayP);
+        await Task.Delay(20);
+        // next_tracks = user queue (provider:queue) THEN context continuation (provider:context) — only the queue rows count.
+        Dispatch(c, "{\"command\":{\"endpoint\":\"set_queue\",\"next_tracks\":[" +
+            "{\"uri\":\"spotify:track:n1\",\"uid\":\"q1\",\"provider\":\"queue\"}," +
+            "{\"uri\":\"spotify:track:n2\",\"uid\":\"\",\"provider\":\"queue\"}," +
+            "{\"uri\":\"spotify:track:cx\",\"uid\":\"h1\",\"provider\":\"context\"}," +
+            "{\"uri\":\"spotify:track:cy\",\"uid\":\"h2\",\"provider\":\"context\"}]}}");
+        await Task.Delay(30);
+        var uq = proj.Queue.Where(e => e.Bucket == QueueBucket.UserQueue).Select(e => e.Track.Uri).ToArray();
+        Assert.Equal(new[] { "spotify:track:n1", "spotify:track:n2" }, uq);   // context continuation rows dropped
+        Assert.DoesNotContain(proj.Queue, e => e.Track.Uri is "spotify:track:cx" or "spotify:track:cy");
+    }
+
+    [Fact]
+    public async Task InboundSetQueue_DropsDelimiterRows()
+    {
+        using var c = Make(out _, out var proj, out _, ctx: new FakeContextResolver("spotify:track:a", "spotify:track:b"));
+        Dispatch(c, PlayP);
+        await Task.Delay(20);
+        Dispatch(c, "{\"command\":{\"endpoint\":\"set_queue\",\"next_tracks\":[" +
+            "{\"uri\":\"spotify:track:n1\",\"provider\":\"queue\"}," +
+            "{\"uri\":\"spotify:delimiter\",\"uid\":\"delimiter0\",\"provider\":\"context\"}]}}");
+        await Task.Delay(30);
+        var uq = proj.Queue.Where(e => e.Bucket == QueueBucket.UserQueue).Select(e => e.Track.Uri).ToArray();
+        Assert.Equal(new[] { "spotify:track:n1" }, uq);
+        Assert.DoesNotContain(proj.Queue, e => e.Track.Uri == "spotify:delimiter");
+    }
+
+    [Fact]
+    public async Task Local_PlayNext_InsertsAtFrontOfUserQueue()
+    {
+        using var c = Make(out _, out var proj, out var outbound, ctx: new FakeContextResolver("spotify:track:a", "spotify:track:b"));
+        await c.PlayAsync("spotify:playlist:p");            // local: seed a resident context
+        await c.EnqueueAsync("spotify:track:existing");     // a pre-existing user-queue item
+        await c.PlayNextAsync(new[]
+        {
+            new PlaybackContextTrack("spotify:track:t1", ""),
+            new PlaybackContextTrack("spotify:track:t2", ""),
+        });
+        var uq = proj.Queue.Where(e => e.Bucket == QueueBucket.UserQueue).Select(e => e.Track.Uri).ToArray();
+        Assert.Equal(new[] { "spotify:track:t1", "spotify:track:t2", "spotify:track:existing" }, uq);  // play-next at front
+        Assert.Empty(outbound.Sent);                        // local → nothing forwarded
+    }
+
+    [Fact]
+    public async Task RemoteActive_PlayNext_SendsSetQueue_InsertedRowsAreQueueProvider()
+    {
+        using var c = Make(out _, out var proj, out var outbound, ctx: new FakeContextResolver("spotify:track:a", "spotify:track:b"));
+        proj.OnCluster(Cluster("other-device"));
+        await c.PlayNextAsync(new[]
+        {
+            new PlaybackContextTrack("spotify:track:t1", "q1"),
+            new PlaybackContextTrack("spotify:track:t2", ""),
+        });
+        using var doc = JsonDocument.Parse(outbound.LastJson!);
+        var cmd = doc.RootElement.GetProperty("command");
+        Assert.Equal("set_queue", cmd.GetProperty("endpoint").GetString());
+        Assert.Empty(cmd.GetProperty("prev_tracks").EnumerateArray());
+        var next = cmd.GetProperty("next_tracks");
+        Assert.Equal("spotify:track:t1", next[0].GetProperty("uri").GetString());
+        Assert.Equal("queue", next[0].GetProperty("provider").GetString());
+        Assert.Equal("spotify:track:t2", next[1].GetProperty("uri").GetString());
+        Assert.Equal("queue", next[1].GetProperty("provider").GetString());
+        Assert.Equal("other-device", outbound.LastTarget);
+    }
+
+    [Fact]
+    public async Task RemoteActive_PlayNext_EchoesQueueRevisionFromCluster()
+    {
+        using var c = Make(out _, out var proj, out var outbound);
+        proj.OnCluster(Cluster("other-device") with { QueueRevision = "10355548321371651421" });   // threaded from the proto
+        await c.PlayNextAsync(new[] { new PlaybackContextTrack("spotify:track:t1", "") });
+        using var doc = JsonDocument.Parse(outbound.LastJson!);
+        Assert.Equal(10355548321371651421UL,
+            doc.RootElement.GetProperty("command").GetProperty("queue_revision").GetUInt64());
+    }
+
+    [Fact]
+    public async Task RemoteActive_PlayNext_RewritesClusterQueue_InsertedFrontThenDeviceQueueVerbatim()
+    {
+        using var c = Make(out _, out var proj, out var outbound);
+        // The active remote device's REAL queue (from its cluster): a queued row, then a context-continuation row, plus history.
+        proj.OnCluster(Cluster("other-device") with
+        {
+            QueueRevision = "42",
+            NextTracks = new[]
+            {
+                new RemoteTrack("spotify:track:eq", "", "", "", "", "", null, 0, Uid: "uq", Provider: "queue"),
+                new RemoteTrack("spotify:track:cx", "", "", "", "", "", null, 0, Uid: "uc", Provider: "context"),
+            },
+            PrevTracks = new[]
+            {
+                new RemoteTrack("spotify:track:hist", "", "", "", "", "", null, 0, Uid: "uh", Provider: "context"),
+            },
+        });
+        await c.PlayNextAsync(new[] { new PlaybackContextTrack("spotify:track:t1", "") });
+
+        using var doc = JsonDocument.Parse(outbound.LastJson!);
+        var cmd = doc.RootElement.GetProperty("command");
+        Assert.Equal("set_queue", cmd.GetProperty("endpoint").GetString());
+        Assert.Equal(42UL, cmd.GetProperty("queue_revision").GetUInt64());   // from the same cluster snapshot, not 0
+
+        var prevT = cmd.GetProperty("prev_tracks");                          // device history echoed verbatim (NOT empty)
+        Assert.Equal("spotify:track:hist", prevT[0].GetProperty("uri").GetString());
+        Assert.Equal("context", prevT[0].GetProperty("provider").GetString());
+
+        var next = cmd.GetProperty("next_tracks");
+        Assert.Equal("spotify:track:t1", next[0].GetProperty("uri").GetString());   // inserted at the FRONT
+        Assert.Equal("queue", next[0].GetProperty("provider").GetString());
+        Assert.Equal("spotify:track:eq", next[1].GetProperty("uri").GetString());   // then the device's own queue row...
+        Assert.Equal("queue", next[1].GetProperty("provider").GetString());
+        Assert.Equal("spotify:track:cx", next[2].GetProperty("uri").GetString());   // ...then its context continuation
+        Assert.Equal("context", next[2].GetProperty("provider").GetString());
     }
 
     [Fact]

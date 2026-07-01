@@ -522,11 +522,20 @@ public static class FakeData
 
     public static LyricsDocument Lyrics(string trackId)
     {
-        string[] lines = ["Driving in the city lights", "Watching as the world goes by", "Every heartbeat keeps the time", "Holding on, we're almost there"];
+        // A full-length (40-line) word-synced lyric: the synced rail shows ~11 lines and depth-of-field-blurs the rest,
+        // so a realistic doc must overflow the viewport (scrollable) and span enough lines to exercise the per-line blur.
+        string[] phrases =
+        [
+            "Driving in the city lights", "Watching as the world goes by", "Every heartbeat keeps the time",
+            "Holding on, we're almost there", "Neon rivers in the rain", "Chasing all the echoes down the lane",
+            "We were younger, we were free", "Dreaming of the way to be", "Stars are falling one by one",
+            "Whispering the night's not done", "Carry me across the line", "Tell me that you'll still be mine",
+        ];
         var doc = new List<LyricLine>();
         long t = 0;
-        foreach (var line in lines)
+        for (int i = 0; i < 40; i++)
         {
+            string line = phrases[i % phrases.Length];
             var words = line.Split(' ');
             var syl = new List<LyricSyllable>();
             long w = t;

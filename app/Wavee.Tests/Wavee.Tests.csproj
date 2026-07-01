@@ -37,6 +37,8 @@
     <!-- feature extension payloads carried over the SAME extended-metadata transport (album recommended-playlist hydration) -->
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\recommended_playlists.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\list_metadata_v2.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <!-- music-video associations (VIDEO_ASSOCIATIONS payload) — VideoAssociationTests parses this against the wire -->
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\video_associations.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <!-- playlist membership + collection delta wire types (the Backend mapping logic is unit-tested here) -->
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\playlist_permission.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\playlist4_external.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
@@ -49,6 +51,8 @@
     <Compile Include="..\Wavee\Backend\**\*.cs" />
     <!-- the pure (FluentGpu-free) QR encoder, source-included so QrTests can round-trip-decode its output -->
     <Compile Include="..\Wavee\Features\Auth\Qr.cs" />
+    <!-- the live music-video data service (Backend-only deps), source-included so VideoAssociationTests can drive it -->
+    <Compile Include="..\Wavee\SpotifyLive\SpotifyVideoService.cs" />
   </ItemGroup>
 
 </Project>

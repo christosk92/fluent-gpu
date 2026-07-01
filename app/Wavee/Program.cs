@@ -178,12 +178,15 @@ static class Program
             // customFrame:true → the in-app TitleBar (WaveeShell) draws the Mica-extended caption buttons + drag region.
             // micaAlt:true → Mica BaseAlt (the flatter File-Explorer tint), matching WaveeMusic's MicaBackdrop Kind="BaseAlt".
             // ambientFps: pace PERPETUAL ambient motion (the always-playing seek playhead, the now-playing equalizer,
-            // skeleton shimmer, buffering spinner) to 30 Hz instead of the panel's full refresh. Wavee auto-starts
-            // playback, so the seek bar's per-frame playhead ticker would otherwise free-run the whole record+present
-            // pipeline at 120 Hz forever for a bar that moves ~3 px/s. Latency-sensitive input (scroll/hover/drag) is
-            // exempt and still runs at the display rate; FG_ANIM_FPS overrides this for diagnostics.
+            // skeleton shimmer, buffering spinner, the karaoke lyrics wipe) to 60 Hz instead of the panel's full refresh.
+            // Wavee auto-starts playback, so the seek bar's per-frame playhead ticker would otherwise free-run the whole
+            // record+present pipeline at the full refresh forever for a bar that moves ~3 px/s. 60 (raised from 30) now
+            // that the per-frame cost is cheap (rect-bounded + linear-sampled blur + back-buffer-direct layers) — the
+            // lyrics wipe/scroll read smooth without quadrupling the idle pipeline. Latency-sensitive input
+            // (scroll/hover/drag) is exempt and always runs at the display rate; FG_ANIM_FPS overrides this (=30 to
+            // revert to the old cadence, =0 for uncapped / full display rate).
             FluentApp.Run(() => new WaveeApp(settings), "Wavee Music", 1180, 760,
-                          frames: frames, screenshot: screenshot, customFrame: true, micaAlt: true, ambientFps: 30);
+                          frames: frames, screenshot: screenshot, customFrame: true, micaAlt: true, ambientFps: 60);
         }
         catch (Exception ex)
         {

@@ -35,7 +35,8 @@ public interface ITransport
 {
     /// <summary><paramref name="method"/> overrides the default (GET when body empty, else POST) — e.g. PUT for the
     /// connect/volume endpoint.</summary>
-    Task<Resp> Request(Channel ch, string route, ReadOnlyMemory<byte> body, CancellationToken ct = default, string? method = null);
+    Task<Resp> Request(Channel ch, string route, ReadOnlyMemory<byte> body, CancellationToken ct = default,
+        string? method = null, IReadOnlyDictionary<string, string>? headers = null);
     IObservable<WireEvent> Events(string topicPrefix);          // dealer MESSAGE pushes by hm:// prefix
     IObservable<WireRequest> Requests(string identPrefix);      // dealer REQUEST frames by message_ident prefix
     Task Reply(string requestId, RequestResult result);         // ③a — the dealer server→client REQUEST→reply ack
@@ -62,13 +63,16 @@ public sealed class StubTransport : ITransport
     public string? LastRequestRoute { get; private set; }
     public string? LastRequestMethod { get; private set; }
     public byte[]? LastRequestBody { get; private set; }
+    public IReadOnlyDictionary<string, string>? LastRequestHeaders { get; private set; }
 
-    public Task<Resp> Request(Channel ch, string route, ReadOnlyMemory<byte> body, CancellationToken ct = default, string? method = null)
+    public Task<Resp> Request(Channel ch, string route, ReadOnlyMemory<byte> body, CancellationToken ct = default,
+        string? method = null, IReadOnlyDictionary<string, string>? headers = null)
     {
         Interlocked.Increment(ref _requestCount);
         LastRequestRoute = route;
         LastRequestMethod = method ?? (body.IsEmpty ? "GET" : "POST");
         LastRequestBody = body.ToArray();
+        LastRequestHeaders = headers is null ? null : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
         return Task.FromResult(new Resp(true, Array.Empty<byte>(), 200));   // stub: the request "succeeds" with no body
     }
 

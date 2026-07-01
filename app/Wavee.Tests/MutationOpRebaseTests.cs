@@ -15,7 +15,8 @@ public class MutationOpRebaseTests
 {
     sealed class ScriptedTransport(Func<string, Resp> respond) : ITransport
     {
-        public Task<Resp> Request(Channel ch, string route, ReadOnlyMemory<byte> body, CancellationToken ct = default, string? method = null) => Task.FromResult(respond(route));
+        public Task<Resp> Request(Channel ch, string route, ReadOnlyMemory<byte> body, CancellationToken ct = default,
+            string? method = null, IReadOnlyDictionary<string, string>? headers = null) => Task.FromResult(respond(route));
         public IObservable<WireEvent> Events(string topicPrefix) => new SimpleSubject<WireEvent>();
         public IObservable<WireRequest> Requests(string identPrefix) => new SimpleSubject<WireRequest>();
         public Task Reply(string requestId, RequestResult result) => Task.CompletedTask;

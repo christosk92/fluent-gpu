@@ -178,6 +178,7 @@ sealed class TrackList : Component
         _lib = UseContext(LibraryBridge.Slot);   // Mutations bridge for the per-row heart (saved-state + toggle)
         var model = _full.Value.Value;           // subscribe → re-render preview→full (chrome columns + trailing update on load)
         _model = model; _tracks = model.Tracks; _hasDate = model.HasDateAdded; _hasBy = model.HasAddedBy; _topTrackId = TopTrack(model.Tracks);
+        if (_h.PlayAllOverride is { Length: > 0 } playAllCell) playAllCell[0] = () => StartVisible(0);   // rail "Play" → visible (sorted) order from the top
         _cfg = DetailPage.ResolveConfig(DetailPage.ParseDetail(_route.Value).Kind, model);   // route kind + loaded ReleaseKind (reused slot re-derives)
         // Embedded in a compact pane (Library): drop the album trailing so the rows are the scroller (the pane owns the
         // hero + actions above). Everything else — the cell, hover transport, now-playing, heart, tier columns — is identical.
@@ -233,7 +234,7 @@ sealed class TrackList : Component
                 selectionMode: _cfg.Selection,
                 selection: _selection,                // external → selection survives the tier remount
                 isItemInvokedEnabled: true,
-                itemInvoked: i => _h.Play(View()[i]),   // DoubleTap / Enter → play this track (original context order)
+                itemInvoked: i => PlayRow(i),   // DoubleTap / Enter → same as a row click (visible-order play + now-playing toggle)
                 grow: _cfg.HasTrailing ? 0f : 1f,
                 // Alpha-mask edge fade: the page floats over a gradient wash (no opaque plate), so the surface-colour
                 // EdgeCues fade self-skips — this feathers the rows' own alpha at the overflowing top/bottom instead.
@@ -531,12 +532,40 @@ sealed class TrackList : Component
             if (playing) _ = _bridge.Player.PauseAsync(); else _ = _bridge.Player.ResumeAsync();
             return;
         }
-        // A DIFFERENT track → START it through the keyed async command: the row's #-cell shows the buffer spinner while
-        // this PlayAsync Task is in flight (re-fire guarded), the await never blocks the UI, and completion clears it.
+        StartVisible(displayPos);   // a DIFFERENT track → start the context at this row, in the visible (sorted/filtered) order
+    }
+
+    // Start THIS context at the given display row, sending the VISIBLE (sorted/filtered) order so a remote player mirrors
+    // the screen (PlayOrderedAsync). Collections stay URI-only (sort rides on context.url, server-side). The keyed async
+    // command drives the row's #-cell buffer spinner. Empty view (still loading / filtered out) → play the context top.
+    void StartVisible(int displayPos)
+    {
+        var v = View();
+        if (v.Length == 0) { _h.Play(0); return; }
+        if ((uint)displayPos >= (uint)v.Length) displayPos = 0;
+        int orig = v[displayPos];
+        var track = _tracks[orig];
         if (_bridge is not null && _play is not null && _model.ContextUri is { } uri)
-            _play.Run(track.Id, ct => _bridge.Player.PlayAsync(uri, orig, ct));
+        {
+            if (!Wavee.Backend.ContextResolve.IsCollection(uri))
+            {
+                var ordered = VisibleOrder(v);
+                _play.Run(track.Id, ct => _bridge.Player.PlayOrderedAsync(uri, ordered, displayPos, ct));
+            }
+            else
+                _play.Run(track.Id, ct => _bridge.Player.PlayAsync(uri, orig, ct));
+        }
         else
             _h.Play(orig);
+    }
+
+    // The visible order as (uri, contextUid) pairs — the embedded page the outbound play command carries. ContextUid is
+    // the per-row playlist-membership uid (skip_to-by-uid); "" outside a user playlist.
+    PlaybackContextTrack[] VisibleOrder(int[] v)
+    {
+        var ordered = new PlaybackContextTrack[v.Length];
+        for (int k = 0; k < v.Length; k++) { var t = _tracks[v[k]]; ordered[k] = new PlaybackContextTrack(t.Uri, t.ContextUid ?? string.Empty); }
+        return ordered;
     }
 
     // ── row grid ─────────────────────────────────────────────────────────────────────────────────────────
@@ -994,7 +1023,7 @@ sealed class MoreButton : Component
 
     IReadOnlyList<MenuFlyoutItem> Items() =>
     [
-        new(Loc.Get(Strings.Detail.Play), Icons.Play, Invoke: () => _h.PlayAll()),
+        new(Loc.Get(Strings.Detail.Play), Icons.Play, Invoke: () => _h.PlayAll()),   // late-binds via PlayAllOverride → visible (sorted) order
         new(Loc.Get(Strings.Detail.AddToQueue), Icons.Add, Invoke: () => _h.AddToQueue()),
         MenuFlyoutItem.Separator,
         new(Loc.Get(Strings.Detail.GoToArtist), Enabled: _m.Artists.Count > 0,

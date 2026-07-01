@@ -66,7 +66,12 @@ public sealed record Artist(
     IReadOnlyList<Track>? TopTracks = null, IReadOnlyList<Album>? AppearsOn = null,
     PinnedItem? Pinned = null, ArtistExtras? Extras = null,
     // Cover-extracted page accent (ARGB; null = none). Drives the artist page wash + Play button + section bars.
-    Palette? Palette = null);
+    Palette? Palette = null,
+    // SWR freshness stamp: when the rich overview (TopTracks/stats/palette/bio) was last fetched. default = never/old →
+    // treated as stale and re-fetched on next open (which heals records persisted by an earlier build, whose deserialized
+    // FetchedAt is default). Set ONLY by a full-overview write; the store merge keeps the newer value so a thin
+    // extended-metadata / NPV / album-derived write never resets the clock.
+    DateTimeOffset FetchedAt = default);
 
 /// <summary>The optional "magazine" facet bundle for an artist (concerts, merch, playlists, videos, top cities, links,
 /// gallery, related artists, a derived tour banner). Any empty list ⇒ that section is omitted from the page.</summary>
@@ -148,7 +153,13 @@ public sealed record Track(
     // whether it is playable in this context. Default = a streamed, playable, source-unspecified track.
     TrackOrigin Origin = TrackOrigin.Streamed,
     Availability Availability = Availability.Playable,
-    string? Source = null);
+    string? Source = null,
+    // Per-context membership uid (PlaylistMember.ItemId) for Connect skip_to.track_uid + embedded page uids. READ-MODEL
+    // ONLY: stamped on the JoinMembership copy, never passed to UpsertTrack (EntityJson omits nulls → never persisted).
+    string? ContextUid = null,
+    // ISRC recording id (e.g. "USRC17607839"), sourced from the extended-metadata Track.external_id (type "isrc"). Drives
+    // the lyrics search's exact-recording fast-path (Musixmatch track_isrc). Null when unknown (thin cluster / Pathfinder).
+    string? Isrc = null);
 
 /// <summary>How a track plays — streamed from a remote source (CDN) or decoded from a local file. The seam routes
 /// playback by this; default is Streamed (the synthetic catalog's shape).</summary>

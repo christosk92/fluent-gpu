@@ -184,6 +184,8 @@ sealed class PlayerBarContent : Component
         bool playing = b.IsPlaying.Value;
         bool shuffle = b.IsShuffle.Value;
         var repeat = b.Repeat.Value;
+        bool hasVideo = b.CurrentTrackHasVideo.Value;   // async-detected music video (VideoService) for the now-playing track
+        bool preferVideo = b.PreferVideo.Value;          // UI-only swap toggle; the video surface/host is a follow-up
         var accent = Tok.AccentDefault;
 
         PlayerState st =
@@ -396,6 +398,13 @@ sealed class PlayerBarContent : Component
             rightKids.Add(Transport(Mdl.Lyrics, () => ui.Toggle(RailMode.Lyrics), true,
                 ui.RailOpen.Value && ui.Mode.Value == RailMode.Lyrics, accent, buttonBox, buttonGlyph)
                 with { Key = "lyrics", Animate = ItemMotion });
+        // Switch-to-video toggle — shown only when the now-playing track has a music video (async-detected). The swap is a
+        // seam for now (sets PreferVideo); the actual video surface/host is a follow-up. Tooltip explains the affordance.
+        if (active && hasVideo)
+            rightKids.Add(ToolTip.Wrap(
+                Transport(Icons.Movie, () => { b.PreferVideo.Value = !b.PreferVideo.Value; }, true, preferVideo, accent, buttonBox, buttonGlyph),
+                Loc.Get(preferVideo ? Strings.Player.SwitchToAudio : Strings.Player.SwitchToVideo))
+                with { Key = "video" });
         if (showQueue)
             rightKids.Add(Embed.Comp(() => new QueueButton(b, accent, buttonBox, buttonGlyph)) with { Key = "queue" });
         if (showDevices)

@@ -36,6 +36,17 @@ public sealed class AggregatingLyricsProvider : ILyricsProvider
         _log = log;
     }
 
+    // After the FIRST candidate lands, wait at most this long for a better one before returning — so a slow CJK provider
+    // can't stall the panel for seconds once we already have something usable. A GOLD candidate ends the wait instantly.
+    const int GraceMs = 2000;
+
+    readonly record struct Probed(LyricsCandidate? Cand, LyricsOutcome Outcome, long Ms, string Detail);
+
+    // An exact-recording word-synced lyric (matched by Spotify identity or ISRC) is the best result possible — nothing a
+    // slower source could return beats it, so the moment one arrives we stop waiting.
+    static bool IsGold(LyricsCandidate? c)
+        => c is { Sync: LyricsSyncKind.Syllable, Basis: MatchBasis.Identity or MatchBasis.Isrc };
+
     public async Task<LyricsDocument?> GetLyricsAsync(string trackId, CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(trackId)) return null;
@@ -45,16 +56,81 @@ public sealed class AggregatingLyricsProvider : ILyricsProvider
         try { req = await _resolve(trackId, ct).ConfigureAwait(false); }
         catch (OperationCanceledException) { throw; }
         catch { req = null; }
-        if (req is null) return null;
+        if (req is null)
+        {
+            LyricsDiagnostics.Publish(new LyricsSearchReport(trackId, "", "", "", 0L, null,
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                "could not resolve track metadata — no title/artist to search with", Array.Empty<LyricsSourceTrace>()));
+            return null;
+        }
 
-        // Fan out — each source bounded by its own timeout; a throw/timeout becomes a null candidate (never fails the set).
-        var tasks = _sources.Select(s => FetchOne(s, req, ct)).ToArray();
-        var results = await Task.WhenAll(tasks).ConfigureAwait(false);
-        var candidates = results.Where(c => c is not null).Select(c => c!).ToList();
-        if (candidates.Count == 0) return null;
+        // Ambient probe: flows (AsyncLocal) into each parallel source task so a source can record WHY it missed.
+        var probe = new LyricsProbe();
+        LyricsProbe.Current.Value = probe;
 
+        // Fan out in parallel (each source bounded by its own timeout), but bound how long we WAIT: return the instant a
+        // gold candidate lands, and otherwise stop GraceMs after the first hit instead of blocking on the slow stragglers.
+        using var srcCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var started = _sources.Select(s => (Source: s, Task: FetchOne(s, req, probe, srcCts.Token))).ToList();
+        var collected = new Dictionary<string, Probed>(StringComparer.Ordinal);
+
+        var pending = started.ToList();
+        Task? grace = null;
+        bool goldCollected = false;
+        while (pending.Count > 0)
+        {
+            ct.ThrowIfCancellationRequested();   // real caller cancel → propagate (sources return Skipped, not throw)
+            var waiters = new List<Task>(pending.Count + 1);
+            foreach (var p in pending) waiters.Add(p.Task);
+            if (grace is not null) waiters.Add(grace);
+
+            var done = await Task.WhenAny(waiters).ConfigureAwait(false);
+            if (ReferenceEquals(done, grace)) break;   // grace window elapsed → stop waiting for slow stragglers
+
+            int idx = pending.FindIndex(p => ReferenceEquals(p.Task, done));
+            var entry = pending[idx];
+            pending.RemoveAt(idx);
+            var pr = await entry.Task.ConfigureAwait(false);   // FetchOne never throws
+            collected[entry.Source.Id] = pr;
+
+            if (grace is null && pr.Cand is not null) grace = Task.Delay(GraceMs);   // first real hit → start the grace clock
+            if (IsGold(pr.Cand)) goldCollected = true;
+            if (goldCollected && (collected.ContainsKey(_referenceSourceId) || !pending.Any(p => p.Source.Id == _referenceSourceId)))
+                break;   // gold is unbeatable, but keep the Spotify reference when it is already nearly here
+        }
+        srcCts.Cancel();   // abort any in-flight stragglers — their results are no longer needed
+
+        var candidates = collected.Values.Where(p => p.Cand is not null).Select(p => p.Cand!).ToList();
         var reference = candidates.FirstOrDefault(c => c.ProviderId == _referenceSourceId)?.Document;
-        var ranked = LyricsReranker.Rank(candidates, reference);
+        RankedLyrics ranked = candidates.Count > 0
+            ? LyricsReranker.Rank(candidates, reference)
+            : new RankedLyrics(null, null, Array.Empty<LyricsDecision>());
+
+        // Fold the reranker verdicts back into the per-source traces (a source we stopped waiting on is "skipped").
+        string? winnerId = ranked.Best?.ProviderId;
+        var traces = new List<LyricsSourceTrace>(_sources.Count);
+        foreach (var s in _sources)
+        {
+            var dec = ranked.All.FirstOrDefault(d => d.ProviderId == s.Id);
+            if (collected.TryGetValue(s.Id, out var pr))
+                traces.Add(new LyricsSourceTrace(s.Id, pr.Outcome, pr.Ms, pr.Detail,
+                    pr.Cand?.Sync ?? LyricsSyncKind.None, pr.Cand?.LineCount ?? 0,
+                    dec?.Score ?? 0d, dec is not null && s.Id == winnerId, dec?.Reason ?? ""));
+            else
+                traces.Add(new LyricsSourceTrace(s.Id, LyricsOutcome.Skipped, 0L,
+                    "skipped — a faster match returned first", LyricsSyncKind.None, 0, 0d, false, ""));
+        }
+
+        int hits = candidates.Count;
+        int ran = collected.Count;
+        string summary = hits == 0
+            ? $"0/{ran} sources returned lyrics — no match anywhere"
+            : ranked.Best is { } sb
+                ? $"{hits}/{ran} returned; winner={sb.ProviderId} ({sb.Sync}, score {sb.Score:F2}, offset {sb.AppliedOffsetMs}ms)"
+                : $"{hits}/{ran} returned";
+        LyricsDiagnostics.Publish(new LyricsSearchReport(
+            trackId, req.Title, req.ArtistsJoined, req.Album, req.DurationMs, req.Isrc,
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), summary, traces));
 
         if (ranked.Best is { } b)
             _log?.Invoke($"track={trackId} winner={b.ProviderId} sync={b.Sync} score={b.Score:F3} text={b.TextAgreement:F2} " +
@@ -65,22 +141,31 @@ public sealed class AggregatingLyricsProvider : ILyricsProvider
         return winner;
     }
 
-    async Task<LyricsCandidate?> FetchOne(ILyricCandidateSource source, LyricsRequest req, CancellationToken ct)
+    async Task<Probed> FetchOne(ILyricCandidateSource source, LyricsRequest req, LyricsProbe probe, CancellationToken ct)
     {
+        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        long Ms() => (long)System.Diagnostics.Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
+        string With(string head) { var n = probe.NotesFor(source.Id); return n.Length > 0 ? head + " — " + n : head; }
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(_opt.PerSourceTimeoutMs);
         try
         {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(_opt.PerSourceTimeoutMs);
-            return await source.FetchAsync(req, cts.Token).ConfigureAwait(false);
+            var c = await source.FetchAsync(req, cts.Token).ConfigureAwait(false);
+            if (c is null) return new Probed(null, LyricsOutcome.Miss, Ms(), With("no match"));
+            return new Probed(c, LyricsOutcome.Hit, Ms(), With($"{c.Sync}, {c.LineCount} lines, basis={c.Basis}"));
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
-            throw;   // the CALLER cancelled — propagate
+            // Our per-source CancelAfter fired = a real timeout; otherwise the aggregate cancelled us (early-exit / caller).
+            bool timedOut = cts.IsCancellationRequested && !ct.IsCancellationRequested;
+            return new Probed(null, timedOut ? LyricsOutcome.Timeout : LyricsOutcome.Skipped, Ms(),
+                timedOut ? With($"timed out (> {_opt.PerSourceTimeoutMs}ms)") : "cancelled");
         }
         catch (Exception e)
         {
             _log?.Invoke($"source {source.Id} failed for {req.TrackId}: {e.GetType().Name}");
-            return null;   // this source's timeout/error — drop it, keep the rest
+            return new Probed(null, LyricsOutcome.Error, Ms(), With($"{e.GetType().Name}: {e.Message}"));
         }
     }
 

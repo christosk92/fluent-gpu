@@ -74,6 +74,27 @@ public class LyricsAggregationTests
     }
 
     [Fact]
+    public async Task Aggregator_GoldArrivesFirst_WaitsForReference_ThenCorrectsOffset()
+    {
+        var shifted = Song.Select(l => (l.Item1 + 500, l.Item2)).ToArray();
+        var sources = new ILyricCandidateSource[]
+        {
+            new FakeSource("musixmatch", new LyricsCandidate("musixmatch", 0.9, MatchBasis.Isrc, WordDoc("musixmatch", shifted))),
+            new FakeSource("spotify", new LyricsCandidate("spotify", 0.55, MatchBasis.Identity, LineDoc("spotify", Song)), delayMs: 60),
+        };
+        var agg = new AggregatingLyricsProvider(sources, Resolver(Req()));
+
+        var doc = await agg.GetLyricsAsync("t1");
+
+        Assert.NotNull(doc);
+        Assert.Equal("musixmatch", doc!.Provider);
+        Assert.Equal(-500, doc.OffsetMsApplied);
+        Assert.Equal(1000, doc.Lines[0].StartMs);
+        Assert.Equal(1000, doc.Lines[0].Syllables[0].StartMs);
+        Assert.Equal(1300, doc.Lines[0].Syllables[0].EndMs);
+    }
+
+    [Fact]
     public async Task Aggregator_SourceThrowsOrTimesOut_DoesNotFailAggregate()
     {
         var sources = new ILyricCandidateSource[]
@@ -130,6 +151,40 @@ public class LyricsAggregationTests
         const string json = "{\"instrumental\":true}";
         var src = new LrcLibSource(new FakeHttp(("lrclib.net/api/get", json)));
         Assert.Null(await src.FetchAsync(Req(), default));
+    }
+
+    [Fact]
+    public async Task LrcLibSource_FallsBackToFeatStrippedSearch()
+    {
+        const string valid = "[{\"instrumental\":false,\"duration\":200.0," +
+            "\"syncedLyrics\":\"[00:01.00]Hi\\n[00:05.00]There\",\"plainLyrics\":\"Hi\\nThere\"}]";
+        // /api/get misses; the raw "Song (feat. X)" /api/search returns [] (no match); the feat-stripped "Song" search
+        // hits → the variant ladder must fall back to it. (Keys are matched by substring against the request URL.)
+        var http = new FakeHttp(
+            ("/api/get", null),                              // exact lookup misses
+            ("feat", "[]"),                                  // full-title search (URL carries the encoded "feat") → empty
+            ("track_name=Song&artist", valid));              // feat-stripped "Song"/"Artist" variant → hit
+        var req = new LyricsRequest("t1", "spotify:track:t1", "Song (feat. X)", new[] { "Artist" }, "Album", 200000);
+
+        var cand = await new LrcLibSource(http).FetchAsync(req, default);
+
+        Assert.NotNull(cand);
+        Assert.Equal("lrclib", cand!.ProviderId);
+        Assert.Equal(2, cand.Document.Lines.Count);
+    }
+
+    [Fact]
+    public void Musixmatch_BuildSubtitlesUrl_IsrcVsQuery()
+    {
+        var byIsrc = MusixmatchSource.BuildSubtitlesUrl("TOK", "USRC17607839", null, null, 200, "abc12345");
+        Assert.Contains("track_isrc=USRC17607839", byIsrc);
+        Assert.DoesNotContain("q_track=", byIsrc);
+        Assert.Contains("q_duration=200", byIsrc);
+
+        var byQuery = MusixmatchSource.BuildSubtitlesUrl("TOK", null, "Mood", "24kGoldn", 200, "abc12345");
+        Assert.Contains("q_track=Mood", byQuery);
+        Assert.Contains("q_artist=24kGoldn", byQuery);
+        Assert.DoesNotContain("track_isrc=", byQuery);
     }
 
     [Fact]

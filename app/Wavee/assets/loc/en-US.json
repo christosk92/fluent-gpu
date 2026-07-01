@@ -286,6 +286,8 @@
     "queue": "Queue",
     "devices": "Devices",
     "nowPlaying": "Now playing",
+    "switchToVideo": "Switch to video",
+    "switchToAudio": "Switch to audio",
     "playingOn": "Playing on {device}"
   },
 

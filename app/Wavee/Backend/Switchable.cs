@@ -78,6 +78,7 @@ public sealed class SwitchablePlayer : IPlaybackPlayer
 
     public IPlaybackState State => _state;
     public Task PlayAsync(string contextUri, int startIndex = 0, CancellationToken ct = default) => Cur.PlayAsync(contextUri, startIndex, ct);
+    public Task PlayOrderedAsync(string contextUri, IReadOnlyList<PlaybackContextTrack> tracks, int startIndex = 0, CancellationToken ct = default) => Cur.PlayOrderedAsync(contextUri, tracks, startIndex, ct);
     public Task PlayTrackAsync(string trackUri, CancellationToken ct = default) => Cur.PlayTrackAsync(trackUri, ct);
     public Task PauseAsync(CancellationToken ct = default) => Cur.PauseAsync(ct);
     public Task ResumeAsync(CancellationToken ct = default) => Cur.ResumeAsync(ct);
@@ -90,6 +91,7 @@ public sealed class SwitchablePlayer : IPlaybackPlayer
     public Task MoveQueueAsync(string entryId, int toIndex, CancellationToken ct = default) => Cur.MoveQueueAsync(entryId, toIndex, ct);
     public Task RemoveFromQueueAsync(string entryId, CancellationToken ct = default) => Cur.RemoveFromQueueAsync(entryId, ct);
     public Task EnqueueAsync(string trackUri, CancellationToken ct = default) => Cur.EnqueueAsync(trackUri, ct);
+    public Task PlayNextAsync(IReadOnlyList<PlaybackContextTrack> tracks, CancellationToken ct = default) => Cur.PlayNextAsync(tracks, ct);
 }
 
 public sealed class SwitchableDevices : IConnectDevices, IDisposable
@@ -163,12 +165,71 @@ public sealed class LiveSpotifySession : ISpotifySession
 public sealed class SwitchableLyrics : ILyricsProvider
 {
     readonly object _gate = new();
+    readonly Dictionary<string, LyricsDocument> _cache = new();
+    readonly Dictionary<string, Task<LyricsDocument?>> _inflight = new();
     ILyricsProvider _inner;
     public SwitchableLyrics(ILyricsProvider inner) => _inner = inner;
-    public void SetInner(ILyricsProvider inner) { lock (_gate) _inner = inner; }
+    public void SetInner(ILyricsProvider inner)
+    {
+        lock (_gate)
+        {
+            _inner = inner;
+            _cache.Clear();
+            _inflight.Clear();
+        }
+    }
     public Task<LyricsDocument?> GetLyricsAsync(string trackId, CancellationToken ct = default)
     {
-        ILyricsProvider cur; lock (_gate) cur = _inner;
-        return cur.GetLyricsAsync(trackId, ct);
+        if (string.IsNullOrWhiteSpace(trackId))
+            return Task.FromResult<LyricsDocument?>(null);
+
+        Task<LyricsDocument?> task;
+        lock (_gate)
+        {
+            if (_cache.TryGetValue(trackId, out var cached))
+                return Task.FromResult<LyricsDocument?>(cached);
+
+            if (_inflight.TryGetValue(trackId, out var existing))
+            {
+                task = existing;
+            }
+            else
+            {
+                var cur = _inner;
+                task = FetchAndCacheAsync(trackId, cur);
+                _inflight[trackId] = task;
+            }
+        }
+
+        return ct.CanBeCanceled ? task.WaitAsync(ct) : task;
+    }
+
+    async Task<LyricsDocument?> FetchAndCacheAsync(string trackId, ILyricsProvider provider)
+    {
+        try
+        {
+            var doc = await provider.GetLyricsAsync(trackId, CancellationToken.None).ConfigureAwait(false);
+            lock (_gate)
+            {
+                if (ReferenceEquals(_inner, provider))
+                {
+                    if (doc is not null)
+                        _cache[trackId] = doc;
+                    _inflight.Remove(trackId);
+                }
+            }
+
+            return doc;
+        }
+        catch
+        {
+            lock (_gate)
+            {
+                if (ReferenceEquals(_inner, provider))
+                    _inflight.Remove(trackId);
+            }
+
+            throw;
+        }
     }
 }

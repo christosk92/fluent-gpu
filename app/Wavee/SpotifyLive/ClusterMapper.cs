@@ -36,6 +36,9 @@ public static class ClusterMapper
         var next = new List<RemoteTrack>();
         if (ps?.NextTracks is { Count: > 0 } nt)
             foreach (var t in nt) if (!string.IsNullOrEmpty(t.Uri)) next.Add(MapTrack(t, 0));
+        var prev = new List<RemoteTrack>();
+        if (ps?.PrevTracks is { Count: > 0 } pt)
+            foreach (var t in pt) if (!string.IsNullOrEmpty(t.Uri)) prev.Add(MapTrack(t, 0));
 
         var r = ps?.Restrictions;
         bool noNext = r is not null && r.DisallowSkippingNextReasons.Count > 0;
@@ -55,7 +58,9 @@ public static class ClusterMapper
             devices, next,
             noPrev, noNext, noSeek, ourVol,
             ps?.PlaybackSpeed ?? 1.0,
-            activeVol);
+            activeVol,
+            ps?.QueueRevision ?? "",
+            prev);
     }
 
     static RemoteTrack MapTrack(P.ProvidedTrack t, long fallbackDuration)
@@ -69,7 +74,7 @@ public static class ClusterMapper
         string artistUri = !string.IsNullOrEmpty(t.ArtistUri) ? t.ArtistUri : Get("artist_uri");
         string albumUri = !string.IsNullOrEmpty(t.AlbumUri) ? t.AlbumUri : Get("album_uri");
         return new RemoteTrack(t.Uri, Get("title"), Get("artist_name"), artistUri, Get("album_title"), albumUri,
-            img.Length == 0 ? null : img, dur);
+            img.Length == 0 ? null : img, dur, t.Uid, t.Provider);
     }
 
     static DeviceKind MapKind(P.DeviceType type, bool isUs)

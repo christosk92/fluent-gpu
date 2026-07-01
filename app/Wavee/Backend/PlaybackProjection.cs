@@ -18,7 +18,10 @@ namespace Wavee.Backend;
 /// <summary>Proto-free snapshot of one cluster track (mapped from a ProvidedTrack by SpotifyLive).</summary>
 public readonly record struct RemoteTrack(
     string Uri, string Title, string ArtistName, string ArtistUri,
-    string AlbumName, string AlbumUri, string? ImageUrl, long DurationMs);
+    string AlbumName, string AlbumUri, string? ImageUrl, long DurationMs,
+    // Context uid + provider ("queue" / "context") — carried so a forwarded set_queue can re-emit the active device's
+    // own queue rows faithfully. Trailing defaults so display-only constructions are unaffected.
+    string Uid = "", string Provider = "");
 
 /// <summary>Proto-free row of the Connect device roster (volume in Spotify's 0..65535 range).</summary>
 public readonly record struct ConnectDeviceRow(string Id, string Name, DeviceKind Kind, bool IsActive, int Volume0_65535);
@@ -39,7 +42,14 @@ public sealed record ClusterDelta(
     // Content playback rate (spoken-word media); 1.0 = normal. Trailing default so existing constructions are unaffected.
     double PlaybackSpeed = 1.0,
     // The ACTIVE device's volume (0..65535, -1 = unknown) — the slider follows the active device, not just us.
-    int ActiveVolume0_65535 = -1);
+    int ActiveVolume0_65535 = -1,
+    // The Connect queue revision (PlayerState.queue_revision, a STRING — can exceed Int64). Echoed back on an outbound
+    // set_queue. Trailing default so existing constructions are unaffected.
+    string QueueRevision = "",
+    // The active device's history (prev_tracks) as the cluster reports it — kept with uid+provider so a forwarded
+    // set_queue can rewrite the REMOTE device's REAL queue (its NextTracks above are the up-next), not our local one.
+    // Non-const default → nullable; coalesced at the fold.
+    IReadOnlyList<RemoteTrack>? PrevTracks = null);
 
 public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, IDisposable
 {
@@ -69,6 +79,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     string? _resolvingUri;   // de-dupe: at most one in-flight resolve per uri (guarded by _gate)
     string? _contextUri;
     string _activeDeviceId = "";
+    string _queueRevision = "";
     bool _isPlaying, _isBuffering, _shuffle;
     RepeatMode _repeat;
     double _volume = 0.7;
@@ -76,6 +87,8 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     double _speed = 1.0;   // playback rate folded from the cluster (remote) / 1.0 (local); applied in Pos()
     Palette? _palette;
     IReadOnlyList<QueueEntry> _queue = Array.Empty<QueueEntry>();
+    // The active device's queue, verbatim from the last cluster (with uid+provider) — the source for a forwarded set_queue.
+    IReadOnlyList<RemoteTrack> _clusterPrev = Array.Empty<RemoteTrack>(), _clusterNext = Array.Empty<RemoteTrack>();
     bool _canSkipNext = true, _canSkipPrev = true, _canSeek = true;   // from cluster restrictions (viewer); true when local
     // reconciliation
     long _lastLocalCmdWall = long.MinValue;
@@ -93,6 +106,13 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     /// <summary>True when the cluster's active device is us (the controller's local-vs-remote branch keys on this).</summary>
     public bool WeAreActive { get { lock (_gate) return _activeDeviceId == _ourDeviceId; } }
     public string ActiveDeviceId { get { lock (_gate) return _activeDeviceId; } }
+    /// <summary>The last-seen Connect queue revision (echoed on an outbound set_queue). "" until the first cluster.</summary>
+    public string QueueRevision { get { lock (_gate) return _queueRevision; } }
+    /// <summary>The active device's queue from the last cluster (uid+provider preserved) — what a forwarded set_queue
+    /// rewrites. Empty until the first cluster. ClusterNextTracks = up-next (user queue then context continuation);
+    /// ClusterPrevTracks = history.</summary>
+    public IReadOnlyList<RemoteTrack> ClusterNextTracks { get { lock (_gate) return _clusterNext; } }
+    public IReadOnlyList<RemoteTrack> ClusterPrevTracks { get { lock (_gate) return _clusterPrev; } }
 
     /// <summary>The controller calls this the instant it issues a local optimistic command, so a stale cluster echo
     /// arriving just after does not revert the optimistic play-state.</summary>
@@ -147,6 +167,9 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         lock (_gate)
         {
             _activeDeviceId = c.ActiveDeviceId;
+            _queueRevision = c.QueueRevision ?? "";
+            _clusterPrev = c.PrevTracks ?? Array.Empty<RemoteTrack>();
+            _clusterNext = c.NextTracks;   // the active device's up-next, kept verbatim (uid+provider) for a forwarded set_queue
             bool weActive = c.ActiveDeviceId == _ourDeviceId;
             // Stale-cluster suppression: only when WE are active and a local command is still in flight do we refuse to let
             // a contradicting cluster revert our optimistic play-state. As a viewer, the cluster is always the truth.
@@ -224,6 +247,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
                     Artists = e.Artists.Count > 0 ? e.Artists : cur.Artists,
                     Album = e.Album,
                     Image = ImageSource.ChooseBetter(e.Image, cur.Image),
+                    Isrc = e.Isrc ?? cur.Isrc,   // carry the resolved ISRC onto the now-playing track (cluster track has none)
                 };
                 changed = true;
             }
@@ -316,6 +340,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
             Album = MergeAlbumRef(current.Album, incoming.Album),
             DurationMs = incoming.DurationMs > 0 ? incoming.DurationMs : current.DurationMs,
             Image = ImageSource.ChooseBetter(incoming.Image, current.Image),
+            Isrc = incoming.Isrc ?? current.Isrc,   // a thin cluster heartbeat must not blank the resolved ISRC
         };
     }
 

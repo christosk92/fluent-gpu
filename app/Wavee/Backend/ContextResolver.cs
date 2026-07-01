@@ -38,6 +38,10 @@ public readonly record struct ContextSpec(
 /// <summary>A bare (uri, uid) pair as it appears in a command's embedded context page — pre-hydration.</summary>
 public readonly record struct QueuedRef(string Uri, string Uid);
 
+/// <summary>One entry in an outbound set_queue snapshot. <c>IsQueued</c> ⇒ provider:"queue" + metadata{is_queued:"true"}
+/// (a user-queued row); otherwise provider:"context" + metadata{} (a context-continuation row).</summary>
+public readonly record struct QueueWireEntry(string Uri, string Uid, bool IsQueued);
+
 /// <summary>The resolved context: ordered, metadata-hydrated tracks, where to start, and the paging/sort metadata the
 /// publisher needs. Lean by design — only what the controller + PutState consume.</summary>
 public readonly record struct ResolvedContext(

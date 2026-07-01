@@ -91,6 +91,11 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         return _store.GetArtist(uri);
     }
 
+    // The artist overview (TopTracks/stats/palette/bio) is a heavy Pathfinder GraphQL read; revalidate it on a generous
+    // window rather than on every open. Longer than the 1h entity-metadata Etag because artist stats/discography change
+    // slowly. (Tunable: drop to TimeSpan.FromHours(1) to mirror the Etag path exactly.)
+    static readonly TimeSpan ArtistOverviewTtl = TimeSpan.FromHours(12);
+
     // First open fetches the detail envelope. Albums are upgraded until they have BOTH tracks and the full Pathfinder
     // metadata; a track-only extended-metadata album is not allowed to strand the page without artist art/releases.
     async Task EnsureFetchedAsync(string uri, CancellationToken ct)
@@ -106,7 +111,12 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
             need = album is null || album.Tracks is null or { Count: 0 } || album.Hydration < AlbumHydrationLevel.Full;
         }
         else if (uri.StartsWith("spotify:artist:", StringComparison.Ordinal))
-            need = _store.GetArtist(uri)?.TopTracks is null or { Count: 0 };   // cache: fetch once, then served from the store (the virtualized discography reads it many times)
+        {
+            // SWR: re-fetch when the overview is missing its top tracks OR the freshness stamp is older than the TTL. A
+            // record persisted by an earlier build has FetchedAt == default (epoch) → reads as stale → heals on next open.
+            var a = _store.GetArtist(uri);
+            need = a is null || a.TopTracks is null or { Count: 0 } || DateTimeOffset.UtcNow - a.FetchedAt > ArtistOverviewTtl;
+        }
         if (need) { try { await fetch(uri, ct).ConfigureAwait(false); } catch { } }
     }
 
@@ -256,7 +266,7 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
             var t = _store.GetTrack(m.ItemUri);
             if (t is null) continue;   // offline-first inner join: a not-yet-hydrated member has no row until it lands
             DateTimeOffset? at = m.AddedAt > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(m.AddedAt) : null;
-            list.Add(t with { AddedAt = at, AddedBy = m.AddedBy });   // stamp membership facts onto the read-model copy
+            list.Add(t with { AddedAt = at, AddedBy = m.AddedBy, ContextUid = m.ItemId });   // stamp membership facts (+ per-row uid) onto the read-model copy
         }
         return list;
     }

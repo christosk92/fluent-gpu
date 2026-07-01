@@ -572,6 +572,8 @@ float4 PSMain(VSOutG i) : SV_Target
 
     private float[] _gradDy = Array.Empty<float>();
     private float[] _gradScale = Array.Empty<float>();   // per-glyph scale pop at the wipe front (BetterLyrics char pop)
+    private float[] _gradRo0 = Array.Empty<float>();     // per-glyph reading-order LEFT  (continuous across wrapped visual lines)
+    private float[] _gradRo1 = Array.Empty<float>();     // per-glyph reading-order RIGHT
 
     /// <summary>Glyph-WIPE variant of <see cref="LayoutRun"/> (the <c>GlyphWipe</c> primitive): shapes/caches the run
     /// under the SAME <see cref="RunKey"/> (so re-using it costs no reshape), then computes a PER-GLYPH color + Y offset
@@ -609,29 +611,66 @@ float4 PSMain(VSOutG i) : SV_Target
         if (count == 0) return;
         if (_gradDy.Length < count) _gradDy = new float[count];
         if (_gradScale.Length < count) _gradScale = new float[count];
+        if (_gradRo0.Length < count) _gradRo0 = new float[count];
+        if (_gradRo1.Length < count) _gradRo1 = new float[count];
 
-        // Run-local x-extent from the glyph centers (the wipe axis); split/fade/float are fractions of it.
-        float minX = float.MaxValue, maxX = float.MinValue;
-        for (int i = 0; i < count; i++) { float cx = quads[i].DstX + quads[i].DstW * 0.5f; if (cx < minX) minX = cx; if (cx > maxX) maxX = cx; }
-        float extent = MathF.Max(maxX - minX, 1e-3f);
+        // READING-ORDER wipe axis. The wipe `split` is a 0..1 fraction of the run's CONTENT IN READING ORDER, not of
+        // its raw x-extent. A wrapped run lays its 2nd+ visual lines back at x≈0 (EmitLine restarts the pen per line —
+        // TextLayoutEngine.EmitLine: `float x = 0f` per line), so a pure-x boundary (each glyph's DstX vs split·width)
+        // paints the LEFT glyphs of line 2 as "already sung" while the still-grey tail of line 1 sits at a LARGER x —
+        // i.e. out of reading order (the wrapped-2nd-line glow bug). Instead we exploit that the quads ARE in reading
+        // order (EmitLine appends each visual line in turn, left→right within the line; non-inking break glyphs are
+        // dropped upstream) and lay the lines END-TO-END into one monotonic coordinate: each glyph's position is
+        // (sum of all prior visual-line widths) + its offset from its OWN line's left edge. A visual-line break is where
+        // x jumps backward past a full em (within a line x only grows; a wrap resets it to the line origin — a jump of
+        // the whole preceding line's width). For a single (non-wrapped) line this collapses to a plain left-edge-to-
+        // right-edge normalization, so the boundary reaches the run's true right edge (the last glyph fully fills at
+        // split==1). `split`/`fade`/`lift` stay fractions of the total reading-order length.
+        float lineBase = 0f;                    // cumulative width of completed visual lines (reading-order origin of this line)
+        float lineMinX = quads[0].DstX;         // x-origin of the current visual line
+        float lineRight = quads[0].DstX;        // running right edge within the current visual line (x space)
+        float lineTol = MathF.Max(size, 1f);    // a wrap jumps back ≫ one em; within-line bearing/marks stay within it
+        for (int i = 0; i < count; i++)
+        {
+            float gx = quads[i].DstX;
+            if (i > 0 && gx < lineRight - lineTol)   // x jumped backward past a full line → a new visual line
+            {
+                lineBase += lineRight - lineMinX;    // bank the completed line's width
+                lineMinX = gx;
+                lineRight = gx;
+            }
+            float gr = gx + quads[i].DstW;
+            if (gr > lineRight) lineRight = gr;
+            _gradRo0[i] = lineBase + (gx - lineMinX);
+            _gradRo1[i] = lineBase + (gr - lineMinX);
+        }
+        float total = MathF.Max(lineBase + (lineRight - lineMinX), 1e-3f);
         float fade = MathF.Max(softness, 1e-4f);
+        // Remap split onto the shader's boundary so the `fade`-wide soft band — which the gradient PS CENTRES on the
+        // boundary (a = saturate((split - gt)/fade + 0.5)) — fully clears the run at BOTH extremes: split==1 places the
+        // boundary half a band PAST the trailing edge (gt = 1 + fade/2) so the last glyph is 100% `before` (white), and
+        // split==0 half a band BEFORE the leading edge (gt = -fade/2) so nothing is sung. Without this the trailing
+        // fade/2 never fills — the "final syllable never reaches white" defect. The reading-order axis above already puts
+        // the last glyph's right edge at gt==1, so this remap is what COMPLETES it. s = split*(1+fade) - fade/2 is the
+        // exact closed-form inverse of the PS band: monotonic, pivoting at 0.5 (mid-line wipe timing unchanged), endpoint-exact.
+        float splitShader = split * (1f + fade) - 0.5f * fade;
         // BetterLyrics per-char motion at the karaoke front (LyricsAnimator.cs): the SUNG run sits at the baseline while the
         // unsung run is sunk by `lift` (≈10% line-height), each glyph rising into place as the wipe sweeps it; and the glyph
         // AT the split magnifies (scale pop ≈1.12), settling to 1.0 within `popWindow` of the front. The colour wipe itself
-        // is per-PIXEL in the gradient PS (ReplayGradient feeds each glyph its run-local-x extent), so the boundary cuts
+        // is per-PIXEL in the gradient PS (ReplayGradient feeds each glyph its reading-order extent), so the boundary cuts
         // THROUGH a glyph — half sung / half unsung — not glyph-by-glyph.
         const float popWindow = 0.12f;
         float popPeak = lift > 0f ? 0.12f : 0f;
         for (int i = 0; i < count; i++)
         {
-            float gtc = (quads[i].DstX + quads[i].DstW * 0.5f - minX) / extent;   // glyph-centre run position (drives float/scale)
-            float a = Math.Clamp((split - gtc) / fade + 0.5f, 0f, 1f);
-            _gradDy[i] = lift * (1f - a);   // unsung sunk by `lift`, rising to the baseline (0) as it is swept
-            float d = MathF.Abs(split - gtc);
+            float gtc = (_gradRo0[i] + _gradRo1[i]) * 0.5f / total;   // glyph-centre reading-order position (drives float/scale)
+            float a = Math.Clamp((splitShader - gtc) / fade + 0.5f, 0f, 1f);
+            _gradDy[i] = lift * (1f - a);   // unsung sunk by `lift`, rising to the baseline (0) as it is swept (settles to 0 at split==1)
+            float d = MathF.Abs(splitShader - gtc);
             _gradScale[i] = popPeak > 0f && d < popWindow ? 1f + popPeak * (1f - d / popWindow) : 1f;
         }
-        ReplayGradient(quads, world, opacity, inMotion ? 0f : SnapDy(quads, world, dpiScale), before, after, split, fade, minX, extent,
-            _gradDy.AsSpan(0, count), _gradScale.AsSpan(0, count), outList);
+        ReplayGradient(quads, world, opacity, inMotion ? 0f : SnapDy(quads, world, dpiScale), before, after, splitShader, fade, total,
+            _gradRo0.AsSpan(0, count), _gradRo1.AsSpan(0, count), _gradDy.AsSpan(0, count), _gradScale.AsSpan(0, count), outList);
     }
 
     /// <summary>Wire the interner so the run cache can drop runs whose text id was reclaimed (resolves empty).</summary>
@@ -717,9 +756,11 @@ float4 PSMain(VSOutG i) : SV_Target
     /// to the quad and record its run-local-x extent [gt0,gt1] plus before/after/split/fade — the PS does the per-PIXEL
     /// colour mix, so the wipe boundary cuts THROUGH glyphs (half sung / half unsung), not glyph-by-glyph.</summary>
     private static void ReplayGradient(ReadOnlySpan<ShapedGlyph> glyphs, Affine2D world, float opacity, float snapDy,
-        ColorF before, ColorF after, float split, float fade, float minX, float extent,
+        ColorF before, ColorF after, float split, float fade, float total,
+        ReadOnlySpan<float> ro0, ReadOnlySpan<float> ro1,
         ReadOnlySpan<float> perGlyphDy, ReadOnlySpan<float> perGlyphScale, List<GradGlyphInstance> outList)
     {
+        float inv = 1f / total;
         for (int i = 0; i < glyphs.Length; i++)
         {
             ref readonly var s = ref glyphs[i];
@@ -733,7 +774,10 @@ float4 PSMain(VSOutG i) : SV_Target
                 M11 = world.M11, M12 = world.M12, M21 = world.M21, M22 = world.M22, Dx = world.Dx, Dy = world.Dy,
                 BR = before.R, BG = before.G, BB = before.B, BA = before.A,
                 AR = after.R, AG = after.G, AB = after.B, AA = after.A,
-                Gt0 = (s.DstX - minX) / extent, Gt1 = (s.DstX + s.DstW - minX) / extent,
+                // Reading-order extent of this glyph (continuous across wrapped visual lines), 0..1 along the run. The VS
+                // lerps gt0→gt1 across the quad's x — within a single glyph reading order is monotonic with x, so the
+                // per-pixel wipe through the glyph stays correct.
+                Gt0 = ro0[i] * inv, Gt1 = ro1[i] * inv,
                 Split = split, Fade = fade, Opacity = opacity,
             });
         }

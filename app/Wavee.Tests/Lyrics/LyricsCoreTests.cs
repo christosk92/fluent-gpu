@@ -112,14 +112,56 @@ public class LyricsCoreTests
     public void Reranker_WrongSongWordSynced_LosesToCorrectLine()
     {
         var reference = Reference();
-        var wrong = Cand("amll", 1.0, MatchBasis.Identity, WordDoc("amll",
+        // A grey (metadata-searched) source returned a WRONG song's karaoke; the sync gate must demote it so the correct
+        // line lyric wins. (Identity/ISRC sources are exempt — see Reranker_IdentityWordSync_ExemptFromGate.)
+        var wrong = Cand("netease", 1.0, MatchBasis.MetadataSearch, WordDoc("netease",
             (1000, "never gonna give you up"), (4000, "never gonna let you down"), (7000, "never gonna run around")));
         var correct = Cand("lrclib", 0.4, MatchBasis.MetadataSearch, LineDoc("lrclib", RealSong));
 
         var ranked = LyricsReranker.Rank(new[] { wrong, correct }, reference);
 
         Assert.NotNull(ranked.Winner);
-        Assert.Equal("lrclib", ranked.Best!.ProviderId);   // wrong-song syllable demoted by the sync gate (low text agreement)
+        Assert.Equal("lrclib", ranked.Best!.ProviderId);   // wrong-song syllable demoted by the sync gate (text below the floor)
+    }
+
+    [Fact]
+    public void Reranker_LooseGate_AcceptsDivergentWordSync()
+    {
+        var reference = Reference();
+        // SAME song, word-synced, but only partial text agreement (a romanized / differently-transcribed grey candidate):
+        // 2 of 4 lines match → text ~0.5. The old 0.80 bar demoted this; the 0.15 floor keeps its sync tier.
+        var syl = Cand("netease", 0.5, MatchBasis.MetadataSearch, WordDoc("netease",
+            (1000, "hello darkness my old friend"), (5000, "ive come to talk with you again"),
+            (9000, "totally unrelated filler line"), (13000, "another unrelated filler line")));
+
+        var d = LyricsReranker.Rank(new[] { syl }, reference).All.Single(x => x.ProviderId == "netease");
+        Assert.DoesNotContain("sync-gate:demoted", d.Reason);
+    }
+
+    [Fact]
+    public void Reranker_LooseGate_StillDemotesWrongWordSync()
+    {
+        var reference = Reference();
+        // Different song entirely → text ≈ 0 (below the floor) → demoted even though it is word-synced.
+        var wrong = Cand("netease", 0.5, MatchBasis.MetadataSearch, WordDoc("netease",
+            (1000, "never gonna give you up"), (4000, "never gonna let you down"), (7000, "never gonna run around")));
+
+        var d = LyricsReranker.Rank(new[] { wrong }, reference).All.Single(x => x.ProviderId == "netease");
+        Assert.Contains("sync-gate:demoted", d.Reason);
+    }
+
+    [Fact]
+    public void Reranker_IdentityWordSync_ExemptFromGate()
+    {
+        var reference = Reference();
+        // AMLL is identity-matched (the exact Spotify track) but its transcription diverges from Spotify's line lyric
+        // (text ≈ 0). It must NOT be demoted — it IS the recording. (ISRC-matched Musixmatch is exempt the same way.)
+        var amll = Cand("amll", 0.9, MatchBasis.Identity, WordDoc("amll",
+            (1000, "totally different transcription aaa"), (5000, "totally different transcription bbb"),
+            (9000, "totally different transcription ccc"), (13000, "totally different transcription ddd")));
+
+        var d = LyricsReranker.Rank(new[] { amll }, reference).All.Single(x => x.ProviderId == "amll");
+        Assert.DoesNotContain("sync-gate:demoted", d.Reason);
     }
 
     [Fact]
@@ -135,6 +177,26 @@ public class LyricsCoreTests
         Assert.Equal(-700, ranked.Best!.AppliedOffsetMs);
         Assert.Equal(1000, ranked.Winner!.Lines[0].StartMs);   // pulled back onto the reference
         Assert.Equal(-700, ranked.Winner.OffsetMsApplied);
+    }
+
+    [Fact]
+    public void Reranker_TimingFallback_TrustedDivergentText_IsCorrected()
+    {
+        var reference = Reference();
+        var divergent = Cand("musixmatch", 0.9, MatchBasis.Isrc, WordDoc("musixmatch",
+            (1500, "totally different transcription aaa"),
+            (5500, "totally different transcription bbb"),
+            (9500, "totally different transcription ccc"),
+            (13500, "totally different transcription ddd")));
+
+        var ranked = LyricsReranker.Rank(new[] { divergent }, reference);
+
+        Assert.Equal(-500, ranked.Best!.AppliedOffsetMs);
+        Assert.Contains("timing-fallback", ranked.Best.Reason);
+        Assert.Equal(1000, ranked.Winner!.Lines[0].StartMs);
+        Assert.Equal(1000, ranked.Winner.Lines[0].Syllables[0].StartMs);
+        Assert.Equal(1400, ranked.Winner.Lines[0].Syllables[0].EndMs);
+        Assert.Equal(-500, ranked.Winner.OffsetMsApplied);
     }
 
     [Fact]

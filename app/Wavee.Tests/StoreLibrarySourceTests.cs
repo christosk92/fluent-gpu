@@ -69,6 +69,46 @@ public class StoreLibrarySourceTests
     }
 
     [Fact]
+    public async Task GetPlaylist_StampsContextUidFromItemId_WithoutPollutingSharedStore()
+    {
+        var store = new InMemoryStore();
+        store.UpsertTrack(Trk("t1"));
+        store.UpsertPlaylist(new Playlist("p", "spotify:playlist:p", "My Mix", null, "Me", null, 0));
+        store.SetMembership("spotify:playlist:p", new[] { new PlaylistMember("rowuid-1", "spotify:track:t1", null, 0) }, null);
+        var src = new StoreLibrarySource(store);
+        var pl = await src.GetPlaylistAsync("spotify:playlist:p");
+
+        Assert.Equal("rowuid-1", pl!.Tracks![0].ContextUid);          // per-row uid stamped from PlaylistMember.ItemId
+        Assert.Null(store.GetTrack("spotify:track:t1")!.ContextUid);  // the SHARED stored entity is untouched (read-model only)
+    }
+
+    [Fact]
+    public async Task GetArtist_StaleOverview_Revalidates_ThenFreshDoesNot()
+    {
+        var store = new InMemoryStore();
+        // A resident artist WITH top tracks but an old/epoch freshness stamp — i.e. a record an earlier build persisted.
+        var resident = new Artist("ar", "spotify:artist:ar", "Stale", null, TopTracks: new[] { Trk("t1") });
+        store.UpsertArtist(resident);   // FetchedAt defaults to epoch → reads as stale
+        var src = new StoreLibrarySource(store);
+
+        int fetches = 0;
+        src.OnDemandFetch = (uri, ct) =>
+        {
+            fetches++;
+            store.UpsertArtist(resident with { MonthlyListeners = 123, FetchedAt = DateTimeOffset.UtcNow });   // overview lands, stamped fresh
+            return Task.CompletedTask;
+        };
+
+        var a1 = await src.GetArtistAsync("spotify:artist:ar");
+        Assert.Equal(1, fetches);                 // stale (epoch) → revalidated, even though it had top tracks
+        Assert.Equal(123, a1!.MonthlyListeners);  // served the refreshed record
+
+        var a2 = await src.GetArtistAsync("spotify:artist:ar");
+        Assert.Equal(1, fetches);                 // now FetchedAt == now → fresh → NOT re-fetched
+        Assert.Equal(123, a2!.MonthlyListeners);
+    }
+
+    [Fact]
     public async Task GetPlaylist_ReturnsNull_ForUnknown()
     {
         var src = new StoreLibrarySource(new InMemoryStore());

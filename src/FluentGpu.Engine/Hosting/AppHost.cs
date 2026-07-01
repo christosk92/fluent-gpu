@@ -827,6 +827,10 @@ public sealed class AppHost : IDisposable
     /// <summary>Run one full frame: pump + input, then paint (the reactive flush + layout + record happen in Paint).</summary>
     public FrameStats RunFrame()
     {
+        // Seam confinement backstop: the frame pump IS the UI thread. Bind it (idempotent) + assert. Both are
+        // [Conditional("FGGUARD")] — live in Debug/CI (proves single-UI-thread ownership), erased from Release/Ship.
+        Threading.ThreadGuard.BindCurrent(Threading.ThreadGuard.ThreadRole.Ui);
+        Threading.ThreadGuard.AssertUi();
         _lastFrameStartTicks = Stopwatch.GetTimestamp();   // frame-start stamp for RecommendedWaitMs ambient-fps pacing
         long db = 0, dt = 0;
         if (s_allocDiag) { db = GC.GetAllocatedBytesForCurrentThread(); dt = Stopwatch.GetTimestamp(); }

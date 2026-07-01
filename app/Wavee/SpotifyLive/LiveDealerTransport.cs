@@ -55,13 +55,16 @@ public sealed class LiveDealerTransport : ITransport, IDisposable
     public IObservable<WireEvent> Events(string topicPrefix) => new FilteredEvents(_events, topicPrefix);
     public IObservable<WireRequest> Requests(string identPrefix) => new FilteredRequests(_requests, identPrefix);
 
-    public async Task<Resp> Request(Channel ch, string route, ReadOnlyMemory<byte> body, CancellationToken ct = default, string? method = null)
+    public async Task<Resp> Request(Channel ch, string route, ReadOnlyMemory<byte> body, CancellationToken ct = default,
+        string? method = null, IReadOnlyDictionary<string, string>? headers = null)
     {
         var url = _spclientBaseUrl() + route;
         var verb = method ?? (body.IsEmpty ? "GET" : "POST");
-        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        if (!body.IsEmpty) headers["Content-Type"] = "application/protobuf";
-        using var resp = await _spclient.SendAsync(new HttpReq(verb, url, headers, body.IsEmpty ? null : body.ToArray()), ct).ConfigureAwait(false);
+        var reqHeaders = headers is null
+            ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
+        if (!body.IsEmpty && !reqHeaders.ContainsKey("Content-Type")) reqHeaders["Content-Type"] = "application/protobuf";
+        using var resp = await _spclient.SendAsync(new HttpReq(verb, url, reqHeaders, body.IsEmpty ? null : body.ToArray()), ct).ConfigureAwait(false);
         using var ms = new MemoryStream();
         await resp.Body.CopyToAsync(ms, ct).ConfigureAwait(false);
         return new Resp(resp.Status is >= 200 and < 300, ms.ToArray(), resp.Status);

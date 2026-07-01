@@ -55,7 +55,7 @@ public sealed class LiveConnect : IDisposable
         // context's hydrated DurationMs feeds the synthetic clock. The real CDN+key LiveTrackResolver lands with the audio
         // host (it would otherwise hit the not-yet-wired audio-key pipeline); _apChannel stays owned for that day.
         var resolver = new StubTrackResolver();
-        var outbound = new LiveOutboundControl(transport, deviceId);
+        var outbound = new LiveOutboundControl(transport, deviceId, () => _connect.CurrentConnectionId);
         // Play-history telemetry (Recently Played) + the PutState publisher both fan off the controller's event log.
         var telemetry = new TelemetryProjection(new GaboTelemetry(log), () => Projection.ContextUri);
         Controller = new PlaybackController(_host, resolver, Projection,

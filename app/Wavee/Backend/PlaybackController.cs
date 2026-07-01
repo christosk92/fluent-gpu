@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Wavee.Backend.Spotify;
 using Wavee.Core;
 
 namespace Wavee.Backend;
@@ -47,12 +48,21 @@ public sealed class LiveOutboundControl : IOutboundControl
 {
     readonly ITransport _transport;
     readonly string _ourDeviceId;
-    public LiveOutboundControl(ITransport transport, string ourDeviceId) { _transport = transport; _ourDeviceId = ourDeviceId; }
+    readonly Func<string?>? _connectionId;
+    public LiveOutboundControl(ITransport transport, string ourDeviceId, Func<string?>? connectionId = null)
+    { _transport = transport; _ourDeviceId = ourDeviceId; _connectionId = connectionId; }
 
     public async Task<OutboundResult> SendAsync(string targetDeviceId, string commandJson, CancellationToken ct = default)
     {
         var route = $"/connect-state/v1/player/command/from/{_ourDeviceId}/to/{targetDeviceId}";
-        var resp = await _transport.Request(Channel.Spclient, route, Encoding.UTF8.GetBytes(commandJson), ct).ConfigureAwait(false);
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Content-Type"] = "application/x-www-form-urlencoded",
+            ["X-Transfer-Encoding"] = "gzip",
+        };
+        if (_connectionId?.Invoke() is { Length: > 0 } connId) headers["X-Spotify-Connection-Id"] = connId;
+        var resp = await _transport.Request(Channel.Spclient, route,
+            HttpCompression.Gzip(Encoding.UTF8.GetBytes(commandJson)), ct, headers: headers).ConfigureAwait(false);
         return new OutboundResult(resp.Ok, ParseAckId(resp), resp.Status);
     }
 
@@ -137,13 +147,26 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     // ── IPlaybackPlayer (UI intents) — each verb routes local vs. forward ─────────────────────────────────────────────
     public async Task PlayAsync(string contextUri, int startIndex = 0, CancellationToken ct = default)
     {
-        if (!RouteLocal()) { await ForwardPlayAsync(contextUri, startIndex, ct).ConfigureAwait(false); return; }
-        await LocalPlaySpecAsync(ContextSpec.ForUri(contextUri, startIndex), ct).ConfigureAwait(false);
+        await ExecutePlayAsync(PlayRequest.Default(contextUri, startIndex), ct).ConfigureAwait(false);
+    }
+
+    public async Task PlayOrderedAsync(string contextUri, IReadOnlyList<PlaybackContextTrack> tracks, int startIndex = 0, CancellationToken ct = default)
+    {
+        if (tracks.Count == 0)
+        {
+            await PlayAsync(contextUri, startIndex, ct).ConfigureAwait(false);
+            return;
+        }
+
+        var refs = ToQueuedRefs(tracks);
+        int start = Math.Clamp(startIndex, 0, refs.Length - 1);
+        var selected = refs[start];
+        await ExecutePlayAsync(new PlayRequest(contextUri, start, refs, selected.Uri, selected.Uid), ct).ConfigureAwait(false);
     }
 
     public Task PlayTrackAsync(string trackUri, CancellationToken ct = default)
     {
-        if (!RouteLocal()) return ForwardPlayAsync(trackUri, 0, ct);
+        if (!RouteLocal()) return ExecutePlayAsync(PlayRequest.Default(trackUri, 0), ct);
         return LocalPlayTracksAsync(trackUri, new[] { new QueuedTrack(SyntheticTrack(trackUri), "") }, 0, ct);
     }
 
@@ -202,7 +225,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
 
     public async Task EnqueueAsync(string trackUri, CancellationToken ct = default)
     {
-        if (!RouteLocal()) { await Forward("add_to_queue", ct, ("uri", trackUri)).ConfigureAwait(false); return; }
+        if (!RouteLocal()) { await ForwardAddToQueueAsync(trackUri, ct).ConfigureAwait(false); return; }
         await _lock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -214,6 +237,39 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             else { _queue.EnqueueUser(SyntheticTrack(trackUri)); PushQueueAndPublish(); }
         }
         finally { _lock.Release(); }
+    }
+
+    // play-next: insert at the FRONT of the user queue. LOCAL → EnqueueNext (head-insert, before existing queue). REMOTE →
+    // a full set_queue snapshot: the inserted tracks + the existing user queue as provider:"queue", then the resident
+    // context continuation as provider:"context". prev_tracks is empty (no history model); queue_revision echoes the cluster.
+    public async Task PlayNextAsync(IReadOnlyList<PlaybackContextTrack> tracks, CancellationToken ct = default)
+    {
+        var refs = ToQueuedRefs(tracks);
+        if (refs.Length == 0) return;
+        if (RouteLocal())
+        {
+            var hydrated = await _contexts.HydrateAsync(refs, ct).ConfigureAwait(false);
+            await _lock.WaitAsync(ct).ConfigureAwait(false);
+            try { for (int i = hydrated.Count - 1; i >= 0; i--) _queue.EnqueueNext(hydrated[i]); PushQueueAndPublish(); }
+            finally { _lock.Release(); }
+            return;
+        }
+        var target = _projection.ActiveDeviceId;
+        if (_outbound is null || string.IsNullOrEmpty(target)) return;
+        // Rewrite the ACTIVE device's queue as the cluster reports it (its real prev/next, uid+provider preserved) with our
+        // tracks inserted at the FRONT of the up-next — NOT our local QueueCore, which is stale/empty when we're a viewer.
+        // prev_tracks + the context continuation are echoed verbatim so the remote queue isn't clobbered, and queue_revision
+        // comes from the same cluster snapshot (so it matches the server's; remote routing can't happen without a cluster).
+        var clusterPrev = _projection.ClusterPrevTracks;
+        var clusterNext = _projection.ClusterNextTracks;
+        var prev = new List<QueueWireEntry>(clusterPrev.Count);
+        foreach (var t in clusterPrev) prev.Add(new QueueWireEntry(t.Uri, t.Uid, t.Provider == "queue"));
+        var next = new List<QueueWireEntry>(refs.Length + clusterNext.Count);
+        foreach (var r in refs)        next.Add(new QueueWireEntry(r.Uri, r.Uid, true));                 // inserted play-next → queue
+        foreach (var t in clusterNext) next.Add(new QueueWireEntry(t.Uri, t.Uid, t.Provider == "queue"));// the device's queue, verbatim
+        var json = OutboundEnvelope.SetQueue(_ourDeviceId, ParseRevision(), prev, next, NewId(), NewId(), Now());
+        var r2 = await _outbound.SendAsync(target, json, ct).ConfigureAwait(false);
+        if (!r2.Ok) _log?.Invoke($"outbound set_queue → {target}: failed ({r2.Status})");
     }
 
     public async Task MoveQueueAsync(string entryId, int toIndex, CancellationToken ct = default)
@@ -474,6 +530,27 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     static Task Done => Task.CompletedTask;
     Task Local(Action a) { a(); return Done; }
 
+    readonly record struct PlayRequest(
+        string ContextUri, int StartIndex, IReadOnlyList<QueuedRef>? OrderedTracks,
+        string? SkipTrackUri, string? SkipTrackUid)
+    {
+        public static PlayRequest Default(string contextUri, int startIndex) =>
+            new(contextUri, Math.Max(0, startIndex), null, null, null);
+    }
+
+    async Task ExecutePlayAsync(PlayRequest request, CancellationToken ct)
+    {
+        if (!RouteLocal()) { await ForwardPlayAsync(request, ct).ConfigureAwait(false); return; }
+        if (request.OrderedTracks is { Count: > 0 })
+        {
+            var spec = new ContextSpec(request.ContextUri, null, request.OrderedTracks,
+                request.SkipTrackUri, request.SkipTrackUid, request.StartIndex);
+            await LocalPlaySpecAsync(spec, ct).ConfigureAwait(false);
+            return;
+        }
+        await LocalPlaySpecAsync(ContextSpec.ForUri(request.ContextUri, request.StartIndex), ct).ConfigureAwait(false);
+    }
+
     async Task Forward(string endpoint, CancellationToken ct, params (string Key, object Value)[] args)
     {
         var target = _projection.ActiveDeviceId;
@@ -483,15 +560,29 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         if (!r.Ok) _log?.Invoke($"outbound {endpoint} → {target}: failed ({r.Status})");
     }
 
-    async Task ForwardPlayAsync(string contextUri, int startIndex, CancellationToken ct)
+    async Task ForwardPlayAsync(PlayRequest request, CancellationToken ct)
     {
         var target = _projection.ActiveDeviceId;
         if (_outbound is null || string.IsNullOrEmpty(target)) return;
         // Outbound carries the OPAQUE context uri — the TARGET resolves the tracks (the desktop full-envelope shape).
-        var json = OutboundEnvelope.Play(_ourDeviceId, contextUri, null, startIndex > 0 ? startIndex : null, null, null,
-            null, _queue.Shuffle, FeatureOf(contextUri), _featureVersion, NewId(), NewId(), Now());
+        int? skipIndex = request.OrderedTracks is { Count: > 0 } ? request.StartIndex
+            : request.StartIndex > 0 ? request.StartIndex : null;
+        string? skipUid = string.IsNullOrEmpty(request.SkipTrackUid) ? null : request.SkipTrackUid;
+        var json = OutboundEnvelope.Play(_ourDeviceId, request.ContextUri, null,
+            skipIndex, request.SkipTrackUri, skipUid, request.OrderedTracks,
+            _queue.Shuffle, FeatureOf(request.ContextUri), _featureVersion, NewId(), NewId(), Now());
         var r = await _outbound.SendAsync(target, json, ct).ConfigureAwait(false);
         if (!r.Ok) _log?.Invoke($"outbound play → {target}: failed ({r.Status})");
+    }
+
+    // add_to_queue: a single track as command.track {uri,uid,metadata} + options — NOT the flat command.uri Forward verb.
+    async Task ForwardAddToQueueAsync(string trackUri, CancellationToken ct)
+    {
+        var target = _projection.ActiveDeviceId;
+        if (_outbound is null || string.IsNullOrEmpty(target)) return;
+        var json = OutboundEnvelope.AddToQueue(_ourDeviceId, trackUri, "", false, false, false, NewId(), NewId(), Now());
+        var r = await _outbound.SendAsync(target, json, ct).ConfigureAwait(false);
+        if (!r.Ok) _log?.Invoke($"outbound add_to_queue → {target}: failed ({r.Status})");
     }
 
     Task ForwardTransferAsync(string target, CancellationToken ct)
@@ -500,6 +591,15 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
 
     static string NewId() => Guid.NewGuid().ToString("N");
     static long Now() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    // The queue_revision to echo on an outbound set_queue — the last revision the cluster reported (held by the projection;
+    // "" until the first cluster). It can exceed Int64, so parse as ulong; an unparseable/absent value sends 0 (best-effort).
+    ulong ParseRevision() => ulong.TryParse(_projection.QueueRevision, out var r) ? r : 0UL;
+    static QueuedRef[] ToQueuedRefs(IReadOnlyList<PlaybackContextTrack> tracks)
+    {
+        var refs = new QueuedRef[tracks.Count];
+        for (int i = 0; i < tracks.Count; i++) refs[i] = new QueuedRef(tracks[i].Uri, tracks[i].Uid ?? "");
+        return refs;
+    }
 
     // play_origin.feature_identifier — the source surface, derived from the context type (matches the desktop captures).
     static string FeatureOf(string uri) =>
@@ -583,7 +683,10 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         catch { return null; }
     }
 
-    // set_queue: an array of track refs under command.<field> (e.g. next_tracks), each {uri,uid}.
+    // set_queue: the USER-QUEUE rows under command.next_tracks. Spotify's next_tracks is the user queue (provider:"queue")
+    // FOLLOWED BY the context continuation (provider:"context"); only the queue rows belong in up-next. Context rows and
+    // spotify:delimiter markers are dropped — the context continuation is served by the resident context, not the user
+    // queue. A missing provider is treated as "queue" (our own/legacy outbound and older payloads omit it).
     static IReadOnlyList<QueuedRef> ParseQueueTracks(byte[] payload, string field)
     {
         try
@@ -596,6 +699,8 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             foreach (var t in arr.EnumerateArray())
             {
                 if (t.ValueKind != JsonValueKind.Object || !t.TryGetProperty("uri", out var u) || u.GetString() is not { Length: > 0 } uri) continue;
+                if (uri == "spotify:delimiter") continue;                                            // queue/context boundary marker
+                if (t.TryGetProperty("provider", out var p) && p.GetString() == "context") continue; // context continuation, not user queue
                 list.Add(new QueuedRef(uri, t.TryGetProperty("uid", out var d) ? d.GetString() ?? "" : ""));
             }
             return list;

@@ -83,11 +83,12 @@ public readonly record struct FillRoundRectCmd(RectF Rect, CornerRadius4 Radii, 
 public readonly record struct DrawGlyphRunCmd(RectF Bounds, ColorF Color, StringId Text, StringId Family, float FontSize, int Weight, int Wrap, int Trim, int MaxLines,
     float CharSpacing, float LineHeight, int LineStacking, int LineBounds, Affine2D Transform, float Opacity,
     int SpanRunId = 0, int ForceColor = 0, int InMotion = 0);
-// A glyph run filled by a left->right WIPE (the GlyphWipe primitive): a glyph whose run-local-x CENTER is left of Split
-// (0..1 along the run's x-extent Bounds) is painted Before, right of Split is After, with a Softness-wide soft blend
-// straddling the split; Lift floats a just-passed glyph up by Lift DIP (settling). Reuses the glyph PSO + per-instance
-// color/offset (NO new shader/PSO). The per-glyph values are computed at replay from Split, so the shaping cache key is
-// identical to the plain run (no reshape as the split advances). General text-reveal; the lyrics karaoke uses it.
+// A glyph run filled by a left->right WIPE (the GlyphWipe primitive): Split (0..1) is a fraction of the run's content in
+// READING ORDER — the replay lays a wrapped run's visual lines END-TO-END over glyph EDGES, so a glyph before Split in
+// reading order is painted Before and one after it After, with a Softness-wide soft blend the replay remaps so Split==1
+// fully clears the run's trailing edge; Lift floats a just-passed glyph up by Lift DIP (settling). Reuses the glyph PSO +
+// per-instance color/offset (NO new shader/PSO). The per-glyph values are computed at replay from Split, so the shaping
+// cache key is identical to the plain run (no reshape as the split advances). General text-reveal; the lyrics karaoke uses it.
 public readonly record struct DrawGlyphRunGradientCmd(RectF Bounds, StringId Text, StringId Family, float FontSize, int Weight, int Wrap, int Trim, int MaxLines,
     float CharSpacing, float LineHeight, int LineStacking, int LineBounds, Affine2D Transform, float Opacity,
     ColorF Before, ColorF After, float Split, float Softness, float Lift, int SpanRunId = 0, int InMotion = 0);
@@ -203,9 +204,10 @@ public sealed class DrawList
     }
 
     /// <summary>A glyph run filled by a left→right wipe (the <c>GlyphWipe</c> primitive): <paramref name="split"/>
-    /// (0..1 along the run's x-extent) divides <paramref name="before"/> (left) from <paramref name="after"/> (right),
-    /// with a <paramref name="softness"/>-wide soft boundary; <paramref name="lift"/> floats a just-passed glyph up.
-    /// Reuses the glyph pipeline (per-instance color/offset computed at replay) — no new shader.</summary>
+    /// (0..1 along the run's content in READING ORDER — visual lines laid end-to-end over glyph edges) divides
+    /// <paramref name="before"/> (sung) from <paramref name="after"/> (unsung), with a <paramref name="softness"/>-wide
+    /// soft boundary the replay remaps so split==1 fully clears the trailing edge; <paramref name="lift"/> floats a
+    /// just-passed glyph up. Reuses the glyph pipeline (per-instance color/offset computed at replay) — no new shader.</summary>
     public void DrawGlyphRunGradient(in RectF bounds, StringId text, StringId family, float fontSize, int weight, int wrap, int trim, int maxLines,
         float charSpacing, float lineHeight, int lineStacking, int lineBounds, in Affine2D transform, float opacity,
         in ColorF before, in ColorF after, float split, float softness, float lift, ulong sortKey = 0, int spanRunId = 0, bool inMotion = false)

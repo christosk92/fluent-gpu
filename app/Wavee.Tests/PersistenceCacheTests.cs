@@ -20,6 +20,9 @@ public class CachedStoreTests
         public IEnumerable<ColdEntity> LoadAllEntities() { foreach (var kv in Entities) yield return new ColdEntity(kv.Key, kv.Value.Kind, kv.Value.Payload); }
         public IEnumerable<ColdSaved> LoadAllSaved() { foreach (var kv in Saved) yield return new ColdSaved(kv.Key.Item1, kv.Key.Item2, kv.Value); }
         public void UpsertEntity(string uri, EntityKind kind, byte[] payload) => Entities[uri] = (kind, payload);
+        public readonly Dictionary<string, byte[]> VideoAssoc = new();
+        public IEnumerable<ColdVideoAssoc> LoadAllVideoAssociations() { foreach (var kv in VideoAssoc) yield return new ColdVideoAssoc(kv.Key, kv.Value); }
+        public void UpsertVideoAssociation(string uri, byte[] payload) => VideoAssoc[uri] = payload;
         public void UpsertSaved(string setId, string uri, bool saved, SyncState sync) { if (saved) Saved[(setId, uri)] = sync; else Saved.Remove((setId, uri)); }
         public readonly Dictionary<string, string?> Revisions = new();
         public string? GetCollectionRevision(string setId) => Revisions.TryGetValue(setId, out var r) ? r : null;
@@ -66,6 +69,24 @@ public class CachedStoreTests
         var cold = new MemCold();
         new CachedStore(cold).SetSaved("liked", "spotify:track:t1", true, SyncState.Confirmed);
         Assert.True(new CachedStore(cold).IsSaved("liked", "spotify:track:t1"));   // survives "restart"
+    }
+
+    [Fact]
+    public void VideoAssociation_DualWrites_AndReloads()
+    {
+        var cold = new MemCold();
+        var assoc = new VideoAssociation("spotify:track:t1", true, "spotify:track:vid",
+            new[] { new VideoFileRef("ab6742d3000053b751ab106a1c8edd63fa934530", 0, 2560, 1440) },
+            "etag1", DateTimeOffset.UtcNow, 2592000);
+        new CachedStore(cold).UpsertVideoAssociation(assoc);
+        Assert.True(cold.VideoAssoc.ContainsKey("spotify:track:t1"));   // persisted to its own cold table
+
+        var a = new CachedStore(cold).GetVideoAssociation("spotify:track:t1");   // survives "restart"
+        Assert.NotNull(a);
+        Assert.True(a!.HasVideo);
+        Assert.Equal("spotify:track:vid", a.CounterpartUri);
+        Assert.Equal("ab6742d3000053b751ab106a1c8edd63fa934530", Assert.Single(a.Files).FileIdHex);
+        Assert.Equal("etag1", a.Etag);
     }
 
     [Fact]

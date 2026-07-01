@@ -110,7 +110,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
         // GoLive so a logout fired in the go-live window still tears the host down (not a no-op).
         if (ct.IsCancellationRequested) { await host.DisposeAsync().ConfigureAwait(false); return null; }
         svc.AttachLive(host, live.CredStore!);
-        var lyrics = BuildLiveLyrics(() => live.BaseUrl, connect.Controller, live.TokenProvider);
+        var lyrics = BuildLiveLyrics(() => live.BaseUrl, connect.Controller, live.TokenProvider, () => connect.Projection?.TrackResolver);
         svc.GoLive(connect.Controller, connect.Devices, liveSession, connectivity, lyrics);
         report.Report(new LoginSnapshot(LoginPhase.Authenticated, User: liveSession.CurrentUser));
         log("Live Connect session active — Wavee is a controllable device, mirrors now-playing, and shows the live account.");
@@ -130,6 +130,8 @@ public sealed class LiveSessionHost : IAsyncDisposable
             svc.AlbumEnrichment.SetInner(new SpotifyAlbumEnrichmentService(pathfinder, em, store, log));
             // Music-video detection + the video↔audio file-id map over the SAME extended-metadata source (etag-cached).
             svc.Video.SetInner(new SpotifyVideoService(em, store, log));
+            // Let the player bar reflect the now-playing track's (async-detected) video via the store change stream.
+            svc.Playback.AttachStore(store);
             if (svc.RealLibrarySource is { } libSrc)
             {
                 libSrc.OnDemandFetch = async (uri, c) =>
@@ -289,7 +291,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
             PathfinderClient.Platform.Desktop, ct).ConfigureAwait(false);
         if (doc is null) return;
         if (Wavee.Core.SpotifyExportMapper.ArtistFromOverview(doc.RootElement) is { Uri.Length: > 0 } artist)
-            store.UpsertArtist(artist);
+            store.UpsertArtist(artist with { FetchedAt = DateTimeOffset.UtcNow });   // stamp SWR freshness on the full overview
     }
 
     // Full-catalog online search via Pathfinder — the per-facet ops (searchTracks/Albums/Artists/Playlists) fired in
@@ -372,30 +374,33 @@ public sealed class LiveSessionHost : IAsyncDisposable
     // fallback); the reranker validates content/timing and picks the best. The request is resolved from the live
     // now-playing track (what the lyrics view asks for). Grey CJK/Musixmatch sources stay off by default (LyricsOptions).
     static Wavee.Backend.Lyrics.AggregatingLyricsProvider BuildLiveLyrics(
-        Func<string> baseUrl, IPlaybackPlayer controller, Func<CancellationToken, Task<string>> token)
+        Func<string> baseUrl, IPlaybackPlayer controller, Func<CancellationToken, Task<string>> token,
+        Func<Func<string, CancellationToken, Task<Track?>>?> trackResolver)
     {
         var http = new Wavee.Backend.Lyrics.SharedHttpLyricFetch();
 
-        // Spotify color-lyrics MUST carry app-platform=WebPlayer (it 400s on any other value). The shared spclient pipeline
-        // force-stamps App-Platform=Win32_x86_64 in ClientTokenMiddleware, so we must NOT route through it — instead a raw
-        // bearer GET via the shared HttpClient with the WebPlayer identity. The bearer is the refreshing TokenProvider
-        // (survives the ~1h access-token expiry), so lyrics keep loading deep into a session.
+        // Spotify color-lyrics auth — the proven WaveeMusic SpClient.GetLyricsAsync recipe: a raw bearer GET with
+        // app-platform=ANDROID + spotify-app-version. The ANDROID platform is what lets the lyrics CDN serve WITHOUT a
+        // client-token; WebPlayer/desktop platforms require a client-token and 403 without one. We must NOT route through
+        // the shared spclient pipeline (it force-stamps App-Platform=Win32_x86_64 in ClientTokenMiddleware). The bearer is
+        // the refreshing TokenProvider (survives the ~1h access-token expiry), so lyrics keep loading deep into a session.
         async Task<string?> SpotifyGet(string url, CancellationToken c)
         {
             try
             {
                 string tok = await token(c).ConfigureAwait(false);
-                if (string.IsNullOrEmpty(tok)) return null;
+                if (string.IsNullOrEmpty(tok)) { Wavee.Backend.Lyrics.LyricsProbe.Note("spotify", "no access token (bearer refresh empty)"); return null; }
                 using var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, url);
                 req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + tok);
-                req.Headers.TryAddWithoutValidation("app-platform", "WebPlayer");
+                req.Headers.TryAddWithoutValidation("app-platform", "Android");
+                req.Headers.TryAddWithoutValidation("spotify-app-version", SpotifyClientIdentity.AppVersionHeader);
                 req.Headers.TryAddWithoutValidation("Accept", "application/json");
                 using var resp = await Wavee.Backend.Spotify.SharedHttp.Client.SendAsync(req, c).ConfigureAwait(false);
-                if (!resp.IsSuccessStatusCode) return null;
+                if (!resp.IsSuccessStatusCode) { Wavee.Backend.Lyrics.LyricsProbe.Note("spotify", $"color-lyrics HTTP {(int)resp.StatusCode}"); return null; }
                 return await resp.Content.ReadAsStringAsync(c).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { throw; }
-            catch { return null; }
+            catch (Exception e) { Wavee.Backend.Lyrics.LyricsProbe.Note("spotify", $"color-lyrics error: {e.GetType().Name}"); return null; }
         }
 
         var sources = new System.Collections.Generic.List<Wavee.Backend.Lyrics.ILyricCandidateSource>
@@ -407,7 +412,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
         // Grey providers (docs plan §6) — ENABLED: widen word/syllable coverage beyond AMLL with the reverse-engineered
         // CJK APIs (QQ QRC, NetEase YRC, Kugou KRC) + Musixmatch richsync. The reranker still validates each against the
         // Spotify reference, so a wrong/ mistimed grey candidate can't win.
-        var opt = Wavee.Backend.Lyrics.LyricsOptions.Default with { EnableGreyProviders = true, PerSourceTimeoutMs = 8000 };
+        var opt = Wavee.Backend.Lyrics.LyricsOptions.Default with { EnableGreyProviders = true, PerSourceTimeoutMs = 30000 };
         if (opt.EnableGreyProviders)
         {
             sources.Add(new Wavee.Backend.Lyrics.Sources.MusixmatchSource());
@@ -416,18 +421,34 @@ public sealed class LiveSessionHost : IAsyncDisposable
             sources.Add(new Wavee.Backend.Lyrics.Sources.KugouSource());
         }
 
-        Task<Wavee.Backend.Lyrics.LyricsRequest?> Resolve(string trackId, CancellationToken c)
+        async Task<Wavee.Backend.Lyrics.LyricsRequest?> Resolve(string trackId, CancellationToken c)
         {
             var t = controller.State.CurrentTrack;
-            if (t is not null && (t.Id == trackId || t.Uri == "spotify:track:" + trackId))
+            if (t is null || (t.Id != trackId && t.Uri != "spotify:track:" + trackId)) return null;
+
+            string uri = "spotify:track:" + trackId;
+            // The cluster's now-playing track is often THIN (no artist / no ISRC) and may not be enriched yet when the
+            // lyrics view first asks — so resolve the FULL track ourselves (the same extended-metadata + Pathfinder
+            // resolver the player bar uses). This makes the search's artist + ISRC independent of the now-playing
+            // enrichment race; otherwise every provider searches title-only (e.g. "fade away" with no artist → no match).
+            bool thin = t.Artists.Count == 0 || string.IsNullOrEmpty(t.Artists[0].Name) || string.IsNullOrEmpty(t.Isrc);
+            if (thin && trackResolver() is { } resolve)
             {
-                var artists = new System.Collections.Generic.List<string>(t.Artists.Count);
-                foreach (var a in t.Artists) artists.Add(a.Name);
-                return Task.FromResult<Wavee.Backend.Lyrics.LyricsRequest?>(new Wavee.Backend.Lyrics.LyricsRequest(
-                    trackId, "spotify:track:" + trackId, t.Title, artists, t.Album.Name, t.DurationMs,
-                    Isrc: null, Market: "from_token", HasSpotifyLyrics: null));
+                try
+                {
+                    var full = await resolve(uri, c).ConfigureAwait(false);
+                    if (full is not null && (full.Uri == uri || full.Id == trackId)) t = full;
+                }
+                catch (OperationCanceledException) { throw; }
+                catch { /* best-effort — fall back to the thin track */ }
             }
-            return Task.FromResult<Wavee.Backend.Lyrics.LyricsRequest?>(null);
+
+            // Skip blank artist names (a thin cluster track carries a single empty ArtistRef) so the request gets [] not [""].
+            var artists = new System.Collections.Generic.List<string>(t.Artists.Count);
+            foreach (var a in t.Artists) if (!string.IsNullOrEmpty(a.Name)) artists.Add(a.Name);
+            return new Wavee.Backend.Lyrics.LyricsRequest(
+                trackId, uri, t.Title, artists, t.Album.Name, t.DurationMs,
+                Isrc: t.Isrc, Market: "from_token", HasSpotifyLyrics: null);
         }
 
         return new Wavee.Backend.Lyrics.AggregatingLyricsProvider(

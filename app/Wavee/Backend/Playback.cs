@@ -164,6 +164,7 @@ public sealed class QueueCore
             list.Add(new QueueEntry($"c{c}", _context[c].Track, QueueBucket.NextUp, false, _context[c].Uid));
         return list;
     }
+
 }
 
 // ── IAudioEngine — in-process decode/decrypt/output behind a swappable seam; STUBBED now (silent + stub decrypt) ───────

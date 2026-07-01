@@ -31,25 +31,44 @@ public sealed class LrcLibSource : ILyricCandidateSource
         string? body = await _http.GetStringAsync(get, null, ct).ConfigureAwait(false);
 
         LyricsDocument? doc = body is not null ? FromObject(body, req) : null;
+        LyricsProbe.Note(Id, doc is not null ? "exact /api/get hit" : "exact /api/get miss → /api/search");
         doc ??= await SearchAsync(req, ct).ConfigureAwait(false);
         if (doc is null || doc.Lines.Count == 0) return null;
         return new LyricsCandidate(Id, Prior, MatchBasis.MetadataSearch, doc);
     }
 
+    // /api/search with the query-variant ladder: full "title/artist" → feat-stripped "title/artist" → "title" only.
+    // Returns the first variant that yields a usable doc (each variant keeps the per-result duration-closest pick + the
+    // >5s reject as the wrong-song guardrail).
     async Task<LyricsDocument?> SearchAsync(LyricsRequest req, CancellationToken ct)
     {
-        string search = "https://lrclib.net/api/search"
-            + "?track_name=" + Uri.EscapeDataString(req.Title)
-            + "&artist_name=" + Uri.EscapeDataString(req.PrimaryArtist);
+        foreach (var (title, artist) in LyricsQuery.TitleArtistVariants(req))
+        {
+            var doc = await SearchOnce(title, artist, req, ct).ConfigureAwait(false);
+            if (doc is { Lines.Count: > 0 })
+            {
+                LyricsProbe.Note(Id, $"/api/search hit on '{title}'" + (artist.Length > 0 ? $" / '{artist}'" : " (title-only)"));
+                return doc;
+            }
+            ct.ThrowIfCancellationRequested();
+        }
+        return null;
+    }
+
+    async Task<LyricsDocument?> SearchOnce(string title, string artist, LyricsRequest req, CancellationToken ct)
+    {
+        string search = "https://lrclib.net/api/search?track_name=" + Uri.EscapeDataString(title)
+            + (artist.Length > 0 ? "&artist_name=" + Uri.EscapeDataString(artist) : "");
         string? json = await _http.GetStringAsync(search, null, ct).ConfigureAwait(false);
         if (json is null) return null;
         try
         {
             using var d = JsonDocument.Parse(json);
             if (d.RootElement.ValueKind != JsonValueKind.Array) return null;
-            string? bestSynced = null, bestPlain = null; long bestDelta = long.MaxValue;
+            string? bestSynced = null, bestPlain = null; long bestDelta = long.MaxValue; int n = 0;
             foreach (var el in d.RootElement.EnumerateArray())
             {
+                n++;
                 if (el.TryGetProperty("instrumental", out var inst) && inst.ValueKind == JsonValueKind.True) continue;
                 string? sl = Str(el, "syncedLyrics");
                 string? pl = Str(el, "plainLyrics");
@@ -58,7 +77,8 @@ public sealed class LrcLibSource : ILyricCandidateSource
                 long delta = req.DurationMs > 0 && dur > 0 ? Math.Abs(dur - req.DurationMs) : 0;
                 if (delta < bestDelta) { bestDelta = delta; bestSynced = sl; bestPlain = pl; }   // GetString → owned copy, safe post-dispose
             }
-            if (req.DurationMs > 0 && bestDelta > 5000) return null;   // no close-enough duration match
+            LyricsProbe.Note(Id, $"/api/search '{title}' → {n} results" + (bestDelta != long.MaxValue ? $" (best Δ{bestDelta}ms)" : ""));
+            if (req.DurationMs > 0 && bestDelta > 5000) { LyricsProbe.Note(Id, "closest result's duration > 5s off — rejected"); return null; }
             if (!string.IsNullOrWhiteSpace(bestSynced)) return LyricsText.ParseLrc(bestSynced!, req.TrackId, Id);
             if (!string.IsNullOrWhiteSpace(bestPlain)) return Unsynced(bestPlain!, req.TrackId);
             return null;

@@ -75,6 +75,23 @@ public sealed class FakePlaybackProvider : IPlaybackPlayer, IPlaybackState, ILyr
         _cursor = Math.Clamp(startIndex, 0, _queue.Count - 1);
         await StartWithBufferingAsync(_queue[_cursor].Track, ct).ConfigureAwait(false);
     }
+    public Task PlayOrderedAsync(string contextUri, IReadOnlyList<PlaybackContextTrack> tracks,
+        int startIndex = 0, CancellationToken ct = default)
+    {
+        // Honor the SUPPLIED (visible/sorted/filtered) order verbatim — do NOT re-resolve via
+        // ContextResolver/FakeData.ContextTracks, so a wrong visible order surfaces instead of being
+        // masked by a re-sort. Mirrors PlayAsync otherwise (NowPlaying = head, cursor = startIndex).
+        if (tracks.Count == 0) return PlayAsync(contextUri, startIndex, ct);
+        ContextUri = contextUri;
+        _queue.Clear();
+        for (int i = 0; i < tracks.Count; i++)
+            if (FakeData.TrackByUri(tracks[i].Uri) is { } t)
+                _queue.Add(new QueueEntry("q" + i, t, i == 0 ? QueueBucket.NowPlaying : QueueBucket.NextUp, false));
+        if (_queue.Count == 0) return PlayAsync(contextUri, startIndex, ct);
+        Queue = _queue.ToArray();
+        _cursor = Math.Clamp(startIndex, 0, _queue.Count - 1);
+        return StartWithBufferingAsync(_queue[_cursor].Track, ct);
+    }
     public Task PlayTrackAsync(string trackUri, CancellationToken ct = default)
     {
         // Resolve the uri to its track and start it as a standalone single (a 1-item queue, no owning context) — so
@@ -117,6 +134,18 @@ public sealed class FakePlaybackProvider : IPlaybackPlayer, IPlaybackState, ILyr
             Queue = _queue.ToArray();
             Bump();
         }
+        return Task.CompletedTask;
+    }
+
+    public Task PlayNextAsync(IReadOnlyList<PlaybackContextTrack> tracks, CancellationToken ct = default)
+    {
+        // In-process "play next": insert at the front of the user queue (just after the now-playing entry).
+        int at = Math.Min(_cursor + 1, _queue.Count);
+        for (int i = 0; i < tracks.Count; i++)
+            if (FakeData.TrackByUri(tracks[i].Uri) is { } t)
+                _queue.Insert(Math.Min(at + i, _queue.Count), new QueueEntry("n" + i, t, QueueBucket.UserQueue, false));
+        Queue = _queue.ToArray();
+        Bump();
         return Task.CompletedTask;
     }
 

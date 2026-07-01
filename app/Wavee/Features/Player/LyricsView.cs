@@ -9,138 +9,354 @@ using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
+using Wavee.Backend.Lyrics;
 using Wavee.Core;
 
 namespace Wavee;
 
-// ── Phase 1 — line-level synced lyrics view ──────────────────────────────────────────────────────────────────────────
-//
-// Renders a vertical column of lyric lines and auto-follows playback: the active line is parked at a focal band and
-// emphasised (brighter + slightly larger via per-line springs); neighbours dim with distance. The column scroll is a
-// pure compositor Transform bound to _scrollY, advanced per-frame by a GATED ticker (mounted only while the rail is open)
-// that reads the smooth playback clock (the SeekBar idiom), resolves the active line, and eases _scrollY so the active
-// line sits at the band. Click a line to seek.
-//
-// Cost discipline (signals-first, like SeekBar): Render re-runs only on LOW-frequency state (track / load / active-line).
-// The hot path is the ticker writing VALUE-GATED signals (_scrollY, _activeLine) the compositor binds read — an unmoved
-// frame is a true no-op, so the host skip-submit gate idles the GPU at rest. No per-frame managed allocation.
+// The lyrics depth-of-field: ONE look for everyone, no tiers, no flags. Each dimmed line, by its distance from the active
+// line, gets a soft self-blur — the full BetterLyrics depth-of-field (out to 6 rows, sigma up to 5, matching their
+// `5 * distanceFactor`). 0 ⇒ no blur layer is emitted at all (SceneRecorder drops sigma ≤ 0.01).
+static class LyricsFx
+{
+    public static float DofSigma(int dist) => dist is <= 0 or > 6 ? 0f : 5f * MathF.Min(dist / 5f, 1f);
+}
+
 sealed class LyricsView : Component
 {
-    // Smooth-clock anchors (re-anchored on each ~1 Hz position tick) — SeekBar.cs:56-101 idiom.
-    long _tickWallMs;
-    long _tickPosMs;
+    // The karaoke wipe advances on this cadence (the ticker period + the OnFrame throttle gate). 16 ms ≈ 60 Hz (was 33 =
+    // 30 Hz). The wipe is AMBIENT motion, so the host ambient cap (Program.cs ambientFps / FG_ANIM_FPS) must ALSO allow
+    // ≥60 or RecommendedWaitMs throttles the sweep back down — both were raised together once per-frame cost got cheap.
+    internal const long KaraokeWipeIntervalMs = 16;
 
-    // Scroll follow: bound to the column Transform; eased toward the active line each frame by the ticker.
-    readonly FloatSignal _scrollY = new(0f);
-    bool _scrollSnapped;   // false → the next valid frame JUMPS the scroll to the active line (open mid-playback / new track), then eases
-    // Resolver output — drives per-line emphasis (each line subscribes). -1 = before the first line.
-    readonly Signal<int> _activeLine = new(-1);
-    // Smooth playback ms — published every frame by the ticker; the ACTIVE word-by-word line reads it to advance its
-    // karaoke wipe split (so only that one line re-renders per frame; the wipe rides DrawGlyphRunGradient → no reshape).
+    // Eye-leads-voice anticipation: emphasis + scroll resolve this many ms AHEAD of the true clock so the line is rising
+    // into focus as the first syllable lands (the karaoke wipe stays on true time). Inside the safe 100-500 ms karaoke
+    // lead window; comfortably above one 16 ms frame.
+    internal const long LeadMs = 140;
+
+    // Dejittered media clock (see OnFrame): a free-running wall-clock base + an additive slew correction, instead of a
+    // hard re-anchor on every laggy IPC snapshot. RebaseClock seeds all of these together.
+    long _baseWall;                     // monotonic wall anchor (Environment.TickCount64)
+    long _basePos;                      // playback position at _baseWall
+    float _offset;                      // additive slew correction folded from IPC-snapshot disagreement
+    bool _wasPlaying;                   // last frame's play state — rebase the clock on the paused→playing transition
+    long _lastAuthMs = long.MinValue;   // last authoritative IPC PositionMs the ticker reacted to
+    long _lastDisplay;                  // last displayed nowMs — monotonic-while-playing guard (no backward wipe/line retreat)
+    long _lastWipeWallMs;
+    int _lastWipeLine = -1;
+
+    bool _scrollSnapped;
+    readonly Signal<int> _activeLine = new(-1);   // emphasis + scroll target (lead-shifted)
+    readonly Signal<int> _voiceLine = new(-1);    // line currently being sung (true time) — owns the karaoke wipe/glow
+    readonly Signal<bool> _interlude = new(false);// active line sung out into a long instrumental gap — recede it
     readonly FloatSignal _nowMs = new(0f);
 
-    // Live layout handles read by the ticker (the active line's arranged rect vs the viewport's → the scroll target).
-    // The viewport is this component's HostNode (read in OnFrame), not a reported handle.
+    NodeHandle _viewportNode = NodeHandle.Null;
     NodeHandle[] _lineNodes = Array.Empty<NodeHandle>();
-    NodeHandle[] _glowNodes = Array.Empty<NodeHandle>();   // parallel: the active wbw line's wiped-glow run (split advanced in lockstep)
+    NodeHandle[] _glowNodes = Array.Empty<NodeHandle>();
 
-    LyricsDocument? _doc;     // the built doc the ticker resolves against (peek-only off the UI thread-of-record)
+    LyricsDocument? _doc;
+    LyricsMeasuredLayout? _layout;
     PlaybackBridge? _b;
 
-    readonly bool _large;            // fullscreen surface (large, centered) vs the compact rail
-    readonly Func<bool>? _visible;   // mount-the-ticker gate; null => use ShellUi.RailOpen (the rail case)
-    float _band = 0.40f;             // focal band (fraction of viewport height) the active line parks at
+    readonly bool _large;
+    readonly Func<bool>? _visible;
+    float _band = 0.40f;
+
+    // Opt-in lyrics-search debug surface (a corner button → a per-source "why no/which lyric" panel). Env-gated like the
+    // FPS HUD so it never shows for normal users; set WAVEE_LYRICS_DEBUG=1 to enable.
+    static readonly bool _lyricsDebug =
+        Environment.GetEnvironmentVariable("WAVEE_LYRICS_DEBUG") is "1" or "true" or "TRUE";
+    readonly Signal<bool> _debugOpen = new(false);
 
     public LyricsView(bool large = false, Func<bool>? visible = null) { _large = large; _visible = visible; }
 
     public override Element Render()
     {
-        // Hooks FIRST (stable order, rule #7) — before any early return.
         var ui = UseContext(ShellUi.Slot);
         var b = UseContext(PlaybackBridge.Slot);
         var svc = UseContext(Services.Slot);
         _b = b;
 
-        var track = b?.CurrentTrack.Value;                 // subscribe → reload on track change
-        bool playing = b?.IsPlaying.Value ?? false;        // subscribe (kept for future gating)
-        bool open = _visible is not null ? _visible() : (ui?.RailOpen.Value ?? false);   // gate the ticker + fetch
-        long posTick = b?.PositionMs.Value ?? 0L;          // subscribe → re-anchor the smooth clock each tick
+        var track = b?.CurrentTrack.Value;
+        bool open = _visible is not null ? _visible() : (ui?.RailOpen.Value ?? false);
+        // Peek, NEVER .Value: subscribing the lyrics view to the IPC position snapshot forces a full re-render every
+        // tick, which re-runs the Skel.Region content delegate -> re-realizes the virtual line window -> ReconcileWindow
+        // tears down + re-mounts every LyricLineView (Components are not recyclable), re-seeding each line's opacity/scale
+        // spring from the fresh node's default paint (1.0) -- the all-lines-pulse bug. The position is consumed by the
+        // per-frame ticker (OnFrame, via Peek) and re-anchored there.
+        long posNow = b?.PositionMs.Peek() ?? 0L;
         string trackId = track?.Id ?? "";
         string artist = track is { Artists.Count: > 0 } ? track.Artists[0].Name : "";
+        string fetchKey = trackId.Length == 0 ? "" : trackId + "|" + artist;
 
-        // Fetch only while the pane is shown, and re-fetch when: the track changes, the pane is (re)opened — so opening
-        // mid-playback loads immediately and a transient miss retries — or async enrichment fills in the initially-thin
-        // cluster track's artist (so the metadata sources get a real artist to match on).
-        string fetchKey = open ? trackId + "|" + artist : "";
         var docL = UseAsyncResource(
-            ct => open && svc?.Lyrics is { } lp ? lp.GetLyricsAsync(trackId, ct) : Task.FromResult<LyricsDocument?>(null),
+            ct => fetchKey.Length > 0 && svc?.Lyrics is { } lp
+                ? lp.GetLyricsAsync(trackId, ct)
+                : Task.FromResult<LyricsDocument?>(null),
             (LyricsDocument?)null, fetchKey);
 
-        UseEffect(() =>
-        {
-            if (b is null) return;
-            _tickWallMs = Environment.TickCount64;
-            _tickPosMs = b.PositionMs.Peek();
-        }, posTick);
+        var doc = docL.Value.Value;
 
-        byte loadState = docL.State.Value;                 // subscribe to load state
-        var doc = docL.Value.Value;                        // subscribe to the value
-
-        // ── guards (after all hooks) ──
         if (b is null || svc is null) return new BoxEl { Grow = 1f };
-        if (track is null) return Message("Nothing playing");
-        if (loadState == (byte)LoadState.Pending) return Message("Loading lyrics…");
-        var lines = doc?.Lines;
-        if (lines is null || lines.Count == 0) return Message("No lyrics available");
-
-        // Rebuild geometry bookkeeping when the doc identity changes (new track).
-        if (!ReferenceEquals(_doc, doc))
+        if (track is null)
         {
-            _doc = doc;
-            _lineNodes = new NodeHandle[lines.Count];      // reconcile-edge alloc (once per track) — fine
-            _glowNodes = new NodeHandle[lines.Count];
-            _activeLine.Value = -1;
-            _scrollY.Value = 0f;
-            _scrollSnapped = false;
+            ClearDocument();
+            return Message("Nothing playing");
         }
 
-        _ = _activeLine.Value;   // subscribe so a new active line re-renders the column (per-line emphasis re-seeds)
+        if (_doc is not null && !StringComparer.Ordinal.Equals(_doc.TrackId, trackId))
+            ClearDocument();
 
-        // Surface style: the compact left-aligned rail vs the large, centered fullscreen view.
-        float fontSz = _large ? 34f : 21f;
-        float lineHt = _large ? 44f : 27f;
-        bool centered = _large;
-        _band = _large ? 0.42f : 0.40f;
-        float padX = _large ? 48f : 18f;
-        float padY = _large ? 340f : 240f;
+        if (doc is { Lines.Count: > 0 } ready)
+            PrepareDocument(ready, posNow);
 
-        var lineKids = new Element[lines.Count];
-        for (int i = 0; i < lines.Count; i++)
-        {
-            int idx = i;
-            var line = lines[i];
-            lineKids[i] = Embed.Comp(() => new LyricLineView(idx, line, _activeLine, _nowMs, fontSz, lineHt, centered, ReportLineNode, ReportGlowNode, () => SeekToLine(idx)))
-                with { Key = "ll" + idx };
-        }
-
-        // The scrolling content column — Transform is a compositor bind (no re-render on scroll). Generous top/bottom
-        // padding so the first/last lines can still reach the focal band.
-        // Shrink=0 keeps the column at content height so it can overflow + scroll; as the viewport's cross-axis child it
-        // stretches to full width, so AlignItems=Center actually centers the (no-wrap) lines on the fullscreen surface.
-        var column = new BoxEl
-        {
-            Direction = 1, Shrink = 0f, Gap = _large ? 14f : 8f, Padding = new Edges4(padX, padY, padX, padY),
-            AlignItems = centered ? FlexAlign.Center : FlexAlign.Stretch,
-            Transform = Prop.Of(() => Affine2D.Translation(0f, _scrollY.Value)),
-            Children = lineKids,
-        };
+        Element body = Skel.Region<LyricsDocument?>(
+            docL,
+            shimmerSource: () => LyricsShimmer(_large),
+            content: d => d is { Lines.Count: > 0 } readyDoc ? LyricsContent(readyDoc) : Message("No lyrics available"),
+            reveal: SkelReveal.FadeOnly,
+            onFailed: () => Message("No lyrics available"),
+            isEmpty: d => d?.Lines is null || d.Lines.Count == 0,
+            onEmpty: () => Message("No lyrics available"),
+            style: new SkeletonStyle(Tok.FillSubtleSecondary, RowGap: _large ? 18f : 14f, BarRadius: 6f, TextRatio: 0.86f),
+            smoothResize: false);
 
         Element? ticker = open ? Embed.Comp(() => new LyricsTicker { Owner = this }) : null;
+        var stack = new BoxEl
+        {
+            Grow = 1f, MinHeight = 0f, ClipToBounds = true, Direction = 1,
+            Children = ticker is null ? [body] : [body, ticker],
+        };
+
+        if (!_lyricsDebug) return stack;
+        return new BoxEl
+        {
+            Grow = 1f, MinHeight = 0f, ZStack = true,
+            Children = _debugOpen.Value ? [stack, DebugOverlay(trackId)] : [stack, DebugButton()],
+        };
+    }
+
+    // ── Lyrics-search debug surface (WAVEE_LYRICS_DEBUG=1) ────────────────────────────────────────────────────────────
+    // A corner pill opens a panel that shows, for the playing track, the request metadata the sources searched with and a
+    // per-source row (outcome + timing + the breadcrumb "why") + the reranker's verdict. Data is LyricsDiagnostics, which
+    // the AggregatingLyricsProvider publishes once per fetch (so the report is already there for the current track).
+
+    Element DebugButton() => new BoxEl
+    {
+        // Full-bleed PASS-THROUGH positioner (its HitTestPassThrough is honoured — see FpsOverlay) pinning the pill
+        // bottom-right; only the pill is hittable, so the lyrics underneath stay scrollable/clickable.
+        Grow = 1f, MinHeight = 0f, HitTestPassThrough = true,
+        Direction = 1, Justify = FlexJustify.End, AlignItems = FlexAlign.End,
+        Padding = new Edges4(0f, 0f, 12f, 12f),
+        Children =
+        [
+            new BoxEl
+            {
+                Direction = 0, AlignItems = FlexAlign.Center, Gap = 5f,
+                Padding = new Edges4(9f, 5f, 9f, 5f), Corners = CornerRadius4.All(7f),
+                Fill = new ColorF(0f, 0f, 0f, 0.55f), BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+                Cursor = CursorId.Hand, OnClick = () => _debugOpen.Value = true,
+                Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
+                Children = [new TextEl("lyrics debug") { Size = 11f, Weight = 600, Color = Tok.TextSecondary }],
+            },
+        ],
+    };
+
+    Element DebugOverlay(string trackId)
+    {
+        var report = LyricsDiagnostics.ForTrack(trackId);
+        var rows = new List<Element>
+        {
+            new BoxEl
+            {
+                Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f,
+                Children =
+                [
+                    new TextEl("Lyrics search") { Size = 15f, Weight = 700, Color = Tok.TextPrimary, Grow = 1f },
+                    new BoxEl
+                    {
+                        Padding = new Edges4(9f, 4f, 9f, 4f), Corners = CornerRadius4.All(6f), Fill = Tok.FillSubtleSecondary,
+                        Cursor = CursorId.Hand, OnClick = () => _debugOpen.Value = false,
+                        Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
+                        Children = [new TextEl("close ✕") { Size = 11f, Weight = 600, Color = Tok.TextSecondary }],
+                    },
+                ],
+            },
+        };
+
+        if (report is null)
+        {
+            rows.Add(new TextEl("No search recorded for this track yet — it may be a local/fake track, or the fetch is still in flight. Close and reopen to refresh.")
+            { Size = 12f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, LineHeight = 17f });
+        }
+        else
+        {
+            rows.Add(new TextEl(report.Summary) { Size = 12.5f, Weight = 600, Color = Tok.AccentTextPrimary, Wrap = TextWrap.Wrap, LineHeight = 18f });
+            rows.Add(new TextEl($"“{report.Title}” — {(report.Artist.Length > 0 ? report.Artist : "(no artist)")}")
+            { Size = 12f, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap, LineHeight = 16f });
+            rows.Add(new TextEl($"album: {(report.Album.Length > 0 ? report.Album : "—")}   ·   {report.DurationMs / 1000}s   ·   ISRC: {report.Isrc ?? "—"}")
+            { Size = 11f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap, LineHeight = 15f });
+            rows.Add(new BoxEl { Height = 1f, Fill = Tok.StrokeCardDefault });
+            foreach (var t in report.Sources) rows.Add(SourceRow(t));
+            if (report.Sources.Count == 0)
+                rows.Add(new TextEl("(no sources ran)") { Size = 12f, Color = Tok.TextSecondary });
+        }
 
         return new BoxEl
         {
-            Grow = 1f, MinHeight = 0f, ClipToBounds = true, Direction = 1,
-            Children = ticker is null ? [column] : [column, ticker],
+            Grow = 1f, MinHeight = 0f, Direction = 1, Fill = new ColorF(0.04f, 0.04f, 0.06f, 0.97f),
+            Children =
+            [
+                new ScrollEl
+                {
+                    Grow = 1f, MinHeight = 0f,
+                    Content = new BoxEl { Direction = 1, Gap = 9f, Padding = new Edges4(18f, 16f, 18f, 18f), Children = rows.ToArray() },
+                },
+            ],
+        };
+    }
+
+    static Element SourceRow(LyricsSourceTrace t)
+    {
+        ColorF dot = t.Outcome switch
+        {
+            LyricsOutcome.Hit => new ColorF(0.30f, 0.78f, 0.45f, 1f),     // green
+            LyricsOutcome.Timeout => new ColorF(0.92f, 0.70f, 0.25f, 1f), // amber
+            LyricsOutcome.Error => new ColorF(0.90f, 0.35f, 0.38f, 1f),   // red
+            LyricsOutcome.Skipped => new ColorF(0.40f, 0.42f, 0.50f, 1f), // dim — didn't run (a faster match won)
+            _ => new ColorF(0.55f, 0.57f, 0.62f, 1f),                     // grey (Miss)
+        };
+
+        var lines = new List<Element>
+        {
+            new BoxEl
+            {
+                Direction = 0, AlignItems = FlexAlign.Center, Gap = 7f,
+                Children =
+                [
+                    new BoxEl { Width = 8f, Height = 8f, Corners = CornerRadius4.All(4f), Fill = dot },
+                    new TextEl(t.SourceId) { Size = 12.5f, Weight = 700, Color = t.Winner ? Tok.AccentTextPrimary : Tok.TextPrimary },
+                    new TextEl($"{t.Outcome.ToString().ToUpperInvariant()} · {t.ElapsedMs}ms{(t.Winner ? "  ★ winner" : "")}")
+                    { Size = 11f, Weight = 600, Color = Tok.TextSecondary, Grow = 1f },
+                ],
+            },
+        };
+        if (t.Detail.Length > 0)
+            lines.Add(new TextEl(t.Detail) { Size = 11f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, LineHeight = 15f });
+        if (t.Outcome == LyricsOutcome.Hit && t.RerankReason.Length > 0)
+            lines.Add(new TextEl($"rerank score {t.Score:F2}  ·  {t.RerankReason}") { Size = 10.5f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap, LineHeight = 14f });
+
+        return new BoxEl { Direction = 1, Gap = 3f, Children = lines.ToArray() };
+    }
+
+    void PrepareDocument(LyricsDocument doc, long posMs)
+    {
+        if (ReferenceEquals(_doc, doc)) return;
+
+        _doc = doc;
+        _lineNodes = new NodeHandle[doc.Lines.Count];
+        _glowNodes = new NodeHandle[doc.Lines.Count];
+        _activeLine.Value = ResolveLine(doc.Lines, posMs);
+        _nowMs.Value = posMs;
+        _scrollSnapped = false;
+        ResetWipeThrottle();
+        RebaseClock(posMs);   // seed the dejittered clock anchor for the freshly loaded doc
+    }
+
+    void ClearDocument()
+    {
+        if (_doc is null && _lineNodes.Length == 0) return;
+        _doc = null;
+        _lineNodes = Array.Empty<NodeHandle>();
+        _glowNodes = Array.Empty<NodeHandle>();
+        _activeLine.Value = -1;
+        _nowMs.Value = 0f;
+        _scrollSnapped = false;
+        ResetWipeThrottle();
+        _lastAuthMs = long.MinValue;   // reset so a freshly loaded doc re-anchors on the next snapshot
+        _lastDisplay = 0L;
+    }
+
+    // Seed every dejittered-clock field from an authoritative position so all re-anchor sites (doc load, click-seek) agree.
+    // Sets _lastDisplay so the monotonic guard adopts the new (possibly backward) position immediately, and _lastAuthMs so
+    // the next OnFrame doesn't re-treat the same value as a snapshot disagreement. Does NOT touch _wasPlaying — the
+    // paused→playing transition still rebases on resume so a pause gap never leaks into the wall delta.
+    void RebaseClock(long pos)
+    {
+        _baseWall = Environment.TickCount64;
+        _basePos = pos;
+        _offset = 0f;
+        _lastAuthMs = pos;
+        _lastDisplay = pos;
+    }
+
+    Element LyricsContent(LyricsDocument doc)
+    {
+        var lines = doc.Lines;
+        // Bigger type (rail 20 -> 26) and a tighter rhythm. Rows are CONTENT-FIT (variable height) via the measured
+        // layout below, so a one-line lyric is short and a two-line lyric is tall — no dead space, no mid-word clipping.
+        float fontSz = _large ? 36f : 26f;
+        float lineHt = _large ? 46f : 33f;          // ~1.27x (was 1.4x) — denser block
+        float rowPad = _large ? 9f : 7f;            // vertical padding per row; inter-line gap = 2*rowPad
+        float rowEst = lineHt + 2f * rowPad;        // measured-layout seed = a single-line row's height
+        bool centered = _large;
+        _band = _large ? 0.42f : 0.40f;
+
+        if (_layout is null || MathF.Abs(_layout.Band - _band) > 0.001f || MathF.Abs(_layout.Estimate - rowEst) > 0.5f)
+            _layout = new LyricsMeasuredLayout(rowEst, _band);
+
+        var layout = _layout;
+        return Virtual.Custom(
+            lines.Count,
+            layout,
+            i =>
+            {
+                var idx = i;
+                return Embed.Comp(() => new LyricLineView(
+                    idx, lines[idx], _activeLine, _voiceLine, _interlude, _nowMs, fontSz, lineHt, rowPad, centered,
+                    ReportLineNode, ReportGlowNode, () => SeekToLine(idx))) with { Key = "ll" + idx };
+            },
+            keyOf: i => "ll" + i,
+            overscan: _large ? 8 : 7) with
+        {
+            Grow = 1f,
+            MinHeight = 0f,
+            AutoEdgeFade = true,
+            SuppressScrollBar = true,
+            OnRealized = h => _viewportNode = h,
+        };
+    }
+
+    static Element LyricsShimmer(bool large)
+    {
+        float padX = large ? 48f : 20f;
+        float padTop = large ? 150f : 110f;
+        float rowH = large ? 32f : 22f;
+        float gap = large ? 24f : 18f;
+        float[] widths = large ? [0.82f, 0.66f, 0.74f, 0.58f, 0.70f, 0.50f] : [0.86f, 0.72f, 0.80f, 0.62f, 0.76f, 0.58f];
+        var rows = new Element[widths.Length];
+
+        for (int i = 0; i < rows.Length; i++)
+        {
+            rows[i] = new BoxEl
+            {
+                Width = large ? 520f * widths[i] : 255f * widths[i],
+                Height = rowH,
+                Corners = CornerRadius4.All(6f),
+                Fill = Tok.FillSubtleSecondary,
+                AlignSelf = large ? FlexAlign.Center : FlexAlign.Start,
+            };
+        }
+
+        return new BoxEl
+        {
+            Grow = 1f,
+            MinHeight = 0f,
+            Direction = 1,
+            Gap = gap,
+            Padding = new Edges4(padX, padTop, padX, 0f),
+            Children = rows,
         };
     }
 
@@ -160,90 +376,237 @@ sealed class LyricsView : Component
         if (b is null || doc is null || (uint)index >= (uint)doc.Lines.Count) return;
         long ms = doc.Lines[index].StartMs;
         b.PositionMs.Value = ms;
-        _tickWallMs = Environment.TickCount64;
-        _tickPosMs = ms;
+        RebaseClock(ms);    // seed all clock fields; _lastAuthMs=ms keeps OnFrame from re-treating our own jump as a seek
+        _scrollSnapped = false;
+        ResetWipeThrottle();
         _ = b.Player.SeekAsync(ms);
     }
 
-    // Per-frame stepper (gated mount): smooth clock → active line → ease scroll. Zero managed allocation.
-    internal void OnFrame()
+    internal void OnFrame(bool forceVisual = false)
     {
         var b = _b; var doc = _doc;
         if (b is null || doc is null || doc.Lines.Count == 0) return;
 
-        long nowMs = b.IsPlaying.Peek()
-            ? _tickPosMs + (Environment.TickCount64 - _tickWallMs)
-            : b.PositionMs.Peek();
+        // Dejittered media clock. The authoritative IPC PositionMs is itself a coarse ~1 Hz extrapolation; the old code
+        // HARD re-anchored on every snapshot, so a delayed/corrected one snapped nowMs — and since BOTH the active-line
+        // resolve and the karaoke wipe read nowMs, the line jumped (even backward) and the fill lurched. Instead: DEADBAND
+        // tiny disagreements (IPC jitter), gently SLEW small ones into an additive offset (no visible jump), SNAP only a
+        // true seek, plus a MONOTONIC-while-playing guard so the wipe/line never tick backward except on a real seek. Peek
+        // only (no .Value subscribe ⇒ no re-render ⇒ no all-lines-pulse); pure scalar math, zero per-frame alloc. With the
+        // deadband, steady-state extrapolation stays byte-identical to before, so the swap timing + skip-submit are intact.
+        long auth = b.PositionMs.Peek();
+        long wallMs = Environment.TickCount64;
+        bool playing = b.IsPlaying.Peek();
+        long nowMs;
+        if (!playing)
+        {
+            // Paused: the snapshot is the truth. Pin the base to it so a later RESUME doesn't leak the pause gap into the
+            // wall delta, and a paused scrub follows immediately.
+            nowMs = auth;
+            _baseWall = wallMs; _basePos = auth; _offset = 0f; _lastAuthMs = auth; _lastDisplay = auth;
+        }
+        else
+        {
+            if (!_wasPlaying)
+            {
+                // Just resumed: rebase clean so the (untimed) pause duration doesn't appear as a forward jump.
+                _baseWall = wallMs; _basePos = auth; _offset = 0f; _lastAuthMs = auth; _lastDisplay = auth;
+            }
+            else if (auth != _lastAuthMs)
+            {
+                _lastAuthMs = auth;
+                long predicted = _basePos + (wallMs - _baseWall);
+                long err = auth - (long)(predicted + _offset);
+                long ae = err < 0 ? -err : err;
+                if (ae <= 12) { /* deadband: ignore IPC jitter < ~12 ms */ }
+                else if (ae <= 250) { _offset += err * 0.5f; }   // slew: absorb ~half per snapshot (closes in 1-2)
+                else                                              // snap: a real seek / device transfer
+                {
+                    _baseWall = wallMs; _basePos = auth; _offset = 0f;
+                    _lastDisplay = auth;        // bypass the monotonic guard for a legitimate (possibly backward) seek
+                    _scrollSnapped = false;     // next ScrollActiveIntoView does the INSTANT-jump latch, not an ease across the song
+                    ResetWipeThrottle();        // re-evaluate the wipe at the new position
+                }
+            }
+            long nowRaw = (long)(_basePos + (wallMs - _baseWall) + _offset);
+            nowMs = Math.Max(nowRaw, _lastDisplay);   // monotonic while playing
+            _lastDisplay = nowMs;
+        }
+        _wasPlaying = playing;
 
-        int active = ResolveLine(doc.Lines, nowMs);
-        if (active != _activeLine.Peek()) _activeLine.Value = active;   // value-gated → re-render lines (emphasis)
-
-        // Publish the smooth ms every frame so the active word-by-word line advances its karaoke wipe (only that line reads it).
+        // Eye-leads-voice: emphasis + scroll resolve against a LEAD-shifted clock (~140 ms early) so the line is rising
+        // into focus as the first syllable lands, while the karaoke wipe/glow stay on the TRUE audio clock (voiceLine +
+        // raw nowMs) so the fill matches the voice. Two indices — one must NOT drive the other (lead-shifting a single
+        // index would retarget the wipe to the not-yet-singing line, killing the fill on the line you are hearing).
+        int active = ResolveLine(doc.Lines, nowMs + LeadMs);   // emphasis + scroll (anticipates)
+        int voiceLine = ResolveLine(doc.Lines, nowMs);          // wipe + glow (on true time)
+        bool activeChanged = active != _activeLine.Peek();
+        if (activeChanged) _activeLine.Value = active;
+        if (voiceLine != _voiceLine.Peek()) _voiceLine.Value = voiceLine;
         _nowMs.Value = nowMs;
 
         var scene = Context.Scene;
-        // The scroll viewport is THIS component's own rendered root (the clipped column container). OnRealized does NOT
-        // fire on a Component's ROOT element, so a self-reported handle stays null — read the engine-provided HostNode.
-        var viewport = Context.HostNode;
-        if (scene is null || active < 0 || (uint)active >= (uint)_lineNodes.Length) return;
-        var line = _lineNodes[active];
+        if (scene is null || active < 0 || (uint)active >= (uint)doc.Lines.Count) return;
+
+        // Instrumental-gap (interlude) state — word-by-word only. During a gap the lead keeps `active` on the just-sung
+        // line N until 140 ms before N+1; if N is sung out and a long (>=4 s) gap precedes N+1, recede N instead of
+        // leaving it frozen-fully-lit. It auto-ends when the lead flips active to N+1 (whose syllables aren't sung yet ⇒
+        // not sung-out). Line-synced lyrics have no syllable end (EndMs == next StartMs ⇒ gap delta 0), so interlude stays
+        // false — correct: there is no word timing to recede against, so don't fake it.
+        var al = doc.Lines[active];
+        long sungOutPoint = al.IsWordByWord && al.Syllables.Count > 0 ? al.Syllables[^1].EndMs : al.EndMs.GetValueOrDefault();
+        long nextStartMs = active + 1 < doc.Lines.Count ? doc.Lines[active + 1].StartMs : long.MaxValue;
+        bool interlude = nowMs >= sungOutPoint && (nextStartMs - sungOutPoint) >= 4000;
+        if (interlude != _interlude.Peek()) _interlude.Value = interlude;
+
+        if (!_scrollSnapped || activeChanged || forceVisual)
+            ScrollActiveIntoView(scene, active);
+
+        // The karaoke wipe/glow live on the VOICE line (true time), which trails the emphasis line during the lead window.
+        if ((uint)voiceLine >= (uint)_lineNodes.Length) return;
+        var line = _lineNodes[voiceLine];
         if (line.IsNull || !scene.IsLive(line)) return;
 
-        // Auto-scroll: park the active line at the focal band. SNAP on the first valid frame (so opening the pane mid-
-        // playback — or a track change — lands on the current line instantly), then EASE. AbsoluteRect is the arranged
-        // (layout) rect; scroll is a compositor Transform, so it's scroll-invariant → target is an absolute translation.
-        // Gated separately from the wipe below so a viewport hiccup never freezes the karaoke.
-        if (!viewport.IsNull && scene.IsLive(viewport))
-        {
-            RectF vp = scene.AbsoluteRect(viewport);
-            RectF lr = scene.AbsoluteRect(line);
-            // AbsoluteRect REFLECTS the live scroll (the column's compositor Transform), so `delta` is the REMAINING
-            // distance from the active line to the focal band — applied INCREMENTALLY to the current scroll (not as an
-            // absolute target). Wait for a real layout (lr.H > 0) so the first frame doesn't snap against a 0-height rect.
-            if (lr.H > 0.5f && vp.H > 0.5f)
-            {
-                float delta = (vp.Y + vp.H * _band) - (lr.Y + lr.H * 0.5f);
-                float cur = _scrollY.Peek();
-                float next = _scrollSnapped ? cur + delta * 0.18f : cur + delta;   // first valid frame snaps to the line; then eases
-                _scrollSnapped = true;
-                if (MathF.Abs(next - cur) < 0.05f) next = cur;   // settled → true no-op (idle the loop)
-                if (next != cur) _scrollY.Value = next;
-            }
-        }
-
-        // Advance the ACTIVE line's karaoke wipe split directly on the scene side-table — this re-records JUST this one
-        // glyph run (no component re-render, no reshape), the SeekBar-thumb discipline applied to the wipe. (TryGetGlyphWipe
-        // is false for non-word-by-word active lines, which set no wipe.) Independent of the scroll above.
         if (scene.TryGetGlyphWipe(line, out var w))
         {
-            float split = LyricLineView.ComputeSplit(doc.Lines[active], nowMs);
-            if (MathF.Abs(split - w.Split) > 0.0008f)
+            float split = LyricLineView.ComputeSplit(doc.Lines[voiceLine], nowMs);
+            // Small POSITIVE wipe lead: nudge the bright boundary a few % ahead of the strictly-played fraction so the edge
+            // reads as anticipating the voice. Keep it tiny — the GlyphWipe band is centered (the leading feather already
+            // sits ~Fade/2 ahead); a large lead would render glyphs fully-sung ahead of the voice. Body stays linear.
+            const float WipeLead = 0.04f;
+            if (split > 0f && split < 1f) split = Math.Clamp(split + WipeLead, 0f, 1f);
+            // Pixel-quantize the wipe boundary (mirror SeekBar): snapping Split to the line's on-screen pixel width makes
+            // sub-pixel ticks produce byte-identical DrawGlyphRunGradient bytes, so the host skip-submit hash gate elides
+            // the karaoke ticks that don't move the wipe a whole pixel (most of them, during slow syllables).
+            float runW = scene.AbsoluteRect(line).W;
+            if (runW > 1f) split = MathF.Round(split * runW) / runW;
+            bool forceWipe = forceVisual || voiceLine != _lastWipeLine || _lastWipeWallMs == 0L;
+            if (!forceWipe && wallMs - _lastWipeWallMs < KaraokeWipeIntervalMs) return;
+
+            _lastWipeWallMs = wallMs;
+            _lastWipeLine = voiceLine;
+
+            bool splitMoved = MathF.Abs(split - w.Split) > 0.0008f;
+            if (splitMoved)
             {
                 scene.SetGlyphWipe(line, w with { Split = split });
                 scene.Mark(line, NodeFlags.PaintDirty);
-                // Advance the wiped glow run in lockstep (same split, its own bright→transparent colors) so the bloom
-                // tracks the sung words exactly.
-                if ((uint)active < (uint)_glowNodes.Length)
+            }
+
+            // Voice-line glow node: keep its wipe split in sync (when it moved) AND drive the held-syllable bloom —
+            // a SUSTAINED syllable (>= BetterLyrics' 700 ms LongDurationSyllable gate) swells the glow's blur, then
+            // releases. The bloom is independent of the split delta (a long held note barely advances the split but must
+            // still swell), so it is NOT gated by splitMoved. The bloom sigma is quantized to a 0.25 grid
+            // (ComputeHeldGlowSigma), so a slow/held note keeps byte-identical bytes and DOES skip-submit.
+            if ((uint)voiceLine < (uint)_glowNodes.Length)
+            {
+                var g = _glowNodes[voiceLine];
+                if (!g.IsNull && scene.IsLive(g))
                 {
-                    var g = _glowNodes[active];
-                    if (!g.IsNull && scene.IsLive(g) && scene.TryGetGlyphWipe(g, out var gw))
+                    bool glowDirty = false;
+                    if (splitMoved && scene.TryGetGlyphWipe(g, out var gw))
                     {
                         scene.SetGlyphWipe(g, gw with { Split = split });
-                        scene.Mark(g, NodeFlags.PaintDirty);
+                        glowDirty = true;
                     }
+                    float baseSigma = _large ? 6f : 4f;                  // the active line's constant soft glow
+                    float peakExtra = (_large ? 46f : 33f) * 0.22f;      // held-syllable bloom amplitude (~lineHeight*0.2, BetterLyrics)
+                    float sigma = LyricLineView.ComputeHeldGlowSigma(doc.Lines[voiceLine], nowMs, baseSigma, peakExtra);
+                    ref var gp = ref scene.Paint(g);
+                    if (MathF.Abs(gp.BlurSigma - sigma) > 0.05f) { gp.BlurSigma = sigma; glowDirty = true; }
+                    if (glowDirty) scene.Mark(g, NodeFlags.PaintDirty);
                 }
             }
         }
     }
 
-    /// <summary>Re-arm the scroll snap so the next valid frame JUMPS to the active line (no ease-in from the top) — called
-    /// when the ticker (re)mounts, i.e. the pane is opened, so opening mid-playback lands on the current line instantly.</summary>
-    internal void ResetScrollSnap() => _scrollSnapped = false;
+    void ScrollActiveIntoView(SceneStore scene, int active)
+    {
+        var viewport = _viewportNode;
+        var layout = _layout;
+        if (layout is null || viewport.IsNull || !scene.IsLive(viewport) || !scene.HasScroll(viewport))
+            return;
 
-    // Current line = the last line whose StartMs <= now (BetterLyrics' next-StartMs boundary). -1 before the first line.
+        ref ScrollState sc = ref scene.ScrollRef(viewport);
+        if (sc.ViewportH <= 0.5f || sc.ContentH <= 0.5f) return;
+
+        // Keep the measured layout's focal top/bottom pad in sync with the live viewport. The engine's measured arrange
+        // path does NOT push the viewport to the layout (unlike the fixed path), so the app does it here; the value is an
+        // instance field read by every geometry call, so one push per frame keeps ContentExtent/Window/ItemRect correct.
+        layout.SetViewport(sc.ViewportH, sc.ViewportW);
+
+        RectF item = layout.ItemRect(active, sc.ViewportW);
+        float target = item.Y + item.H * 0.5f - sc.ViewportH * _band;
+        target = Math.Clamp(target, 0f, MathF.Max(0f, sc.ContentH - sc.ViewportH));
+
+        if (!_scrollSnapped)
+        {
+            _scrollSnapped = true;
+            sc.ScrollMode = 0;
+            sc.FlingVelocity = 0f;
+            sc.FlingRetargeted = false;
+            sc.FlingSnapTarget = float.NaN;
+            sc.OffsetY = target;
+            sc.TargetY = target;
+            ApplyScrollTransform(scene, in sc, target);
+            // Instant jump to the active line WITHOUT a LyricsView re-render: latch the offset as a scroll-restore and
+            // mark LAYOUT, so FlexLayout.ArrangeViewport re-asserts the offset + content transform + re-realizes the
+            // virtual window (reuseOverlap — existing rows kept). Context.RequestRerender() would instead re-run the
+            // Skel.Region content delegate, rebuild the VirtualListEl, and remount every line node, re-seeding each
+            // line's springs from default paint (1.0) — the "all lines flash active for a frame" bug (on open / seek).
+            sc.RestoreX = sc.OffsetX;
+            sc.RestoreY = target;
+            sc.RestorePending = true;
+            scene.Mark(viewport, NodeFlags.LayoutDirty | NodeFlags.VirtualRangeDirty);
+            return;
+        }
+
+        if (MathF.Abs(sc.TargetY - target) <= 0.5f) return;
+
+        // Velocity-continuous re-target: only zero the carried spring velocity on the FIRST entry into ProgrammaticMode.
+        // A re-target while ALREADY easing (dense lyric sections, lines ~200-300 ms apart) KEEPS the velocity so the engine
+        // spring chains smoothly to the new target instead of restarting a decelerating chase (the "list trails the song"
+        // defect). The engine ScrollAnimator integrates the critically-damped spring (no overshoot).
+        if (sc.ScrollMode != ScrollAnimator.ProgrammaticMode)
+        {
+            sc.ScrollMode = ScrollAnimator.ProgrammaticMode;
+            sc.FlingVelocity = 0f;
+        }
+        sc.FlingRetargeted = false;
+        sc.FlingSnapTarget = float.NaN;
+        sc.TargetY = target;
+        Context.ArmScroll?.Invoke(viewport);
+        // No Context.RequestRerender(): ArmScroll drives the smooth scroll and the engine ScrollAnimator re-realizes the
+        // virtual window on each offset move (reuseOverlap), while the active-line emphasis re-renders the line components
+        // IN PLACE via the _activeLine signal (same node ⇒ springs retarget by rebase). Re-rendering LyricsView here would
+        // rebuild the virtual window and remount every line, re-seeding its springs from default paint — every line would
+        // flash "active" for a frame on each line change (the reported swap-flash).
+    }
+
+    static void ApplyScrollTransform(SceneStore scene, in ScrollState sc, float target)
+    {
+        var contentNode = sc.ContentNode;
+        if (contentNode.IsNull || !scene.IsLive(contentNode)) return;
+
+        scene.Paint(contentNode).LocalTransform = Affine2D.Translation(0f, -target);
+        scene.Mark(contentNode, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+    }
+
+    internal void ResetScrollSnap()
+    {
+        _scrollSnapped = false;
+        ResetWipeThrottle();
+    }
+
+    void ResetWipeThrottle()
+    {
+        _lastWipeWallMs = 0L;
+        _lastWipeLine = -1;
+    }
+
     static int ResolveLine(IReadOnlyList<LyricLine> lines, long nowMs)
     {
-        if (nowMs < lines[0].StartMs) return -1;
+        if (lines.Count == 0 || nowMs < lines[0].StartMs) return -1;
         int lo = 0, hi = lines.Count - 1, ans = 0;
         while (lo <= hi)
         {
@@ -262,115 +625,206 @@ sealed class LyricsView : Component
     };
 }
 
-// One lyric line. Its OWN component so it can emphasise itself with springs (seeded on its distance-from-active) without
-// re-rendering siblings beyond the cheap re-render the active-line change already triggers. Reports its node up so the
-// view's ticker can read the active line's arranged rect for the scroll follow.
+// Variable-height (measured) virtual layout for the lyrics list. Each row is CONTENT-FIT — a one-line lyric is short, a
+// two-line lyric is tall — so there is no dead space and nothing clips/ellipsizes; a top/bottom focal pad still lets the
+// FIRST and LAST lines scroll to the focal band. Implements the engine's measured seam (estimate-then-correct over an
+// ExtentTable; the engine measures each realized row and feeds SetMeasured) AND the viewport seam (for the focal pad).
+// The app also pushes the viewport (LyricsView.ScrollActiveIntoView) because the engine's measured arrange path, unlike
+// the fixed-geometry path, does not call SetViewport.
+sealed class LyricsMeasuredLayout : IMeasuredVirtualLayout, IViewportVirtualLayout
+{
+    public readonly float Estimate;   // per-row height seed for not-yet-measured rows (a single-line row)
+    public readonly float Band;
+    float _viewport;
+    ExtentTable? _table;
+
+    public LyricsMeasuredLayout(float estimate, float band)
+    {
+        Estimate = MathF.Max(1f, estimate);
+        Band = Math.Clamp(band, 0.05f, 0.95f);
+    }
+
+    ExtentTable Ensure(int n)
+    {
+        if (_table is null) _table = new ExtentTable(n, Estimate);
+        else if (_table.Count != n) _table.Reset(n, Estimate);
+        return _table;
+    }
+
+    // Pad so a centered active line can sit at the focal band even at the very top/bottom of the list. Estimate*0.5 is the
+    // half-height correction (the band centers a row's MIDDLE); exact enough since the active row is always measured.
+    float TopPad => _viewport <= 0f ? 0f : MathF.Max(0f, _viewport * Band - Estimate * 0.5f);
+    float BottomPad => _viewport <= 0f ? 0f : MathF.Max(0f, _viewport * (1f - Band) - Estimate * 0.5f);
+
+    public void SetViewport(float mainExtent, float crossSize) => _viewport = MathF.Max(0f, mainExtent);
+
+    public float ContentExtent(int itemCount, float crossSize)
+        => itemCount <= 0 ? 0f : TopPad + (float)Ensure(itemCount).Total + BottomPad;
+
+    public void Window(int itemCount, float crossSize, float viewportExtent, float scrollOffset, int overscan, out int first, out int last)
+    {
+        if (itemCount <= 0) { first = last = 0; return; }
+        var t = Ensure(itemCount);
+        float o = scrollOffset - TopPad;
+        first = Math.Max(0, t.IndexAt(MathF.Max(0f, o)) - overscan);
+        last = Math.Min(itemCount, t.IndexAt(MathF.Max(0f, o + viewportExtent)) + 1 + overscan);
+        if (last < first) last = first;
+    }
+
+    public RectF ItemRect(int index, float crossSize)
+    {
+        float pos = _table?.OffsetOf(index) ?? index * Estimate;
+        float ext = _table?.ExtentAt(index) ?? Estimate;
+        return new RectF(0f, TopPad + pos, crossSize, ext);
+    }
+
+    public void SetMeasured(int index, float mainExtent, float crossSize) => _table?.SetExtent(index, mainExtent);
+    public float OffsetOf(int index, float crossSize) => TopPad + (_table?.OffsetOf(index) ?? index * Estimate);
+    public int IndexAt(float offset, float crossSize) => _table?.IndexAt(MathF.Max(0f, offset - TopPad)) ?? 0;
+}
+
 sealed class LyricLineView : Component
 {
     readonly int _index;
     readonly LyricLine _line;
     readonly Signal<int> _activeLine;
+    readonly Signal<int> _voiceLine;
+    readonly Signal<bool> _interlude;
     readonly FloatSignal _nowMs;
     readonly float _fontSz;
     readonly float _lineHt;
+    readonly float _rowPad;
     readonly bool _centered;
     readonly Action<int, NodeHandle> _reportNode;
     readonly Action<int, NodeHandle> _reportGlow;
     readonly Action _onSeek;
 
-    public LyricLineView(int index, LyricLine line, Signal<int> activeLine, FloatSignal nowMs,
-        float fontSz, float lineHt, bool centered, Action<int, NodeHandle> reportNode, Action<int, NodeHandle> reportGlow, Action onSeek)
+    public LyricLineView(int index, LyricLine line, Signal<int> activeLine, Signal<int> voiceLine, Signal<bool> interlude, FloatSignal nowMs,
+        float fontSz, float lineHt, float rowPad, bool centered, Action<int, NodeHandle> reportNode, Action<int, NodeHandle> reportGlow, Action onSeek)
     {
-        _index = index; _line = line; _activeLine = activeLine; _nowMs = nowMs;
-        _fontSz = fontSz; _lineHt = lineHt; _centered = centered;
+        _index = index; _line = line; _activeLine = activeLine; _voiceLine = voiceLine; _interlude = interlude; _nowMs = nowMs;
+        _fontSz = fontSz; _lineHt = lineHt; _rowPad = rowPad; _centered = centered;
         _reportNode = reportNode; _reportGlow = reportGlow; _onSeek = onSeek;
     }
 
     public override Element Render()
     {
-        int active = _activeLine.Value;                    // subscribe → re-render (re-seed springs) on active change
+        int active = _activeLine.Value;
+        int voice = _voiceLine.Value;
         bool isActive = _index == active;
+        bool isVoice = _index == voice;   // currently being sung — owns the karaoke wipe (trails emphasis during the lead)
+        bool interlude = isActive && _interlude.Value;   // active line sung out into a long instrumental gap — recede it
         int dist = active < 0 ? 6 : Math.Abs(_index - active);
 
-        // Emphasis — the exact BetterLyrics values (LyricsAnimator.cs): a continuous distance factor (0 at the active line
-        // → 1 at the viewport edge, ≈5 lines out) drives scale 1.0→0.75 (_highlightedScale→_defaultScale), Gaussian blur
-        // 0→5, and a linear opacity fade. The active line reads full-size/sharp/opaque; neighbours shrink, blur and recede.
-        // All ride springs that re-seed only when the distance bucket changes (deps) then settle on the compositor.
         float f = MathF.Min(dist / 5f, 1f);
-        float scale = isActive ? 1f : 1f - 0.25f * f;
-        // Steeper opacity falloff than BetterLyrics' default so ONE line clearly dominates (was reading as "3 lines at once"):
-        // active 1.0, then ~0.44 / 0.33 / 0.22 for the next lines.
-        float opacity = isActive ? 1f : MathF.Max(0.16f, 0.55f * (1f - f));
-        float blur = (isActive || dist > 6) ? 0f : 5f * f;   // DoF: Gaussian blur 0→5 with distance (BetterLyrics cap)
+        // Emphasis targets. Active line: full focus (scale 1 / opacity 1 / crisp). During an instrumental interlude the
+        // still-active sung-out line recedes to a calm look instead of sitting frozen-fully-lit. Dimmed lines fall off by
+        // distance; a line still being sung during the ~140 ms lead stays crisp (blur 0) so it never pops blurred.
+        float scale = interlude ? 0.92f : isActive ? 1f : 1f - 0.25f * f;
+        float opacity = interlude ? 0.55f : isActive ? 1f : MathF.Max(0.16f, 0.55f * (1f - f));
+        float blur = interlude ? LyricsFx.DofSigma(1) : (isActive || isVoice) ? 0f : LyricsFx.DofSigma(dist);
 
-        UseSpring(AnimChannel.ScaleX, scale, SpringParams.Default, dist);
-        UseSpring(AnimChannel.ScaleY, scale, SpringParams.Default, dist);
-        UseSpring(AnimChannel.Opacity, opacity, SpringParams.Default, dist);
-        UseSpring(AnimChannel.BlurSigma, blur, SpringParams.Default, dist);
+        // Co-settled emphasis on ONE near-critical ~0.55 s timeline (matched to the scroll spring) so the line rises into
+        // focus as a single event, not a fast glide then a slow springy swell. Scale keeps a whisper of bounce (ζ 0.90);
+        // opacity is critically damped (ζ 1.0 — no flicker on dim). DepKey folds in the interlude bit so the springs
+        // retarget on interlude entry/exit. Same persistent-node rebase path — no remount, no all-lines-pulse.
+        var emph = SpringParams.FromResponse(0.55f, 0.90f);
+        var key = DepKey.From(dist, interlude ? 1 : 0);
+        UseSpring(AnimChannel.ScaleX, scale, emph, key);
+        UseSpring(AnimChannel.ScaleY, scale, emph, key);
+        UseSpring(AnimChannel.Opacity, opacity, SpringParams.FromResponse(0.55f, 1.0f), key);
+        // The DoF blur is NOT a spring. DofSigma is a pure STEP of integer distance, so a spring only manufactures
+        // intermediate sigmas every settle frame — each one marks the node TransformDirty (defeating skip-submit for the
+        // whole settle) and steps the heavy Gaussian kernel frame-to-frame = the during-a-line DoF breathing. Instead the
+        // bucketed sigma is set STATICALLY as the row's Blur element property (see the BoxEl below): a settled line is then
+        // byte-identical frame-to-frame, and a line change jumps it one bucket in a single frame (the eye is on the moving
+        // active line). On a change the leaving/entering line re-renders via _activeLine, so the reconciler re-asserts the
+        // new static sigma — nothing overrides it once the spring is gone.
 
         var wrap = _centered ? TextWrap.NoWrap : TextWrap.Wrap;
+        int maxLines = _centered ? 1 : 2;
         Element textEl;
-        if (isActive && _line.IsWordByWord && _line.Syllables.Count > 0)
+
+        // ~half-glyph wipe feather (BetterLyrics LyricsLineRendererBase: fadeBand ≈ 0.5/charCount) — softer than a flat edge.
+        float soft = Math.Clamp(0.5f / Math.Max(1, _line.Text.Length), 0.03f, 0.08f);
+        // The karaoke wipe sub-tree renders on the active line AND the voice line — during the ~140 ms lead the voice line
+        // (still being sung) trails the emphasis line, but its fill must keep running. Emphasis (scale/opacity) follows
+        // `active`; the wipe split follows true time via _nowMs.
+        if ((isActive || isVoice) && _line.IsWordByWord && _line.Syllables.Count > 0)
         {
-            // Karaoke wipe (A1) via the generic GlyphWipe primitive. The INITIAL split is set here (Peek → no per-frame
-            // re-render); the ticker advances it each frame on the scene side-table keyed by THIS run's node (reported via
-            // OnRealized) — so the wipe flows without re-rendering or reshaping.
             float split = ComputeSplit(_line, (long)_nowMs.Peek());
-            var wipe = new TextEl(_line.Text)
+            var wipe = LineText(_line.Text, Tok.TextPrimary) with
             {
-                Size = _fontSz, Weight = 700, Wrap = wrap, LineHeight = _lineHt, Color = Tok.TextSecondary,
-                Wipe = new GlyphWipe(Before: Tok.TextPrimary, After: Tok.TextPrimary with { A = 0.4f }, Split: split, Softness: 0.025f, Lift: _lineHt * 0.1f),
+                Color = Tok.TextSecondary,
+                // Lift cut 0.1 -> 0.03 of line height: BetterLyrics' float is a TRANSIENT per-glyph rise that settles to 0,
+                // so a static whole-line lift at 0.1 reads ~3x too strong ("dy too much"). 0.03 is a subtle lift-into-focus.
+                Wipe = new GlyphWipe(Before: Tok.TextPrimary, After: Tok.TextPrimary with { A = 0.4f }, Split: split, Softness: soft, Lift: _lineHt * 0.03f),
                 OnRealized = h => _reportNode(_index, h),
             };
-            // The glow FOLLOWS the sung portion: a wiped bright→transparent run, blurred — so only sung words bloom while
-            // the unsung stay clean and dim (the BetterLyrics karaoke glow). Its split rides in lockstep with the main wipe.
-            var glow = new BoxEl
+            // Soft glow = a blurred copy of the played glyphs UNDER the crisp wipe. It carries NO static Blur element
+            // property (TextEl has none); instead OnFrame drives its NodePaint.BlurSigma every frame — a constant BASE
+            // sigma on all tiers (the cheap glow signature), plus a HELD-syllable BLOOM (>=700 ms) on the discrete tiers.
+            // BlurSigma>0 makes any node a self-blur group, so this one TextEl both carries the wipe AND is the glow.
+            var glow = LineText(_line.Text, Tok.TextPrimary) with
             {
-                Blur = _centered ? 13f : 9f, HitTestVisible = false,
-                Children = [new TextEl(_line.Text)
-                {
-                    Size = _fontSz, Weight = 700, Wrap = wrap, LineHeight = _lineHt, Color = Tok.TextPrimary,
-                    Wipe = new GlyphWipe(Before: Tok.TextPrimary, After: Tok.TextPrimary with { A = 0f }, Split: split, Softness: 0.14f),
-                    OnRealized = h => _reportGlow(_index, h),
-                }],
+                Wipe = new GlyphWipe(Before: Tok.TextPrimary, After: Tok.TextPrimary with { A = 0f }, Split: split, Softness: 0.14f),
+                OnRealized = h => _reportGlow(_index, h),
             };
             textEl = new BoxEl { ZStack = true, Children = [glow, wipe] };
         }
         else if (isActive)
         {
-            // Active but line-synced (no per-word timing): bright + the same glow, no wipe.
-            var crisp = new TextEl(_line.Text)
-            {
-                Size = _fontSz, Weight = 700, Wrap = wrap, LineHeight = _lineHt, Color = Tok.TextPrimary,
-                OnRealized = h => _reportNode(_index, h),
-            };
+            // Line-level active line (no syllables ⇒ no held-note bloom): a static soft glow halo under the crisp text.
+            var crisp = LineText(_line.Text, Tok.TextPrimary) with { OnRealized = h => _reportNode(_index, h) };
             var glow = new BoxEl
             {
                 Blur = _centered ? 13f : 9f, HitTestVisible = false,
-                Children = [new TextEl(_line.Text) { Size = _fontSz, Weight = 700, Wrap = wrap, LineHeight = _lineHt, Color = Tok.TextPrimary with { A = 0.4f } }],
+                Children = [LineText(_line.Text, Tok.TextPrimary with { A = 0.4f })],
             };
             textEl = new BoxEl { ZStack = true, Children = [glow, crisp] };
         }
         else
         {
-            textEl = new TextEl(_line.Text)
-            {
-                Size = _fontSz, Weight = 700, Wrap = wrap, LineHeight = _lineHt, Color = Tok.TextSecondary,
-                OnRealized = h => _reportNode(_index, h),
-            };
+            textEl = LineText(_line.Text, Tok.TextSecondary) with { OnRealized = h => _reportNode(_index, h) };
         }
 
         return new BoxEl
         {
-            Direction = 1, Padding = new Edges4(2f, 5f, 2f, 5f),
-            TransformOriginX = _centered ? 0.5f : 0f, TransformOriginY = 0.5f,   // scale about center (fullscreen) or left (rail)
-            Cursor = CursorId.Hand, OnClick = _onSeek,
-            Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
+            Direction = 1,
+            // Static depth-of-field: the dimmed-line sigma is a Blur element property (DofSigma step), not a per-frame
+            // spring — so a settled line's bytes never change and the kernel never breathes. Active line ⇒ blur 0 ⇒ no
+            // self-blur layer (SceneRecorder drops sigma ≤ 0.01); its soft glow is a child blur group instead.
+            Blur = blur,
+            // No fixed Height — the row sizes to its text (1 line short, 2 lines tall); the measured layout reads that
+            // natural height so there is no dead space. Vertical padding (_rowPad) is the inter-line gap.
+            Shrink = 0f,
+            Padding = new Edges4(2f, _rowPad, 2f, _rowPad),
+            Justify = FlexJustify.Center,
+            AlignItems = _centered ? FlexAlign.Center : FlexAlign.Stretch,
+            TransformOriginX = _centered ? 0.5f : 0f,
+            TransformOriginY = 0.5f,
+            Cursor = CursorId.Hand,
+            OnClick = _onSeek,
+            Role = AutomationRole.Button,
+            Focusable = true,
+            AllowFocusOnInteraction = false,
             Children = [textEl],
+        };
+
+        TextEl LineText(string text, ColorF color) => new(text)
+        {
+            Size = _fontSz,
+            Weight = 700,
+            Wrap = wrap,
+            LineHeight = _lineHt,
+            Color = color,
+            MaxLines = maxLines,
+            // Rail: no ellipsis — a long line wraps cleanly (up to MaxLines) instead of the confusing mid-word "lif.."
+            // trim. Fullscreen stays single-line (NoWrap) so it keeps the ellipsis.
+            Trim = _centered ? TextTrim.CharacterEllipsis : TextTrim.None,
         };
     }
 
-    // Played fraction (0..1) along the line from the sung syllables + the smooth clock — the karaoke wipe split.
     internal static float ComputeSplit(LyricLine line, long now)
     {
         var syl = line.Syllables;
@@ -388,24 +842,92 @@ sealed class LyricLineView : Component
         }
         return Math.Clamp(played / total, 0f, 1f);
     }
+
+    // Held / long-syllable glow bloom (BetterLyrics LongDurationSyllable scope). A syllable sustained >= 700 ms (the
+    // BetterLyrics LyricsGlowEffectLongSyllableDuration default) swells the active line's glow; a short syllable gets
+    // none. Envelope = a soft trapezoid over the syllable (rise ~22%, hold, fall ~22%), the smooth analogue of
+    // BetterLyrics' Keyframe(target,in)->Keyframe(0,out). Amplitude <paramref name="peakExtra"/> (~lineHeight*0.2, its
+    // auto glow target) is added over the constant <paramref name="baseSigma"/>. Returns baseSigma outside any held note.
+    internal const long HeldSyllableMs = 700;
+    internal static float ComputeHeldGlowSigma(LyricLine line, long now, float baseSigma, float peakExtra)
+    {
+        if (peakExtra <= 0f) return baseSigma;
+        var syl = line.Syllables;
+        for (int i = 0; i < syl.Count; i++)
+        {
+            long s = syl[i].StartMs, e = syl[i].EndMs;
+            if (now < s) break;            // playhead hasn't reached this syllable yet
+            if (now >= e) continue;        // already past it
+            long dur = e - s;
+            if (dur < HeldSyllableMs) return baseSigma;   // short syllable: no bloom
+            float t = Math.Clamp((float)(now - s) / dur, 0f, 1f);
+            float env = Smooth01(0f, 0.22f, t) * (1f - Smooth01(0.78f, 1f, t));
+            // Snap the bloom to a 0.25 grid: under the 16 ms timer's jitter (15/16/17/coalesced) the raw envelope steps
+            // irregularly, and the call site only delta-gates at 0.05 — so the held note's glow sigma keeps creeping,
+            // marking PaintDirty on a self-blur node every tick (the sustained-note breathing). Quantized, a held/slow
+            // note yields byte-identical sigma frame-to-frame, so consecutive frames stay byte-stable and the skip-submit
+            // hash elides them. The glow analogue of the wipe's pixel-quantize. baseSigma (4/6) is already on the grid,
+            // so the resting (no-bloom) glow is unchanged.
+            return MathF.Round((baseSigma + peakExtra * env) * 4f) / 4f;
+        }
+        return baseSigma;
+    }
+
+    static float Smooth01(float a, float b, float x)
+    {
+        float t = Math.Clamp((x - a) / MathF.Max(1e-5f, b - a), 0f, 1f);
+        return t * t * (3f - 2f * t);
+    }
 }
 
-// Per-frame stepper for LyricsView (the SeekTicker idiom): mounted only while the rail is open, it subscribes to the host
-// frame clock and advances the owner's scroll/active-line each frame. Never re-renders the owner (it only writes the
-// value-gated signals the compositor binds read). Unmounts when the rail closes, idling the frame loop.
 sealed class LyricsTicker : ReactiveComponent
 {
     public required LyricsView Owner;
+    Timer? _timer;
+    int _timerGeneration;
 
     public override Element Setup()
     {
-        Owner.ResetScrollSnap();   // (re)opening the pane → the first frame snaps to the current line, no scroll-in from the top
-        var tick = UseContextSignal(FrameClock.Tick);
+        Owner.ResetScrollSnap();
+        var bridge = UseContextSignal(PlaybackBridge.Slot);
+        var post = UsePost();
         UseSignalEffect(() =>
         {
-            _ = tick.Value;
-            Owner.OnFrame();
+            Reactive.OnCleanup(StopTimer);
+            var b = bridge.Value;
+            if (b is null)
+            {
+                StopTimer();
+                return;
+            }
+            if (!b.IsPlaying.Value)
+            {
+                StopTimer();
+                _ = b.PositionMs.Value;
+                Owner.OnFrame(forceVisual: true);
+                return;
+            }
+            StartTimer(post);
         });
         return new BoxEl { HitTestVisible = false, Width = 0f, Height = 0f };
+    }
+
+    void StartTimer(Action<Action> post)
+    {
+        if (_timer is not null) return;
+        int generation = Interlocked.Increment(ref _timerGeneration);
+        _timer = new Timer(_ => post(() =>
+        {
+            if (Volatile.Read(ref _timerGeneration) == generation) Owner.OnFrame();
+        }), null, 0, LyricsView.KaraokeWipeIntervalMs);
+    }
+
+    void StopTimer()
+    {
+        var timer = _timer;
+        if (timer is null) return;
+        _timer = null;
+        Interlocked.Increment(ref _timerGeneration);
+        timer.Dispose();
     }
 }

@@ -23,7 +23,11 @@ public static class LyricsReranker
     const double WText = 0.40, WSync = 0.25, WTiming = 0.20, WCoverage = 0.10, WPrior = 0.05;
     const double LineMatchThreshold = 0.5;   // token overlap to call two lines "the same line"
     const double DriftToleranceMs = 600;     // MAD above this ⇒ timing is locally wrong
-    const double SyncGateText = 0.80, SyncGateTiming = 0.5, SyncGateCoverage = 0.6;
+    const long TimingFallbackBucketMs = 100;
+    const long TimingFallbackPairToleranceMs = 600;
+    // Sync-gate thresholds. The text bar is a low FLOOR (was 0.80 — which rejected correct-but-divergent word-sync); the
+    // timing/coverage guardrails do the real work of rejecting a wrong song. See the gate in Rank for the reasoning.
+    const double SyncGateTextFloor = 0.15, SyncGateTiming = 0.5, SyncGateCoverage = 0.6;
 
     public static RankedLyrics Rank(IReadOnlyList<LyricsCandidate> candidates, LyricsDocument? reference)
     {
@@ -38,17 +42,25 @@ public static class LyricsReranker
         for (int i = 0; i < candidates.Count; i++)
         {
             var c = candidates[i];
+            bool trusted = c.Basis is MatchBasis.Identity or MatchBasis.Isrc;
             var candTokens = c.Document.Lines.Select(l => Tokens(l.Text)).ToList();
 
             double text, coverage, timing; long applied = 0; string reason;
             if (refTokens is { Count: > 0 } && candTokens.Count > 0)
             {
                 var (lcs, pairs) = LcsAlign(candTokens, refTokens);
+                bool timingFallback = false;
+                if (pairs.Count < 3 && trusted && TryTimingFallbackPairs(c.Document, reference!, out var fallbackPairs))
+                {
+                    pairs = fallbackPairs;
+                    timingFallback = true;
+                }
                 int overlap = Math.Min(candTokens.Count, refTokens.Count);
                 text = lcs / (double)Math.Max(1, overlap);
                 coverage = overlap / (double)Math.Max(1, Math.Max(candTokens.Count, refTokens.Count));
                 (timing, applied) = TimingScoreVsRef(c.Document, reference!, pairs);
                 reason = $"ref-align lcs={lcs}/{overlap} off={applied}ms";
+                if (timingFallback) reason += " [timing-fallback]";
             }
             else
             {
@@ -61,10 +73,14 @@ public static class LyricsReranker
             }
 
             double sync = c.Sync switch { LyricsSyncKind.Syllable => 1.0, LyricsSyncKind.Line => 0.6, LyricsSyncKind.Unsynced => 0.2, _ => 0.2 };
-            // Sync gate: a word-synced candidate keeps its sync advantage ONLY if it's verified correct. Otherwise it is
-            // demoted below a clean line-synced candidate (prevents a bad richsync beating Spotify's correct line lyric).
-            if (c.Sync == LyricsSyncKind.Syllable && refTokens is { Count: > 0 }
-                && !(text >= SyncGateText && timing >= SyncGateTiming && coverage >= SyncGateCoverage))
+            // Sync gate: a word-synced candidate keeps its sync advantage unless it looks like a DIFFERENT song. An
+            // identity/ISRC-matched source IS the exact recording (AMLL / Spotify-native / Musixmatch-ISRC), so it is never
+            // demoted on fuzzy text disagreement with Spotify's own (often sparse/romanized) line lyric. Otherwise apply a
+            // low text FLOOR plus the timing/coverage guardrails: correct-but-divergent karaoke (romanization, CJK,
+            // ad-libs) scores ~0.15–0.5 text and must survive, while a truly-wrong song has incoherent timing (high MAD →
+            // timing < 0.5) and/or mismatched line counts (coverage < 0.6) and is still demoted below a clean line candidate.
+            if (c.Sync == LyricsSyncKind.Syllable && refTokens is { Count: > 0 } && !trusted
+                && !(text >= SyncGateTextFloor && timing >= SyncGateTiming && coverage >= SyncGateCoverage))
             {
                 sync = 0.45;
                 reason += " [sync-gate:demoted]";
@@ -120,6 +136,69 @@ public static class LyricsReranker
     }
 
     // ── timing ───────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    static bool TryTimingFallbackPairs(LyricsDocument cand, LyricsDocument reff, out List<(int C, int R)> pairs)
+    {
+        pairs = new List<(int C, int R)>();
+        if (cand.Lines.Count < 3 || reff.Lines.Count < 3) return false;
+
+        var buckets = new Dictionary<long, int>();
+        for (int c = 0; c < cand.Lines.Count; c++)
+        {
+            long cs = cand.Lines[c].StartMs;
+            for (int r = 0; r < reff.Lines.Count; r++)
+            {
+                long bucket = DeltaBucket(cs - reff.Lines[r].StartMs);
+                buckets.TryGetValue(bucket, out int n);
+                buckets[bucket] = n + 1;
+            }
+        }
+
+        long bestBucket = 0;
+        int bestCount = 0;
+        bool tied = false;
+        foreach (var kv in buckets)
+        {
+            if (kv.Value > bestCount)
+            {
+                bestBucket = kv.Key;
+                bestCount = kv.Value;
+                tied = false;
+            }
+            else if (kv.Value == bestCount)
+            {
+                tied = true;
+            }
+        }
+        if (bestCount < 3 || tied) return false;
+
+        int nextRef = 0;
+        for (int c = 0; c < cand.Lines.Count && nextRef < reff.Lines.Count; c++)
+        {
+            int bestRef = -1;
+            long bestErr = long.MaxValue;
+            long cs = cand.Lines[c].StartMs;
+            for (int r = nextRef; r < reff.Lines.Count; r++)
+            {
+                long err = Math.Abs((cs - reff.Lines[r].StartMs) - bestBucket);
+                if (err < bestErr)
+                {
+                    bestErr = err;
+                    bestRef = r;
+                }
+                if (reff.Lines[r].StartMs > cs - bestBucket + TimingFallbackPairToleranceMs && bestErr <= TimingFallbackPairToleranceMs)
+                    break;
+            }
+            if (bestRef < 0 || bestErr > TimingFallbackPairToleranceMs) continue;
+            pairs.Add((c, bestRef));
+            nextRef = bestRef + 1;
+        }
+
+        return pairs.Count >= 3;
+    }
+
+    static long DeltaBucket(long delta)
+        => (long)Math.Round(delta / (double)TimingFallbackBucketMs, MidpointRounding.AwayFromZero) * TimingFallbackBucketMs;
 
     static (double Score, long AppliedOffsetMs) TimingScoreVsRef(LyricsDocument cand, LyricsDocument reff, List<(int C, int R)> pairs)
     {

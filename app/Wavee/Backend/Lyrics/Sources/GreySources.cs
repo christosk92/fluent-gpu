@@ -81,18 +81,29 @@ public sealed class KugouSource : ILyricCandidateSource
 
     public async Task<LyricsCandidate?> FetchAsync(LyricsRequest req, CancellationToken ct)
     {
-        string kw = $"{req.Title} {req.PrimaryArtist}".Trim();
+        foreach (var kw in LyricsQuery.Variants(req))
+        {
+            var cand = await TryForKeyword(kw, req, ct).ConfigureAwait(false);
+            if (cand is not null) { LyricsProbe.Note(Id, $"hit on variant '{kw}'"); return cand; }
+            ct.ThrowIfCancellationRequested();
+        }
+        return null;
+    }
+
+    async Task<LyricsCandidate?> TryForKeyword(string kw, LyricsRequest req, CancellationToken ct)
+    {
         string searchUrl = $"http://mobilecdn.kugou.com/api/v3/search/song?format=json&keyword={Uri.EscapeDataString(kw)}&page=1&pagesize=10&showtype=1";
         string? sj = await GreyHttp.Get(searchUrl, null, ct).ConfigureAwait(false);
         if (sj is null) return null;
 
-        string? hash = null; long bestDelta = long.MaxValue;
+        string? hash = null; long bestDelta = long.MaxValue; int n = 0;
         try
         {
             using var d = JsonDocument.Parse(sj);
             if (!d.RootElement.TryGetProperty("data", out var data) || !data.TryGetProperty("info", out var info) || info.ValueKind != JsonValueKind.Array) return null;
             foreach (var it in info.EnumerateArray())
             {
+                n++;
                 string? h = GreyHttp.Str(it, "hash");
                 long dsec = it.TryGetProperty("duration", out var dv) && dv.TryGetInt64(out var ds) ? ds : 0;
                 long delta = req.DurationMs > 0 && dsec > 0 ? Math.Abs(dsec * 1000 - req.DurationMs) : 0;
@@ -100,11 +111,12 @@ public sealed class KugouSource : ILyricCandidateSource
             }
         }
         catch { return null; }
+        LyricsProbe.Note(Id, $"song search '{kw}' → {n} results");
         if (hash is null) return null;
 
         string lyrSearch = $"https://lyrics.kugou.com/search?ver=1&man=yes&client=pc&keyword={Uri.EscapeDataString(req.Title)}&duration={req.DurationMs}&hash={hash}";
         string? lj = await GreyHttp.Get(lyrSearch, null, ct).ConfigureAwait(false);
-        if (lj is null) return null;
+        if (lj is null) { LyricsProbe.Note(Id, "matched song but lyric search HTTP failed"); return null; }
         string? id = null, accesskey = null;
         try
         {
@@ -113,18 +125,19 @@ public sealed class KugouSource : ILyricCandidateSource
                 foreach (var c in cands.EnumerateArray()) { id = GreyHttp.Str(c, "id"); accesskey = GreyHttp.Str(c, "accesskey"); if (id is not null && accesskey is not null) break; }
         }
         catch { return null; }
-        if (id is null || accesskey is null) return null;
+        if (id is null || accesskey is null) { LyricsProbe.Note(Id, "matched song but kugou has no KRC lyric for it (no candidate)"); return null; }
 
         string dl = $"https://lyrics.kugou.com/download?accesskey={accesskey}&fmt=krc&charset=utf8&kgid={id}";
         string? dj = await GreyHttp.Get(dl, null, ct).ConfigureAwait(false);
         if (dj is null) return null;
         string? b64; try { using var d = JsonDocument.Parse(dj); b64 = GreyHttp.Str(d.RootElement, "content"); } catch { return null; }
-        if (string.IsNullOrEmpty(b64)) return null;
+        if (string.IsNullOrEmpty(b64)) { LyricsProbe.Note(Id, "KRC download returned empty content"); return null; }
 
         string? krc = LyricCrypto.DecryptKrc(b64!);
-        if (krc is null) return null;
+        if (krc is null) { LyricsProbe.Note(Id, "matched song but KRC decrypt failed"); return null; }
         var doc = LyricsWordFormats.ParseKrc(krc, req.TrackId, Id);
-        return doc.Lines.Count > 0 ? new LyricsCandidate(Id, Prior, MatchBasis.MetadataSearch, doc) : null;
+        if (doc.Lines.Count == 0) { LyricsProbe.Note(Id, "matched song but KRC parsed to 0 lines"); return null; }
+        return new LyricsCandidate(Id, Prior, MatchBasis.MetadataSearch, doc);
     }
 }
 
@@ -140,18 +153,29 @@ public sealed class NeteaseSource : ILyricCandidateSource
 
     public async Task<LyricsCandidate?> FetchAsync(LyricsRequest req, CancellationToken ct)
     {
-        string kw = $"{req.Title} {req.PrimaryArtist}".Trim();
+        foreach (var kw in LyricsQuery.Variants(req))
+        {
+            var cand = await TryForKeyword(kw, req, ct).ConfigureAwait(false);
+            if (cand is not null) { LyricsProbe.Note(Id, $"hit on variant '{kw}'"); return cand; }
+            ct.ThrowIfCancellationRequested();
+        }
+        return null;
+    }
+
+    async Task<LyricsCandidate?> TryForKeyword(string kw, LyricsRequest req, CancellationToken ct)
+    {
         string searchUrl = $"https://music.163.com/api/search/get/web?type=1&offset=0&limit=10&s={Uri.EscapeDataString(kw)}";
         string? sj = await GreyHttp.Get(searchUrl, Headers, ct).ConfigureAwait(false);
         if (sj is null) return null;
 
-        string? id = null; long bestDelta = long.MaxValue;
+        string? id = null; long bestDelta = long.MaxValue; int n = 0;
         try
         {
             using var d = JsonDocument.Parse(sj);
             if (!d.RootElement.TryGetProperty("result", out var r) || !r.TryGetProperty("songs", out var songs) || songs.ValueKind != JsonValueKind.Array) return null;
             foreach (var s in songs.EnumerateArray())
             {
+                n++;
                 string? sid = s.TryGetProperty("id", out var iv) ? (iv.ValueKind == JsonValueKind.Number ? iv.GetInt64().ToString() : iv.GetString()) : null;
                 long dur = s.TryGetProperty("duration", out var dv) && dv.TryGetInt64(out var dd) ? dd : 0;
                 long delta = req.DurationMs > 0 && dur > 0 ? Math.Abs(dur - req.DurationMs) : 0;
@@ -159,6 +183,7 @@ public sealed class NeteaseSource : ILyricCandidateSource
             }
         }
         catch { return null; }
+        LyricsProbe.Note(Id, $"song search '{kw}' → {n} results");
         if (id is null) return null;
 
         string lyrUrl = $"https://music.163.com/api/song/lyric?id={id}&lv=1&kv=1&tv=1&yv=1";
@@ -182,6 +207,7 @@ public sealed class NeteaseSource : ILyricCandidateSource
             }
         }
         catch { return null; }
+        LyricsProbe.Note(Id, "matched song but it carried no yrc/lrc lyric");
         return null;
     }
 }
@@ -197,12 +223,22 @@ public sealed class QqMusicSource : ILyricCandidateSource
 
     public async Task<LyricsCandidate?> FetchAsync(LyricsRequest req, CancellationToken ct)
     {
-        string kw = $"{req.Title} {req.PrimaryArtist}".Trim();
+        foreach (var kw in LyricsQuery.Variants(req))
+        {
+            var cand = await TryForKeyword(kw, req, ct).ConfigureAwait(false);
+            if (cand is not null) { LyricsProbe.Note(Id, $"hit on variant '{kw}'"); return cand; }
+            ct.ThrowIfCancellationRequested();
+        }
+        return null;
+    }
+
+    async Task<LyricsCandidate?> TryForKeyword(string kw, LyricsRequest req, CancellationToken ct)
+    {
         string body = $"{{\"req_1\":{{\"method\":\"DoSearchForQQMusicDesktop\",\"module\":\"music.search.SearchCgiService\",\"param\":{{\"query\":{JsonString(kw)},\"page_num\":1,\"num_per_page\":10,\"search_type\":0}}}}}}";
         string? sj = await GreyHttp.PostJson("https://u.y.qq.com/cgi-bin/musicu.fcg", body, Headers, ct).ConfigureAwait(false);
         if (sj is null) return null;
 
-        string? songid = null; long bestDelta = long.MaxValue;
+        string? songid = null; long bestDelta = long.MaxValue; int n = 0;
         try
         {
             using var d = JsonDocument.Parse(sj);
@@ -211,6 +247,7 @@ public sealed class QqMusicSource : ILyricCandidateSource
                 || !song.TryGetProperty("list", out var list) || list.ValueKind != JsonValueKind.Array) return null;
             foreach (var it in list.EnumerateArray())
             {
+                n++;
                 string? sid = it.TryGetProperty("songid", out var iv) && iv.ValueKind == JsonValueKind.Number ? iv.GetInt64().ToString() : null;
                 long sec = it.TryGetProperty("interval", out var dv) && dv.TryGetInt64(out var dd) ? dd : 0;
                 long delta = req.DurationMs > 0 && sec > 0 ? Math.Abs(sec * 1000 - req.DurationMs) : 0;
@@ -218,17 +255,19 @@ public sealed class QqMusicSource : ILyricCandidateSource
             }
         }
         catch { return null; }
+        LyricsProbe.Note(Id, $"song search '{kw}' → {n} results");
         if (songid is null) return null;
 
         var form = new (string, string)[] { ("version", "15"), ("miniversion", "82"), ("lrctype", "4"), ("musicid", songid) };
         string? xml = await GreyHttp.PostForm("https://c.y.qq.com/qqmusic/fcgi-bin/lyric_download.fcg", form, Headers, ct).ConfigureAwait(false);
-        if (xml is null) return null;
+        if (xml is null) { LyricsProbe.Note(Id, "matched song but lyric download HTTP failed"); return null; }
         string? hex = LongestHexRun(xml);
-        if (hex is null) return null;
+        if (hex is null) { LyricsProbe.Note(Id, "matched song but qq has no QRC lyric for it (empty response)"); return null; }
         string? qrc = LyricCrypto.DecryptQrc(hex);
-        if (qrc is null) return null;
+        if (qrc is null) { LyricsProbe.Note(Id, "matched song but QRC decrypt failed"); return null; }
         var doc = LyricsWordFormats.ParseQrc(qrc, req.TrackId, Id);
-        return doc.Lines.Count > 0 ? new LyricsCandidate(Id, Prior, MatchBasis.MetadataSearch, doc) : null;
+        if (doc.Lines.Count == 0) { LyricsProbe.Note(Id, "matched song but QRC parsed to 0 lines"); return null; }
+        return new LyricsCandidate(Id, Prior, MatchBasis.MetadataSearch, doc);
     }
 
     static string JsonString(string s) => "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
@@ -263,13 +302,50 @@ public sealed class MusixmatchSource : ILyricCandidateSource
     public async Task<LyricsCandidate?> FetchAsync(LyricsRequest req, CancellationToken ct)
     {
         string? token = await GetTokenAsync(ct).ConfigureAwait(false);
-        if (token is null) return null;
+        if (token is null) { LyricsProbe.Note(Id, "no usertoken — token.get blocked (captcha/401)"); return null; }
 
-        string rnd = Guid.NewGuid().ToString("N")[..8];
-        string url = "https://apic-desktop.musixmatch.com/ws/1.1/macro.subtitles.get"
+        long durSec = req.DurationMs / 1000;
+
+        // ISRC fast-path: an EXACT-recording lookup (no fuzzy title/artist guess). The reranker trusts MatchBasis.Isrc and
+        // never demotes it. Inert until the track's ISRC is wired through (LiveSessionHost.Resolve).
+        if (!string.IsNullOrEmpty(req.Isrc))
+        {
+            var byIsrc = await TryUrl(BuildSubtitlesUrl(token, req.Isrc, null, null, durSec, Rnd()), MatchBasis.Isrc, req, ct).ConfigureAwait(false);
+            if (byIsrc is not null) { LyricsProbe.Note(Id, $"ISRC fast-path hit ({req.Isrc})"); return byIsrc; }
+            LyricsProbe.Note(Id, $"ISRC '{req.Isrc}' miss → q_track/q_artist");
+        }
+
+        // Fuzzy fallback: q_track/q_artist over the first two variants (full + feat-stripped). A title-only q_track is
+        // skipped — too prone to wrong-language covers; the ISRC path covers the precise case.
+        var variants = LyricsQuery.TitleArtistVariants(req);
+        for (int i = 0; i < variants.Count && i < 2; i++)
+        {
+            var (title, artist) = variants[i];
+            if (artist.Length == 0) continue;
+            var cand = await TryUrl(BuildSubtitlesUrl(token, null, title, artist, durSec, Rnd()), MatchBasis.MetadataSearch, req, ct).ConfigureAwait(false);
+            if (cand is not null) { LyricsProbe.Note(Id, $"hit on q_track '{title}'"); return cand; }
+            ct.ThrowIfCancellationRequested();
+        }
+        LyricsProbe.Note(Id, $"no richsync for '{req.Title} / {req.PrimaryArtist}' ({durSec}s)");
+        return null;
+    }
+
+    static string Rnd() => Guid.NewGuid().ToString("N")[..8];
+
+    /// <summary>The macro.subtitles.get URL. When <paramref name="isrc"/> is set it keys on <c>track_isrc</c> (exact
+    /// recording); otherwise on <c>q_track</c>/<c>q_artist</c>. Pure → unit-testable without network.</summary>
+    public static string BuildSubtitlesUrl(string token, string? isrc, string? qTrack, string? qArtist, long durSec, string rnd)
+    {
+        string q = !string.IsNullOrEmpty(isrc)
+            ? $"&track_isrc={Uri.EscapeDataString(isrc!)}"
+            : $"&q_track={Uri.EscapeDataString(qTrack ?? "")}&q_artist={Uri.EscapeDataString(qArtist ?? "")}";
+        return "https://apic-desktop.musixmatch.com/ws/1.1/macro.subtitles.get"
             + "?namespace=lyrics_richsynched&optional_calls=track.richsync&subtitle_format=lrc"
-            + $"&q_track={Uri.EscapeDataString(req.Title)}&q_artist={Uri.EscapeDataString(req.PrimaryArtist)}"
-            + $"&q_duration={req.DurationMs / 1000}&usertoken={token}&format=json&app_id={AppId}&t={rnd}";
+            + q + $"&q_duration={durSec}&usertoken={token}&format=json&app_id={AppId}&t={rnd}";
+    }
+
+    async Task<LyricsCandidate?> TryUrl(string url, MatchBasis basis, LyricsRequest req, CancellationToken ct)
+    {
         string? json = await GreyHttp.Get(url, Headers, ct).ConfigureAwait(false);
         if (json is null) return null;
         try
@@ -280,7 +356,7 @@ public sealed class MusixmatchSource : ILyricCandidateSource
             string? body = GreyHttp.Str(richBody, "richsync_body");
             if (string.IsNullOrWhiteSpace(body)) return null;
             var doc = LyricsWordFormats.ParseRichsync(body!, req.TrackId, Id);
-            return doc.Lines.Count > 0 ? new LyricsCandidate(Id, Prior, MatchBasis.MetadataSearch, doc) : null;
+            return doc.Lines.Count > 0 ? new LyricsCandidate(Id, Prior, basis, doc) : null;
         }
         catch { return null; }
     }

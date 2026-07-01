@@ -118,6 +118,104 @@ public static class OutboundEnvelope
         return Encoding.UTF8.GetString(buf.WrittenSpan);
     }
 
+    // add_to_queue: a SINGLE track as command.track {uri,uid,metadata} + command.options (the desktop shape). uid and
+    // metadata are ALWAYS written, even when empty (NOT the play builder's omit-if-empty uid rule) — the real desktop
+    // sends uid:"" + metadata:{} for a fresh add. Replaces the legacy flat command.uri form.
+    public static string AddToQueue(string fromDeviceId, string trackUri, string trackUid,
+        bool overrideRestrictions, bool onlyForLocalDevice, bool systemInitiated,
+        string commandId, string intentId, long initiatedTimeMs)
+    {
+        var buf = new ArrayBufferWriter<byte>(256);
+        using (var w = new Utf8JsonWriter(buf))
+        {
+            w.WriteStartObject();
+            w.WriteStartObject("command");
+            w.WriteString("endpoint", "add_to_queue");
+            w.WriteStartObject("track");
+            w.WriteString("uri", trackUri);
+            w.WriteString("uid", trackUid ?? "");          // ALWAYS written, even ""
+            w.WriteStartObject("metadata"); w.WriteEndObject();   // explicit {}
+            w.WriteEndObject();   // track
+            w.WriteStartObject("options");
+            w.WriteBoolean("override_restrictions", overrideRestrictions);
+            w.WriteBoolean("only_for_local_device", onlyForLocalDevice);
+            w.WriteBoolean("system_initiated", systemInitiated);
+            w.WriteEndObject();   // options
+            WriteLoggingParams(w, fromDeviceId, commandId, initiatedTimeMs);
+            w.WriteEndObject();   // command
+            WriteTail(w, intentId);
+            w.WriteEndObject();   // root
+        }
+        return Encoding.UTF8.GetString(buf.WrittenSpan);
+    }
+
+    // set_queue: a full queue snapshot — used to insert tracks as "play next" WITHOUT replacing the context. next_tracks is
+    // the user-queue block (provider:"queue") followed by the context continuation (provider:"context"); the current track
+    // is implicit (in neither array). queue_revision is a bare UNSIGNED number that can EXCEED Int64 (ulong, never long).
+    public static string SetQueue(string fromDeviceId, ulong queueRevision,
+        IReadOnlyList<QueueWireEntry> prevTracks, IReadOnlyList<QueueWireEntry> nextTracks,
+        string commandId, string intentId, long initiatedTimeMs)
+    {
+        var buf = new ArrayBufferWriter<byte>(4096);
+        using (var w = new Utf8JsonWriter(buf))
+        {
+            w.WriteStartObject();
+            w.WriteStartObject("command");
+            w.WriteString("endpoint", "set_queue");
+            w.WriteNumber("queue_revision", queueRevision);   // ulong overload → bare number, handles > Int64
+            w.WriteStartArray("prev_tracks");
+            foreach (var e in prevTracks) WriteQueueEntry(w, e);
+            w.WriteEndArray();
+            w.WriteStartArray("next_tracks");
+            foreach (var e in nextTracks) WriteQueueEntry(w, e);
+            w.WriteEndArray();
+            w.WriteStartObject("options");
+            w.WriteBoolean("override_restrictions", false);
+            w.WriteBoolean("only_for_local_device", false);
+            w.WriteBoolean("system_initiated", false);
+            w.WriteEndObject();
+            WriteLoggingParams(w, fromDeviceId, commandId, initiatedTimeMs);
+            w.WriteEndObject();   // command
+            WriteTail(w, intentId);
+            w.WriteEndObject();   // root
+        }
+        return Encoding.UTF8.GetString(buf.WrittenSpan);
+    }
+
+    static void WriteQueueEntry(Utf8JsonWriter w, in QueueWireEntry e)
+    {
+        w.WriteStartObject();
+        w.WriteString("uri", e.Uri);
+        w.WriteString("uid", e.Uid ?? "");                       // always written, may be ""
+        w.WriteStartObject("metadata");
+        if (e.IsQueued) w.WriteString("is_queued", "true");      // STRING "true" — NOT a boolean (matches the capture)
+        w.WriteEndObject();
+        w.WriteString("provider", e.IsQueued ? "queue" : "context");
+        w.WriteStartArray("removed"); w.WriteEndArray();
+        w.WriteStartArray("blocked"); w.WriteEndArray();
+        w.WriteStartObject("restrictions"); WriteEmptyRestrictions(w); w.WriteEndObject();
+        w.WriteEndObject();
+    }
+
+    // The 22 disallow_*_reasons keys the captured set_queue carries on every entry, each an empty array.
+    static void WriteEmptyRestrictions(Utf8JsonWriter w)
+    {
+        foreach (var k in RestrictionKeys) { w.WriteStartArray(k); w.WriteEndArray(); }
+    }
+
+    static readonly string[] RestrictionKeys =
+    {
+        "disallow_peeking_prev_reasons", "disallow_peeking_next_reasons", "disallow_skipping_prev_reasons",
+        "disallow_skipping_next_reasons", "disallow_pausing_reasons", "disallow_resuming_reasons",
+        "disallow_toggling_repeat_context_reasons", "disallow_toggling_repeat_track_reasons",
+        "disallow_toggling_shuffle_reasons", "disallow_set_queue_reasons", "disallow_add_to_queue_reasons",
+        "disallow_seeking_reasons", "disallow_interrupting_playback_reasons", "disallow_transferring_playback_reasons",
+        "disallow_remote_control_reasons", "disallow_inserting_into_next_tracks_reasons",
+        "disallow_inserting_into_context_tracks_reasons", "disallow_reordering_in_next_tracks_reasons",
+        "disallow_reordering_in_context_tracks_reasons", "disallow_removing_from_next_tracks_reasons",
+        "disallow_removing_from_context_tracks_reasons", "disallow_updating_context_reasons",
+    };
+
     static void WriteLoggingParams(Utf8JsonWriter w, string deviceId, string commandId, long initiatedTimeMs)
     {
         w.WriteStartObject("logging_params");

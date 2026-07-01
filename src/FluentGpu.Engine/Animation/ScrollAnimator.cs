@@ -76,6 +76,11 @@ public sealed class ScrollAnimator
     /// <summary>Programmatic bring-into-view smoothing. Deliberately slower than the wheel response: selection-driven
     /// viewport movement should be legible and coordinated with surrounding layout motion, not feel like a wheel notch.</summary>
     public const float ProgrammaticEaseTauMs = 110f;
+    /// <summary>Programmatic bring-into-view spring half-life (ms). ProgrammaticMode is a velocity-continuous,
+    /// critically-damped spring (no overshoot) rather than the old velocity-less exp-ease, so a new target set mid-flight
+    /// carries momentum across the re-target (dense selection/lyric follow no longer trails). ~95 ms ≈ the old
+    /// <see cref="ProgrammaticEaseTauMs"/> feel. Closed-form in dt ⇒ frame-rate-independent + dt-deterministic.</summary>
+    public const float ProgrammaticSpringHalflifeMs = 95f;
     /// <summary>Mouse-wheel MOMENTUM friction (per-second velocity survival, the wheel-fling analogue of
     /// <see cref="FlingDecayPerS"/>). Heavier than a touch fling so a single notch settles crisply (~0.25s) while a fast
     /// spin still coasts. k = −ln(decay); the seed picks v0 = notchDip·k so one notch coasts ≈ one notch. Env-tunable via
@@ -330,14 +335,33 @@ public sealed class ScrollAnimator
             else
             {
                 if (sc.ScrollMode == FlingMode || sc.ScrollMode == WheelFlingMode) { sc.ScrollMode = 0; sc.FlingVelocity = 0f; }   // retargeted away → TargetChase
-                float tau = sc.ScrollMode == ProgrammaticMode ? ProgrammaticEaseTauMs : _wheelEaseTauMs;
-                float kOff = 1f - MathF.Exp(-dtMs / tau);
                 float oldOff = off;
-                off += (tgt - off) * kOff;
-                if (MathF.Abs(tgt - off) < 0.5f) off = tgt;
+                if (sc.ScrollMode == ProgrammaticMode)
+                {
+                    // Velocity-continuous, critically-damped spring (no overshoot) toward the bring-into-view target —
+                    // replaces the velocity-less exp-ease so a NEW target set mid-flight (e.g. dense lyric sections, lines
+                    // ~200-300 ms apart) carries momentum across the re-target instead of restarting a decelerating chase.
+                    // Closed-form in dt (the critically-damped regime of Generators.EvalSpring) ⇒ frame-rate-independent +
+                    // dt-deterministic. The carried velocity rides the existing FlingVelocity field (0 on first entry).
+                    float y = 1.3863f / (ProgrammaticSpringHalflifeMs * 0.001f);   // 2*ln2 / halflife(s)
+                    float dt = MathF.Min(dtMs, 50f) * 0.001f;                       // clamp coalesced frames; → seconds
+                    float vel = sc.FlingVelocity;
+                    float j0 = off - tgt;
+                    float j1 = vel + j0 * y;
+                    float e = MathF.Exp(-y * dt);
+                    off = e * (j0 + j1 * dt) + tgt;
+                    vel = e * (vel - j1 * y * dt);
+                    if (MathF.Abs(off - tgt) < 0.5f && MathF.Abs(vel) < 16f) { off = tgt; vel = 0f; sc.ScrollMode = 0; }
+                    sc.FlingVelocity = vel;
+                }
+                else   // wheel-driven target chase: the snappy exp-ease (a notch needs no velocity carry)
+                {
+                    float kOff = 1f - MathF.Exp(-dtMs / _wheelEaseTauMs);
+                    off += (tgt - off) * kOff;
+                    if (MathF.Abs(tgt - off) < 0.5f) off = tgt;
+                }
                 moved = off != oldOff;
                 if (horizontal) sc.OffsetX = off; else sc.OffsetY = off;
-                if (sc.ScrollMode == ProgrammaticMode && off == tgt) sc.ScrollMode = 0;
 
                 if (moved)
                 {
