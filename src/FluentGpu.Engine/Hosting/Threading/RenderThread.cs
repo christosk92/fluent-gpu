@@ -29,15 +29,24 @@ public sealed class RenderThread : IDisposable
     private readonly AutoResetEvent _resizeIdle = new(false);
     private readonly AutoResetEvent _resumeResize = new(false);
     private int _resizeQuiesce;
+    // Step 4 (async device-lost recovery): the UI observes a lost device, sets RecoverRequest + wakes this loop; the loop
+    // rebuilds the device here (render-confined) and signals RecoverDone + nudges the UI. Null ⇒ no recovery wired.
+    private readonly DeviceLostCoordinator? _deviceLost;
+    private readonly Action? _recover;      // runs ON this thread: _device.RecoverDevice() under AssertRender
+    private readonly Action? _windowWake;   // thread-safe UI wake (PostMessage WM_NULL) to nudge the UI out of its clean block
     private readonly bool _async;                          // Step 5: false = force-sync (UI blocks in DrainSync); true = async (WakeAsync, UI proceeds)
     private volatile bool _running = true;
     private ulong _presentAck;
 
-    public RenderThread(SceneFramePublisher publisher, Action<RenderFrame> submitPresent, bool async = false)
+    public RenderThread(SceneFramePublisher publisher, Action<RenderFrame> submitPresent, bool async = false,
+                        DeviceLostCoordinator? deviceLost = null, Action? recover = null, Action? windowWake = null)
     {
         _publisher = publisher;
         _submitPresent = submitPresent;
         _async = async;
+        _deviceLost = deviceLost;
+        _recover = recover;
+        _windowWake = windowWake;
         _thread = new Thread(Loop) { Name = "fgpu-render", IsBackground = true };
         _thread.Start();
     }
@@ -53,6 +62,16 @@ public sealed class RenderThread : IDisposable
         {
             _wake.WaitOne();
             if (!_running) break;
+            // Step 4: device-lost recovery takes priority. The UI observed a lost device and is BLOCKING (not publishing)
+            // until RecoverDone. Rebuild the device here (render-confined — this thread is the sole ComPtr owner), mark
+            // done, and nudge the UI out of its clean block. No resize/present can be pending (the UI blocks both).
+            if (_deviceLost is { } dl && dl.RecoverRequest != 0 && dl.RecoverDone == 0)
+            {
+                _recover?.Invoke();
+                dl.RecoverDone = 1;
+                _windowWake?.Invoke();
+                continue;
+            }
             // Step 2: a resize is pending. Park HERE (before any TryAcquire/submit/present ComPtr touch), tell the UI the
             // loop is idle, and block until the UI finishes the fenced swapchain Resize + calls Resume. Then re-loop and
             // wait for the next real wake (the post-resize full-relayout republish).

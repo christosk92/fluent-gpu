@@ -128,6 +128,13 @@ public sealed class AppHost : IDisposable
     // through this queue (drained in SubmitPresentOnRenderThread before submit) instead of touching the device on the UI
     // thread. Null in default/force-sync — there the direct device sinks run with no cross-thread overlap.
     private readonly Threading.ImageUploadQueue? _imageQueue;
+    // Step 4 (ASYNC only): device-lost recovery rendezvous. Non-null ⇒ the UI polls the device's lost-reason each frame,
+    // parks the render loop, and drives RecoverDevice through this coordinator. Null in default/force-sync (they keep the
+    // single-thread throw-on-loss behavior). FG_FORCE_DEVICE_LOST=<frameN> injects a controlled removal at that frame.
+    private readonly Threading.DeviceLostCoordinator? _deviceLost;
+    private static readonly int s_forceLostFrame =
+        int.TryParse(System.Environment.GetEnvironmentVariable("FG_FORCE_DEVICE_LOST"), out int __fl) && __fl > 0 ? __fl : -1;
+    private int _frameOrdinal;
     private readonly InputDispatcher _dispatcher;
     private readonly InputEventRing _ring = new();
     private readonly IFrameTimeSource _frameTime;
@@ -359,9 +366,19 @@ public sealed class AppHost : IDisposable
         // Step 1 (async): stage uploads / free evictions on the render thread, BEFORE the submit opens its command list —
         // so a texture is resident before the draw that references it, and the store stays single-toucher (no lock).
         if (_imageQueue is { } q) _device.DrainImageJobs(q);
-        if (rf.SuppressVsync) _device.SuppressVsyncOnce();
-        _device.SubmitDrawList(_renderSeam.Bytes(rf), _renderSeam.SortKeys(rf), in rf.Submit);
-        _swapchain.Present();
+        try
+        {
+            if (rf.SuppressVsync) _device.SuppressVsyncOnce();
+            _device.SubmitDrawList(_renderSeam.Bytes(rf), _renderSeam.SortKeys(rf), in rf.Submit);
+            _swapchain.Present();
+        }
+        catch (System.Exception) when (s_renderAsync)
+        {
+            // Step 4: a submit/present threw on the render thread. If the device is lost, record it (the UI recover gate
+            // fires next frame) and SWALLOW — an unobserved background exception here would kill the process. A
+            // non-device-loss throw is a genuine bug: rethrow so it isn't masked.
+            if (!_device.NoteIfDeviceLost()) throw;
+        }
     }
 
     private bool _frameNeeded = true;        // a frame is required (reactive work pending, input, resize, …)
@@ -856,7 +873,16 @@ public sealed class AppHost : IDisposable
         // Render-thread seam (Step 4, force-sync): spawn the fgpu-render thread that runs submit/present off the UI
         // thread. Default OFF — ships single-thread until the seam.race soak is green. The thread just waits on its wake
         // event until the first Paint drains it, so constructing it here (before the first frame) is safe.
-        if (s_renderThread || s_renderAsync) { _renderThread = new Threading.RenderThread(_renderSeam, SubmitPresentOnRenderThread, async: s_renderAsync); _device.MarkRenderConfined(); }
+        if (s_renderThread || s_renderAsync)
+        {
+            // Step 4: under async, wire the device-lost recovery rendezvous — arm the backend to SIGNAL loss (not throw on
+            // the render thread) + bound its fence waits, and give the render loop a recover gate (_device.RecoverDevice
+            // under render confinement) + a thread-safe UI wake to nudge the UI out of its clean block on RecoverDone.
+            if (s_renderAsync) { _deviceLost = new Threading.DeviceLostCoordinator(); _device.EnableAsyncDeviceLostSignaling(); }
+            _renderThread = new Threading.RenderThread(_renderSeam, SubmitPresentOnRenderThread, async: s_renderAsync,
+                deviceLost: _deviceLost, recover: _deviceLost is null ? null : _device.RecoverDevice, windowWake: _deviceLost is null ? null : _window.Wake);
+            _device.MarkRenderConfined();
+        }
 
         // Opt-in diagnostics tools (constructed only when their flag is set; the host tick paths short-circuit otherwise).
         if (s_wakeDiag) _wakeDiag = new WakeDiagnostics();
@@ -951,6 +977,41 @@ public sealed class AppHost : IDisposable
         if (s_allocDiag) { db = Probe(SegPump, db, dt); dt = Stopwatch.GetTimestamp(); }
         int clicks = _dispatcher.Dispatch(_ring.Drain());  // 2 input dispatch (handlers write signals → schedule effects)
         if (s_allocDiag) { db = Probe(SegDispatch, db, dt); dt = Stopwatch.GetTimestamp(); }
+
+        // Step 4 fault injection (FG_FORCE_DEVICE_LOST=<frameN>): force a controlled DEVICE_REMOVED so the next submit
+        // fails and the recovery rendezvous below is exercised on real hardware.
+        if (s_forceLostFrame > 0 && s_renderAsync && ++_frameOrdinal == s_forceLostFrame)
+            _device.InjectDeviceLost();
+
+        // Step 4 (async): device-lost recovery handshake. The render thread records a lost reason (a failed submit/present
+        // or a bounded fence-wait timeout on a removed device). On the 0→1 edge: dirty the whole tree + relayout, ask the
+        // render thread to rebuild (waking it so it reaches the recover gate), then BLOCK (render nothing) until RecoverDone
+        // — then re-realize resident images and fall through to a full re-recorded frame against the rebuilt device.
+        if (_deviceLost is { } dl && s_renderAsync)
+        {
+            if (dl.RecoverRequest == 0 && _device.PollDeviceLost() != 0)
+            {
+                _scene.MarkAllPaintDirty();
+                _needFullLayout = true;
+                dl.RecoverRequest = 1;
+                _renderThread!.WakeAsync();   // CRITICAL: wake the parked render loop so it reaches the recover gate
+            }
+            if (dl.RecoverRequest != 0)
+            {
+                if (dl.RecoverDone != 0)
+                {
+                    dl.RecoverDone = 0;
+                    dl.RecoverRequest = 0;
+                    _images.ReRealizeAllResident();   // re-decode resident art → re-upload to the fresh store (Step-1 handoff)
+                    // fall through: the whole-tree-dirty + full-layout frame re-records everything against the rebuilt device
+                }
+                else
+                {
+                    LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, FrameMs = _frameMs };
+                    return LastStats;   // block cleanly; the render thread's windowWake nudges us when RecoverDone flips
+                }
+            }
+        }
 
         // Minimize gate: a minimized window paints nothing — but the pump+dispatch above MUST run so the restore
         // message lands (RecommendedWaitMs blocks indefinitely while minimized, so the loop only wakes on a message).

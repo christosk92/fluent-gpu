@@ -529,6 +529,16 @@ public sealed class SceneStore : ISceneBackend
     }
     public bool TryGetBrushAnim(NodeHandle h, out BrushAnim ba) => _brushAnims.TryGet((int)h.Raw.Index, out ba);
 
+    /// <summary>Force a full re-record: mark every occupied node <see cref="NodeFlags.PaintDirty"/>. Device-lost recovery
+    /// (threading-render-seam.md §9) — after <c>RecoverDevice</c> the backend's textures + glyph atlas are freshly
+    /// recreated and empty, so the next frame must regenerate the WHOLE DrawList to repopulate them via on-demand glyph
+    /// re-rasterization + image re-upload. Paired with the host's <c>_needFullLayout</c>. Cold path (once per loss).</summary>
+    public void MarkAllPaintDirty()
+    {
+        for (int i = 1; i < _high; i++)
+            if (_gen[i] != 0) _flags[i] |= NodeFlags.PaintDirty;
+    }
+
     /// <summary>Set the brush cross-fade progress, driven by the unified engine's <c>AnimChannel.BrushFade</c> track
     /// (the separate per-frame AdvanceBrushAnims ticker is deleted). Marks PaintDirty; drops the row at T≥1 so the
     /// recorder snaps to the live color. The engine's BrushFade track keeps the loop awake while a fade runs.</summary>

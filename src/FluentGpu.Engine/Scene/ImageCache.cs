@@ -326,6 +326,21 @@ public sealed class ImageCache
     public void Unpin(ImageHandle h) { if (_byId.TryGetValue(h.Id, out var e) && e.Refs > 0) e.Refs--; }
     public int RefsOf(ImageHandle h) => _byId.TryGetValue(h.Id, out var e) ? e.Refs : 0;
 
+    /// <summary>Device-lost recovery (threading-render-seam.md §9): the backend's image textures are gone (the store was
+    /// recreated by RecoverDevice). Re-decode every resident (Ready) image from its retained source so it re-uploads
+    /// through the Step-1 handoff to the fresh store. UI thread (invoked on the recover-done frame). Ready→Pending, which
+    /// keeps the frame loop awake until the re-uploads land. Safe to iterate: Entry is a class (mutated in place, no
+    /// structural dictionary change) and RestartDecode only calls the decoder (never adds/removes _byId keys).</summary>
+    public void ReRealizeAllResident()
+    {
+        foreach (var (id, e) in _byId)
+            if (e.State == ImageState.Ready)
+            {
+                UsedBytes -= e.Bytes;   // the texture is gone; RestartDecode re-adds the bytes when the fresh decode completes
+                RestartDecode(id, e, e.Refs > 0 ? ImagePriority.Visible : ImagePriority.Prefetch);
+            }
+    }
+
     private void RestartDecode(int id, Entry e, ImagePriority priority)
     {
         if (e.State == ImageState.Pending) { _decoder.Prioritize(id, priority); return; }

@@ -234,6 +234,52 @@ public sealed unsafe class D3D12Device : IGpuDevice
         }
     }
 
+    // ── Device-lost recovery (Step 4, ASYNC only; design/subsystems/threading-render-seam.md §9) ──
+    // Armed by EnableAsyncDeviceLostSignaling under async. Armed ⇒ a device-removed/reset/hung failure on the render
+    // thread records the reason (read by PollDeviceLost) instead of throwing an unobserved background exception, and the
+    // fence waits become bounded (WaitFenceEventBounded) so a lost device can't hang the loop forever. The non-async
+    // (default/force-sync) path keeps throwing on loss, unchanged.
+    private int _deviceLostReason;
+    private bool _signalDeviceLostInsteadOfThrow;
+    public void EnableAsyncDeviceLostSignaling() => _signalDeviceLostInsteadOfThrow = true;
+    public int PollDeviceLost() => System.Threading.Volatile.Read(ref _deviceLostReason);
+
+    // Render thread: a submit/present just threw. If the device is actually removed, record the reason (so the UI recover
+    // gate fires) and report true so the caller can SWALLOW the exception (keeping the render thread alive). Returns false
+    // for a non-device-loss throw (a genuine bug — must NOT be masked).
+    public bool NoteIfDeviceLost()
+    {
+        if (_device == null) return false;
+        int reason = (int)_device->GetDeviceRemovedReason();
+        if (reason != 0) { System.Threading.Volatile.Write(ref _deviceLostReason, reason); return true; }
+        return false;
+    }
+
+    // Async fence wait that never blocks forever on a lost device: poll GetDeviceRemovedReason on a bounded cadence and
+    // bail (recording the reason) if the device died. Only bails on ACTUAL removal — a merely-slow GPU keeps waiting, so
+    // we never return early and read an unfinished back buffer.
+    private void WaitFenceEventBounded()
+    {
+        while (true)
+        {
+            if (WaitForSingleObject(_fenceEvent, 1000) == 0u) return;   // WAIT_OBJECT_0 — fence signaled
+            int reason = (int)_device->GetDeviceRemovedReason();
+            if (reason != 0) { System.Threading.Volatile.Write(ref _deviceLostReason, reason); return; }
+        }
+    }
+
+    // Test hook (FG_FORCE_DEVICE_LOST=<frameN>): force a clean DEVICE_REMOVED via ID3D12Device5::RemoveDevice — a
+    // controlled removal that does NOT TDR the whole desktop — to exercise the async recovery rendezvous on real hardware.
+    public void InjectDeviceLost()
+    {
+        ID3D12Device5* dev5;
+        if (_device != null && (int)_device->QueryInterface(__uuidof<ID3D12Device5>(), (void**)&dev5) >= 0 && dev5 != null)
+        {
+            dev5->RemoveDevice();
+            dev5->Release();
+        }
+    }
+
     private void InitDevice()
     {
         uint flags = 0;
@@ -1309,6 +1355,9 @@ public sealed unsafe class D3D12Device : IGpuDevice
             // Surface GetDeviceRemovedReason on a device-removed/reset so a GPU fault names its cause instead of a bare
             // 0x887A0005 (the empirical probe for the popup-swapchain path).
             uint reason = ((uint)pr == 0x887A0005u || (uint)pr == 0x887A0007u) ? (uint)_device->GetDeviceRemovedReason() : 0u;
+            // Step 4 (async): record the loss + bail instead of throwing on the render thread (unobserved bg exception =
+            // process death). The UI's recover gate polls PollDeviceLost and drives RecoverDevice. Non-async: unchanged throw.
+            if (_signalDeviceLostInsteadOfThrow) { System.Threading.Volatile.Write(ref _deviceLostReason, reason != 0u ? (int)reason : (int)(uint)pr); return; }
             throw new InvalidOperationException($"Present failed: 0x{(uint)pr:X8}" + (reason != 0u ? $" (device removed reason 0x{reason:X8})" : ""));
         }
         StoreActive();
@@ -1326,7 +1375,8 @@ public sealed unsafe class D3D12Device : IGpuDevice
         ulong v = _frameFenceValues[frameIndex];
         if (v == 0 || global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence) >= v) return;
         Check((HRESULT)global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.SetEventOnCompletion(_fence, v, (void*)_fenceEvent), "SetEventOnCompletion");   // GEN-COM (wired)
-        WaitForSingleObject(_fenceEvent, INFINITE);
+        if (_signalDeviceLostInsteadOfThrow) WaitFenceEventBounded();   // Step 4: no INFINITE hang on a lost device (async)
+        else WaitForSingleObject(_fenceEvent, INFINITE);
     }
 
     // Block until the swapchain is ready to accept a new frame (bounds present-queue depth → lower latency, efficient wait).
@@ -1368,7 +1418,8 @@ public sealed unsafe class D3D12Device : IGpuDevice
         if (global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence) < v)
         {
             Check((HRESULT)global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.SetEventOnCompletion(_fence, v, (void*)_fenceEvent), "SetEventOnCompletion");   // GEN-COM (wired)
-            WaitForSingleObject(_fenceEvent, INFINITE);
+            if (_signalDeviceLostInsteadOfThrow) WaitFenceEventBounded();   // Step 4: no INFINITE hang on a lost device (async)
+            else WaitForSingleObject(_fenceEvent, INFINITE);
         }
     }
 
@@ -1507,6 +1558,58 @@ public sealed unsafe class D3D12Device : IGpuDevice
             target.RtvHeap->Release();
             target.RtvHeap = null;
         }
+    }
+
+    // Step 4 (async): rebuild the lost device. Render-confined (this is the SOLE ComPtr owner; the UI is parked/blocking).
+    // Mirrors Dispose's teardown MINUS the leading WaitForGpu (the dead fence never completes — canon §9.2) and MINUS the
+    // swapchain-object removal (we recreate them in place), then re-runs the ctor's init sequence. All GPU state is
+    // CPU-reconstructible: PSOs recompile from embedded HLSL, the glyph atlas re-rasterizes on demand, and resident images
+    // re-decode via ImageCache.ReRealizeAllResident (the UI calls it on the recover-done frame).
+    public void RecoverDevice()
+    {
+        AssertSubmitThread();
+        // 1. Release every swapchain's GPU resources but KEEP the D3D12Swapchain objects (their W/H/Hwnd/Composited/etc.
+        //    survive for re-init); reset Disposed since we are recreating, not tearing down.
+        for (int i = 0; i < _swapchains.Count; i++)
+        {
+            ReleaseSwapchainResources(_swapchains[i]);
+            _swapchains[i].Disposed = false;
+        }
+        for (uint i = 0; i < FRAME_COUNT; i++) _backBuffers[i] = null;
+        // 2. Release device-level ComPtrs + pipelines (null the pipe fields so EnsurePipelines re-runs). NO WaitForGpu.
+        if (_dcomp != null) { _dcomp->Release(); _dcomp = null; }
+        _glyphs?.Dispose(); _glyphs = null;
+        _imagePipe?.Dispose(); _imagePipe = null;
+        _imageTextures?.Dispose(); _imageTextures = null;
+        _shadowPipe?.Dispose(); _shadowPipe = null;
+        _arcPipe?.Dispose(); _arcPipe = null;
+        _polylinePipe?.Dispose(); _polylinePipe = null;
+        _gradPipe?.Dispose(); _gradPipe = null;
+        _acrylic?.Dispose(); _acrylic = null;
+        _opacity?.Dispose(); _opacity = null;
+        _rectPipe?.Dispose(); _rectPipe = null;
+        if (_cmdList != null) { global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_cmdList); _cmdList = null; }
+        for (uint i = 0; i < FRAME_COUNT; i++)
+            if (_allocators[i] != null) { global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_allocators[i]); _allocators[i] = null; }
+        if (_fence != null) { global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_fence); _fence = null; }
+        if (_queue != null) { global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_queue); _queue = null; }
+        if (_factory != null) { global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_factory); _factory = null; }
+        if (_device != null) { global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_device); _device = null; }
+        if (_fenceEvent != HANDLE.NULL) { CloseHandle(_fenceEvent); _fenceEvent = HANDLE.NULL; }
+
+        // 3. Recreate the device/queue/allocators/command-list/fence/event (InitDevice resets _fenceValue = 0).
+        InitDevice();
+        // 4. Zero the per-back-buffer fence bookkeeping so WaitForFrame's v==0 early-out fires for the first FRAME_COUNT
+        //    frames — the fresh fence never reaches the stale pre-loss targets.
+        System.Array.Clear(_frameFenceValues, 0, _frameFenceValues.Length);
+        // 5. Recreate all pipelines + a fresh (empty) image store; re-arm async image confinement on the new store.
+        EnsurePipelines();
+        if (_signalDeviceLostInsteadOfThrow) _imageTextures?.MarkRenderConfined();
+        // 6. Recreate every swapchain (SwapChain / RtvHeap / BackBuffers / DComp / Backdrop) at its retained size.
+        for (int i = 0; i < _swapchains.Count; i++) InitSwapChain(_swapchains[i]);
+        if (_primarySwapchain != null) Activate(_primarySwapchain);
+        // 7. Healthy again.
+        System.Threading.Volatile.Write(ref _deviceLostReason, 0);
     }
 
     public void Dispose()
