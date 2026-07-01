@@ -124,6 +124,10 @@ public sealed class AppHost : IDisposable
     // single-thread inline pass-through (the default shipping path). It runs submit/present off the UI thread but the UI
     // still blocks on it (no async overlap until the soak-gated Step 5 flip).
     private readonly Threading.RenderThread? _renderThread;
+    // Step 1 (ASYNC only): the image upload/evict handoff. Non-null ⇒ ImageCache hands GPU work to the render thread
+    // through this queue (drained in SubmitPresentOnRenderThread before submit) instead of touching the device on the UI
+    // thread. Null in default/force-sync — there the direct device sinks run with no cross-thread overlap.
+    private readonly Threading.ImageUploadQueue? _imageQueue;
     private readonly InputDispatcher _dispatcher;
     private readonly InputEventRing _ring = new();
     private readonly IFrameTimeSource _frameTime;
@@ -352,6 +356,9 @@ public sealed class AppHost : IDisposable
     private void SubmitPresentOnRenderThread(Threading.RenderFrame rf)
     {
         Threading.ThreadGuard.AssertRender();
+        // Step 1 (async): stage uploads / free evictions on the render thread, BEFORE the submit opens its command list —
+        // so a texture is resident before the draw that references it, and the store stays single-toucher (no lock).
+        if (_imageQueue is { } q) _device.DrainImageJobs(q);
         if (rf.SuppressVsync) _device.SuppressVsyncOnce();
         _device.SubmitDrawList(_renderSeam.Bytes(rf), _renderSeam.SortKeys(rf), in rf.Submit);
         _swapchain.Present();
@@ -793,8 +800,29 @@ public sealed class AppHost : IDisposable
         _scene.OnFreeIndex = OnSceneSlotFreed;
         _reconciler.Images = _images;
         _reconciler.ImageEpoch = _imageEpoch;
-        _images.SetPixelAttemptSink(_device.TryUploadImage);
-        _images.SetEvictSink(_device.EvictImage);
+        if (s_renderAsync)
+        {
+            // ASYNC (Step 1): the UI thread must not touch the device. The pixel sink COPIES the transient decode pixels
+            // into a rented ArrayPool buffer and enqueues it (optimistically admitting Ready); the render thread stages it
+            // (returning the buffer) and posts back only rejections. The evict sink enqueues too. See ImageUploadQueue.
+            _imageQueue = new Threading.ImageUploadQueue();
+            var q = _imageQueue;
+            _images.SetPixelAttemptSink((int id, System.ReadOnlySpan<byte> px, int w, int h) =>
+            {
+                byte[] buf = System.Buffers.ArrayPool<byte>.Shared.Rent(px.Length);
+                px.CopyTo(buf);
+                q.EnqueueUpload(id, buf, w, h, px.Length);
+                return FluentGpu.Scene.ImageUploadResult.Accepted;   // optimistic; a real rejection returns via the reject ring next Pump
+            });
+            _images.SetEvictSink(q.EnqueueEvict);
+            _images.SetAsyncUploadQueue(q);
+            _device.MarkImageUploadsRenderConfined();
+        }
+        else
+        {
+            _images.SetPixelAttemptSink(_device.TryUploadImage);
+            _images.SetEvictSink(_device.EvictImage);
+        }
         _images.ImageStatusChanged += (_, _, _, _) => { if (_imageEpoch.HasSubscribers) _imageEpoch.Value = _imageEpoch.Peek() + 1; WakeFrame(); };
 
         // Publish ambient contexts before the first render so UseContext(Viewport.Size)/FrameDiagnostics resolve.

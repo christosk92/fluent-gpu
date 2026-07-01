@@ -1,4 +1,5 @@
 using FluentGpu.Foundation;
+using FluentGpu.Hosting.Threading;
 
 namespace FluentGpu.Scene;
 
@@ -126,6 +127,7 @@ public sealed class ImageCache
     private ImageReadyHandler _pixelSink;
     private ImageUploadAttemptHandler? _pixelAttemptSink;
     private System.Action<int> _evictSink;
+    private ImageUploadQueue? _asyncUploads;   // non-null ⇒ async render thread: GPU work is handed off, not called inline
     // IImageDecoder guarantees a successful completion calls onPixels immediately before onComplete for the same id.
     // Remember that one admission result so OnDecodeComplete can fold GPU rejection into the terminal cache state.
     private int _uploadResultId;
@@ -177,8 +179,15 @@ public sealed class ImageCache
     }
 
     /// <summary>The host wires this to <c>IGpuDevice.EvictImage</c>; the cache calls it when residency evicts an image so
-    /// the backend frees the GPU texture. Set once at composition.</summary>
+    /// the backend frees the GPU texture. Set once at composition. Under the async render thread the host wires this to
+    /// <see cref="ImageUploadQueue.EnqueueEvict"/> instead, so the eviction is drained + freed on the render thread.</summary>
     public void SetEvictSink(System.Action<int> sink) => _evictSink = sink ?? _noEvict;
+
+    /// <summary>ASYNC render thread only (render-thread-seam landing plan §9, Step 1). When set, the pixel/evict sinks
+    /// hand GPU work to the render thread via this queue instead of touching the device on the UI thread; an upload is
+    /// optimistically admitted <c>Ready</c> and the render thread posts a REJECTION back here, drained each <see cref="Pump"/>
+    /// by <see cref="DrainAsyncRejections"/>. Null in default/force-sync (the direct sinks run with no cross-thread overlap).</summary>
+    public void SetAsyncUploadQueue(ImageUploadQueue queue) => _asyncUploads = queue;
 
     public long UsedBytes { get; private set; }
     public int Count => _byId.Count;
@@ -342,9 +351,35 @@ public sealed class ImageCache
     public int Pump()
     {
         _pumpCompleted = 0;
+        if (_asyncUploads is { } q) DrainAsyncRejections(q);   // fold +1-frame async upload rejections before this pump's decodes
         _decoder.Pump(_onComplete, _onPixels);
         if (_pumpCompleted > 0) EvictToBudget();
         return _pumpCompleted;
+    }
+
+    // ASYNC only (Step 1): the render thread stages uploads a frame after the UI optimistically admitted them Ready.
+    // On rejection (atlas/pool exhaustion) it posts the result here; fold it into the terminal Failed state, undo the
+    // optimistic byte accounting, and release any partial placement — the deferred analogue of OnDecodeComplete's
+    // synchronous admission-failure path (381-390). Only a still-optimistically-Ready entry is downgraded: if it has
+    // since been evicted, re-requested, or already failed, the reject is stale → skip (a rare ABA the sync path shares).
+    private void DrainAsyncRejections(ImageUploadQueue q)
+    {
+        while (q.TryDequeueResult(out var r))
+        {
+            if (!_byId.TryGetValue(r.Id, out var e) || e.State != ImageState.Ready) continue;
+            UsedBytes -= e.Bytes;
+            e.Bytes = 0;
+            _evictSink(r.Id);   // async ⇒ enqueues an evict job (releases any resident blur-hash/partial placement)
+            bool wasActiveDeadline = e.Transition.Enabled && !float.IsNaN(e.TextureMs)
+                && e.TextureMs + e.Transition.DurationMs >= _clockMs;
+            e.TextureMs = float.NaN;
+            e.State = ImageState.Failed;
+            e.Failure = r.Result == ImageUploadResult.ResourceExhausted ? ImageFailureKind.GpuResourceExhausted : ImageFailureKind.GpuUpload;
+            if (wasActiveDeadline) RecomputeCrossfadeDeadline();
+            _totalFailed++;
+            Diag.Set("media", "failed", _totalFailed);
+            ImageStatusChanged?.Invoke(r.Id, e.State, e.Failure, e.Attempts);
+        }
     }
 
     private ImageUploadResult UploadPixels(int id, System.ReadOnlySpan<byte> pixels, int w, int h)

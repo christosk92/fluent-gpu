@@ -214,6 +214,26 @@ public sealed unsafe class D3D12Device : IGpuDevice
     [System.Diagnostics.Conditional("FGGUARD")]
     private void AssertSubmitThread() { if (_renderConfined) FluentGpu.Hosting.Threading.ThreadGuard.AssertRender(); }
 
+    // Seam Step 1 (ASYNC only): image Stage/Free/FlushUploads become render-confined once the host wires the upload
+    // queue. Force-sync leaves the store UI-staged (no overlap), so this is a SEPARATE arm from MarkRenderConfined.
+    public void MarkImageUploadsRenderConfined() => _imageTextures?.MarkRenderConfined();
+
+    // Seam Step 1 (ASYNC only): drain the UI→render image-upload queue on the render thread, just before the frame's
+    // SubmitDrawList opens its command list (so a staged texture is resident before the draw that references it). Every
+    // Stage/Free/return-to-pool here runs render-confined → the texture store is single-toucher, no lock.
+    public void DrainImageJobs(FluentGpu.Hosting.Threading.ImageUploadQueue queue)
+    {
+        AssertSubmitThread();
+        if (_imageTextures is null) return;
+        while (queue.TryDequeueJob(out var j))
+        {
+            if (j.Evict) { _imageTextures.Free(j.Id); continue; }
+            var res = j.Buffer is null ? ImageUploadResult.Invalid : _imageTextures.Stage(j.Id, j.Buffer.AsSpan(0, j.ByteLen), j.W, j.H);
+            if (res != ImageUploadResult.Accepted) queue.PostReject(j.Id, res);   // +1-frame async admission: the UI folds the rejection next Pump
+            if (j.Buffer is not null) System.Buffers.ArrayPool<byte>.Shared.Return(j.Buffer);   // ownership transferred to us; return after Stage copied it
+        }
+    }
+
     private void InitDevice()
     {
         uint flags = 0;

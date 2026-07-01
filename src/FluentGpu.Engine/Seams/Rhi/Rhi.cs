@@ -36,6 +36,19 @@ public interface IGpuDevice : IDisposable
     /// No-op by default (headless / single-thread backends have nothing to confine).</summary>
     void MarkRenderConfined() { }
 
+    /// <summary>Render-thread seam (Step 1, ASYNC only): the host calls this after wiring the image-upload queue so the
+    /// backend arms confinement on its image texture store (Stage/Free/FlushUploads then throw under FGGUARD off the
+    /// render thread). Separate from <see cref="MarkRenderConfined"/> because force-sync still stages on the UI thread
+    /// (no overlap), so its image store must NOT be confined. No-op by default.</summary>
+    void MarkImageUploadsRenderConfined() { }
+
+    /// <summary>Render-thread seam (Step 1, ASYNC only): drain the UI→render image-upload queue on the RENDER thread,
+    /// immediately before the frame's <see cref="SubmitDrawList(ReadOnlySpan{byte}, ReadOnlySpan{ulong}, in FrameInfo)"/>
+    /// opens its command list — staging uploads / freeing evictions there keeps the texture store single-toucher. An
+    /// upload's transferred buffer is returned to <c>ArrayPool&lt;byte&gt;.Shared</c> after staging; a rejected upload is
+    /// posted back via <see cref="ImageUploadQueue.PostReject"/>. No-op by default (headless has no queue wired).</summary>
+    void DrainImageJobs(Hosting.Threading.ImageUploadQueue queue) { }
+
     /// <summary>Diagnostic: wall-time (ms) spent BLOCKED on GPU fences — the frame fence (<c>WaitForFrame</c>) plus the
     /// present-latency waitable — inside the most recent <see cref="SubmitDrawList(ReadOnlySpan{byte}, ReadOnlySpan{ulong}, in FrameInfo)"/>.
     /// This UI-thread stall is what dominates measured "submit" time today (the render-thread seam will move it off the UI
