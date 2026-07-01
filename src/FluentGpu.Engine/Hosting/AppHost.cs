@@ -608,7 +608,12 @@ public sealed class AppHost : IDisposable
     {
         _app = app;
         _window = window;
-        PopupWindowsEnabled = window.Handle.Kind == NativeHandleKind.Headless || device.SupportsSecondarySwapchains;
+        // Step 3 (async): windowed out-of-bounds popups submit + present on the UI thread (RecordPopupWindows), sharing
+        // the one device/queue/fence/command-list with the render thread — a concurrent submit source that would race the
+        // async loop and defeat the device-level submit/present confinement assert. Gate them OFF under async: flyouts/menus
+        // fall back to in-window clamped placement (the overlay's existing fallback). Removes the last UI-thread GPU submit,
+        // making the Step 0 assert unconditionally valid. Default + force-sync keep windowed popups (no async overlap).
+        PopupWindowsEnabled = (window.Handle.Kind == NativeHandleKind.Headless || device.SupportsSecondarySwapchains) && !s_renderAsync;
         _device = device;
         _root = root;
         _strings = strings;
