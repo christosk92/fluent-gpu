@@ -107,6 +107,16 @@ public readonly record struct AcrylicSpec(ColorF Tint, float TintOpacity, float 
     public static AcrylicSpec FlyoutLight => new(ColorF.FromRgba(0xFC, 0xFC, 0xFC), 0.0f, 30f, 0.02f, 0.85f, ColorF.FromRgba(0xF9, 0xF9, 0xF9));
 }
 
+/// <summary>Renderer policy for a per-node self-blur layer.</summary>
+public enum BlurCachePolicy : byte
+{
+    Normal = 0,
+    /// <summary>During user-scroll hold, reuse a retained blur if available; otherwise draw the subtree inline for this frame.</summary>
+    HoldIfCached = 1,
+    /// <summary>During user-scroll hold, reuse a retained blur if available; otherwise skip this decorative blur for this frame.</summary>
+    HoldOrSkipOnMiss = 2,
+}
+
 /// <summary>Which edges an <see cref="EdgeFadeSpec"/> feathers (a bit mask).</summary>
 [System.Flags]
 public enum EdgeMask : byte { None = 0, Left = 1, Top = 2, Right = 4, Bottom = 8, Horizontal = Left | Right, Vertical = Top | Bottom, All = 15 }

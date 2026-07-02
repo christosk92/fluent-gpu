@@ -57,6 +57,10 @@ public sealed class Services
     /// <summary>Persisted app settings (sidebar width, etc.) — read/written through the interface + typed keys, never the
     /// concrete store. The real registry-backed store is wired here, in the composition root, not at the call sites.</summary>
     public IAppSettings Settings { get; }
+    /// <summary>The cross-arena memory-shedding coordinator (Backend/Residency/MemoryGovernor.cs), instantiated + wired here
+    /// and driven by a periodic OS-memory-pressure poll (WaveeApp). Steady-state growth is already bounded by each cache's
+    /// own LRU cap; the governor sheds FURTHER under real memory pressure. (Was dead code — only referenced by tests.)</summary>
+    public Wavee.Backend.Residency.MemoryGovernor Residency { get; } = new();
 
     Services(IWaveeLog log, ISpotifySession session, IMusicLibrary library,
              IPlaybackPlayer player, IConnectDevices devices, ILyricsProvider lyrics, IAppSettings settings, IMutationSource mutations,
@@ -75,6 +79,10 @@ public sealed class Services
         Playback = new PlaybackBridge(player, devices, session);
         LibraryBridge = new LibraryBridge(mutations, userPlaylists);
         LibraryStore = new LibraryStore(library, mutations, userPlaylists, library as ICollectionEvents);
+        // Wire the detail caches as a sheddable arena (priority 2 = shed under MODERATE+ pressure, so at-rest A→B→A stays
+        // instant; the LRU insert-cap already bounds steady state). The entity-store "unpinned drop" (priority 3/4) is the
+        // documented follow-up — it needs a reachability pin-set to evict live entities safely.
+        Residency.Register(2, "detail-cache", () => LibraryStore.ShedDetails(keep: 16));
     }
 
     /// <summary>The fake wiring that drives the skeleton with in-memory data (no network). Persistence is real (the

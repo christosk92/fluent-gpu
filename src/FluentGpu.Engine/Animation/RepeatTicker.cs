@@ -6,7 +6,7 @@ namespace FluentGpu.Animation;
 /// <summary>
 /// Drives WinUI RepeatButton auto-repeat: while a repeat node is held, its click handler is invoked once on press, then
 /// after an initial delay, then at a fixed interval. A host system armed by the dispatcher on press / released on up
-/// (the <see cref="InteractionAnimator"/>/<see cref="ScrollAnimator"/> idiom), ticked once per frame in the host loop and
+/// (the <see cref="InteractionAnimator"/>/<see cref="ScrollIntegrator"/> idiom), ticked once per frame in the host loop and
 /// reported through <see cref="HasActive"/> so frames keep flowing while held — and stop the instant it's released
 /// (no busy loop). Zero alloc on a steady frame (invokes the already-stored click <see cref="Action"/>).
 /// Delay/Interval come from the node (<c>InteractionInfo.RepeatDelayMs/RepeatIntervalMs</c>; NaN/non-positive = the

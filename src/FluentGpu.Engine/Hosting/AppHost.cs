@@ -25,6 +25,7 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public int BlurCandidateCount { get; init; }
     public int BlurGroupCount { get; init; }
     public int BlurSuppressedByScrollCount { get; init; }
+    public int BlurHoldCandidateCount { get; init; }
     public int EdgeFadeGroupCount { get; init; }
     public double Fps { get; init; }
     public double FrameMs { get; init; }
@@ -144,9 +145,10 @@ public sealed class AppHost : IDisposable
     private readonly InputDispatcher _dispatcher;
     private readonly InputEventRing _ring = new();
     private readonly IFrameTimeSource _frameTime;
+    private readonly bool _isHeadless;   // headless: FixedFrameTimeSource + FrameQpcSec stays 0 (resampler uses the latest sample, deterministic)
     private readonly AnimEngine _anim;
     private readonly ConnectedAnimation _connected;
-    private readonly ScrollAnimator _scrollAnim;   // the deterministic, engine-owned scroll integrator (wheel/touchpad/touch/spring) — the ONLY scroll source
+    private readonly ScrollIntegrator _scrollAnim;   // the deterministic, engine-owned scroll integrator (wheel/touchpad/touch/spring) — the ONLY scroll source
     private readonly RepeatTicker _repeat;
     private readonly CaretBlinker _caretBlinker;
     private readonly ImageCache _images;
@@ -213,23 +215,14 @@ public sealed class AppHost : IDisposable
     // submit/present onto it (FORCE-SYNC in Step 4 — the UI still blocks). The engine ships the proven single-thread
     // inline path until the seam.race soak is green; this flag is the staged flip mechanism, not a user quality knob.
     private static readonly bool s_renderThread = Diag.EnvFlag("FG_RENDER_THREAD");
-    // Step 5 async flip — NOW DEFAULT ON. The render thread presents on its OWN timeline (the UI never blocks on the GPU
-    // fence/present) — the actual scrolling-smoothness win. The four async races are closed + verified on real D3D12:
-    // Step 1 image upload/evict handoff, Step 2 resize rendezvous, Step 3 windowed-popups-off, Step 4 device-lost detect
-    // + recovery. ESCAPE HATCH: FG_RENDER_ASYNC=0 (or false/off/no) reverts to the proven single-thread inline path at
-    // RUNTIME — no rebuild — if a field GPU/driver issue surfaces. Honest residual: the sustained-load TDR/hung class
-    // (~minutes) is soak territory, not single-run provable (landing plan §9) — but Step 4 now RECOVERS from device loss
-    // rather than crashing, so async-default is strictly more robust to GPU faults than the old single-thread default.
-    private static readonly bool s_renderAsync = AsyncDefaultOn();
-    private static bool AsyncDefaultOn()
-    {
-        string? v = System.Environment.GetEnvironmentVariable("FG_RENDER_ASYNC");
-        if (string.IsNullOrWhiteSpace(v)) return true;   // DEFAULT ON (unset ⇒ async)
-        return !v.Equals("0", System.StringComparison.OrdinalIgnoreCase)
-            && !v.Equals("false", System.StringComparison.OrdinalIgnoreCase)
-            && !v.Equals("off", System.StringComparison.OrdinalIgnoreCase)
-            && !v.Equals("no", System.StringComparison.OrdinalIgnoreCase);
-    }
+    // Step 5 async flip — REVERTED TO DEFAULT-OFF (opt-in FG_RENDER_ASYNC=1). Async correctly decouples the UI from the
+    // GPU (the back buffer renders byte-identically — proven by --screenshot), BUT presenting from the render thread to
+    // the DComp-composited swapchain produces a DIM/wrong ON-SCREEN composite (a desktop capture shows it, though the
+    // back-buffer CaptureBgra passes — the blind spot that hid it). Until that on-screen present path is fixed, async
+    // ships OFF: the proven single-thread inline path renders correctly. The Step 1-4 machinery stays wired for opt-in
+    // debugging. (Separately: the lyrics choppiness this was meant to fix is GPU-bound — the DoF blur exceeds the vblank —
+    // which async would not have fixed regardless; that needs a DoF cost reduction, not a threading change.)
+    private static readonly bool s_renderAsync = Diag.EnvFlag("FG_RENDER_ASYNC");
     private readonly WakeDiagnostics? _wakeDiag;
     private readonly MemCensus? _memCensus;
 
@@ -360,7 +353,7 @@ public sealed class AppHost : IDisposable
         mode = 0; userScroll = false; contentDirty = false;
         if (vp.IsNull || !_scene.IsLive(vp) || !_scene.HasScroll(vp)) return;
         ref var sc = ref _scene.ScrollRef(vp);
-        mode = sc.ScrollMode;
+        mode = sc.Phase;
         userScroll = sc.UserScrollActive;
         var c = sc.ContentNode;
         contentDirty = !c.IsNull && _scene.IsLive(c) && (_scene.Flags(c) & NodeFlags.TransformDirty) != 0;
@@ -433,6 +426,8 @@ public sealed class AppHost : IDisposable
     // settle + any in-flight art reveal finish smoothly instead of snapping to the 30 Hz ambient cadence mid-motion.
     private long _scrollGraceUntil;
     private static readonly long ScrollGraceTicks = (long)(0.15 * Stopwatch.Frequency);
+    private long _selfBlurHoldUntil;
+    private static readonly long SelfBlurHoldAfterScrollTicks = (long)(0.12 * Stopwatch.Frequency);
     public int AmbientAnimationFps { get; set; } = s_ambientFpsDefault;
     private static readonly int s_ambientFpsDefault = ReadAmbientFps();
     private static int ReadAmbientFps() => int.TryParse(Environment.GetEnvironmentVariable("FG_ANIM_FPS"), out var v) && v >= 0 ? v : 0;
@@ -468,6 +463,21 @@ public sealed class AppHost : IDisposable
     public InputDispatcher Input => _dispatcher;
     public FrameStats LastStats { get; private set; }
     public bool HasActiveWork => ComputeWakeReasons() != WakeReasons.None;
+
+    // Async UI-loop pace cap (~142fps). In the SYNC path, latency-sensitive frames returned a 0 wait and Present blocked
+    // the UI thread at vsync — THAT is what paced the loop. Under async Present is off the UI thread, so a 0 wait
+    // free-spins the loop (100k+ fps, pegging a core → thermal/scheduling contention that makes the render thread's
+    // presents irregular = judder). This cap replaces the lost vsync throttle; WaitForWork still returns EARLY on input
+    // (latency unchanged), and the render coalesces (DropOldest) any over-production on a panel slower than ~142Hz.
+    private const int AsyncDisplayPaceMs = 7;
+
+    /// <summary>Render-thread present progress (last presented publish-seq) — 0 when there is no render thread. The delta
+    /// over wall-time is the ACTUAL on-screen frame rate under async (which the UI-thread FrameMs cannot report, since
+    /// submit/present are off-thread). Diagnostic (FG_FPS_LOG).</summary>
+    public ulong RenderPresentSeq => _renderThread?.PresentAck ?? 0;
+    /// <summary>Wall-time the render thread most recently BLOCKED on the GPU (frame fence + present latency) inside its
+    /// submit — the real render-side cost async hides from FrameMs. High + climbing ⇒ GPU-bound. Diagnostic (FG_FPS_LOG).</summary>
+    public double LastGpuFenceWaitMs => _device.LastFenceWaitMs;
 
     /// <summary>The message-loop wait timeout (ms) for the NEXT pump: how long to block in <c>WaitForWork</c> before
     /// running another frame. Computes the wake mask ONCE and paces by it:
@@ -506,7 +516,16 @@ public sealed class AppHost : IDisposable
             MaybeTrimOnIdle();   // #10: playback/ambient never reaches WakeReasons.None, so trim the slab tail here too (30s-cadence-gated)
             return AmbientFrameWaitMs();
         }
-        return 0;                                   // latency-sensitive / one-shot motion: display-rate pacing
+        // Skip-submit pacing floor: an elided submit skips Present — the sync path's ONLY pacer — so a scroll-armed-
+        // but-unchanged stretch (a held/stuck band, a spring tail, the 2s scrollbar idle-hide dwell) would otherwise
+        // free-run the loop at CPU speed re-recording a byte-identical scene (measured on-device: ~785 fps, a full
+        // core, for the whole armed window). Pace those frames at AsyncDisplayPaceMs — the same constant the async
+        // path returns, deliberately: it is exempt from the NextDeltaMs Resync guard, so the animation clock stays
+        // monotonic (a novel wait value here would zero-dt every animating frame — the frozen one-shot-anim bug
+        // class). Input still ends the wait immediately (WaitForWork is MsgWait-based), so nothing gains latency;
+        // the first frame that actually changes pixels submits, and the next wait returns to 0 (present-throttled).
+        if (!_asyncActive && _lastFrameSkippedSubmit) return AsyncDisplayPaceMs;
+        return _asyncActive ? AsyncDisplayPaceMs : 0;   // latency-sensitive / one-shot motion: sync = present-throttled (0); async = pace cap (present is off-thread — 0 would free-spin)
     }
 
     /// <summary>True when capping the frame rate won't dull a one-shot transition: either no AnimEngine track is running,
@@ -547,6 +566,7 @@ public sealed class AppHost : IDisposable
     // ── Skip-submit gate state (finding #3a) ─────────────────────────────────────────────────────────────────────────
     private ulong _lastPresentedDrawListHash;   // FNV-1a of the last PRESENTED command stream; a byte-identical frame skips submit+present
     private long _framesSkippedSubmit;          // diagnostic census of elided submits (idle/playback redundant presents avoided)
+    private bool _lastFrameSkippedSubmit;       // the previous frame elided Present → RecommendedWaitMs must self-pace (no vsync block happened)
     /// <summary>Frames whose GPU submit+present was elided because the recorded command stream matched the last presented one.</summary>
     public long FramesSkippedSubmit => _framesSkippedSubmit;
 
@@ -615,6 +635,13 @@ public sealed class AppHost : IDisposable
     internal int InteractionAnimatorCensus => _anim.HoverPressTrackCount;   // hover/press are now engine HoverFade/PressFade tracks (InteractionAnimator deleted)
     internal int ScrollAnimatorCensus => _scrollAnim.ActiveCount;
 
+    /// <summary>Test-only handle to the phase-7 scroll integrator (scroll-feel-rework-v2 §8 headless gates). Headless
+    /// leaves <see cref="ScrollIntegrator.FrameQpcSec"/> at 0 (the resampler is then vacuous — deterministic for the
+    /// legacy gates), so the §8 gates that must exercise real frame-time resampling set it to a SYNTHETIC frame clock via
+    /// this seam before each <c>RunFrame</c> (headless never overwrites it — see the <c>!_isHeadless</c> guard at the
+    /// tick). Not exposed publicly; VerticalSlice has InternalsVisibleTo.</summary>
+    internal ScrollIntegrator ScrollIntegratorForTest => _scrollAnim;
+
     /// <summary>The frame loop's current wake-reason mask — why <see cref="HasActiveWork"/> would keep running this
     /// instant (for tests / census). An O(1) recompute of the same terms.</summary>
     public WakeReasons CurrentWakeReasons => ComputeWakeReasons();
@@ -664,7 +691,8 @@ public sealed class AppHost : IDisposable
         strings.AddRef(sbUp); strings.AddRef(sbDown); strings.AddRef(sbLeft); strings.AddRef(sbRight); strings.AddRef(sbFam);
         SceneRecorder.ConfigureScrollbarArrowGlyphs(sbUp, sbDown, sbLeft, sbRight, sbFam);
         _images = images ?? new ImageCache(new FakeImageDecoder());
-        _frameTime = frameTime ?? (window.Handle.Kind == NativeHandleKind.Headless ? new FixedFrameTimeSource() : new StopwatchFrameTimeSource());
+        _isHeadless = window.Handle.Kind == NativeHandleKind.Headless;
+        _frameTime = frameTime ?? (_isHeadless ? new FixedFrameTimeSource() : new StopwatchFrameTimeSource());
         _swapchain = device.CreateSwapchain(new SwapchainDesc(window.Handle, window.ClientSizePx));
         _reconciler = new TreeReconciler(_scene, strings, _runtime);
         _layout = new FlexLayout(_scene, fonts);
@@ -674,10 +702,10 @@ public sealed class AppHost : IDisposable
         _reconciler.OnSubtreeDeactivated = _dispatcher.DeactivateSubtree;
         _anim = new AnimEngine(_scene);
         _connected = new ConnectedAnimation(_scene, _anim, _images);   // shared-element (connected-animation) Hero flies
-        // Scroll is fully engine-owned: the deterministic ScrollAnimator is the single, portable scroll source on every
-        // platform (wheel target-chase + touch/touchpad fling + overscroll spring + conscious scrollbar). There is no OS
-        // scroll source — touchpad arrives as hi-res WM_POINTERWHEEL → PanTouchpad, touch as the dispatcher's gesture path.
-        _scrollAnim = new ScrollAnimator(_scene, scrollProfile);
+        // Scroll is fully engine-owned: the deterministic ScrollIntegrator is the single, portable scroll source (§2.1
+        // single writer) on every platform (WheelAnimating chase + touch/touchpad fling + overscroll spring + conscious
+        // scrollbar). There is no OS scroll source — touchpad arrives as phase-tagged scroll events, touch as the gesture path.
+        _scrollAnim = new ScrollIntegrator(_scene, scrollProfile);
         _repeat = new RepeatTicker(_scene);
         _caretBlinker = new CaretBlinker(_scene);
         _lastSize = window.ClientSizePx;
@@ -697,6 +725,13 @@ public sealed class AppHost : IDisposable
         _scrollAnim.ScrollWrite = _dispatcher.WriteScrollOffset;   // Fling integrator writes absolute offsets through the Input chokepoint
         _scrollAnim.OverscrollWrite = _dispatcher.WriteOverscroll; // overscroll spring-back writes the visual band (offset untouched)
         _dispatcher.OnFlingStarted = SeedScrollFling;              // touch-up flick → friction-decay inertia in phase 7
+        // scroll-feel-rework-v2 §2.1/§2.3: the phase-driven dispatcher is a pure intent recorder — it records
+        // TouchpadTracking contact onto the integrator resampler; phase 7 (ScrollIntegrator.Tick) is the SOLE offset/band
+        // writer. CancelFling zeros a coast on every PointerDown / scrollbar grab (R6 fix).
+        _dispatcher.OnScrollTrackBegin = _scrollAnim.BeginTracking;
+        _dispatcher.OnScrollTrackSample = _scrollAnim.AppendContactSample;
+        _dispatcher.OnScrollTrackEnd = _scrollAnim.EndTracking;
+        _dispatcher.OnCancelFling = _scrollAnim.CancelFling;
         _dispatcher.OnRepeatArmed = _repeat.Arm;
         _dispatcher.OnRepeatReleased = _repeat.Disarm;
         _dispatcher.OnRepeatPaused = _repeat.Pause;     // held pointer left the repeat node → stop ticking
@@ -836,7 +871,7 @@ public sealed class AppHost : IDisposable
             _connected.OnNodeParked(node, parked);
         };
         // Symmetric teardown of INDEX-keyed per-node side-tables on slot free (mem-06): a freed node's slot is reused,
-        // so the AnimEngine layout-transition spec + the ScrollAnimator conscious-bar timers (both keyed by node index,
+        // so the AnimEngine layout-transition spec + the ScrollIntegrator conscious-bar timers (both keyed by node index,
         // not gen-checked handle) must be dropped or the next node reusing that index inherits the stale row.
         _scene.OnFreeIndex = OnSceneSlotFreed;
         _reconciler.Images = _images;
@@ -963,23 +998,31 @@ public sealed class AppHost : IDisposable
     }
 
     /// <summary>Wired to <see cref="InputDispatcher.OnFlingStarted"/>: a touch pan released with a flick speed hands its
-    /// offset-space velocity here. Seed the viewport's <see cref="ScrollState.FlingVelocity"/> + <c>ScrollMode=Fling</c>
-    /// and arm the <see cref="ScrollAnimator"/> so phase 7 friction-decays it (and <c>WakeReasons.ScrollAnim</c> keeps
-    /// frames coming until it settles). 0-alloc: a cached method group, two field writes on a ref.</summary>
+    /// offset-space velocity here. Seed the viewport's <see cref="ScrollState.FlingVelocity"/> (clamped to the §4.3
+    /// FlingMaxVelocityPxPerS = 8000 px/s seed cap) + <c>Phase = Fling</c> and arm the <see cref="ScrollIntegrator"/> so
+    /// phase 7 coasts it via the exact-integral CoastStep (and <c>WakeReasons.ScrollAnim</c> keeps frames coming until it
+    /// settles). 0-alloc: a cached method group, a few field writes on a ref.</summary>
     private void SeedScrollFling(NodeHandle node, float velocityPxPerS)
     {
         if (node.IsNull || !_scene.IsLive(node) || !_scene.HasScroll(node)) return;
         ref ScrollState sc = ref _scene.ScrollRef(node);
-        sc.FlingVelocity = velocityPxPerS;
-        sc.ScrollMode = 1;   // ScrollAnimator Fling mode
-        // A snap-configured viewport re-solves the velocity on the FIRST fling tick (ScrollAnimator) so the same decay
+        sc.FlingVelocity = Math.Clamp(velocityPxPerS, -ScrollIntegrator.FlingMaxVelocityPxPerS, ScrollIntegrator.FlingMaxVelocityPxPerS);
+        sc.Phase = ScrollIntegrator.Fling;
+        sc.PhaseFlags = 0;   // a touch/PTP-fallback self-fling (not OS-owned): the exact-integral coast owns it
+        // A snap-configured viewport re-solves the velocity on the FIRST fling tick (ScrollIntegrator) so the same decay
         // curve lands EXACTLY on a snap value — capture the launch offset (the impulse "ignored value" anchor) and reset
         // the one-shot retarget latch here. A non-snap viewport ignores both.
         sc.FlingRetargeted = false;
         sc.FlingSnapTarget = float.NaN;
         sc.FlingFromOffset = sc.Orientation == 1 ? sc.OffsetX : sc.OffsetY;
+        if (FluentGpu.Foundation.ScrollTrace.On)
+            FluentGpu.Foundation.ScrollTrace.AnimEvent((int)node.Raw.Index, 4, velocityPxPerS, sc.FlingFromOffset, 0f);
         _scrollAnim.Arm(node);
     }
+
+    /// <summary>Events pumped into the ring this frame — recorded by the <see cref="FluentGpu.Foundation.ScrollTrace"/>
+    /// frame marker (diagnostic only; written every frame, read only when the trace is on).</summary>
+    private int _tracePumpedEvents;
 
     /// <summary>Run one full frame: pump + input, then paint (the reactive flush + layout + record happen in Paint).</summary>
     public FrameStats RunFrame()
@@ -994,9 +1037,9 @@ public sealed class AppHost : IDisposable
         long diagUiStart = db;
 
         _ring.Clear();
-        _window.PumpInto(_ring);              // 1 pump
+        _tracePumpedEvents = _window.PumpInto(_ring);              // 1 pump
         if (s_allocDiag) { db = Probe(SegPump, db, dt); dt = Stopwatch.GetTimestamp(); }
-        int clicks = _dispatcher.Dispatch(_ring.Drain());  // 2 input dispatch (handlers write signals → schedule effects)
+        int clicks = _dispatcher.Dispatch(_ring.Drain(), _ring.DrainVelocitySamples());  // 2 input dispatch (handlers write signals → schedule effects)
         if (s_allocDiag) { db = Probe(SegDispatch, db, dt); dt = Stopwatch.GetTimestamp(); }
 
         // Step 4 fault injection (FG_FORCE_DEVICE_LOST=<frameN>): force a controlled DEVICE_REMOVED so the next submit
@@ -1158,6 +1201,8 @@ public sealed class AppHost : IDisposable
         Threading.ThreadGuard.BindCurrent(Threading.ThreadGuard.ThreadRole.Ui);
         if (_inPaint) { _frameAfterPaint = true; return LastStats; }
         _inPaint = true;
+        // Publish the effective device scale for scroll content-transform device-pixel rounding (before reconcile/layout).
+        _scene.DeviceScale = _window.Scale <= 0f ? 1f : _window.Scale;
         _reconciler.FrameEpoch++;   // one tick per paint — caps a warming virtual list's cold-realize grow to 1 batch/frame
         long diagUiStart = s_allocDiag ? GC.GetAllocatedBytesForCurrentThread() : 0;
         try
@@ -1355,7 +1400,14 @@ public sealed class AppHost : IDisposable
             // not a real interval. Drop it so the first active frame advances ~one frame instead of leaping ~34 ms — the
             // root of "scroll/connected animations feel 24 fps then 120 fps." Steady display-rate frames (prev wait 0)
             // and genuine mid-scroll GC hitches are untouched; steady ambient frames never enter (no interactive work).
-            if (_lastWaitMs != 0)
+            // Resync fires ONLY when stepping UP from a genuinely THROTTLED/idle cadence (ambient 30 Hz, HUD 10 Hz, or a
+            // blocked idle) to display rate — feeding that stale throttle gap into the animators would make one-shot motion
+            // LEAP on frame 1. A frame already AT display rate must NOT resync. Sync display rate waits 0; ASYNC display
+            // rate waits AsyncDisplayPaceMs (the free-spin cap, RecommendedWaitMsCore) — so BOTH are "already at display
+            // rate." Excluding AsyncDisplayPaceMs is load-bearing: without it EVERY async animating frame resynced →
+            // NextDeltaMs()==0 every frame → one-shot enter transitions froze at their initial (invisible) state, so
+            // animated content (sidebar sections, home cards) never appeared on-screen while non-animated chrome did.
+            if (_lastWaitMs != 0 && _lastWaitMs != AsyncDisplayPaceMs)
             {
                 WakeReasons stepUp = ComputeWakeReasons();
                 if ((stepUp & LatencySensitiveWake) != 0 || (_anim.HasActive && !AnimIsAmbient()) || _connected.HasActive)
@@ -1372,8 +1424,18 @@ public sealed class AppHost : IDisposable
             // 7 eased hover/press: HoverT/PressT now driven by the engine's HoverFade/PressFade tracks (ticked in _anim.Tick above); InteractionAnimator deleted
             // 7 implicit BrushTransition: the cross-fade T is now driven by the unified engine (AnimChannel.BrushFade,
             // seeded at reconcile); the separate per-frame AdvanceBrushAnims ticker is deleted.
-            _dispatcher.TickTouchpad(dtMs);                    // 7 precision-touchpad pan: ease applied offset + lift→inertia (before the pump so the fling it seeds runs this frame)
+            // (TickTouchpad is gone — scroll phase events apply 1:1 at dispatch; design §6/§12.)
+            if (FluentGpu.Foundation.ScrollTrace.On)
+                FluentGpu.Foundation.ScrollTrace.Frame(dtMs, _tracePumpedEvents, _scrollAnim.HasActive || _dispatcher.GestureActive);
+            // scroll-feel-rework-v2 §4.1: the TouchpadTracking resampler targets frameT − 5ms. Feed the frame's QPC clock
+            // (matches the dispatcher's per-packet QpcTicks). Headless leaves it 0 → the resampler uses the latest deposited
+            // sample (no synthesis), preserving gate determinism.
+            if (!_isHeadless) _scrollAnim.FrameQpcSec = Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
             _scrollAnim.Tick(dtMs);                            // 7 smooth scroll + fling + overscroll spring + scrollbar fade (the engine-owned integrator)
+            long scrollHoldNow = Stopwatch.GetTimestamp();
+            if (_scrollAnim.AnyUserScrollActiveThisFrame)
+                _selfBlurHoldUntil = scrollHoldNow + SelfBlurHoldAfterScrollTicks;
+            bool holdSelfBlurForScroll = scrollHoldNow < _selfBlurHoldUntil;
             ScrollBindEval.ApplyPinAndFlagPass(_scene);       // 7 generic scroll-bind pins + the predicate-flag channel (sticky etc.)
             ScrollBindEval.RunObservers(_scene);              // 7 change-only scroll-geometry observers (pull-to-refresh / analytics)
             _repeat.Tick(dtMs);                                // 7 RepeatButton auto-repeat (held → re-fire click)
@@ -1415,7 +1477,7 @@ public sealed class AppHost : IDisposable
                 if (!_popupWindows[i].Root.IsNull && _scene.IsLive(_popupWindows[i].Root))
                     _popupSkipRoots.Add(_popupWindows[i].Root);
             var recordStats = SceneRecorder.Record(_scene, _drawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicFlyout.Fallback, in textEdit,
-                CollectionsMarshal.AsSpan(_popupSkipRoots)); // 8 record
+                CollectionsMarshal.AsSpan(_popupSkipRoots), holdSelfBlurForAnyUserScroll: holdSelfBlurForScroll); // 8 record
             SceneRecorder.RecordDetached(_scene, _drawList, _images, _connected.Detached, _scene.OverlayClip);   // 8 detached fly snapshots (flag-gated rebuild; no-op when none)
             RecordPopupWindows(in focus, in textEdit);         // 8b record each popup window's subtree DrawList
             // 8b′ probe capture (WAVEE_LYRICS_ADVANCE_PROBE): snapshot the designated viewports' scroll state HERE — before
@@ -1450,6 +1512,7 @@ public sealed class AppHost : IDisposable
             if (skipSubmit)
             {
                 _framesSkippedSubmit++;
+                _lastFrameSkippedSubmit = true;   // no Present happened → RecommendedWaitMs applies the pacing floor
                 hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
                 tSubmitDone = tSubmit = Stopwatch.GetTimestamp();
             }
@@ -1478,6 +1541,7 @@ public sealed class AppHost : IDisposable
                     _swapchain.Present();                       // 11 present (UI thread)
                 }
                 if (maybeUnchanged) _lastPresentedDrawListHash = dlHash;   // track the stream only across quiet runs (active frames don't hash)
+                _lastFrameSkippedSubmit = false;   // a real submit/present paced this frame
                 hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
                 tSubmit = Stopwatch.GetTimestamp();
             }
@@ -1500,6 +1564,7 @@ public sealed class AppHost : IDisposable
                 BlurCandidateCount = recordStats.BlurCandidateCount,
                 BlurGroupCount = recordStats.BlurGroupCount,
                 BlurSuppressedByScrollCount = recordStats.BlurSuppressedByScrollCount,
+                BlurHoldCandidateCount = recordStats.BlurHoldCandidateCount,
                 EdgeFadeGroupCount = recordStats.EdgeFadeGroupCount,
                 Fps = _fps,
                 FrameMs = _frameMs,

@@ -35,15 +35,19 @@ sealed class HomePage : Component
         // names/covers replace the initial URIs without a manual nav.
         var home = UseLoadable(Loadable<HomeFeed>.Pending(FakeData.HomeSeed));   // seed renders the loading shape; later refreshes swap Ready->Ready in place
         var post = UsePost();
-        var homeWorkerStarted = UseRef(false);
-        Context.UseEffect(() =>
+        // Start the background home-refresh loop + the library-change subscription ONCE, and tie BOTH to this component's
+        // lifetime. A UseSignalEffect that reads no signals runs exactly once on mount; its Reactive.OnCleanup fires on
+        // unmount (KeepAlive eviction / navigation away). Without this, each cold remount of Home leaked an orphaned 60s
+        // PeriodicTimer loop + a never-unsubscribed observer that COMPOUNDED over a long session (memory + background
+        // fetches). Mirrors the LyricsTicker lifecycle pattern (Features/Player/LyricsView.cs).
+        Context.UseSignalEffect(() =>
         {
-            if (homeWorkerStarted.Value) return;
-            homeWorkerStarted.Value = true;
-            StartHomeRefreshLoop(svc, home, post);
-
-            if (svc.Library is Wavee.Core.ICollectionEvents ev)
-                ev.CollectionsChanged.Subscribe(Wavee.Backend.Observers.From<Wavee.Core.CollectionKind>(__ => { _ = RefreshHomeOnce(svc, home, post, failIfInitial: false); }));
+            var cts = new CancellationTokenSource();
+            StartHomeRefreshLoop(svc, home, post, cts.Token);
+            IDisposable? sub = svc.Library is Wavee.Core.ICollectionEvents ev
+                ? ev.CollectionsChanged.Subscribe(Wavee.Backend.Observers.From<Wavee.Core.CollectionKind>(__ => { _ = RefreshHomeOnce(svc, home, post, failIfInitial: false); }))
+                : null;
+            Reactive.OnCleanup(() => { cts.Cancel(); cts.Dispose(); sub?.Dispose(); });
         });
         string? name = bridge?.User.Value?.DisplayName;     // subscribe → greeting refreshes on login
 
@@ -145,15 +149,19 @@ sealed class HomePage : Component
         return ScrollView(page) with { Grow = 1f, ScrollKey = "home" };
     }
 
-    static void StartHomeRefreshLoop(Services svc, Loadable<HomeFeed> home, Action<Action> post)
+    static void StartHomeRefreshLoop(Services svc, Loadable<HomeFeed> home, Action<Action> post, CancellationToken ct)
     {
         _ = Task.Run(async () =>
         {
-            await RefreshHomeOnce(svc, home, post, failIfInitial: true).ConfigureAwait(false);
-            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(60));
-            while (await timer.WaitForNextTickAsync().ConfigureAwait(false))
-                await RefreshHomeOnce(svc, home, post, failIfInitial: false).ConfigureAwait(false);
-        });
+            try
+            {
+                await RefreshHomeOnce(svc, home, post, failIfInitial: true).ConfigureAwait(false);
+                using var timer = new PeriodicTimer(TimeSpan.FromSeconds(60));
+                while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
+                    await RefreshHomeOnce(svc, home, post, failIfInitial: false).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { /* Home unmounted → stop the refresh loop cleanly */ }
+        }, ct);
     }
 
     static async Task RefreshHomeOnce(Services svc, Loadable<HomeFeed> home, Action<Action> post, bool failIfInitial)

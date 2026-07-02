@@ -586,7 +586,7 @@ public sealed class FlexLayout
             float band = OverscrollPhysics.GuardBandSign(sc.OverscrollPx, off, maxOff);
             if (sc.Overscrolling && band != sc.OverscrollPx) sc.OverscrollPx = band;
             OverscrollPhysics.WriteContentTransform(ref cp, in _scene.Bounds(content), horizontal, off, band,
-                sc.ZoomFactor);
+                sc.ZoomFactor, _scene.DeviceScale);
         }
         // (Re)bake geometry-dependent ranges (Content*/Bounds now known), then apply the generic scroll-driven bindings
         // in the SAME ArrangeViewport invocation — a resize frame must not paint a one-frame-stale bound transform.
@@ -600,7 +600,7 @@ public sealed class FlexLayout
         // size (a mount realizes against the Height hint; a relayout can also grow the host). If the realized window
         // no longer covers the now-known viewport, flag the node — the host (AppHost.Paint) re-realizes + re-runs
         // scoped layout inside the SAME frame (bounded), so the first presented frame shows the real rows. Same
-        // windowing idiom as the scroll paths (ScrollAnimator.Tick / InputDispatcher).
+        // windowing idiom as the scroll paths (ScrollIntegrator.Tick / InputDispatcher).
         if (sc.ItemCount > 0)
         {
             float vpExtent = horizontal ? sc.ViewportW : sc.ViewportH;

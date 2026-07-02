@@ -640,7 +640,10 @@ As-built `LayerKind`s on the `PushLayer`/`PopLayer` opcode pair: **`Acrylic`** (
 Motion Kit — `NodePaint.BlurSigma > 0`): the subtree renders to a pooled offscreen RT, a separable **dynamic-σ**
 Gaussian runs over it, and it composites once at the group alpha. The `Blur` kind reuses the `Opacity` group's
 `OpacityLayerCompositor` RT pool + composite (it IS an opacity group that blurs first), so it is the cheapest path that
-supports an animating blur. Semantics + the curve/token vocabulary: `backdrop-effects-animation.md` FA-2.
+supports an animating blur. Semantics + the curve/token vocabulary: `backdrop-effects-animation.md` FA-2. The
+cross-frame retained self-blur **pin cache** and its position-independent key (and the `PushLayerCmd.InMotion` payload
+field — 1 = the self-blur node's world transform moved this frame; drives the compositor's settle re-mint, and is **not**
+folded into the pin key) are owned by `backdrop-effects-animation.md` §FA-2a.
 
 ```
 PushLayer → BeginRenderPass(layerRT, Clear transparent) → [children draw into layerRT]

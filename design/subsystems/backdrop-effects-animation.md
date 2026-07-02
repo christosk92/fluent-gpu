@@ -405,6 +405,65 @@ here, on `LayoutTransition`) gains a `float Blur` field: `SeedEnter` seeds `Anim
 (`reconciler-hooks.md`): an EXITING shimmer orphan blurs out (it renders until reclaimed; the recorder already honors
 BlurSigma via the self-blur layer) while the real content blur-reveals in — the two-layer cross-blur, same slot.
 
+**FA-2a (as-built — the cross-frame self-blur PIN cache + its position-independent key).** A self-blur whose subtree
+is byte-identical to a previous frame's reuses that frame's **retained, already-blurred pixels** (a "pin" — a small
+region-sized RT, the layer's device rect + the ±3σ tap halo) instead of re-rendering + re-running the two Gaussian
+passes; a HIT is a single region composite. The pin lives in `OpacityLayerCompositor`'s pool (render-thread-owned,
+`threading-render-seam.md`) and is keyed by a **position-INDEPENDENT content key** computed by the portable
+`FluentGpu.Render.BlurPinKey.TryCompute` (so the headless VerticalSlice can gate it).
+
+- **Key** = FNV-1a over `{ σ, round(DeviceRect.W), round(DeviceRect.H) }` (the absolute `DeviceRect.X/Y` is **excluded**)
+  **+** the subtree's op bytes with each op's `Transform.Dx/Dy` (and each `ClipCmd` rect origin) **rebased to the layer
+  origin and rounded to the integer grid** — `Dx → round(Dx − DeviceRect.X)`, `Dy → round(Dy − DeviceRect.Y)`. Scale/
+  rotation (`M11..M22`) and every content field (glyph text/color, the karaoke wipe `Split`, image id, …) fold
+  **verbatim**. Rebasing is exact-under-translation because op `Rect`/`Bounds` are node-local (origin 0,0 — the
+  recorder emits `local` + a `world` transform) and all absolute position lives in `Transform.Dx/Dy`; the rounding is in
+  the recorder's DIP space and gates hit/miss granularity only (the compositor always places a HIT from the CURRENT
+  layer's `RegionBox`, so placement follows the true sub-pixel position — the key never yields a stale composite). A
+  **nested `PushLayer`** or any **unknown op** ⇒ `TryCompute` returns false ⇒ uncacheable ⇒ render normally (never a
+  stale pin). This replaced the old absolute-`DeviceRect` hash, which missed on every scroll.
+- **Invalidation contract.** A **HIT** (reuse the pin; no subtree render, no Gaussian) requires identical content bytes
+  **and** identical `round(device W/H)` **and** identical σ **and** identical rebased-rounded per-op positions — this
+  **includes** a pure scroll/translation and an opacity animation (opacity is applied at composite as `GroupAlpha`, not
+  in the key). A **CONTENT MISS** (render subtree + 2-pass Gaussian + re-mint) is any change to σ; to `round(device
+  W/H)` (an emphasis-scale step, DPI change, relayout, wrap); to glyph text/color/wipe-split/child structure; or a ≥1
+  device-unit change in any op's position **relative to the layer origin**. A **position-only move** that was a miss
+  under the old key is now a HIT. **`BlurCachePolicy` (`Normal`/`HoldIfCached`/`HoldOrSkipOnMiss`) documented miss
+  semantics apply to CONTENT misses only** — a position-only move is a HIT for every policy.
+- **Settle re-mint (exactness at rest).** On a would-be HIT where `PushLayerCmd.InMotion == 0` **and** the pin's
+  captured integer region origin differs from this frame's, one content-miss re-blur refreshes the pin at the exact rest
+  position; subsequent identical frames are byte-stable ⇒ skip-submit. (For a glyph-bearing subtree the glyph
+  `InMotion` field folds into the key and already forces this re-blur at the settle frame; `PushLayerCmd.InMotion` +
+  the origin check cover the non-glyph subtrees.)
+- **Edge-clamped region ⇒ uncacheable.** The pin holds only the ON-CANVAS slice (`RegionBox` clamps the halo-inflated
+  device rect to `[0,_w]×[0,_h]`, and a pin is copied out of the canvas-sized scratch). Because the key is
+  position-independent, a strip scrolling partly past a canvas edge would otherwise HIT a full-strip pin and be composited
+  into the shorter clamped viewport — the full pin's `UV[0,1]` mapped onto fewer rows = a vertical **squish** (worse in
+  full-screen lyrics where a dimmed row crosses the window top/bottom). So a frame whose region is canvas-edge-clamped
+  (`OpacityLayerCompositor.RegionIsClamped` — the unclamped `RegionBox` pokes outside the canvas) is treated as
+  uncacheable: **no HIT** (miss ⇒ the pixel-exact scissored render+blur draws the partial strip) **and no MINT** (a
+  partial capture would squish later, and each distinct clamp size would mint a duplicate same-hash pin, thrashing the
+  budget). The full pin minted while fully on-canvas survives and serves again once the row returns; a *stationary*
+  clamped row costs nothing (identical drawlist ⇒ skip-submit).
+- **One pin per hash, size-exact hit.** At most one `BlurReady` pin ever carries a given `PinHash`: before (re)minting,
+  `RetainPinFromScratch` retires (fence-gated) any same-hash pin whose region size differs, and `FindPin` requires
+  `W == RegionBox.W && H == RegionBox.H` — a physical-size mismatch is a **MISS** (render + blur the exact region), never
+  a wrong-sized pin stretched onto the current viewport. This closes the mid-ease duplicate: because `RegionBox` depends
+  on the sub-pixel `frac(pos·scale)` floor/ceil, a pin minted 1px off in height could otherwise coexist as a second
+  same-hash pin that `FindPin` kept returning and `PinOriginDiffers` rejected every frame — a permanent per-row
+  re-Gaussian (and, being `FindPin`-hit, never trimmed). (A `HIT` therefore also requires the region SIZE to match, so a
+  sub-pixel move that shifts the floor/ceil region by 1px re-blurs rather than stretches.)
+- **Budget + eviction.** One physical 32-slot pool (`MaxPool = 32`) shared by canvas-sized transient scratch and
+  region pins: `PinBudget = 24` region pins (guarantees ≥ 8 slots for transient scratch — a new mint past the cap
+  evicts the coldest pin first); `PinTrimIdleFrames = 120` submitted frames for pins vs `TrimIdleFrames = 600` for
+  transient (a stationary pin is `FindPin`-hit every submitted frame, so only ORPHANS — a rect/σ a row left — climb to
+  120 and get reclaimed). LRU is **MRU-on-hit**: a `FindPin` hit refreshes `LastUseFence`, so a hot pin is never the
+  preferred victim (the fix for the rolling-eviction fps cliff where a stationary pin kept its creation fence forever).
+- **Honest scope.** A constant-size op that moves *relative to the layer origin* by ≥1 device unit is a content miss
+  (correct). **Scale reuse is a non-goal** — size is content; the app steps emphasis scale per integer distance so the
+  auto-scroll ease is position-only (`app/Wavee/Features/Player/LyricsView.cs`). Distinct from the acrylic retained-
+  backdrop cache (§2.3, keyed by `PushLayerCmd.LayerId`); that contract is unchanged.
+
 ---
 
 ## 5. Connected / implicit / driven animation — the phase-7 `AnimTrack`

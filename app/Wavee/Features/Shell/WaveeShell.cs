@@ -22,6 +22,7 @@ sealed class WaveeShell : Component
     readonly Signal<Route> _route = new(new Route("home"));
     readonly Signal<bool> _canBack = new(false);
     readonly Signal<bool> _canForward = new(false);
+    const int MaxBackStack = 200;   // bound the in-memory back/forward stacks over a long session (the persisted HistoryStore keeps its own 500-entry cap)
     readonly List<Route> _history = new();
     readonly List<Route> _forwardHistory = new();
     readonly HistoryStore _historyStore = new();
@@ -89,7 +90,7 @@ sealed class WaveeShell : Component
         // Inert probe (screenshot / UI iteration only): open the right rail to the Lyrics panel at startup.
         if (Diag.EnvFlag("WAVEE_LYRICS_OPEN") || Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE")) { _shellUi.RailOpen.Value = true; _shellUi.Mode.Value = RailMode.Lyrics; }
 
-        if (Diag.EnvFlag("WAVEE_NAV_PROBE") || Diag.EnvFlag("WAVEE_CONN_STRESS") || Diag.EnvFlag("WAVEE_TRACKLIST_SHOT") || Diag.EnvFlag("WAVEE_HERO_SHOT") || Diag.EnvFlag("WAVEE_HOME_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_PROBE") || Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE"))
+        if (Diag.EnvFlag("WAVEE_NAV_PROBE") || Diag.EnvFlag("WAVEE_CONN_STRESS") || Diag.EnvFlag("WAVEE_TRACKLIST_SHOT") || Diag.EnvFlag("WAVEE_HERO_SHOT") || Diag.EnvFlag("WAVEE_HOME_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_PROBE") || Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE") || Diag.EnvFlag("WAVEE_MEM_SOAK"))
         {
             ProbeNav = GoNav; ProbeBack = Back; ProbeForward = Forward; ProbeTheme = ToggleTheme; ProbeOpenTab = OpenNewTab;
             // Exactly the Home-card path: stash a preview (→ DetailShell mounts the PREVIEW path, not the skeleton path the
@@ -395,6 +396,7 @@ sealed class WaveeShell : Component
     void Go(string key, string? arg)
     {
         _history.Add(_route.Peek());
+        if (_history.Count > MaxBackStack) _history.RemoveAt(0);   // bound the in-memory back-stack
         _forwardHistory.Clear();
         _canForward.Value = false;
         _route.Value = new Route(key, arg);
@@ -408,6 +410,7 @@ sealed class WaveeShell : Component
         if (_history.Count == 0) return;
         _morphBegin?.Invoke(_route.Peek().Name);   // reverse fly: snapshot the leaving page's cover; the like-tagged dest on the previous route flies it back
         _forwardHistory.Add(_route.Peek());
+        if (_forwardHistory.Count > MaxBackStack) _forwardHistory.RemoveAt(0);
         _canForward.Value = true;
         _route.Value = _history[^1];
         _history.RemoveAt(_history.Count - 1);

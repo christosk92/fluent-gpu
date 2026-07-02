@@ -30,7 +30,7 @@ public sealed class ItemsViewController
     /// scrolling the virtualized viewport. <paramref name="alignmentRatio"/> NaN = minimal scroll (the default
     /// BringIntoViewOptions); 0 = align item start to viewport start, 1 = end to end (the Home/End ratios,
     /// ItemsViewInteractions.cpp:1013-1016). <paramref name="animate"/> true = SMOOTH-scroll to the target (the
-    /// ScrollAnimator eases the offset, matching WinUI's <c>BringIntoViewOptions.AnimationDesired</c>); false (default) =
+    /// ScrollIntegrator eases the offset, matching WinUI's <c>BringIntoViewOptions.AnimationDesired</c>); false (default) =
     /// snap immediately. Animated paging (e.g. a PagedShelf's chevrons) passes true.</summary>
     public void StartBringItemIntoView(int index, float alignmentRatio = float.NaN, bool animate = false)
         => BringIntoViewImpl?.Invoke(index, alignmentRatio, animate);
@@ -489,16 +489,18 @@ public sealed class ItemsView : Component
             float content = horizontal ? sc.ContentW : sc.ContentH;
             target = Math.Clamp(target, 0f, MathF.Max(0f, content - viewport));
 
-            // Animated (WinUI AnimationDesired): set the TARGET only and arm the ScrollAnimator — phase 7 eases the live
-            // offset toward it (+ re-realizes the window + fades the bar). Snap (default): write Offset==Target and apply
-            // the -offset content transform now (the dispatcher's SetScrollOffset idiom, InputDispatcher.cs:388-433).
+            // Animated (WinUI AnimationDesired): record the PendingTarget + Programmatic WheelAnimating and arm the
+            // ScrollIntegrator — phase 7 chases the live offset toward it (+ re-realizes the window + fades the bar) with
+            // the ProgrammaticSpringHalflifeMs crit-damped chase. Snap (default): write Offset==Target and apply the
+            // -offset content transform now (the dispatcher's SetScrollOffset idiom, InputDispatcher.cs:388-433).
             if (animate)
             {
-                sc.ScrollMode = ScrollAnimator.ProgrammaticMode;
+                sc.Phase = ScrollIntegrator.WheelAnimating;
+                sc.PhaseFlags = ScrollState.PhaseProgrammatic;
                 sc.FlingVelocity = 0f;
                 sc.FlingRetargeted = false;
                 sc.FlingSnapTarget = float.NaN;
-                if (horizontal) sc.TargetX = target; else sc.TargetY = target;
+                if (horizontal) sc.PendingTargetX = target; else sc.PendingTargetY = target;
                 Context.ArmScroll?.Invoke(vp);
                 Context.RequestRerender();
                 return;

@@ -213,11 +213,12 @@ sealed class TrackList : Component
         // its own binds (BoundRowContent / BoundTitle), so a track change recolours and a sort change reorders the
         // realized rows IN PLACE — no whole-list epoch, no list re-render. Tier/column changes alter the slot SET and
         // remount via the keyed wrapper below.
+        bool labeled = tier <= 3;   // wide tiers (≥ 440px) show command-bar labels; narrow lists collapse to icon-only
         Element chrome = new BoxEl
         {
             Key = "chrome", Direction = 1, Padding = new Edges4(PadX, WaveeSpace.S, PadX, 0f),
-            // Vertical layout: the header already shows the toolbar (right of Play), so the chrome is just the columns.
-            Children = _showToolbar ? [Toolbar(), Header(set, tracks, sort)] : [Header(set, tracks, sort)],
+            // The command bar (filter/sort/row-size) sits above the column header; the rail owns the context actions.
+            Children = _showToolbar ? [Toolbar(labeled), Header(set, tracks, sort)] : [Header(set, tracks, sort)],
         };
 
         Element RealList() => View().Length == 0
@@ -311,21 +312,56 @@ sealed class TrackList : Component
     }
 
     // ── chrome (fixed) ───────────────────────────────────────────────────────────────────────────────────
-    // The list controls, right-aligned (filter · more · sort · density). No count/duration summary here — that lives in
-    // the rail's meta line, so the strip doesn't duplicate it.
-    Element Toolbar() => new BoxEl
+    // The track-list command bar: ONE left-aligned WinUI CommandBar above the column header, grouped by a vertical
+    // separator — [Play · Shuffle] | [Sort · Row size] — with a "Find" search field docked alone on the RIGHT. The
+    // search field carries the filter FUNNEL as its trailing affix (advanced filter folded into search — hide explicit /
+    // videos only, a light checkable menu), so there's no separate Filter button. Every command shows icon + label at
+    // wide tiers and collapses to icon-only at a narrow list (tier ≥ 4, < 440px) — the DefaultLabelPosition=Right +
+    // dynamic-overflow behavior, in Wavee's own 32px pill styling. The rail owns Add-to-queue / Copy-to-playlist, so the
+    // bar doesn't carry them. Keyed by the labeled state so a tier cross rebuilds cleanly. (Composed from ToolFx, not the
+    // CommandBar control, which only does the classic labels-on-open mode.)
+    Element Toolbar(bool labeled)
     {
-        Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.End, Gap = WaveeSpace.XS,
-        Margin = new Edges4(0f, 0f, 0f, WaveeSpace.XS),
-        Children =
-        [
-            Embed.Comp(() => new FilterButton(_h.Query, _h.Flags, _h.SetFlags, _model.HasVideo)),
-            Embed.Comp(() => new MoreButton(_model, _h)),
-            // The Sort button opens the "sort by" flyout — the only way to sort by Artist (no column of its own).
-            Embed.Comp(() => new SortMenuButton(_h.Sort, _h.SetSort, _cfg.ShowAlbumColumn, _hasDate)),
-            Embed.Comp(() => new ListButton(_h.Density, _h.SetDensity)),
-        ],
-    };
+        // Play / Shuffle: labeled (icon + text) at wide tiers, icon-only when the list narrows — the same collapse as the
+        // view controls. Plain action buttons (no flyout) so they take the no-op NoAnchor.
+        Element Cmd(string glyph, string label, Action onClick) => labeled
+            ? ToolFx.LabeledButton(glyph, label, false, onClick, NoAnchor)
+            : ToolFx.Button(glyph, false, onClick, NoAnchor);
+
+        var left = new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = 2f,
+            Children =
+            [
+                Cmd(Icons.Play, Loc.Get(Strings.Detail.Play), _h.PlayAll),
+                Cmd(Icons.Shuffle, Loc.Get(Strings.Detail.Shuffle), _h.Shuffle),
+                ToolFx.Separator(),
+                // The Sort button opens the "sort by" flyout — the only way to sort by Artist (no column of its own).
+                Embed.Comp(() => new SortMenuButton(_h.Sort, _h.SetSort, _cfg.ShowAlbumColumn, _hasDate, labeled)),
+                Embed.Comp(() => new ListButton(_h.Density, _h.SetDensity, labeled)),
+            ],
+        };
+        // The "Find" box, docked alone on the right — a plain search field (no suggestions flyout), two-way bound to the
+        // live filter query (View() matches case-insensitively on title / artist / album). Its trailing affix is the
+        // filter funnel, so the "advanced filter" (hide explicit / videos only) folds into the search box itself.
+        Element search = Embed.Comp(() => new EditableText
+        {
+            Placeholder = Loc.Get(Strings.Detail.Filter.SearchThisList),
+            Width = labeled ? 220f : 150f, Height = 32f,
+            Text = _h.Query,
+            RightAffix = Embed.Comp(() => new FilterButton(_h.Flags, _h.SetFlags, _model.HasVideo)),
+        });
+        return new BoxEl
+        {
+            Key = labeled ? "cmdbar:lbl" : "cmdbar:icon",
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.XS,
+            Margin = new Edges4(0f, 0f, 0f, WaveeSpace.XS),
+            Children = [left, new BoxEl { Grow = 1f }, search],
+        };
+    }
+
+    // A no-op OnRealized for the plain action buttons (Play / Shuffle) — they open no flyout, so they need no anchor.
+    static readonly Action<NodeHandle> NoAnchor = static _ => { };
 
     static Element ToolBtn(string glyph) => new BoxEl
     {
@@ -692,7 +728,17 @@ sealed class SelectionBar : Component
                 new TextEl(Strings.Detail.SelectedCount(count)) { Size = 13f, Weight = 600, Color = Tok.TextPrimary },
                 Divider(),
                 ActionBtn(Icons.Play, Loc.Get(Strings.Detail.Play), () => { var s = Sel(); if (svc is not null && s.Count > 0) { _ = svc.Player.PlayTrackAsync(s[0].Uri); for (int i = 1; i < s.Count; i++) _ = svc.Player.EnqueueAsync(s[i].Uri); _sel.DeselectAll(); } }),
-                ActionBtn(Icons.List, Loc.Get(Strings.Detail.AddToQueue), () => { var s = Sel(); if (svc is not null && s.Count > 0) { foreach (var t in s) _ = svc.Player.EnqueueAsync(t.Uri); Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(s.Count)), ToastSeverity.Success); _sel.DeselectAll(); } }),
+                ActionBtn(Icons.Next, Loc.Get(Strings.Detail.PlayNext), () =>
+                {
+                    var s = Sel();
+                    if (svc is not null && s.Count > 0)
+                    {
+                        int n = DetailQueueActions.PlayNext(svc.Player, s, s.Count);
+                        if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success);
+                        _sel.DeselectAll();
+                    }
+                }),
+                ActionBtn(Icons.Queue, Loc.Get(Strings.Detail.AddToEndOfQueue), () => { var s = Sel(); if (svc is not null && s.Count > 0) { int n = DetailQueueActions.AddToEnd(svc.Player, s, s.Count); if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success); _sel.DeselectAll(); } }),
                 ActionBtn(Icons.Add, Loc.Get(Strings.Detail.AddToPlaylist), () => { var s = Sel(); if (lib is not null && s.Count > 0) { var (uri, name) = lib.AddToDefaultPlaylist(s); Toasts.Show(Strings.Detail.AddedToPlaylist(name), ToastSeverity.Success); _sel.DeselectAll(); } }),
                 Divider(),
                 ActionBtn(Icons.Accept, Loc.Get(Strings.Detail.SelectAll), () => _sel.SelectAll()),
@@ -786,9 +832,9 @@ sealed class SortMenuButton : Component
 {
     readonly IReadSignal<TrackSort> _sort;
     readonly Action<TrackSort> _setSort;
-    readonly bool _hasAlbum, _hasDate;
-    public SortMenuButton(IReadSignal<TrackSort> sort, Action<TrackSort> setSort, bool hasAlbum, bool hasDate)
-    { _sort = sort; _setSort = setSort; _hasAlbum = hasAlbum; _hasDate = hasDate; }
+    readonly bool _hasAlbum, _hasDate, _labeled;
+    public SortMenuButton(IReadSignal<TrackSort> sort, Action<TrackSort> setSort, bool hasAlbum, bool hasDate, bool labeled = false)
+    { _sort = sort; _setSort = setSort; _hasAlbum = hasAlbum; _hasDate = hasDate; _labeled = labeled; }
 
     static string Label(SortColumn c) => c switch
     {
@@ -843,7 +889,9 @@ sealed class SortMenuButton : Component
             handle.Value.ClosedAction = () => handle.Value = null;
         }
 
-        return ToolFx.Button(Icons.Sort, active, Toggle, h => anchor.Value = h);
+        return _labeled
+            ? ToolFx.LabeledButton(Icons.Sort, Loc.Get(Strings.Library.SortBy), active, Toggle, h => anchor.Value = h)
+            : ToolFx.Button(Icons.Sort, active, Toggle, h => anchor.Value = h);
     }
 }
 
@@ -858,98 +906,105 @@ static class ToolFx
         return new BoxEl
         {
             Width = 32f, Height = 32f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = CornerRadius4.All(WaveeRadius.Control),
+            Corners = CornerRadius4.All(16f),
             Fill = active ? accent with { A = 0.16f } : ColorF.Transparent,
-            HoverFill = active ? accent with { A = 0.24f } : Tok.FillSubtleSecondary,
+            HoverFill = active ? accent with { A = 0.24f } : Tok.FillSubtleTertiary,
             PressedFill = active ? accent with { A = 0.12f } : Tok.FillSubtleTertiary,
             OnClick = onClick, OnRealized = onRealized,
             Children = [Ui.Icon(glyph, 14f, active ? accent : Tok.TextSecondary)],
         };
     }
 
+    // The labeled (icon + text) command-bar form of Button — the wide-layout variant; opens the same flyout on click and
+    // carries the same accent "on" ramp so an active filter/sort reads identically to the icon-only form.
+    public static Element LabeledButton(string glyph, string label, bool active, Action onClick, Action<NodeHandle> onRealized)
+    {
+        ColorF accent = Tok.AccentTextPrimary;
+        return new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = 6f, Height = 32f,
+            Padding = new Edges4(10f, 0f, 12f, 0f),
+            Corners = CornerRadius4.All(16f),
+            Fill = active ? accent with { A = 0.16f } : ColorF.Transparent,
+            HoverFill = active ? accent with { A = 0.24f } : Tok.FillSubtleTertiary,
+            PressedFill = active ? accent with { A = 0.12f } : Tok.FillSubtleTertiary,
+            OnClick = onClick, OnRealized = onRealized,
+            Children =
+            [
+                Ui.Icon(glyph, 14f, active ? accent : Tok.TextSecondary),
+                new TextEl(label) { Size = 13f, Weight = 600, Color = active ? accent : Tok.TextSecondary },
+            ],
+        };
+    }
+
+    // A vertical group separator (the WinUI AppBarSeparator) — a 1px divider between command groups in the bar.
+    public static Element Separator() => new BoxEl
+    {
+        Width = 1f, Height = 20f, AlignSelf = FlexAlign.Center, Fill = Tok.StrokeDividerDefault,
+        Margin = new Edges4(WaveeSpace.XS, 0f, WaveeSpace.XS, 0f),
+    };
+
     public static PopupOptions Popup => new(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false };
 }
 
-// The Filter button: opens a flyout with a live search box (filters the list by title / artist / album) plus an
-// advanced toggle (hide explicit). The button shows the accent "on" state whenever a filter is set.
+// The search box's trailing filter funnel (mounted as the EditableText RightAffix — so "advanced filter" lives INSIDE
+// the Find box). Opens a light CHECKABLE MenuFlyout of the quick-filter toggles (Hide explicit / Videos only) — the same
+// lightweight menu style as Sort, replacing the old heavy titled Layer panel. Shows an accent pill + glyph when a
+// filter is set.
 sealed class FilterButton : Component
 {
-    readonly Signal<string> _query;
     readonly IReadSignal<TrackFilterFlags> _flags;
     readonly Action<TrackFilterFlags> _setFlags;
     readonly bool _hasVideo;
-    public FilterButton(Signal<string> query, IReadSignal<TrackFilterFlags> flags, Action<TrackFilterFlags> setFlags, bool hasVideo)
-    { _query = query; _flags = flags; _setFlags = setFlags; _hasVideo = hasVideo; }
+    public FilterButton(IReadSignal<TrackFilterFlags> flags, Action<TrackFilterFlags> setFlags, bool hasVideo)
+    { _flags = flags; _setFlags = setFlags; _hasVideo = hasVideo; }
+
+    // Checkable menu items (WinUI AppBarToggleButton-in-menu): the ✓ shows the live flag; clicking toggles it.
+    IReadOnlyList<MenuFlyoutItem> Items()
+    {
+        var f = _flags.Peek();
+        var items = new List<MenuFlyoutItem>(2)
+        {
+            MenuFlyoutItem.Toggle(Loc.Get(Strings.Detail.Filter.HideExplicit), (f & TrackFilterFlags.HideExplicit) != 0,
+                () => _setFlags(_flags.Peek() ^ TrackFilterFlags.HideExplicit)),
+        };
+        if (_hasVideo)
+            items.Add(MenuFlyoutItem.Toggle(Loc.Get(Strings.Detail.Filter.VideosOnly), (f & TrackFilterFlags.VideosOnly) != 0,
+                () => _setFlags(_flags.Peek() ^ TrackFilterFlags.VideosOnly)));
+        return items;
+    }
 
     public override Element Render()
     {
         var anchor = UseRef<NodeHandle>(default);
         var handle = UseRef<OverlayHandle?>(null);
         var svc = UseContext(Overlay.Service);
-        bool active = !string.IsNullOrWhiteSpace(_query.Value) || _flags.Value != TrackFilterFlags.None;   // subscribe → accent when filtering
-
-        // The body is its OWN component so the toggle rows track the LIVE flags — a static snapshot would let the
-        // controlled ToggleSwitch revert to its stale value after a tap (the reported bug).
-        Element Content() => Embed.Comp(() => new FilterPanel(_query, _flags, _setFlags, _hasVideo));
+        bool active = _flags.Value != TrackFilterFlags.None;   // subscribe → accent when a quick-filter toggle is on
+        ColorF accent = Tok.AccentTextPrimary;
 
         void Toggle()
         {
             if (svc is null) return;
             if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
-            handle.Value = svc.Open(() => anchor.Value, Content, FlyoutPlacement.BottomEdgeAlignedRight, ToolFx.Popup);
+            handle.Value = svc.Open(() => anchor.Value, () => MenuFlyout.Build(Items(), () => handle.Value?.Close()),
+                FlyoutPlacement.BottomEdgeAlignedRight, ToolFx.Popup);
             handle.Value.ClosedAction = () => handle.Value = null;
         }
-        return ToolFx.Button(Icons.Filter, active, Toggle, h => anchor.Value = h);
-    }
-}
-
-// The filter flyout body: a search box (filters title/artist/album) over label-left / switch-right toggle rows + Clear.
-// A Component so a flag change re-renders it and the controlled switches stay in sync (no revert).
-sealed class FilterPanel : Component
-{
-    readonly Signal<string> _query;
-    readonly IReadSignal<TrackFilterFlags> _flags;
-    readonly Action<TrackFilterFlags> _setFlags;
-    readonly bool _hasVideo;
-    public FilterPanel(Signal<string> query, IReadSignal<TrackFilterFlags> flags, Action<TrackFilterFlags> setFlags, bool hasVideo)
-    { _query = query; _flags = flags; _setFlags = setFlags; _hasVideo = hasVideo; }
-
-    public override Element Render()
-    {
-        var flags = _flags.Value;   // subscribe → the switches reflect the live state
-        bool Has(TrackFilterFlags f) => (flags & f) != 0;
-
-        var rows = new List<Element>(6)
+        // Mirror the WinUI TextControlButton affix (EditableText.InnerButton): Width 30 + the inner-button margin 0,4,4,4,
+        // and NO explicit height / AlignSelf — the field's affix row (AlignItems=Stretch) fills it to full height, while
+        // AlignItems/Justify=Center vertically centers the glyph. Accent pill + glyph when a filter is active.
+        return new BoxEl
         {
-            new TextEl(Loc.Get(Strings.Detail.Filter.Title)) { Size = 13f, Weight = 700, Color = Tok.TextPrimary },
-            TextBox.Create(placeholder: Loc.Get(Strings.Detail.Filter.SearchThisList), width: 248f, text: _query),
-            new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault, Margin = new Edges4(0f, WaveeSpace.XS, 0f, WaveeSpace.XS) },
-            ToggleRow(Loc.Get(Strings.Detail.Filter.HideExplicit), Has(TrackFilterFlags.HideExplicit), () => _setFlags(flags ^ TrackFilterFlags.HideExplicit)),
+            Width = 30f, Margin = new Edges4(0f, 4f, 4f, 4f),
+            AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Corners = CornerRadius4.All(WaveeRadius.Control),
+            Fill = active ? accent with { A = 0.16f } : ColorF.Transparent,
+            HoverFill = active ? accent with { A = 0.24f } : Tok.FillSubtleSecondary,
+            PressedFill = active ? accent with { A = 0.12f } : Tok.FillSubtleTertiary,
+            OnClick = Toggle, OnRealized = h => anchor.Value = h,
+            Children = [Icon(Icons.Filter, 14f, active ? accent : Tok.TextSecondary)],
         };
-        if (_hasVideo)
-            rows.Add(ToggleRow(Loc.Get(Strings.Detail.Filter.VideosOnly), Has(TrackFilterFlags.VideosOnly), () => _setFlags(flags ^ TrackFilterFlags.VideosOnly)));
-        rows.Add(new BoxEl
-        {
-            Direction = 0, Justify = FlexJustify.End, Margin = new Edges4(0f, WaveeSpace.XS, 0f, 0f),
-            Children = [ClearButton(() => { _query.Value = ""; _setFlags(TrackFilterFlags.None); })],
-        });
-
-        return Layer(Edges4.All(WaveeSpace.M), new BoxEl { Direction = 1, Gap = WaveeSpace.S, MinWidth = 248f, Children = rows.ToArray() });
     }
-
-    // A settings-style row: label left (grows), switch right — no stacked header, no wasted left gutter.
-    static Element ToggleRow(string label, bool on, Action toggle) => new BoxEl
-    {
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, MinHeight = 32f,
-        Children = [new TextEl(label) { Size = 13f, Color = Tok.TextPrimary, Grow = 1f }, ToggleSwitch.Create(on, toggle)],
-    };
-
-    static Element ClearButton(Action onClick) => new BoxEl
-    {
-        Padding = new Edges4(WaveeSpace.S, WaveeSpace.XS, WaveeSpace.S, WaveeSpace.XS),
-        Corners = CornerRadius4.All(WaveeRadius.Control), HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
-        OnClick = onClick, Children = [new TextEl(Loc.Get(Strings.Detail.Filter.Clear)) { Size = 13f, Color = Tok.AccentTextPrimary }],
-    };
 }
 
 // The List button: opens a flyout with a stepped slider (Compact · Default · Cozy · Comfortable) controlling row height.
@@ -957,7 +1012,8 @@ sealed class ListButton : Component
 {
     readonly IReadSignal<int> _density;
     readonly Action<int> _setDensity;
-    public ListButton(IReadSignal<int> density, Action<int> setDensity) { _density = density; _setDensity = setDensity; }
+    readonly bool _labeled;
+    public ListButton(IReadSignal<int> density, Action<int> setDensity, bool labeled = false) { _density = density; _setDensity = setDensity; _labeled = labeled; }
 
     internal static string Label(int d) => d switch { 0 => Loc.Get(Strings.Detail.Density.Compact), 2 => Loc.Get(Strings.Detail.Density.Cozy), 3 => Loc.Get(Strings.Detail.Density.Comfortable), _ => Loc.Get(Strings.Detail.Density.Default) };
 
@@ -977,7 +1033,9 @@ sealed class ListButton : Component
             handle.Value.ClosedAction = () => handle.Value = null;
         }
         // Never accent — density is a view preference, not an active filter/sort (matches the reasoning in the design).
-        return ToolFx.Button(Icons.List, false, Toggle, h => anchor.Value = h);
+        return _labeled
+            ? ToolFx.LabeledButton(Icons.List, Loc.Get(Strings.Detail.Density.RowSize), false, Toggle, h => anchor.Value = h)
+            : ToolFx.Button(Icons.List, false, Toggle, h => anchor.Value = h);
     }
 }
 
@@ -1011,40 +1069,5 @@ sealed class DensityPanel : Component
                         length: 216f),
                 ],
             });
-    }
-}
-
-// The More (⋯) button: a MenuFlyout of list-level actions.
-sealed class MoreButton : Component
-{
-    readonly DetailModel _m;
-    readonly DetailHandlers _h;
-    public MoreButton(DetailModel m, DetailHandlers h) { _m = m; _h = h; }
-
-    IReadOnlyList<MenuFlyoutItem> Items() =>
-    [
-        new(Loc.Get(Strings.Detail.Play), Icons.Play, Invoke: () => _h.PlayAll()),   // late-binds via PlayAllOverride → visible (sorted) order
-        new(Loc.Get(Strings.Detail.AddToQueue), Icons.Add, Invoke: () => _h.AddToQueue()),
-        MenuFlyoutItem.Separator,
-        new(Loc.Get(Strings.Detail.GoToArtist), Enabled: _m.Artists.Count > 0,
-            Invoke: () => { if (_m.Artists.Count > 0) _h.Go(_m.Artists[0].Uri, _m.Artists[0].Name); }),
-        new(Loc.Get(Strings.Detail.Share), Icons.Share, Invoke: () => { /* TODO: share */ }),
-    ];
-
-    public override Element Render()
-    {
-        var anchor = UseRef<NodeHandle>(default);
-        var handle = UseRef<OverlayHandle?>(null);
-        var svc = UseContext(Overlay.Service);
-
-        void Toggle()
-        {
-            if (svc is null) return;
-            if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
-            handle.Value = svc.Open(() => anchor.Value, () => MenuFlyout.Build(Items(), () => handle.Value?.Close()),
-                FlyoutPlacement.BottomEdgeAlignedRight, ToolFx.Popup);
-            handle.Value.ClosedAction = () => handle.Value = null;
-        }
-        return ToolFx.Button(Icons.More, false, Toggle, h => anchor.Value = h);
     }
 }

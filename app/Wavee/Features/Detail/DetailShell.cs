@@ -21,8 +21,8 @@ readonly record struct DetailHandlers(
     // List-view controls surfaced by the chrome / header toolbar (search query, quick-filter flags, row density).
     Signal<string> Query, IReadSignal<TrackFilterFlags> Flags, Action<TrackFilterFlags> SetFlags,
     IReadSignal<int> Density, Action<int> SetDensity,
-    // Playlist/queue mutations for THIS context (add the context's tracks to the queue / a user playlist).
-    Action AddToQueue, Action AddToPlaylist,
+    // Playlist/queue mutations for THIS context (insert next / append to the queue / add to a user playlist).
+    Action PlayNext, Action AddToQueue, Action AddToPlaylist,
     // Open a related album / "Featured on" playlist card. Unlike Go (a bare route flip), these stash the card's partial
     // model first so the destination takes DetailPage's in-place fast path instead of a full skeleton remount. See DetailNav.
     Action<Album> OpenAlbum, Action<PlaylistSummary> OpenPlaylist,
@@ -127,7 +127,7 @@ sealed class DetailShell : Component
             ? accent
             : WaveePalette.BackgroundDark(art ?? WaveePalette.Neutral);
         // The Mica scrim colour: the art's tinted-dark tone at a low alpha so Mica keeps reading as Mica (≈0.14). Null
-        // when there is no real palette ⇒ plain Mica. Liked (single-column) never tints.
+        // when there is no real palette ⇒ plain Mica.
         ColorF? micaTint = (art is null || !_cfg.TwoColumn) ? null : (WaveePalette.TintedDark(art) with { A = 0.14f });
 
         // ── page-scoped Mica tint via the activation lifecycle (reconciler-hooks §0bis) ──
@@ -156,9 +156,12 @@ sealed class DetailShell : Component
         // Add-to-queue / add-to-playlist act on THIS context's tracks (capped batch); each confirms with a toast.
         void AddToQueue()
         {
-            if (svc is null) return;
-            int n = Math.Min(m.Tracks.Count, 50);
-            for (int i = 0; i < n; i++) _ = svc.Player.EnqueueAsync(m.Tracks[i].Uri);
+            int n = DetailQueueActions.AddToEnd(svc?.Player, m.Tracks);
+            if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success);
+        }
+        void PlayNext()
+        {
+            int n = DetailQueueActions.PlayNext(svc?.Player, m.Tracks);
             if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success);
         }
         void AddToPlaylist()
@@ -193,7 +196,7 @@ sealed class DetailShell : Component
         var playAllOverride = new Action?[1];   // TrackList fills [0] with the visible-order play; the rail's Play late-binds through it
         var handlers = new DetailHandlers(Play, () => { var ov = playAllOverride[0]; if (ov is not null) ov(); else Play(0); },
             Shuffle, PlayContext, go, accent, _sort, SetSort,
-            _query, _filterFlags, f => _filterFlags.Value = f, _density, SetDensity, AddToQueue, AddToPlaylist,
+            _query, _filterFlags, f => _filterFlags.Value = f, _density, SetDensity, PlayNext, AddToQueue, AddToPlaylist,
             a => DetailNav.OpenAlbum(navPreview, morph, go, a),
             p => DetailNav.OpenPlaylist(navPreview, morph, go, p),
             playAllOverride);
@@ -204,7 +207,7 @@ sealed class DetailShell : Component
         // branch so single-column / vertical pages don't take a needless re-render on every resize.
         var viewportSig = UseContextSignal(Viewport.Size);
 
-        // Single-column (liked): just the track table, full width, no rail / no wash (its toolbar stays in the chrome).
+        // Single-column fallback: just the track table, full width, no rail / no wash.
         if (!_cfg.TwoColumn)
             return Embed.Comp(() => new TrackList(_route, _model, bridge, handlers));
 
@@ -212,9 +215,11 @@ sealed class DetailShell : Component
         void Measure(RectF r) { if (r.W > 0f) { int md = ModeFor(r.W); if (md != _mode.Peek()) _mode.Value = md; } }
         int mode = _mode.Value;   // subscribe → re-render on mode change
 
-        // The track list (drops columns by breakpoint, owns the now-playing re-skin + an external SelectionModel). In
-        // VERTICAL mode its toolbar moves into the rail header, so drop it from the chrome there.
-        bool showToolbar = mode != Vertical;
+        // The track list (drops columns by breakpoint, owns the now-playing re-skin + an external SelectionModel). Its
+        // view controls (filter / sort / row size) ride a responsive Fluent command bar in the list's OWN chrome (always
+        // on for tracks; the rail owns the context actions); the podcast episode toolbar stays in the episode column on
+        // wide layouts.
+        bool showToolbar = _cfg.Content == DetailContent.Tracks || mode != Vertical;
         // Right column = the track table OR the episode list (podcast shows). Distinct Keys so an album↔show swap in the
         // reused detail slot remounts the column cleanly instead of reconciling TrackList against EpisodeList.
         Element right = _cfg.Content == DetailContent.Episodes

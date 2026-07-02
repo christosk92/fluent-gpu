@@ -51,6 +51,7 @@ sealed class WaveeApp : Component
         var post = Context.UsePost();
         var loginSession = UseRef<System.Threading.CancellationTokenSource?>(null);
         var wasAuthed = UseRef(false);   // have we EVER authenticated this run? (fake demo: logout → takeover, but no initial-launch flash)
+        var governorTimer = UseRef<System.Threading.Timer?>(null);   // rooted here so the periodic MemoryGovernor poll isn't GC-collected (the app root never unmounts)
 
         // ── Simultaneous live login (device code + browser race) ─────────────────────────────────────────────────────
         // The takeover runs BOTH methods at once: RestartCode polls the device code (the two-pane's QR + pairing code), and
@@ -112,6 +113,20 @@ sealed class WaveeApp : Component
             bridge.Activate(post);
             libBridge.Activate(post);
             store.Activate(post);
+
+            // Drive the MemoryGovernor from a periodic OS-memory-pressure poll. The Timer fires on a background thread but
+            // marshals Trim to the UI thread (post) so the UI-thread-affine detail caches shed safely. At rest (no pressure)
+            // it sheds nothing — each cache's LRU cap already bounds steady state; under real pressure it sheds further.
+            governorTimer.Value ??= new System.Threading.Timer(_ =>
+            {
+                var info = GC.GetGCMemoryInfo();
+                double load = info.HighMemoryLoadThresholdBytes > 0 ? (double)info.MemoryLoadBytes / info.HighMemoryLoadThresholdBytes : 0.0;
+                var level = load >= 1.0 ? Wavee.Backend.Residency.MemoryPressure.Critical
+                          : load >= 0.85 ? Wavee.Backend.Residency.MemoryPressure.Moderate
+                          : Wavee.Backend.Residency.MemoryPressure.Normal;
+                post(() => _services.Residency.Trim(level));
+            }, null, dueTime: 30_000, period: 30_000);
+
             if (Diag.EnvFlag("WAVEE_FAKE_CHALLENGE"))
             {
                 // Deterministic login screenshots (no network): seed a canned pairing challenge so the takeover renders the

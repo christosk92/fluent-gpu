@@ -383,8 +383,13 @@ sealed class LibraryDetailPane : Component
         void AddToQueue()
         {
             var m = Cur(); if (m is null) return;
-            int n = Math.Min(m.Tracks.Count, 50);
-            for (int i = 0; i < n; i++) _ = _svc.Player.EnqueueAsync(m.Tracks[i].Uri);
+            int n = DetailQueueActions.AddToEnd(_svc.Player, m.Tracks);
+            if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success);
+        }
+        void PlayNext()
+        {
+            var m = Cur(); if (m is null) return;
+            int n = DetailQueueActions.PlayNext(_svc.Player, m.Tracks);
             if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success);
         }
         void AddToPlaylist()
@@ -396,7 +401,7 @@ sealed class LibraryDetailPane : Component
         }
         return new DetailHandlers(Play, () => Play(0), Shuffle, PlayContext, go, Tok.AccentDefault,
             _sort, s => _sort.Value = s, _query, _flags, f => _flags.Value = f, _density, d => _density.Value = d,
-            AddToQueue, AddToPlaylist,
+            PlayNext, AddToQueue, AddToPlaylist,
             // The embedded TrackList has no trailing shelves, so these are never invoked here; route through DetailNav
             // (no preview/morph store) so behaviour stays a plain nav if that ever changes.
             a => DetailNav.OpenAlbum(null, null, go, a), p => DetailNav.OpenPlaylist(null, null, go, p));

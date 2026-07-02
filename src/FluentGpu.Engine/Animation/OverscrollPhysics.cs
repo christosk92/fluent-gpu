@@ -11,63 +11,73 @@ namespace FluentGpu.Animation;
 /// </summary>
 public static class OverscrollPhysics
 {
-    // DirectManipulationService.cpp — scale falls from 1 → s_scaleOverpanValue over s_maxOverpanDistance px of pull.
-    public const float DmMaxOverpanDistancePx = 200f;
-    public const float DmScaleAtMaxOverpan = 0.91f;
-
-    // ScrollInputHelper.cpp:309 — ScrollViewer / ScrollPresenter default overpan cap.
+    // ScrollInputHelper.cpp:309 — ScrollViewer / ScrollPresenter default overpan cap (kept: BandLimit / OverscrollLimitFraction).
     public const float ViewportLimitFraction = 0.1f;
+
+    // Reserved DM touch-overpan pull distance (the translation-only IT/touchpad path does not use it).
+    public const float DmMaxOverpanDistancePx = 200f;
 
     // TODO (§5f, deferred): snap on touchpad coast — when a precision-touchpad coast settles within ~5f DIP of a
     // configured snap point, nudge the final rest ONTO it (the touch-fling snap-retarget already does this for a flick;
     // a touchpad coast currently settles wherever the momentum lands). Deferred until on-device snap-list tuning.
 
-    // InteractionTracker-style release — snappy bounce (WinUI ScrollPresenter elastic settle).
-    public static readonly float SpringOmegaRadPerS = Env("FG_OS_OMEGA", 42f);
-    public static readonly float SpringDampingRatio = Env("FG_OS_ZETA", 1f);
+    // ── v2 iOS rubber-band (scroll-feel-rework-v2 §4.4/§4.6). ONE shipping feel — no env knobs on the scroll path.
+    /// <summary>iOS rubber-band coefficient — the marginal slope at zero excess. <c>f(x)=x·d·c/(d+c·|x|)</c>.</summary>
+    public const float RubberC = 0.55f;
+    /// <summary>Asymptote fraction of the viewport the band approaches but NEVER reaches: <c>d = 0.15·viewport</c>.</summary>
+    public const float BandAsymptoteFraction = 0.15f;
 
-    /// <summary>Glide-into-edge: fraction of residual speed feeding the spring (higher = livelier edge bounce).</summary>
-    public static readonly float MomentumSpringCoupling = Env("FG_OS_MOMENTUM", 0.45f);
+    // Critically-damped release (WinUI ScrollPresenter elastic settle) — plain consts, one shipping feel.
+    /// <summary>Overscroll snap-back frequency (rad/s) — WebKit λ=12.5; τ=80ms, settle ≈320ms (was the snappy 42).</summary>
+    public const float SnapBackOmega = 12.5f;
+    public const float SpringDampingRatio = 1f;
+
+    /// <summary>Edge-bounce seed coupling γ = WebKit's momentum coefficient <c>a</c> = 0.31 (scroll-feel-v2.1 §A.1). At
+    /// ω=12.5 the critically-damped seed <c>v0·t·e^(−ωt)</c> is ALGEBRAICALLY WebKit's momentum bounce
+    /// <c>(v0·a)·t·e^(−(s/p)t)</c> because <c>s/p = 20/1.6 = 12.5</c>, so γ=0.31 makes our bounce the WebKit exponential
+    /// exactly and reproduces its ~9 px excursion per 1000 px/s. Was the ad-hoc 0.45.</summary>
+    public const float MomentumSpringCoupling = 0.31f;
+
+    /// <summary>Bounce depth cap <c>Cpeak</c> — the deepest a velocity-only edge bounce may reach as a fraction of the
+    /// asymptote <c>d</c> (scroll-feel-v2.1 §A.1). The exact peak overshoot of <c>v0·t·e^(−ωt)</c> is <c>v0/(ω·e)</c>, so
+    /// clamping the seed velocity to <c>Cpeak·d·ω·e</c> bounds the peak at <c>Cpeak·d &lt; d</c> — which keeps §A.4's
+    /// re-grab inverse strictly inside its valid domain (the F7 divergence is then unreachable on a bounce). 0.6 is an
+    /// honest feel constant: the soft-spring-into-asymptotic-band composition is ours (no shipping system stacks these
+    /// two), so we keep the simplest value that guarantees <c>peak &lt; d</c> rather than invent a pedigree.</summary>
+    public const float MomentumPeakDepthFraction = 0.6f;
 
     public static float BandLimit(float viewportExtent)
         => ViewportLimitFraction * MathF.Max(0f, viewportExtent);
 
-    /// <summary>Signed visual band for a past-edge excess (offset space). Ratio damping with a SOFT knee at
-    /// <c>soft = 2·limit</c> (gentler initial give — the band tracks the finger more closely for the first pixels of
-    /// touch overpan), still hard-capped at the 10% viewport <see cref="BandLimit"/>. The softer denominator only
-    /// changes the APPROACH; the cap is unchanged (DM / IT elastic family). Saturates to <c>limit</c> at <c>excess ≥ soft</c>.</summary>
+    /// <summary>Signed visual band for a past-edge excess (offset space) — the canonical iOS asymptotic rubber-band
+    /// (scroll-feel-rework-v2 §4.4): <c>f(x) = x·d·c/(d + c·|x|)</c> with <c>c = <see cref="RubberC"/> = 0.55</c> (the
+    /// marginal slope at 0) and <c>d = <see cref="BandAsymptoteFraction"/>·viewport</c> the asymptote the band approaches
+    /// but NEVER reaches — bounded, no wall, marginal give &gt; 0 everywhere (replaces the min()-clamped soft-knee that
+    /// froze the content at the 10% cap). Applied to past-edge excess only; in-range is 1:1.</summary>
     public static float BandFromExcess(float excess, float viewportExtent)
     {
         if (excess == 0f || viewportExtent <= 0f) return 0f;
-        float limit = BandLimit(viewportExtent);
-        float soft = limit * 2f; // gentler initial give (the soft knee)
-        float raw = MathF.Abs(excess);
-        float d = MathF.Min(limit, soft * raw / (raw + soft));
-        return excess < 0f ? -d : d;
+        float d = BandAsymptoteFraction * viewportExtent;
+        float ax = MathF.Abs(excess);
+        float f = (ax * d * RubberC) / (d + RubberC * ax);
+        return excess < 0f ? -f : f;
     }
 
-    /// <summary>EXACT inverse of <see cref="BandFromExcess"/> for re-seeding raw position mid-spring (|band| &lt; limit).
-    /// Uses the same <c>soft = 2·limit</c> knee so a re-seed round-trips (a headless gate pins this within 0.5px).</summary>
+    /// <summary>EXACT inverse of <see cref="BandFromExcess"/> for re-seeding raw position on a mid-spring re-grab —
+    /// <c>x = f·d / (c·(d − |f|))</c>, valid for ALL <c>|f| &lt; d</c>. No saturation early-out: the v2 map never
+    /// saturates (band &lt; d always), so the inverse is exact everywhere in the band range (a headless gate round-trips
+    /// this within 0.5px including at/above the OLD saturation point).</summary>
     public static float ExcessFromBand(float band, float viewportExtent)
     {
         if (band == 0f || viewportExtent <= 0f) return 0f;
-        float limit = BandLimit(viewportExtent);
-        float soft = limit * 2f; // must match BandFromExcess for the inverse to hold
-        float abs = MathF.Abs(band);
-        if (abs >= limit) return band < 0f ? -limit : limit;
-        float excess = abs * soft / (soft - abs);
-        return band < 0f ? -excess : excess;
-    }
-
-    /// <summary>DM scale compression during overpan: 1 at rest → <see cref="DmScaleAtMaxOverpan"/> at the band cap.
-    /// Reserved for the Windows DM touch path; the precision-touchpad / InteractionTracker path is translation-only.</summary>
-    public static float ScaleForBand(float bandAbs, float viewportExtent)
-    {
-        if (bandAbs <= 0f || viewportExtent <= 0f) return 1f;
-        float limit = BandLimit(viewportExtent);
-        if (limit <= 0f) return 1f;
-        float t = MathF.Min(bandAbs / limit, 1f);
-        return 1f - (1f - DmScaleAtMaxOverpan) * t;
+        float d = BandAsymptoteFraction * viewportExtent;
+        float af = MathF.Abs(band);
+        // Safety clamp: BandFromExcess never emits |f| ≥ d, but a band DISPLACEMENT can also come from the spring
+        // (velocity-seeded edge bounce overshoot) and may touch/exceed the asymptote — the true inverse diverges
+        // there (d − af ≤ 0 ⇒ sign-flipped/∞ excess folded into a re-grab anchor). Cap just inside the asymptote.
+        if (af >= d) af = 0.98f * d;
+        float x = (af * d) / (RubberC * (d - af));   // |f| < d after the clamp
+        return band < 0f ? -x : x;
     }
 
     /// <summary>Advance a friction coast one frame: decay the velocity by <paramref name="decayPerS"/>^dt and add the
@@ -87,47 +97,26 @@ public static class OverscrollPhysics
         return dpos;
     }
 
-    /// <summary>Velocity-sensitive precision-touchpad transfer curve, applied once to the frame-coalesced DIP delta.
-    /// Small motion (≤18 DIP/frame) stays exactly 1:1, so short two-finger adjustments never become twitchy. Medium
-    /// motion receives a smoothly increasing gain (up to 1.20× by 96 DIP/frame), removing the "heavy / work the fingers"
-    /// feel without globally multiplying every gesture. Large accelerated packets pass through a soft output knee toward
-    /// a 180-DIP safety ceiling instead of exploding. Because gain falls with packet magnitude, the driver's momentum tail
-    /// also decelerates progressively rather than reading as a linear ramp. Packet shaping only: no synthetic coast.</summary>
-    public static float ShapeTouchpadPacketDelta(float deltaDip)
+    // (ShapeTouchpadPacketDelta — the second, frame-coalescing-sensitive gain curve of the deleted touchpad
+    // integrator — is GONE: contact deltas apply 1:1 by contract (docs/plans/scroll-feel-rework-design.md §12; H2).)
+
+    /// <summary>Seed the edge-bounce spring when inertia hits a clamp (touch fling or an OS-momentum tail at the edge) —
+    /// VELOCITY-ONLY, position untouched (scroll-feel-v2.1 §A.1). This is the universal shipping pattern (iOS seeds a ζ=1
+    /// spring at the current stretch with the edge-crossing velocity; Chromium seeds <c>initial_stretch=StretchAmount</c>
+    /// + <c>initial_velocity</c>; Flutter/Android seed velocity only) — the old <c>v/k</c> position seed reached ~96% of the
+    /// asymptote on any hard flick (F6's one-frame band teleport) and is deleted. <paramref name="bandPx"/> is LEFT at the
+    /// passed-in current stretch; the spring then evolves it as <c>v0·t·e^(−ωt)</c> whose peak <c>v0/(ω·e)</c> is bounded to
+    /// <c>Cpeak·d</c> by clamping the seed to <c>γ·v</c> capped at <c>Cpeak·d·ω·e</c>. Never SHRINKS an existing
+    /// <paramref name="bandVelPxPerS"/> — a lift-at-a-held-stretch tick with v≈0 must not erase a live seed (F5). The
+    /// caller keeps its own <c>sign(v)==sign(excess)</c> / <c>|v|≥settle</c> gate. The band POSITION is deliberately
+    /// not a parameter: velocity-only means this function can never move the stretch.</summary>
+    public static void SeedFromEdgeMomentum(ref float bandVelPxPerS, float velocityPxPerS, float viewportExtent)
     {
-        const float precision = 18f;
-        const float fullGainAt = 96f;
-        const float maxGain = 1.20f;
-        const float outputKnee = 150f;
-        const float maxFrame = 180f;
-
-        float a = MathF.Abs(deltaDip);
-        if (a <= precision) return deltaDip;
-
-        float x = Math.Clamp((a - precision) / (fullGainAt - precision), 0f, 1f);
-        float smooth = x * x * (3f - 2f * x); // zero slope at both gain-zone boundaries
-        float shaped = a * (1f + (maxGain - 1f) * smooth);
-        if (shaped > outputKnee)
-            shaped = MathF.Min(maxFrame, outputKnee + (shaped - outputKnee) * 0.25f);
-        return MathF.CopySign(shaped, deltaDip);
-    }
-
-    /// <summary>Seed band + spring velocity when inertia hits a clamp (touch fling or touchpad glide). One code path for
-    /// both — excess travel from v/k is mapped through the same resistance curve; spring gets damped coupling, not raw v.</summary>
-    public static void SeedFromEdgeMomentum(ref float bandPx, ref float bandVelPxPerS, float velocityPxPerS,
-        float viewportExtent, float decayPerS)
-    {
-        if (velocityPxPerS == 0f || viewportExtent <= 0f)
-        {
-            bandPx = 0f;
-            bandVelPxPerS = 0f;
-            return;
-        }
-
-        float k = decayPerS > 0f && decayPerS < 1f ? -MathF.Log(decayPerS) : 1f;
-        float excess = velocityPxPerS / k;
-        bandPx = BandFromExcess(excess, viewportExtent);
-        bandVelPxPerS = velocityPxPerS * MomentumSpringCoupling;
+        if (viewportExtent <= 0f) return;   // leave the seed untouched (nothing to seed against)
+        float d = BandAsymptoteFraction * viewportExtent;
+        float vCap = MomentumPeakDepthFraction * d * SnapBackOmega * MathF.E;   // exact peak bound: peak = seedVel/(ω·e) ≤ Cpeak·d
+        float sv = Math.Clamp(velocityPxPerS * MomentumSpringCoupling, -vCap, vCap);
+        if (MathF.Abs(sv) > MathF.Abs(bandVelPxPerS)) bandVelPxPerS = sv;   // never shrink
     }
 
     /// <summary>Advance a damped spring from <paramref name="posPx"/> toward <paramref name="targetPx"/> (default 0 = the
@@ -140,7 +129,7 @@ public static class OverscrollPhysics
         float targetPx = 0f)
     {
         if (posPx == targetPx && velPxPerS == 0f) return true;
-        float w = omegaRadPerS > 0f ? omegaRadPerS : SpringOmegaRadPerS;
+        float w = omegaRadPerS > 0f ? omegaRadPerS : SnapBackOmega;
         float z = SpringDampingRatio;
         if (dtMs > 0f && MathF.Abs(z - 1f) <= 0.0001f)
         {
@@ -179,15 +168,21 @@ public static class OverscrollPhysics
     /// <summary>Compose content <c>LocalTransform</c>: -(offset+band) translation. The precision-touchpad and
     /// InteractionTracker-style path is <b>translation-only</b> elastic overscroll (no scale — scale-about-edge is
     /// DM touch-only and pivots in viewport scroll-space, not content bounds, which read as "wrong relative point"
-    /// when scrolling). Pinch zoom still uses origin conjugation when <paramref name="zoomFactor"/> ≠ 1.</summary>
+    /// when scrolling). Pinch zoom still uses origin conjugation when <paramref name="zoomFactor"/> ≠ 1.
+    /// <para>The scroll-axis translation is snapped to a whole DEVICE pixel (scroll-feel-rework-v2 §4.6/§8):
+    /// <c>tx = round((offset+band)·scale)/scale</c> with <paramref name="scale"/> the effective DPI scale — a slow
+    /// sub-pixel pan advances in whole-device-px steps (a ScrollBind sticky pin sharing the origin never seams), while
+    /// the LOGICAL offset/band remain continuous float (the caller's state is untouched). Headless scale = 1.</para></summary>
     public static void WriteContentTransform(
         ref NodePaint cp, in RectF contentBounds,
         bool horizontal, float offset, float band,
-        float zoomFactor)
+        float zoomFactor, float scale)
     {
         float z = (!float.IsFinite(zoomFactor) || zoomFactor <= 0f) ? 1f : zoomFactor;
-        float offX = horizontal ? offset + band : 0f;
-        float offY = horizontal ? 0f : offset + band;
+        float s = (!float.IsFinite(scale) || scale <= 0f) ? 1f : scale;
+        float t = MathF.Round((offset + band) * s) / s;   // device-pixel snap; logical offset/band stay float
+        float offX = horizontal ? t : 0f;
+        float offY = horizontal ? 0f : t;
 
         z = Math.Clamp(z, 1e-3f, 64f); // pick max to match product needs
 
@@ -215,14 +210,5 @@ public static class OverscrollPhysics
         if (offset <= 0.5f && band > 0f) return 0f;
         if (offset >= maxOffset - 0.5f && band < 0f) return 0f;
         return band;
-    }
-
-    private static float Env(string name, float dflt)
-    {
-        var s = Environment.GetEnvironmentVariable(name);
-        return s is not null && float.TryParse(s, System.Globalization.NumberStyles.Float,
-            System.Globalization.CultureInfo.InvariantCulture, out float v)
-            ? v
-            : dflt;
     }
 }

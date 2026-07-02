@@ -42,8 +42,10 @@ namespace FluentGpu.Rhi.D3D12;
 /// </summary>
 internal sealed unsafe class OpacityLayerCompositor : IDisposable
 {
-    private const int MaxPool = 32;           // CANVAS-sized transient group slots + small REGION-sized blur-cache PINS (one pool)
-    private const int TrimIdleFrames = 600;   // free entries idle this long (~10 s) are retired (fence-gated release)
+    private const int MaxPool = 32;              // CANVAS-sized transient group slots + small REGION-sized blur-cache PINS (one pool)
+    private const int PinBudget = 24;            // max retained region pins; guarantees ≥ MaxPool-PinBudget = 8 slots for transient scratch
+    private const int TrimIdleFrames = 600;      // transient (canvas) free entries idle this long (~10 s) are retired (fence-gated)
+    private const int PinTrimIdleFrames = 120;   // pins idle this long (~2 s of SUBMITTED frames) are retired — a stationary pin is FindPin-hit every submit, so only ORPHANS (a rect/σ a row left) climb to this
 
     private ID3D12Device* _device;
     private uint _w, _h;                      // canvas size (physical px) — transient slots match it; PINS are region-sized
@@ -479,7 +481,8 @@ float4 PSMain(V i) : SV_Target
         {
             ref var e = ref _pool[i];
             if (e.Res == null || e.InUse) continue;
-            if (++e.IdleFrames <= TrimIdleFrames) continue;
+            int trimAt = e.PinHash != 0 ? PinTrimIdleFrames : TrimIdleFrames;   // pins reclaim fast (orphans), transient keeps the 10 s window
+            if (++e.IdleFrames <= trimAt) continue;
             _retired.Add(new Retired { Res = e.Res, Fence = e.LastUseFence });
             e = default;
         }
@@ -639,20 +642,75 @@ float4 PSMain(V i) : SV_Target
         maxY = Math.Min((int)_h, (int)MathF.Ceiling((L.DeviceRect.Y + L.DeviceRect.H) * scale) + rTaps);
     }
 
-    /// <summary>A valid (already-blurred) region pin for <paramref name="hash"/>, refreshed into this frame's SRV bank,
-    /// or -1. The pin is left PIXEL_SHADER_RESOURCE between frames, so the caller composites it with no barrier.</summary>
-    public int FindPin(ulong hash)
+    /// <summary>A valid (already-blurred) region pin for <paramref name="hash"/> whose retained region size EQUALS this
+    /// frame's <see cref="RegionBox"/> (W==rw &amp;&amp; H==rh), refreshed into this frame's SRV bank, or -1. The pin is left
+    /// PIXEL_SHADER_RESOURCE between frames, so the caller composites it with no barrier. The size-exact match is
+    /// load-bearing: <see cref="RegionBox"/> depends on the sub-pixel <c>frac(pos·scale)</c> floor/ceil, so a mid-ease
+    /// pin can differ by 1px from the rest region — matching hash-only would composite that wrong-sized pin STRETCHED
+    /// onto the current viewport (the pin's UV[0,1] mapped onto a taller/shorter box). A physical-size mismatch is a MISS
+    /// (the miss path renders + blurs the exact region), never a stretch. Paired with <see cref="RetainPinFromScratch"/>'s
+    /// one-pin-per-hash retire so at most one BlurReady pin ever carries a given hash. G1: a hit also stamps
+    /// <paramref name="frameFence"/> into LastUseFence so a hot (repeatedly-hit) pin stays MRU and is NEVER the preferred
+    /// LRU victim — otherwise a stationary pin keeps its creation fence forever = permanently the oldest entry = the first
+    /// thing evicted once the pool fills (the rolling-eviction fps cliff this fixes).</summary>
+    public int FindPin(ulong hash, ulong frameFence, in PushLayerCmd L, float scale)
     {
         if (hash == 0) return -1;
+        RegionBox(in L, scale, out int minX, out int minY, out int maxX, out int maxY);
+        uint rw = (uint)Math.Max(1, maxX - minX), rh = (uint)Math.Max(1, maxY - minY);   // == RetainPinFromScratch's stored W/H
         for (int i = 0; i < MaxPool; i++)
         {
             ref var e = ref _pool[i];
-            if (e.Res == null || e.InUse || e.PinHash != hash || !e.BlurReady) continue;
+            if (e.Res == null || e.InUse || e.PinHash != hash || !e.BlurReady || e.W != rw || e.H != rh) continue;
             e.IdleFrames = 0;
+            e.LastUseFence = frameFence;                // G1: a hit makes the pin MRU
             CreateSrv(e.Res, SrvCpu(PoolSrvSlot(i)));   // refresh THIS frame's parity bank for the composite
             return i;
         }
         return -1;
+    }
+
+    /// <summary>Count of retained region pins currently held in the pool (PinHash != 0).</summary>
+    private int CountPins() { int n = 0; for (int i = 0; i < MaxPool; i++) if (_pool[i].Res != null && _pool[i].PinHash != 0) n++; return n; }
+
+    /// <summary>Retire the COLDEST non-in-use region pin (fence-gated). With G1 keeping hot pins' fences fresh, the
+    /// coldest pin is a genuine orphan (a rect/σ a row has left) — so the budget cap never evicts a live pin.</summary>
+    private void EvictLruPin()
+    {
+        int v = -1;
+        for (int i = 0; i < MaxPool; i++)
+        {
+            ref var e = ref _pool[i];
+            if (e.Res == null || e.InUse || e.PinHash == 0) continue;
+            if (v < 0 || e.LastUseFence < _pool[v].LastUseFence) v = i;
+        }
+        if (v >= 0) { _retired.Add(new Retired { Res = _pool[v].Res, Fence = _pool[v].LastUseFence }); _pool[v] = default; }
+    }
+
+    /// <summary>True iff this self-blur's halo-inflated region is clamped by a CANVAS edge this frame — i.e. the
+    /// UNCLAMPED <see cref="RegionBox"/> would poke outside [0,_w]×[0,_h]. A clamped region captures/needs only a PARTIAL
+    /// strip, so a position-INDEPENDENT pin (minted full while on-canvas) cannot be composited into it without vertically
+    /// squishing (<see cref="CompositePinnedBlur"/> maps the full pin's UV[0,1] onto the shorter clamped viewport). The
+    /// caller therefore treats a clamped region as UNCACHEABLE — no pin HIT (miss ⇒ the pixel-exact scissor path renders
+    /// it) and no pin MINT (a partial capture would squish later AND each distinct clamp size would mint a duplicate
+    /// same-hash pin, thrashing the budget). The full pin minted while fully on-canvas survives and serves again once the
+    /// row scrolls back within the canvas; a STATIONARY clamped row costs nothing (identical drawlist ⇒ skip-submit).</summary>
+    public bool RegionIsClamped(in PushLayerCmd L, float scale)
+    {
+        int rTaps = (int)MathF.Min(MathF.Ceiling(L.BlurSigma * 3f), 32f);
+        return (int)MathF.Floor(L.DeviceRect.X * scale) - rTaps < 0
+            || (int)MathF.Floor(L.DeviceRect.Y * scale) - rTaps < 0
+            || (int)MathF.Ceiling((L.DeviceRect.X + L.DeviceRect.W) * scale) + rTaps > (int)_w
+            || (int)MathF.Ceiling((L.DeviceRect.Y + L.DeviceRect.H) * scale) + rTaps > (int)_h;
+    }
+
+    /// <summary>True iff pin <paramref name="slot"/>'s captured integer region origin differs from this frame's region
+    /// origin — i.e. the content moved since the pin was minted. Used only on a SETTLED frame (PushLayerCmd.InMotion==0)
+    /// to force one exact re-mint at rest, so the final displayed pin is rasterized at the true rest position.</summary>
+    public bool PinOriginDiffers(int slot, in PushLayerCmd L, float scale)
+    {
+        RegionBox(in L, scale, out int minX, out int minY, out _, out _);
+        return _pool[slot].RegionX != minX || _pool[slot].RegionY != minY;
     }
 
     /// <summary>Cache-MISS completion: COPY the just-blurred region out of the transient scratch slot
@@ -667,21 +725,38 @@ float4 PSMain(V i) : SV_Target
         RegionBox(in L, scale, out int minX, out int minY, out int maxX, out int maxY);
         uint rw = (uint)Math.Max(1, maxX - minX), rh = (uint)Math.Max(1, maxY - minY);
 
-        int slot = -1;
-        for (int i = 0; i < MaxPool; i++)   // reuse this hash's existing same-size pin if it survived
-            if (_pool[i].Res != null && !_pool[i].InUse && _pool[i].PinHash == hash && _pool[i].W == rw && _pool[i].H == rh) { slot = i; break; }
-        if (slot < 0) for (int i = 0; i < MaxPool; i++) if (_pool[i].Res == null) { slot = i; break; }   // cold growth
-        if (slot < 0)
+        // One pin per hash: a same-hash pin at a DIFFERENT region size (minted mid-ease, before the height settled —
+        // RegionBox depends on the sub-pixel frac(pos·scale) floor/ceil) must never coexist with this one. FindPin now
+        // matches size-exactly, so a wrong-size survivor is invisible to it, but it would still occupy a slot + budget and
+        // (were the match ever hash-only again) be returned then rejected every frame by PinOriginDiffers ⇒ a permanent
+        // per-row re-Gaussian. Retire it (fence-gated) before (re)minting at the current size.
+        for (int i = 0; i < MaxPool; i++)
         {
-            for (int i = 0; i < MaxPool; i++)   // LRU evict, preferring an UNPINNED (transient) victim
+            ref var st = ref _pool[i];
+            if (st.Res == null || st.InUse || st.PinHash != hash || (st.W == rw && st.H == rh)) continue;
+            _retired.Add(new Retired { Res = st.Res, Fence = st.LastUseFence });
+            st = default;
+        }
+
+        int slot = -1;
+        for (int i = 0; i < MaxPool; i++)   // reuse this hash's existing same-size pin if it survived (no pin-count change)
+            if (_pool[i].Res != null && !_pool[i].InUse && _pool[i].PinHash == hash && _pool[i].W == rw && _pool[i].H == rh) { slot = i; break; }
+        if (slot < 0)   // no live same-size pin for this hash ⇒ will MINT a new one — enforce the pin budget first
+        {
+            if (CountPins() >= PinBudget) EvictLruPin();   // G2: cap region pins so they can never starve canvas scratch (≥ 8 slots stay for transient)
+            for (int i = 0; i < MaxPool; i++) if (_pool[i].Res == null) { slot = i; break; }   // cold growth
+            if (slot < 0)
             {
-                if (_pool[i].InUse) continue;
-                if (slot < 0) { slot = i; continue; }
-                bool iUn = _pool[i].PinHash == 0, sUn = _pool[slot].PinHash == 0;
-                if (iUn != sUn) { if (iUn) slot = i; continue; }
-                if (_pool[i].LastUseFence < _pool[slot].LastUseFence) slot = i;
+                for (int i = 0; i < MaxPool; i++)   // LRU evict, preferring an UNPINNED (transient) victim
+                {
+                    if (_pool[i].InUse) continue;
+                    if (slot < 0) { slot = i; continue; }
+                    bool iUn = _pool[i].PinHash == 0, sUn = _pool[slot].PinHash == 0;
+                    if (iUn != sUn) { if (iUn) slot = i; continue; }
+                    if (_pool[i].LastUseFence < _pool[slot].LastUseFence) slot = i;
+                }
+                if (slot < 0) return;   // pool momentarily all in-use scratch — skip the pin (re-blurs next frame, no correctness loss)
             }
-            if (slot < 0) return;   // pool momentarily all in-use scratch — skip the pin (re-blurs next frame, no correctness loss)
         }
         ref var e = ref _pool[slot];
         if (e.Res != null && (e.W != rw || e.H != rh))   // wrong-size RT (different region) → retire (fence-gated) + reallocate

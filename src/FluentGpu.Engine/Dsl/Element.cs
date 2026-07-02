@@ -254,6 +254,9 @@ public sealed record BoxEl : Element
     /// <c>AnimChannel.BlurSigma</c> (UseTransition/UseKeyframes) for the transitions.dev recipes (number pop-in, skeleton
     /// reveal, icon swap, page slide, …). 0 = no blur (the default). Composited only — never relayout.</summary>
     public float Blur { get; init; }
+    /// <summary>Optional retained-cache behavior for self-blur layers. Default renders normally; HoldIfCached lets
+    /// stationary effects reuse cached blurred pixels during user-scroll without globally disabling blur.</summary>
+    public BlurCachePolicy BlurCachePolicy { get; init; }
     /// <summary>Transform origin (normalized 0..1 of the box). Composited scale/rotate (and animated ScaleX/Y) pivot here;
     /// default centre (0.5,0.5). Set OriginY=0 to scale/unfold from the TOP edge (a flyout/menu), 1 for the bottom.</summary>
     public float TransformOriginX { get; init; } = 0.5f;

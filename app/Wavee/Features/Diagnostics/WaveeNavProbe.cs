@@ -534,7 +534,7 @@ internal static class WaveeNavProbe
         string? csvPath = outDir is null ? null : Path.Combine(outDir, "wavee-live-lyrics-scroll-probe.csv");
         string? summaryPath = outDir is null ? null : Path.Combine(outDir, "wavee-live-lyrics-scroll-probe-summary.txt");
         var csv = new StringBuilder(1 << 18);
-        csv.AppendLine("phase,frame,label,intervalMs,frameMs,flushMs,layoutMs,animMs,recordMs,submitMs,fenceWaitMs,presentMs,gen0,gen1,comps,nodes,draws,blurCandidates,blurLayers,blurSuppressed,edgeFadeGroups,d3dBlurHit,d3dBlurMiss,d3dOpacityGroups,lyricsNowMs,lyricsAuthMs,lyricsActiveLine,lyricsVoiceLine,lyricsActiveChanged,lyricsScrollSnapped,trackMs,isPlaying,mainOff,mainTarget,mainMode,mainTransformDirty,lyricsOff,lyricsTarget,lyricsMode,lyricsTransformDirty,track");
+        csv.AppendLine("phase,frame,label,intervalMs,frameMs,flushMs,layoutMs,animMs,recordMs,submitMs,fenceWaitMs,presentMs,gen0,gen1,comps,nodes,draws,blurCandidates,blurLayers,blurSuppressed,blurHoldCandidates,edgeFadeGroups,d3dBlurHit,d3dBlurMiss,d3dBlurHoldHit,d3dBlurHoldFallback,d3dOpacityGroups,lyricsNowMs,lyricsAuthMs,lyricsActiveLine,lyricsVoiceLine,lyricsActiveChanged,lyricsScrollSnapped,trackMs,isPlaying,mainOff,mainTarget,mainMode,mainTransformDirty,lyricsOff,lyricsTarget,lyricsMode,lyricsTransformDirty,track");
 
         int realFrames = EnvInt("WAVEE_PROBE_REAL_FRAMES", 1800, 120, 20000);
         int workFrames = EnvInt("WAVEE_PROBE_WORK_FRAMES", 600, 0, 20000);
@@ -701,8 +701,8 @@ internal static class WaveeNavProbe
             var routeIntervals = new List<double>(perRouteRealFrames);
             var realPhase = new Phase("real:" + route.Label);
             phases.Add(realPhase);
-            int activeChangeFrames = 0, blurSuppressedFrames = 0, zeroBlurWithCandidates = 0;
-            int maxBlurSuppressed = 0, maxBlurCandidates = 0, maxBlurLayers = 0, maxBlurCacheMiss = 0;
+            int activeChangeFrames = 0, blurHeldFrames = 0, zeroBlurWithCandidates = 0;
+            int maxBlurHeld = 0, maxBlurCandidates = 0, maxBlurLayers = 0, maxBlurCacheMiss = 0;
             int minBlurLayers = int.MaxValue;
             void TrackLyricsPipeline(FrameStats s)
             {
@@ -713,8 +713,11 @@ internal static class WaveeNavProbe
                     minBlurLayers = Math.Min(minBlurLayers, s.BlurGroupCount);
                     if (s.BlurGroupCount == 0) zeroBlurWithCandidates++;
                 }
-                if (s.BlurSuppressedByScrollCount > 0) blurSuppressedFrames++;
-                maxBlurSuppressed = Math.Max(maxBlurSuppressed, s.BlurSuppressedByScrollCount);
+                // During this MAIN-page wheel the lyrics sibling self-blur HOLDS under its cache policy (served by its
+                // position-independent pin), counted by BlurHoldCandidateCount; 0 held frames across a sustained scroll =
+                // the sibling-defer path is dead (the metric that replaced the retired BlurSuppressedByScrollCount).
+                if (s.BlurHoldCandidateCount > 0) blurHeldFrames++;
+                maxBlurHeld = Math.Max(maxBlurHeld, s.BlurHoldCandidateCount);
                 maxBlurCandidates = Math.Max(maxBlurCandidates, s.BlurCandidateCount);
                 maxBlurLayers = Math.Max(maxBlurLayers, s.BlurGroupCount);
                 maxBlurCacheMiss = Math.Max(maxBlurCacheMiss, gpu.LastBlurCacheMiss);
@@ -776,7 +779,7 @@ internal static class WaveeNavProbe
             bool mainMoved = mainMax - mainMin > 1f;
             bool lyricsMoved = lyricsMax - lyricsMin > 1f;
             string minBlur = minBlurLayers == int.MaxValue ? "-" : minBlurLayers.ToString(CultureInfo.InvariantCulture);
-            routeReports.Add($"{route.Label}: main offset {mainScroll0.OffsetY:0}->{mainScroll1.OffsetY:0} range {mainMin:0}-{mainMax:0} {(mainMoved ? "moved" : "NO-MOVE")}; lyrics offset {lyricsScroll0.OffsetY:0}->{lyricsScroll1.OffsetY:0} range {lyricsMin:0}-{lyricsMax:0} {(lyricsMoved ? "moved" : "still")}; frames real={routeIntervals.Count} work={workPhase.Ms.Count}; activeChanges={activeChangeFrames}; blurLayers min/max={minBlur}/{maxBlurLayers}; blurCandidates max={maxBlurCandidates}; blurSuppressed frames/max={blurSuppressedFrames}/{maxBlurSuppressed}; zeroBlurWithCandidates={zeroBlurWithCandidates}; maxBlurCacheMiss={maxBlurCacheMiss}");
+            routeReports.Add($"{route.Label}: main offset {mainScroll0.OffsetY:0}->{mainScroll1.OffsetY:0} range {mainMin:0}-{mainMax:0} {(mainMoved ? "moved" : "NO-MOVE")}; lyrics offset {lyricsScroll0.OffsetY:0}->{lyricsScroll1.OffsetY:0} range {lyricsMin:0}-{lyricsMax:0} {(lyricsMoved ? "moved" : "still")}; frames real={routeIntervals.Count} work={workPhase.Ms.Count}; activeChanges={activeChangeFrames}; blurLayers min/max={minBlur}/{maxBlurLayers}; blurCandidates max={maxBlurCandidates}; blurHeld frames/max={blurHeldFrames}/{maxBlurHeld} (sibling DoF deferred during the main scroll; 0 across a moving scroll = regression); zeroBlurWithCandidates={zeroBlurWithCandidates}; maxBlurCacheMiss={maxBlurCacheMiss}");
             measuredRoutes++;
         }
 
@@ -824,7 +827,7 @@ internal static class WaveeNavProbe
         string? csvPath = outDir is null ? null : Path.Combine(outDir, "wavee-lyrics-advance-probe.csv");
         string? summaryPath = outDir is null ? null : Path.Combine(outDir, "wavee-lyrics-advance-probe-summary.txt");
         var csv = new StringBuilder(1 << 16);
-        csv.AppendLine("phase,line,frame,label,injectedNowMs,activeLine,voiceLine,activeChanged,voiceChanged,lyMode,lyPrevMode,lyUserScroll,lyContentDirty,lyOff,lyTgt,blurCandidates,blurGroups,blurSuppressed,d3dBlurMiss,frameMs,recordMs,submitMs,fenceWaitMs,presentMs,presented,animMs,mainMode,mainContentDirty,track");
+        csv.AppendLine("phase,line,frame,label,injectedNowMs,activeLine,voiceLine,activeChanged,voiceChanged,lyMode,lyPrevMode,lyUserScroll,lyContentDirty,lyOff,lyTgt,blurCandidates,blurGroups,blurSuppressed,blurHoldCandidates,d3dBlurMiss,d3dBlurHoldHit,d3dBlurHoldFallback,frameMs,recordMs,submitMs,fenceWaitMs,presentMs,presented,animMs,mainMode,mainContentDirty,track");
 
         void Paced() { if (window.IsClosed) return; host.RunFrame(); window.WaitForWork(16); }   // ~16 ms dt so the spring eases realistically
         void FrameLive() { if (window.IsClosed) return; host.RunFrame(); int wt = host.RecommendedWaitMs(); if (wt > 0) window.WaitForWork(Math.Min(wt, 16)); }
@@ -878,7 +881,7 @@ internal static class WaveeNavProbe
         int endLine = Math.Min(lineCount - 1, startLine + EnvInt("WAVEE_PROBE_ADVANCES", 20, 1, 4096));
 
         // ── P1: stationary line-advance ────────────────────────────────────────────────────────────────────────────
-        int p1Frames = 0, p1SuppressedFrames = 0, p1SettleFrames = 0, p1WouldDropFrames = 0, p1MaxSuppressed = 0;
+        int p1Frames = 0, p1BlurAbsentFrames = 0, p1SettleFrames = 0;
         int prevLyMode = 0;
         for (int li = startLine; li <= endLine && !window.IsClosed; li++)
         {
@@ -888,18 +891,20 @@ internal static class WaveeNavProbe
                 var s = host.RunFrame();
                 window.WaitForWork(16);
                 p1Frames++;
-                bool settleEdge = prevLyMode == FluentGpu.Animation.ScrollAnimator.ProgrammaticMode && s.LyricsScrollMode == 0;
+                bool settleEdge = prevLyMode == FluentGpu.Animation.ScrollIntegrator.WheelAnimating && s.LyricsScrollMode == 0;
                 if (settleEdge) p1SettleFrames++;
-                if (s.BlurSuppressedByScrollCount > 0) { p1SuppressedFrames++; p1MaxSuppressed = Math.Max(p1MaxSuppressed, s.BlurSuppressedByScrollCount); }
-                // The OLD bug signature: content transform written this frame, NOT a user scroll, yet blur suppressed.
-                if (!s.LyricsUserScrollActive && s.LyricsContentDirtyAtRecord && s.BlurSuppressedByScrollCount > 0) p1WouldDropFrames++;
+                // BUG1 signature under the pin-cache pipeline: the recorder no longer DROPS a stationary blur (the retired
+                // BlurSuppressedByScrollCount is always 0), so the observable regression is the DoF VANISHING — a
+                // content-advance frame (content transform written, NOT a user scroll) that records zero blur candidates
+                // means the lyric depth-of-field went absent instead of being served by its pin.
+                if (!s.LyricsUserScrollActive && s.LyricsContentDirtyAtRecord && s.BlurCandidateCount == 0) p1BlurAbsentFrames++;
                 AppendAdvanceRow(csv, "P1-stationary", li, f, settleEdge ? "settle" : "", s, prevLyMode, host.Scene, lyricsVp, mainVp, gpu);
                 prevLyMode = s.LyricsScrollMode;
             }
         }
 
         // ── P2: wheel the MAIN page while lyrics sit still (sibling isolation) ──────────────────────────────────────
-        int p2Frames = 0, p2LyricsTouched = 0, p2LyricsSuppressed = 0;
+        int p2Frames = 0, p2LyricsTouched = 0, p2LyricsHeld = 0;
         if (!mainVp.IsNull && host.Scene.IsLive(mainVp))
         {
             var mr = host.Scene.AbsoluteRect(mainVp);
@@ -915,7 +920,9 @@ internal static class WaveeNavProbe
                 window.WaitForWork(16);
                 p2Frames++;
                 if (s.LyricsUserScrollActive || s.LyricsContentDirtyAtRecord) p2LyricsTouched++;   // must stay 0 — lyrics untouched by a main scroll
-                if (s.BlurSuppressedByScrollCount > 0 && (s.LyricsUserScrollActive || s.LyricsContentDirtyAtRecord)) p2LyricsSuppressed++;
+                // Sibling isolation now MEANS the stationary lyrics DoF is HELD (served by its position-independent pin),
+                // not dropped, while the main page scrolls — BlurHoldCandidateCount > 0 with the lyrics themselves untouched.
+                if (s.BlurHoldCandidateCount > 0) p2LyricsHeld++;
                 AppendAdvanceRow(csv, "P2-mainscroll", -1, f, "", s, prevLyMode, host.Scene, lyricsVp, mainVp, gpu);
                 prevLyMode = s.LyricsScrollMode;
             }
@@ -983,18 +990,18 @@ internal static class WaveeNavProbe
         }
 
         // ── report ─────────────────────────────────────────────────────────────────────────────────────────────────
-        bool bug1Fixed = p1SuppressedFrames == 0 && p1WouldDropFrames == 0;
+        bool bug1Fixed = p1BlurAbsentFrames == 0;
         var sb = new StringBuilder(2048);
         sb.AppendLine();
         sb.AppendLine("=== WAVEE LYRICS ADVANCE PROBE — synchronous, timer-decoupling-free ===");
         sb.AppendLine($"track: {TrackLabel(WaveeApp.ProbePlayback)}; lines={lineCount}; advances={Math.Max(0, endLine - startLine + 1)}; settleFrames/advance={settleFrames}");
         sb.AppendLine();
         sb.AppendLine("P1 stationary line-advance (the BUG1 scenario):");
-        sb.AppendLine($"  frames={p1Frames}; programmatic-settle frames seen={p1SettleFrames}; blur-suppressed frames={p1SuppressedFrames} (maxSuppressed={p1MaxSuppressed}); would-drop frames (contentDirty & !userScroll & suppressed)={p1WouldDropFrames}");
-        sb.AppendLine($"  >>> BUG1 {(bug1Fixed ? "FIXED" : "PRESENT")} — lyric DoF was {(bug1Fixed ? "NEVER" : "STILL")} suppressed while stationary-advancing (expect a settle edge each advance with lyMode 2->0, lyContentDirty=1, lyUserScroll=0, blurSuppressed=0).");
+        sb.AppendLine($"  frames={p1Frames}; programmatic-settle frames seen={p1SettleFrames}; DoF-absent frames (contentDirty & !userScroll & zero blur candidates)={p1BlurAbsentFrames}");
+        sb.AppendLine($"  >>> BUG1 {(bug1Fixed ? "FIXED" : "PRESENT")} — lyric DoF was {(bug1Fixed ? "NEVER" : "STILL")} dropped while stationary-advancing (expect a settle edge each advance with lyMode 2->0, lyContentDirty=1, lyUserScroll=0, and a live blur candidate every content frame).");
         sb.AppendLine();
         sb.AppendLine("P2 main-scroll sibling isolation:");
-        sb.AppendLine($"  frames={p2Frames}; frames where lyrics were user-scrolling/content-dirty during a MAIN scroll={p2LyricsTouched} (expect 0); lyrics-attributable suppression={p2LyricsSuppressed} (expect 0)");
+        sb.AppendLine($"  frames={p2Frames}; frames where lyrics were user-scrolling/content-dirty during a MAIN scroll={p2LyricsTouched} (expect 0); frames the stationary lyrics DoF was HELD (served by its pin)={p2LyricsHeld} (expect >0 while the main page moves; 0 = the sibling-defer path is dead)");
         sb.AppendLine();
         sb.AppendLine("P3 skip-submit / present (BUG3 mechanism):");
         string p3rate = p3Frames > 0 ? $"{100.0 * p3Presented / p3Frames:0}%" : "n/a";
@@ -1038,7 +1045,10 @@ internal static class WaveeNavProbe
            .Append(s.BlurCandidateCount.ToString(CultureInfo.InvariantCulture)).Append(',')
            .Append(s.BlurGroupCount.ToString(CultureInfo.InvariantCulture)).Append(',')
            .Append(s.BlurSuppressedByScrollCount.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(s.BlurHoldCandidateCount.ToString(CultureInfo.InvariantCulture)).Append(',')
            .Append(gpu.LastBlurCacheMiss.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(gpu.LastBlurHoldHit.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(gpu.LastBlurHoldFallback.ToString(CultureInfo.InvariantCulture)).Append(',')
            .Append(F(s.FrameMs)).Append(',')
            .Append(F(s.RecordMs)).Append(',')
            .Append(F(s.SubmitMs)).Append(',')
@@ -1130,9 +1140,12 @@ internal static class WaveeNavProbe
            .Append(s.BlurCandidateCount.ToString(CultureInfo.InvariantCulture)).Append(',')
            .Append(s.BlurGroupCount.ToString(CultureInfo.InvariantCulture)).Append(',')
            .Append(s.BlurSuppressedByScrollCount.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(s.BlurHoldCandidateCount.ToString(CultureInfo.InvariantCulture)).Append(',')
            .Append(s.EdgeFadeGroupCount.ToString(CultureInfo.InvariantCulture)).Append(',')
            .Append(gpu.LastBlurCacheHit.ToString(CultureInfo.InvariantCulture)).Append(',')
            .Append(gpu.LastBlurCacheMiss.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(gpu.LastBlurHoldHit.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(gpu.LastBlurHoldFallback.ToString(CultureInfo.InvariantCulture)).Append(',')
            .Append(gpu.LastOpacityGroups.ToString(CultureInfo.InvariantCulture)).Append(',')
            .Append(ld.NowMs.ToString(CultureInfo.InvariantCulture)).Append(',')
            .Append(ld.AuthMs.ToString(CultureInfo.InvariantCulture)).Append(',')
@@ -1159,7 +1172,7 @@ internal static class WaveeNavProbe
             transformDirty = 1;
         csv.Append(',').Append(F(sc.OffsetY))
            .Append(',').Append(F(sc.TargetY))
-           .Append(',').Append(sc.ScrollMode.ToString(CultureInfo.InvariantCulture))
+           .Append(',').Append(sc.Phase.ToString(CultureInfo.InvariantCulture))
            .Append(',').Append(transformDirty.ToString(CultureInfo.InvariantCulture));
     }
 
@@ -1515,7 +1528,7 @@ internal static class WaveeNavProbe
         // ── Phase 4: SCROLL via REAL mouse-wheel INPUT. NOT WriteScrollOffset (that bypasses input): here every notch is an
         //    InputKind.Wheel event injected through window.QueueInput → PumpInto → the dispatcher ring → DispatchWheel/ScrollAt
         //    (hit-test the cursor pos, route to the nearest VERTICAL scroller), and SmoothScroll eases each +60 DIP notch via
-        //    the ScrollAnimator (inertia). So this measures the full real path a mouse drives: hit-test + wheel routing + the
+        //    the ScrollIntegrator (inertia). So this measures the full real path a mouse drives: hit-test + wheel routing + the
         //    eased per-frame re-layout / virtualization re-realize / re-record, including the inertial COAST after a flick. ──
         var scroll = new Phase("scroll (real wheel)");
         if (Diag.EnvFlag("WAVEE_LIKED_SHOT")) { window.SetClientSize(1456, 820); Settle(12); Nav("liked", null); Settle(50); var px0 = gpu.CaptureBgra(out int cw0, out int ch0); PngWriter.WriteBgra(@"C:\tmp\liked_header.png", px0, cw0, ch0); }
@@ -1548,7 +1561,7 @@ internal static class WaveeNavProbe
                 window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, i < 100 ? +60f : -60f));
                 Measure(scroll, i < 100 ? "wheel-down" : "wheel-up");
             }
-            // Flick-and-coast: a 6-notch burst, then STOP — the ScrollAnimator eases the residual to rest. These COAST frames
+            // Flick-and-coast: a 6-notch burst, then STOP — the ScrollIntegrator eases the residual to rest. These COAST frames
             // are exactly what a programmatic offset-set can never see (it lands instantly); a real flick animates for ~15 frames.
             for (int rep = 0; rep < 6 && !window.IsClosed; rep++)
             {

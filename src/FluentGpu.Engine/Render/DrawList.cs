@@ -134,7 +134,12 @@ public readonly record struct PushLayerCmd(RectF DeviceRect, CornerRadius4 Radii
     // Acrylic-only: a STABLE per-overlay id (the scene node handle, packed index|gen) keying the compositor's retained
     // blurred-backdrop cache across frames, so a stationary acrylic surface REUSES its blur instead of re-blurring every
     // frame (design/subsystems/backdrop-effects-animation.md §2.3). 0 ⇒ no caching (re-blur every frame — prior behavior).
-    ulong LayerId = 0);
+    ulong LayerId = 0,
+    int BlurCachePolicy = 0,
+    // Self-blur only: 1 = the node's world transform moved THIS frame (recorder's inMotion — scroll/fling/FLIP). NOT part
+    // of the cross-frame pin key (backdrop-effects-animation.md §FA-2a); at rest (0) the compositor does one exact re-mint
+    // when a HIT would otherwise composite a pin captured at a different position (settle exactness for non-glyph subtrees).
+    int InMotion = 0);
 public readonly record struct PopLayerCmd(RectF DeviceRect);
 // A circular-arc stroke (ProgressRing). The arc is centred in <see cref="Rect"/> with radius (min(W,H)-Thickness)/2, a
 // <see cref="Thickness"/>-wide stroke, swept from <see cref="StartDeg"/> for <see cref="SweepDeg"/> degrees (0° = 12 o'clock,
@@ -312,11 +317,11 @@ public sealed class DrawList
     /// <paramref name="blurSigma"/> px, and composites once at <paramref name="groupAlpha"/> (so blur + fade read as one
     /// motion). The element's OWN pixels blur — not the backdrop behind it. Subtree commands record at opacity relative
     /// to 1, NOT pre-multiplied by the group alpha.</summary>
-    public void PushBlurLayer(in RectF deviceRect, in CornerRadius4 radii, float blurSigma, float groupAlpha, ulong sortKey = 0)
+    public void PushBlurLayer(in RectF deviceRect, in CornerRadius4 radii, float blurSigma, float groupAlpha, ulong sortKey = 0, BlurCachePolicy cachePolicy = BlurCachePolicy.Normal, bool inMotion = false)
     {
         WriteOp(DrawOp.PushLayer);
         WritePayload(new PushLayerCmd(deviceRect, radii, default, default, 0f, MathF.Max(0f, blurSigma), 0f, 0f,
-            (int)LayerKind.Blur, Math.Clamp(groupAlpha, 0f, 1f)));
+            (int)LayerKind.Blur, Math.Clamp(groupAlpha, 0f, 1f), BlurCachePolicy: (int)cachePolicy, InMotion: inMotion ? 1 : 0));
         PushSort(sortKey);
     }
 

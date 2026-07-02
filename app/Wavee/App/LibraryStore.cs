@@ -42,6 +42,13 @@ public sealed class LibraryStore
     // ── per-entity detail caches (master-detail right pane + detail revisits) ──
     readonly Dictionary<string, Loadable<DetailModel>> _details = new(StringComparer.Ordinal);
     readonly Dictionary<string, Loadable<Artist>> _artistDetails = new(StringComparer.Ordinal);
+    // Bound the detail caches so a long browsing session cannot accumulate them without limit (each entry is a full
+    // DetailModel / Artist — tens of KB). A miss simply re-fetches (self-healing), so an LRU cap is safe. The MRU key sits
+    // at the END of the recency list; on overflow the least-recently-used entry is dropped. MemoryGovernor sheds further
+    // under real memory pressure via ShedDetails. (All access is UI-thread — same context that mutates the dictionaries.)
+    const int DetailCacheCap = 48;
+    readonly List<string> _detailLru = new();
+    readonly List<string> _artistLru = new();
 
     public LibraryStore(IMusicLibrary lib, IMutationSource mut, UserPlaylistSource pls, ICollectionEvents? events)
     {
@@ -91,7 +98,7 @@ public sealed class LibraryStore
         {
             if (_likedLoaded) Refresh(Liked, _lib.GetLikedSongsAsync);
             if (_statsLoaded) Refresh(Stats, _lib.GetStatsAsync);    // the liked count lives in stats
-            _details.Remove("liked");                                // the liked track SET changed → reload its detail fresh
+            _details.Remove("liked"); _detailLru.Remove("liked");    // the liked track SET changed → reload its detail fresh
         })));
         _subs.Add(_pls.PlaylistsChanged.Subscribe(_ => post(() =>
         {
@@ -121,26 +128,47 @@ public sealed class LibraryStore
     // ── per-entity detail caches (instant A→B→A; the loader is injected by the caller) ──
     public Loadable<DetailModel> Detail(string routeKey, Func<CancellationToken, Task<DetailModel>> load, DetailModel seed)
     {
-        if (_details.TryGetValue(routeKey, out var l)) return l;   // hit → already Ready → instant
+        if (_details.TryGetValue(routeKey, out var l)) { Touch(_detailLru, routeKey); return l; }   // hit → already Ready → instant
         l = Loadable<DetailModel>.Pending(seed);
         _details[routeKey] = l;
+        Touch(_detailLru, routeKey);
+        EvictOldest(_details, _detailLru, DetailCacheCap);
         Fill(l, load);
         return l;
     }
 
     public Loadable<Artist> ArtistDetail(string uri, Func<CancellationToken, Task<Artist>> load, Artist seed)
     {
-        if (_artistDetails.TryGetValue(uri, out var l)) return l;
+        if (_artistDetails.TryGetValue(uri, out var l)) { Touch(_artistLru, uri); return l; }
         l = Loadable<Artist>.Pending(seed);
         _artistDetails[uri] = l;
+        Touch(_artistLru, uri);
+        EvictOldest(_artistDetails, _artistLru, DetailCacheCap);
         Fill(l, load);
         return l;
+    }
+
+    // Recency: move key to the MRU end. O(n) but n ≤ cap (small), all on the UI thread.
+    static void Touch(List<string> lru, string key) { lru.Remove(key); lru.Add(key); }
+    static void EvictOldest<T>(Dictionary<string, T> map, List<string> lru, int cap)
+    {
+        while (lru.Count > cap) { string oldest = lru[0]; lru.RemoveAt(0); map.Remove(oldest); }
+    }
+
+    /// <summary>MemoryGovernor shed hook — trim the per-entity detail caches to <paramref name="keep"/> most-recent each,
+    /// returning an approximate bytes-freed estimate. Safe under pressure: a dropped detail re-fetches on its next open.</summary>
+    public long ShedDetails(int keep)
+    {
+        int before = _details.Count + _artistDetails.Count;
+        EvictOldest(_details, _detailLru, keep);
+        EvictOldest(_artistDetails, _artistLru, keep);
+        return (long)(before - (_details.Count + _artistDetails.Count)) * 24_000;   // rough: a detail model averages tens of KB
     }
 
     void InvalidateWhere(Func<string, bool> match)
     {
         List<string>? keys = null;
         foreach (var k in _details.Keys) if (match(k)) (keys ??= new()).Add(k);
-        if (keys is not null) foreach (var k in keys) _details.Remove(k);
+        if (keys is not null) foreach (var k in keys) { _details.Remove(k); _detailLru.Remove(k); }
     }
 }

@@ -62,7 +62,7 @@ sealed class DetailPage : Component
         // The content is wrapped in a plain Grow=1 BoxEl (NOT a bare component): the SkelRegion boundary mirrors its active
         // child's layout participation, and a plain BoxEl's Grow is written synchronously (WriteColumns) — a bare component's
         // Grow is mirrored from ITS output only after its async render effect runs, so the boundary would mirror a stale Grow=0
-        // and the single-column page (a virtualized list whose only intrinsic height is its chrome) would collapse to 0 rows.
+        // and detail pages whose virtualized list has little intrinsic height would collapse to 0 rows.
         return Skel.Region(
             model,
             shimmerSource: () => DetailSkeleton.Build(SkeletonConfig(kind), morphKey),

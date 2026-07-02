@@ -154,7 +154,7 @@ public sealed class TreeReconciler
     /// <summary>Set by the host; shared-element (connected-animation) registry. A node carrying <c>Element.MorphId</c> is
     /// registered as a participant here so its art flies between routes (backdrop-effects-animation.md §5.4/§5.6).</summary>
     public ConnectedAnimation? Connected { get; set; }
-    /// <summary>Set by the host (→ ScrollAnimator.Arm); injected into each component so a control can arm a viewport for a
+    /// <summary>Set by the host (→ ScrollIntegrator.Arm); injected into each component so a control can arm a viewport for a
     /// smooth programmatic scroll (set Target, then phase 7 eases the offset toward it).</summary>
     public Action<FluentGpu.Foundation.NodeHandle>? ArmScroll { get; set; }
     /// <summary>Set by the host; image nodes request decodes through it and pin/unpin for residency (liveness).</summary>
@@ -165,7 +165,7 @@ public sealed class TreeReconciler
     public Action<NodeHandle>? OnSubtreeDeactivated { get; set; }
     /// <summary>Set by the host; called for each node as a subtree is parked/un-parked by KeepAlive so the animation +
     /// scroll tickers can quiesce that node's tracks (a parked, invisible tab must not keep the app awake / defeat the
-    /// idle wake-stop). Wired to <c>AnimEngine.SetNodeParked</c> + <c>ScrollAnimator.SetNodeParked</c>.</summary>
+    /// idle wake-stop). Wired to <c>AnimEngine.SetNodeParked</c> + <c>ScrollIntegrator.SetNodeParked</c>.</summary>
     public Action<NodeHandle, bool>? OnNodeParkedChanged { get; set; }
 
     public TreeReconciler(SceneStore scene, StringTable strings, ReactiveRuntime? runtime = null)
@@ -1940,6 +1940,7 @@ public sealed class TreeReconciler
                 paint.PressedOpacity = b.PressedOpacity;
                 paint.OpacityGroup = b.OpacityGroup;
                 paint.BlurSigma = b.Blur;   // self-blur (Expressive Motion Kit); phase-7 AnimChannel.Blur overrides for animated nodes
+                paint.BlurCachePolicy = b.BlurCachePolicy;
 
 
 

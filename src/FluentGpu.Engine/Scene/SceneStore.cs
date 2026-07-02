@@ -57,6 +57,11 @@ public sealed class SceneStore : ISceneBackend
     // scissor. Reset to Infinite when no fly is in flight. Read once per frame by the SceneRecorder overlay pass.
     public RectF OverlayClip = RectF.Infinite;
 
+    // Effective device-pixel scale (DIP→px), set by AppHost each frame from the window scale (1 in headless / on DPI
+    // change re-read). The sole consumer is the scroll content transform's device-pixel rounding (OverscrollPhysics.
+    // WriteContentTransform), so a sub-pixel pan advances in whole device pixels while the logical offset stays float.
+    public float DeviceScale = 1f;
+
     // topology (int indices; 0 = none)
     private int[] _parent, _firstChild, _lastChild, _prevSib, _nextSib, _childCount;
 
@@ -158,7 +163,7 @@ public sealed class SceneStore : ISceneBackend
 
     /// <summary>Optional slot-free notification (node INDEX): invoked by <see cref="FreeSubtree"/> as a node's slot is
     /// reclaimed, so subsystems that key per-node state by INDEX (rather than gen-checked handle) — the AnimEngine
-    /// layout-transition side-table, the ScrollAnimator conscious-bar timers — can drop the dormant row symmetrically.
+    /// layout-transition side-table, the ScrollIntegrator conscious-bar timers — can drop the dormant row symmetrically.
     /// Without it a freed slot's stale spec/state would be inherited by the NEXT node reusing that index. Wired by the
     /// host; null on backends that don't use the index-keyed side-tables.</summary>
     public Action<int>? OnFreeIndex { get; set; }
@@ -327,7 +332,7 @@ public sealed class SceneStore : ISceneBackend
         if (_gestureSubs.Count != 0) _gestureSubs.Remove(idx);   // drop the node's UseGesture declaration with it (handler closures released)
         if (DragGhost == node) DragGhost = NodeHandle.Null;   // a freed ghost must not linger in the recorder's top band
         if ((flags & NodeFlags.ConnectedOverlay) != 0) RemoveOverlay(node);   // a freed overlay must not linger in the band
-        OnFreeIndex?.Invoke(idx);   // symmetric teardown of INDEX-keyed external side-tables (AnimEngine transitions / ScrollAnimator timers)
+        OnFreeIndex?.Invoke(idx);   // symmetric teardown of INDEX-keyed external side-tables (AnimEngine transitions / ScrollIntegrator timers)
         _gen[idx]++;
         if (_gen[idx] == 0) _gen[idx] = 1;
         _nextFree[idx] = _freeHead;

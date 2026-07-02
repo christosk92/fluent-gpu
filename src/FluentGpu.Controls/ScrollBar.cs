@@ -41,7 +41,7 @@ namespace FluentGpu.Controls;
 /// choreography is stepped by a mounted FrameClock ticker at the engine's 16ms-per-frame convention (the
 /// <c>UseAnimatedValue</c> precedent), so it is deterministic on the headless FixedFrameTimeSource host.
 /// The auto-hiding OVERLAY scrollbar on scroll viewports is engine-drawn (SceneRecorder.EmitScrollbar) with its
-/// timing in <c>Animation.ScrollAnimator</c> — this control is the standalone (always-visible) ScrollBar element.
+/// timing in <c>Animation.ScrollIntegrator</c> — this control is the standalone (always-visible) ScrollBar element.
 /// </summary>
 public static partial class ScrollBar
 {

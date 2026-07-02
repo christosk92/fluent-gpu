@@ -21,6 +21,12 @@ public sealed class AggregatingLyricsProvider : ILyricsProvider
     readonly Action<string>? _log;
     readonly Dictionary<string, LyricsDocument> _cache = new();
     readonly object _gate = new();
+    // Bound the winner cache: a long session touches thousands of distinct tracks and each LyricsDocument is tens of KB
+    // (word-synced). A miss re-fetches (self-healing), so an LRU cap is safe. Touched/evicted under _gate; MRU at the end.
+    const int CacheCap = 64;
+    readonly List<string> _lru = new();
+    void TouchLru(string id) { _lru.Remove(id); _lru.Add(id); }
+    void EvictLru() { while (_lru.Count > CacheCap) { var oldest = _lru[0]; _lru.RemoveAt(0); _cache.Remove(oldest); } }
 
     public AggregatingLyricsProvider(
         IEnumerable<ILyricCandidateSource> sources,
@@ -50,7 +56,7 @@ public sealed class AggregatingLyricsProvider : ILyricsProvider
     public async Task<LyricsDocument?> GetLyricsAsync(string trackId, CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(trackId)) return null;
-        lock (_gate) if (_cache.TryGetValue(trackId, out var cached)) return cached;
+        lock (_gate) if (_cache.TryGetValue(trackId, out var cached)) { TouchLru(trackId); return cached; }
 
         LyricsRequest? req;
         try { req = await _resolve(trackId, ct).ConfigureAwait(false); }
@@ -137,7 +143,7 @@ public sealed class AggregatingLyricsProvider : ILyricsProvider
                 $"timing={b.TimingScore:F2} offset={b.AppliedOffsetMs}ms candidates=[{string.Join(",", candidates.Select(c => c.ProviderId))}] ({b.Reason})");
 
         var winner = ranked.Winner;
-        if (winner is not null) lock (_gate) _cache[trackId] = winner;
+        if (winner is not null) lock (_gate) { _cache[trackId] = winner; TouchLru(trackId); EvictLru(); }
         return winner;
     }
 
@@ -170,5 +176,5 @@ public sealed class AggregatingLyricsProvider : ILyricsProvider
     }
 
     /// <summary>Clear the winner cache (e.g. on logout / provider-config change).</summary>
-    public void ClearCache() { lock (_gate) _cache.Clear(); }
+    public void ClearCache() { lock (_gate) { _cache.Clear(); _lru.Clear(); } }
 }

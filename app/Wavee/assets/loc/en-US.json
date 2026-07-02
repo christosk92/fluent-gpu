@@ -4,7 +4,11 @@
 
   "detail": {
     "play": "Play",
+    "shuffle": "Shuffle",
+    "playNext": "Play next",
+    "playAfter": "Play after",
     "addToQueue": "Add to queue",
+    "addToEndOfQueue": "Add to end of queue",
     "addToPlaylist": "Add to playlist",
     "copyToPlaylist": "Copy to playlist",
     "addedToQueue": "Added {count} to queue",
@@ -374,6 +378,7 @@
   },
 
   "common": {
+    "more": "More",
     "retry": "Retry",
     "dismiss": "Dismiss",
     "offline": "You're offline — showing saved content.",

@@ -21,7 +21,7 @@ sealed class RightRail : Component
         var header = new BoxEl
         {
             Direction = 0, Height = 48f, AlignItems = FlexAlign.Center, Gap = 4f,
-            Padding = new Edges4(14f, 0f, 6f, 0f),
+            Padding = new Edges4(22f, 0f, 10f, 0f),
             Children =
             [
                 new TextEl(Title(mode))

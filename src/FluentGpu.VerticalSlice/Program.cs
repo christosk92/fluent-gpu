@@ -530,7 +530,7 @@ sealed class TouchFlingSettleProbe : Component
 // A bound virtual list sized so a touch flick lands MID-LIST (the clamp is far away) — the snap-fling probe. The test
 // sets ScrollState.SnapInterval = RowH on the viewport after mount (the reconciler patches Orientation/ItemCount but
 // never touches the snap fields, so a post-mount SnapInterval survives every reconcile). A flick then retargets its
-// friction decay to land EXACTLY on a RowH multiple (ScrollSnap + ScrollAnimator). Large content keeps the snap target
+// friction decay to land EXACTLY on a RowH multiple (ScrollSnap + ScrollIntegrator). Large content keeps the snap target
 // interior (never clamp-bounded), so the landing is purely the snap math. Viewport = Scene.Root.
 sealed class SnapFlingProbe : Component
 {
@@ -543,6 +543,56 @@ sealed class SnapFlingProbe : Component
                Fill = Prop.Of(() => ColorF.FromRgba(30, 30, (byte)(idx.Value % 2 == 0 ? 30 : 50))),
            })
            with { Width = 300, Height = 400 };
+}
+
+// scroll-feel-rework-v2 §8 HeadlessScrollProducer: scripts all six input kinds (contact begin/update/end, OS momentum,
+// discrete wheel notch, pointer-down-cancel) with SYNTHETIC timestamps into the headless Pal ring, and drives frames
+// while feeding the phase-7 integrator a synthetic frame clock (FrameQpcSec) so the §4.1 frame-time resampler runs
+// deterministically headless (the AppHost only wires the wall clock on real backends). Packet stamps live on the ms
+// domain (QpcTicks=0 ⇒ ContactSampleSec falls back to TimestampMs/1000), and FrameMs drives FrameQpcSec on the SAME
+// domain, so the resampler targets FrameMs−5ms honestly. No wall clock; 0-alloc per event (record-struct queue only).
+sealed class HeadlessScrollProducer
+{
+    readonly HeadlessWindow _win;
+    readonly AppHost _host;
+    readonly Point2 _at;
+    byte _seq;
+    public uint Ms;          // per-packet stamp clock (ms)
+    public double FrameMs;   // frame-present clock → FrameQpcSec (ms)
+    public byte Device = (byte)ScrollDeviceClass.WheelHiResFallback;   // fallback ⇒ a hard lift self-flings (§4.3)
+    public uint PointerId = 9;
+
+    public HeadlessScrollProducer(HeadlessWindow win, AppHost host, Point2 at, uint startMs = 5000)
+    { _win = win; _host = host; _at = at; Ms = startMs; FrameMs = startMs; }
+
+    InputEvent Ph(InputKind k, float dyDip) => new(k, _at, 0, 0, ScrollDelta: dyDip,
+        Pointer: PointerKind.Touchpad, TimestampMs: Ms, PointerId: PointerId, ScrollPhaseSeq: _seq++, DeviceClassRaw: Device);
+
+    public void ContactBegin(float dyDip = 0f) => _win.QueueInput(Ph(InputKind.ScrollBegin, dyDip));
+    public void ContactUpdate(float dyDip) => _win.QueueInput(Ph(InputKind.ScrollUpdate, dyDip));
+    public void ContactEnd() => _win.QueueInput(Ph(InputKind.ScrollEnd, 0f));
+    public void MomentumBegin() => _win.QueueInput(Ph(InputKind.MomentumBegin, 0f));
+    public void MomentumUpdate(float dyDip) => _win.QueueInput(Ph(InputKind.MomentumUpdate, dyDip));
+    public void MomentumEnd() => _win.QueueInput(Ph(InputKind.MomentumEnd, 0f));
+    public void WheelNotch(float notches) => _win.QueueInput(new InputEvent(InputKind.Wheel, _at, 0, 0,
+        Pointer: PointerKind.Mouse, WheelNotch: notches, TimestampMs: Ms));
+    public void PointerDownAt(Point2 p, PointerKind kind = PointerKind.Mouse, uint id = 0) =>
+        _win.QueueInput(new InputEvent(InputKind.PointerDown, p, 0, 0, Pointer: kind, TimestampMs: Ms, PointerId: id));
+
+    /// <summary>Present one frame: set the synthetic FrameQpcSec (headless never overwrites it), run, then advance the
+    /// frame clock by <paramref name="dtMs"/>. Folds this frame's offset-write count into the single-writer audit.</summary>
+    public FrameStats Frame(float dtMs)
+    {
+        _host.ScrollIntegratorForTest.FrameQpcSec = FrameMs / 1000.0;
+        var f = _host.RunFrame();
+        FluentGpu.Foundation.ScrollTrace.AuditResetFrame();
+        FrameMs += dtMs;
+        return f;
+    }
+
+    /// <summary>Present one frame AND advance the packet clock in lockstep (Ms == FrameMs) for gates that don't script
+    /// sub-frame packet cadence.</summary>
+    public FrameStats Step(float dtMs) { var f = Frame(dtMs); Ms = (uint)Math.Round(FrameMs); return f; }
 }
 
 // A virtualized list whose rows are clickable (the tap target). A below-slop touch down→up over a row TAPS it (the row's
@@ -3444,6 +3494,108 @@ static class Slice
             $"opacity {faded:0.00}->{held:0.00}, active={scaleStillActive}");
     }
 
+    // Cross-frame self-blur pin-cache KEY (backdrop-effects-animation.md §FA-2a). BlurPinKey.TryCompute is portable
+    // (TerraFX-free) so the position-independent content key can be gated headlessly here; the Windows D3D12 pool (G1/G2
+    // LRU + budget + settle re-mint) is covered by the --screenshot golden. We emit the blur subtree the SAME way the
+    // recorder does — layer DeviceRect = the ABSOLUTE device bounds, each child op's Bounds = node-local (0,0,w,h), each
+    // child op's Transform = the world transform (position lives in Dx/Dy) — so these bytes exercise the exact rebasing
+    // path. (Constructing the DrawList directly, rather than driving SceneRecorder + a scroll, isolates each delta.)
+    static (ulong key, bool ok) BlurStripKey(StringTable strings, float ox, float oy, float sigma, float scaleX, float w, float h,
+        StringId text, float childDx, float childDy, float split, StringId text2 = default, float child2Dx = 0f, float child2Dy = 0f)
+    {
+        var dl = new DrawList();
+        var fam = strings.Intern("Segoe UI");
+        var layerRect = new RectF(ox, oy, w * scaleX, h);
+        dl.PushBlurLayer(layerRect, default, sigma, 1f);
+        var local = new RectF(0f, 0f, w, h);
+        var world = new Affine2D(scaleX, 0f, 0f, 1f, ox + childDx, oy + childDy);   // world = translate(layer origin) ∘ child offset
+        if (split >= 0f)
+            dl.DrawGlyphRunGradient(local, text, fam, 20f, 400, 0, 0, 1, 0f, 24f, 0, 0, world, 1f,
+                new ColorF(1f, 1f, 1f, 1f), new ColorF(1f, 1f, 1f, 0.4f), split, 0.05f, 0f);
+        else
+            dl.DrawGlyphRun(local, new ColorF(1f, 1f, 1f, 1f), text, fam, 20f, 400, 0, 0, 1, 0f, 24f, 0, 0, world, 1f);
+        if (!text2.IsEmpty)
+        {
+            var world2 = new Affine2D(scaleX, 0f, 0f, 1f, ox + child2Dx, oy + child2Dy);
+            dl.DrawGlyphRun(new RectF(0f, 0f, w, h), new ColorF(1f, 1f, 1f, 1f), text2, fam, 20f, 400, 0, 0, 1, 0f, 24f, 0, 0, world2, 1f);
+        }
+        dl.PopLayer(layerRect);
+        var bytes = dl.Bytes;
+        var L = MemoryMarshal.Read<PushLayerCmd>(bytes.Slice(sizeof(int)));
+        int start = sizeof(int) + Unsafe.SizeOf<PushLayerCmd>();
+        bool ok = BlurPinKey.TryCompute(bytes, start, in L, out ulong key, out _);
+        return (key, ok);
+    }
+
+    static void BlurPinKeyChecks(StringTable strings)
+    {
+        // BP.1 — the core G3 invariant: a pure translation (scroll) at two DIFFERENT (and fractional) origins ⇒ SAME key.
+        var t1 = strings.Intern("lyric line");
+        var (k1, o1) = BlurStripKey(strings, 100f, 200f, 4f, 1f, 300f, 40f, t1, 8f, 6f, -1f);
+        var (k2, o2) = BlurStripKey(strings, 100f - 13.7f, 200f - 37.4f, 4f, 1f, 300f, 40f, t1, 8f, 6f, -1f);
+        Check("BP.1 translation-invariant key (scroll → HIT, not a re-blur)", o1 && o2 && k1 == k2 && k1 != 0, $"k1={k1:X16} k2={k2:X16}");
+
+        // BP.2 — determinism: sweep the origin across 200 sub-pixel AND integer-crossing offsets; the key must not wobble
+        // (a raw fl(P+X)-X rebase would leak a ≤1-ULP jitter — rounding to the integer grid kills it). Non-integer child
+        // offsets (12.3, 5.7) make the P+X and P subtractions genuinely inexact, so this exercises the wobble path.
+        ulong refk = 0; bool allSame = true, allOk = true;
+        var t2 = strings.Intern("determinism");
+        for (int i = 0; i < 200; i++)
+        {
+            float frac = i / 50f;   // 0.00 .. 3.98, crossing 0/1/2/3
+            var (k, ok) = BlurStripKey(strings, 100f + frac, 200f + frac, 4f, 1f, 300f, 40f, t2, 12.3f, 5.7f, -1f);
+            if (i == 0) refk = k;
+            if (k != refk) allSame = false;
+            if (!ok) allOk = false;
+        }
+        Check("BP.2 key constant across 200 sub-pixel + integer-crossing offsets (no float wobble)", allOk && allSame && refk != 0, $"ref={refk:X16}");
+
+        // BP.3 — content sensitivity: a glyph text change and a wipe-Split change (DrawGlyphRunGradient) each flip the key.
+        var ta = strings.Intern("verse one");
+        var tb = strings.Intern("verse two");
+        var (ka, _) = BlurStripKey(strings, 100f, 200f, 4f, 1f, 300f, 40f, ta, 8f, 6f, -1f);
+        var (kb, _) = BlurStripKey(strings, 100f, 200f, 4f, 1f, 300f, 40f, tb, 8f, 6f, -1f);
+        var (ks1, _) = BlurStripKey(strings, 100f, 200f, 4f, 1f, 300f, 40f, ta, 8f, 6f, 0.3f);
+        var (ks2, _) = BlurStripKey(strings, 100f, 200f, 4f, 1f, 300f, 40f, ta, 8f, 6f, 0.7f);
+        Check("BP.3 content-sensitive: text change and wipe-split change each flip the key", ka != kb && ks1 != ks2, $"text={ka != kb} split={ks1 != ks2}");
+
+        // BP.4 — size/sigma sensitivity: a σ step and a ScaleX step (⇒ device W/H + world M11) each flip the key. This
+        // proves SIZE stays a CONTENT miss (scale reuse is a non-goal; the app steps scale so the ease is position-only).
+        var tz = strings.Intern("emphasis");
+        var (kg1, _) = BlurStripKey(strings, 100f, 200f, 4f, 1f, 300f, 40f, tz, 8f, 6f, -1f);
+        var (kg2, _) = BlurStripKey(strings, 100f, 200f, 5f, 1f, 300f, 40f, tz, 8f, 6f, -1f);
+        var (kc1, _) = BlurStripKey(strings, 100f, 200f, 4f, 1.00f, 300f, 40f, tz, 8f, 6f, -1f);
+        var (kc2, _) = BlurStripKey(strings, 100f, 200f, 4f, 1.10f, 300f, 40f, tz, 8f, 6f, -1f);
+        Check("BP.4 size-sensitive: σ change and ScaleX change each flip the key (size stays a content miss)", kg1 != kg2 && kc1 != kc2, $"sigma={kg1 != kg2} scale={kc1 != kc2}");
+
+        // BP.5 — relative-layout sensitivity: shift ONE child's local offset by ≥1 px (same size/content) ⇒ the key flips.
+        // Proves the rebase catches a genuine relative move — it is NOT a blanket "ignore all Dx/Dy" (no false-share).
+        var tr = strings.Intern("main");
+        var tr2 = strings.Intern("child2");
+        var (kr1, or1) = BlurStripKey(strings, 100f, 200f, 4f, 1f, 300f, 40f, tr, 8f, 6f, -1f, tr2, 40f, 6f);
+        var (kr2, or2) = BlurStripKey(strings, 100f, 200f, 4f, 1f, 300f, 40f, tr, 8f, 6f, -1f, tr2, 44f, 6f);
+        Check("BP.5 relative-layout-sensitive: a ≥1px child-local shift flips the key (no false-share)", or1 && or2 && kr1 != kr2 && kr1 != 0, $"k1={kr1:X16} k2={kr2:X16}");
+
+        // BP.6 — alloc: 10000 TryCompute calls on a fixed byte buffer under the GC tripwire ⇒ delta == 0 (stackalloc only,
+        // safe for the phase 6–13 record hot path).
+        {
+            var dl = new DrawList();
+            var fam = strings.Intern("Segoe UI");
+            var layerRect = new RectF(100f, 200f, 300f, 40f);
+            dl.PushBlurLayer(layerRect, default, 4f, 1f);
+            dl.DrawGlyphRun(new RectF(0f, 0f, 300f, 40f), new ColorF(1f, 1f, 1f, 1f), strings.Intern("alloc"), fam, 20f, 400, 0, 0, 1, 0f, 24f, 0, 0, new Affine2D(1f, 0f, 0f, 1f, 108f, 206f), 1f);
+            dl.PopLayer(layerRect);
+            var pl = MemoryMarshal.Read<PushLayerCmd>(dl.Bytes.Slice(sizeof(int)));
+            int st = sizeof(int) + Unsafe.SizeOf<PushLayerCmd>();
+            BlurPinKey.TryCompute(dl.Bytes, st, in pl, out _, out _);   // warm
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            ulong last = 0;
+            for (int i = 0; i < 10000; i++) { BlurPinKey.TryCompute(dl.Bytes, st, in pl, out ulong k, out _); last = k; }
+            long delta = GC.GetAllocatedBytesForCurrentThread() - before;
+            Check("BP.6 BlurPinKey.TryCompute is zero-alloc (10000 calls)", delta == 0 && last != 0, $"delta={delta}B/10000 last={last:X16}");
+        }
+    }
+
     // Expressive Motion Kit (transitions.dev adoption): the new named expressive curves, the per-node self-blur channel
     // (AnimChannel.BlurSigma → NodePaint.BlurSigma, PaintDirty only — never relayout), and the recorder's PushLayer{Blur}
     // emission. Blurred GPU pixels are a --shot manual check; here we prove the curve math, the channel, and the opcode.
@@ -5655,7 +5807,7 @@ static class Slice
                 var f = host.RunFrame();
                 host.Scene.TryGetScroll(vp, out var sc);
                 if (sc.OffsetY > prevOff + 0.01f) { monotonicRun++; if (monotonicRun > maxRun) maxRun = monotonicRun; if (f.Rendered) decayRendered = true; }
-                else if (sc.ScrollMode == 0) { settledAt = i; firstRealizedSettled = sc.FirstRealized; }
+                else if (sc.Phase == 0) { settledAt = i; firstRealizedSettled = sc.FirstRealized; }
                 else monotonicRun = 0;   // a non-advancing frame mid-fling (should not happen) breaks the run
                 prevOff = sc.OffsetY;
             }
@@ -5671,6 +5823,93 @@ static class Slice
             Check("gate.touch.flick-decay-settle a touch flick decays monotonically (≥10 frames), re-realizes the window, then settles at a BOUNDED rest SHORT of the far clamp (WinUI-like friction, not a near-frictionless coast to the end)",
                 maxRun >= 10 && settledFast && reRealized && coastedForward && boundedShortOfClamp,
                 $"maxRun={maxRun} settledAt={settledAt} offset={afterUp.OffsetY:0}->{settled.OffsetY:0} (clamp={maxOff:0}) reRealized={reRealized}");
+        }
+
+        // gate.scroll.impulse-velocity (scroll-feel rework Phase 1, design §2): the IMPULSE (work-energy) release
+        // estimator. (a) CONSTANT-velocity drag → the seeded fling speed equals the hand speed exactly (W = ½v² →
+        // √(2W) = v). (b) An ACCELERATING drag queued TWO moves per frame — the ring coalesces each pair and deposits
+        // the overwritten move into the velocity side ring — must match an independent in-gate replica of the IMPULSE
+        // math over the full scripted sample stream: proves per-packet (pre-coalesce) fidelity survives frame
+        // coalescing. (c) A drag that PAUSES ≥ AssumeStoppedMs before the lift seeds NO fling (Android
+        // ASSUME_POINTER_STOPPED_TIME): the finger stopped before lifting.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("impulse-vel", new Size2(360, 460), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
+            host.RunFrame();
+            var vp = host.Scene.Root;
+
+            // (a) constant velocity: 10 moves × 32 px @ 16 ms = 2000 px/s finger speed, up 16 ms after the last move.
+            TouchGesture(window, host, new Point2(150, 384), new Point2(150, 64), 10, pointerId: 11, msPerStep: 16f);
+            host.Scene.TryGetScroll(vp, out var scA);
+            // The up frame's phase-7 tick already decayed the fresh seed once (16 ms of FlingDecayPerS) — fold that
+            // into the expectation so the gate asserts the ESTIMATOR exactly, not the estimator minus one tick.
+            float decay1 = MathF.Exp(MathF.Log(0.135f) * 16f / 1000f);
+            float vConst = MathF.Abs(scA.FlingVelocity);
+            bool constExact = MathF.Abs(vConst - 2000f * decay1) <= 2000f * decay1 * 0.02f && scA.Phase == ScrollIntegrator.Fling;   // ±2%
+            for (int i = 0; i < 400; i++) { host.RunFrame(); host.Scene.TryGetScroll(vp, out var s); if (s.Phase == 0) break; }
+
+            // (b) accelerating, two moves per frame (8 ms stamps): quadratic profile y(t) sampled every 8 ms. The gate
+            // replicates the estimator (cap-8 ring, 66 ms horizon, newest-pre-window baseline, ½ first term, √(2W)).
+            uint t0 = s_touchClockMs; float y0 = 384f;
+            Span<(uint T, float Y)> samples = stackalloc (uint, float)[17];
+            samples[0] = (t0, y0);                                       // the down seeds the ring
+            for (int i = 1; i <= 16; i++)
+            {
+                float tt = i / 16f;                                       // quadratic: slow start, fast finish
+                samples[i] = ((uint)(t0 + i * 8), y0 - 320f * tt * tt);
+            }
+            window.QueueInput(Touch(InputKind.PointerDown, new Point2(150, samples[0].Y), samples[0].T, 12));
+            host.RunFrame();
+            for (int i = 1; i <= 16; i += 2)
+            {
+                window.QueueInput(Touch(InputKind.PointerMove, new Point2(150, samples[i].Y), samples[i].T, 12));
+                if (i + 1 <= 16) window.QueueInput(Touch(InputKind.PointerMove, new Point2(150, samples[i + 1].Y), samples[i + 1].T, 12));
+                host.RunFrame();                                          // the pair coalesces; the first feeds the side ring
+            }
+            uint tUp = (uint)(t0 + 16 * 8 + 8);
+            window.QueueInput(Touch(InputKind.PointerUp, new Point2(150, samples[16].Y), tUp, 12));
+            host.RunFrame();
+            s_touchClockMs = tUp + 1000;
+            host.Scene.TryGetScroll(vp, out var scB);
+            float vAccel = MathF.Abs(scB.FlingVelocity);
+
+            // Independent replica of the estimator over the scripted stream (cap-8 ring → keep the NEWEST 8 samples).
+            int keep = Math.Min(8, samples.Length);
+            int start = samples.Length - keep;
+            double w = 0.0, vprev = 0.0; bool firstSeg = true; int basei = -1;
+            for (int i = start; i < samples.Length; i++)
+            {
+                if ((tUp - samples[i].T) > 40) { basei = i; continue; }   // pre-window → baseline (v2 §4.3: single 40ms IMPULSE window)
+                if (basei < 0) { basei = i; continue; }                    // first in-window sample baselines
+                double dt = (samples[i].T - samples[basei].T) / 1000.0;
+                if (dt <= 0) { basei = i; continue; }
+                double v = (samples[i].Y - samples[basei].Y) / dt;
+                if (firstSeg) { w += 0.5 * v * Math.Abs(v); firstSeg = false; }
+                else w += (v - vprev) * Math.Abs(v);
+                vprev = v; basei = i;
+            }
+            float vExpected = (float)Math.Abs(Math.Sign(w) * Math.Sqrt(2.0 * Math.Abs(w))) * decay1;   // − one up-frame tick
+            bool conforms = vExpected > 100f && MathF.Abs(vAccel - vExpected) <= MathF.Max(1f, vExpected * 0.02f);
+            for (int i = 0; i < 400; i++) { host.RunFrame(); host.Scene.TryGetScroll(vp, out var s); if (s.Phase == 0) break; }
+
+            // (c) pause-before-lift: a real drag, then the finger rests 60 ms (> AssumeStoppedMs=40), then lifts → no fling.
+            uint t2 = s_touchClockMs;
+            window.QueueInput(Touch(InputKind.PointerDown, new Point2(150, 384), t2, 13)); host.RunFrame();
+            for (int i = 1; i <= 8; i++)
+            {
+                window.QueueInput(Touch(InputKind.PointerMove, new Point2(150, 384 - i * 24), t2 + (uint)(i * 16), 13));
+                host.RunFrame();
+            }
+            window.QueueInput(Touch(InputKind.PointerUp, new Point2(150, 384 - 8 * 24), t2 + 8 * 16 + 60, 13));   // 60 ms rest
+            host.RunFrame();
+            s_touchClockMs = t2 + 8 * 16 + 60 + 1000;
+            host.Scene.TryGetScroll(vp, out var scC);
+            bool stoppedNoFling = scC.Phase != ScrollIntegrator.Fling || MathF.Abs(scC.FlingVelocity) < 1f;
+
+            Check("gate.scroll.impulse-velocity the IMPULSE release estimator: constant-velocity drag reads the exact hand speed; an accelerating TWO-MOVES-PER-FRAME stream (ring-coalesced, side-ring fed) matches the independent work-energy replica; a ≥40ms pause before lift seeds NO fling",
+                constExact && conforms && stoppedNoFling,
+                $"const={vConst:0} (expect 2000±2%) accel={vAccel:0} vs replica={vExpected:0} pauseFling={(scC.Phase == ScrollIntegrator.Fling ? scC.FlingVelocity : 0f):0.0}");
         }
 
         // gate.scroll.mouse-wheel-eases-discrete: a synthetic PointerKind.Mouse stream remains on ONE eased TargetChase
@@ -5692,21 +5931,21 @@ static class Slice
                 window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0, ScrollDelta: d, TimestampMs: t));
                 host.RunFrame();
                 host.Scene.TryGetScroll(vp, out var s);
-                if (s.ScrollMode == 1) everFlung = true;
+                if (s.Phase == ScrollIntegrator.Fling) everFlung = true;
                 if (s.OffsetY + 0.01f < prev) monotonic = false;   // never jumps backward (no eased-vs-1:1 desync)
                 prev = s.OffsetY; t += 16;
             }
             for (int i = 0; i < 60; i++) host.RunFrame();   // let the ease converge to the accumulated target
             host.Scene.TryGetScroll(vp, out var settled);
             float offSettled = settled.OffsetY;
-            bool converged = offSettled >= 433f && offSettled <= 437f && settled.ScrollMode == 0;
+            bool converged = offSettled >= 433f && offSettled <= 437f && settled.Phase == 0;
             // After the stream stops, no momentum/coast past the target.
             float coastMax = offSettled;
             for (int i = 0; i < 30; i++) { host.RunFrame(); host.Scene.TryGetScroll(vp, out var s); coastMax = MathF.Max(coastMax, s.OffsetY); }
             bool noMomentum = coastMax <= offSettled + 1f;
             Check("gate.scroll.mouse-wheel-eases-discrete a MIXED-magnitude PointerKind.Mouse stream eases monotonically via ONE TargetChase path to the summed target — no magnitude split, no post-target momentum",
                 monotonic && !everFlung && converged && noMomentum,
-                $"settled={offSettled:0} (expect 435) monotonic={monotonic} flung={everFlung} coastTo={coastMax:0} mode={settled.ScrollMode}");
+                $"settled={offSettled:0} (expect 435) monotonic={monotonic} flung={everFlung} coastTo={coastMax:0} mode={settled.Phase}");
         }
 
         // gate.scroll.flick-into-edge-bounce: a genuine TOUCH flick whose fling REACHES a clamp converts the residual
@@ -5733,7 +5972,7 @@ static class Slice
             {
                 host.RunFrame();
                 host.Scene.TryGetScroll(vp, out var s);
-                if (s.ScrollMode == 1) flung = true;
+                if (s.Phase == ScrollIntegrator.Fling) flung = true;
                 maxBand = MathF.Max(maxBand, MathF.Abs(s.OverscrollPx));
                 if (i > 4 && MathF.Abs(s.OverscrollPx) < 0.1f && s.OffsetY <= 0.5f) settledAt = i;
             }
@@ -6044,10 +6283,10 @@ static class Slice
             // A capture-loss is not a flick: the cancelled list must NOT be flinging.
             host.RunFrame();
             host.Scene.TryGetScroll(left, out var lAfter);
-            bool leftNoFling = Near(lAfter.OffsetY, lEnd.OffsetY, 0.6f) && lAfter.ScrollMode == 0;
+            bool leftNoFling = Near(lAfter.OffsetY, lEnd.OffsetY, 0.6f) && lAfter.Phase == 0;
             Check("gate.touch.per-id-cancel a per-id PointerCancel ends only that contact (its pan freezes, no fling) while the other id keeps panning",
                 leftFrozen && rightContinued && leftNoFling,
-                $"leftFrozenAt={leftFrozenAt:0} leftEnd={lEnd.OffsetY:0} rightEnd={rEnd.OffsetY:0} leftMode={lAfter.ScrollMode}");
+                $"leftFrozenAt={leftFrozenAt:0} leftEnd={lEnd.OffsetY:0} rightEnd={rEnd.OffsetY:0} leftMode={lAfter.Phase}");
         }
 
         // gate.touch.pressed-no-hover: a touch PointerDown drives the Pressed visual exactly like a mouse press (the node
@@ -6092,6 +6331,16 @@ static class Slice
             using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new ScrollProbe());
             host.RunFrame();
             var vp = host.Scene.Root;
+            // Warm the scroll content node's first dirty-Mark (a one-time per-node lazy init in the scene's dirty tracking):
+            // v2 §2.1 moves the offset write to phase 7 (the integrator tick), so this init now lands inside the measured
+            // hot half — prime it here (a throwaway wheel down then back to the top marks + resets the content), exactly as
+            // the fling gates warm the tick-write path via pre-fling contact tracking. The measured drag asserts steady state.
+            // NB: does NOT advance the shared s_touchClockMs (only the per-host frame clock) — a later gate's absolute
+            // timestamps must stay put (gate.touch.flick-seed-gap-invariant sits knife-edge on AssumeStoppedMs=40).
+            window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(130, 100), 0, 0, ScrollDelta: 48f, TimestampMs: s_touchClockMs));
+            host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(130, 100), 0, 0, ScrollDelta: -1_000_000f, TimestampMs: s_touchClockMs + 16));
+            host.RunFrame();
             host.Scene.TryGetScroll(vp, out var sc0);
             float maxOff = MathF.Max(0f, sc0.ContentH - sc0.ViewportH);   // 800 − 200 = 600
             float laneX = 194f;   // the 200-wide viewport's lane sits at x∈[188,200]; the thumb is at the top at offset 0
@@ -6595,7 +6844,7 @@ static class Slice
                 allReal && consistent, $"seed min={min:0} max={max:0} spread={(max > 0f ? (max - min) / max * 100f : 0f):0.#}% (want min≥1700, spread<10%)");
         }
 
-        // gate.scroll.engine-owned-integrator: scroll is fully engine-owned — the deterministic ScrollAnimator is the
+        // gate.scroll.engine-owned-integrator: scroll is fully engine-owned — the deterministic ScrollIntegrator is the
         // single, portable scroll source on every platform (there is no OS scroll-source seam; DirectManipulation is
         // gone). A wheel notch drives the integrator's target-chase to a NON-ZERO offset in plain TargetChase mode,
         // proving the engine integrator alone moves the viewport.
@@ -6608,32 +6857,581 @@ static class Slice
             window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0, 200f));   // DIP ScrollDelta (integrator path)
             for (int i = 0; i < 40; i++) host.RunFrame();
             host.Scene.TryGetScroll(vp, out var s);
-            bool integratorRan = s.OffsetY > 0f && s.ScrollMode == 0;
-            Check("gate.scroll.engine-owned-integrator scroll is fully engine-owned — the deterministic ScrollAnimator integrator alone drives the viewport (no OS scroll source); a wheel notch chases the target to a non-zero offset in TargetChase mode",
-                integratorRan, $"integratorRan={integratorRan} off={s.OffsetY:0} mode={s.ScrollMode}");
+            bool integratorRan = s.OffsetY > 0f && s.Phase == ScrollIntegrator.Idle;
+            Check("gate.scroll.engine-owned-integrator scroll is fully engine-owned — the deterministic ScrollIntegrator alone drives the viewport (no OS scroll source); a DIP wheel delta advances it to a non-zero offset and settles back to Idle",
+                integratorRan, $"integratorRan={integratorRan} off={s.OffsetY:0} phase={s.Phase}");
         }
 
-        // gate.scroll.overscroll-physics: WinUI-parity overpan resistance + inverse + spring settle (translation-only band).
+        // gate.scroll.overscroll-physics (v2): the canonical iOS asymptotic rubber-band + its EXACT inverse + the ω=12.5
+        // snap-back (scroll-feel-rework-v2 §4.4/§4.5). d = BandAsymptoteFraction·vp = 60 is the asymptote the band
+        // approaches but NEVER reaches (no wall, marginal give > 0 everywhere) — bandPos at excess=120 lands BELOW d,
+        // not clamped at the old 10% cap. f(x) = x·d·c/(d + c·|x|), c = 0.55.
         {
             float vp = 400f;
-            // Excess values kept below the soft knee (soft = 2·limit = 80 at vp=400) so the band is in the elastic region
-            // and round-trips exactly; a value AT/above the cap is information-lossy by design (the inverse caps at limit).
-            float bandNeg = OverscrollPhysics.BandFromExcess(-30f, vp);
-            float bandPos = OverscrollPhysics.BandFromExcess(120f, vp);   // > soft ⇒ saturates the 10% cap
-            float inv = OverscrollPhysics.ExcessFromBand(bandNeg, vp);
+            float d = OverscrollPhysics.BandAsymptoteFraction * vp;       // 60
+            float bandNeg = OverscrollPhysics.BandFromExcess(-30f, vp);   // -30·60·0.55/(60+0.55·30) = -12.941
+            float bandPos = OverscrollPhysics.BandFromExcess(120f, vp);   // 120·60·0.55/(60+0.55·120) = 31.429 (< d — no wall)
+            float inv = OverscrollPhysics.ExcessFromBand(bandNeg, vp);    // exact inverse ⇒ -30
             float p = bandNeg, v = 0f;
-            for (int i = 0; i < 120; i++) OverscrollPhysics.StepSpring(ref p, ref v, 16f);
-            bool ok = bandNeg < -1f && bandNeg > -OverscrollPhysics.BandLimit(vp) - 0.1f
-                   && bandPos > 1f && bandPos < OverscrollPhysics.BandLimit(vp) + 0.1f
-                   && Near(inv, -30f, 1f)
+            for (int i = 0; i < 120; i++) OverscrollPhysics.StepSpring(ref p, ref v, 16f);   // ω=SnapBackOmega=12.5 ⇒ settles well within 1920ms
+            bool ok = Near(bandNeg, -12.941f, 0.05f) && bandNeg > -d && bandNeg < 0f
+                   && Near(bandPos, 31.429f, 0.05f) && bandPos < d
+                   && Near(inv, -30f, 0.5f)
                    && Near(p, 0f, 0.1f) && Near(v, 0f, 1f);
-            Check("gate.scroll.overscroll-physics WinUI-parity overpan band caps at 10% viewport, inverts excess, and springs back to 0 (translation-only — IT touchpad path)",
-                ok, $"bandNeg={bandNeg:0.0} bandPos={bandPos:0.0} inv={inv:0.0} final=({p:0.00},{v:0.0})");
+            Check("gate.scroll.overscroll-physics v2 iOS rubber-band f(x)=x·d·c/(d+c|x|) (c=0.55, d=0.15·vp) approaches but never reaches the asymptote, ExcessFromBand is its exact inverse, and the ω=12.5 snap-back springs to 0 (translation-only)",
+                ok, $"bandNeg={bandNeg:0.000} bandPos={bandPos:0.000} d={d:0} inv={inv:0.0} final=({p:0.00},{v:0.0})");
+        }
+    }
+
+    // ── scroll-feel-rework-v2 §8 validation: the twelve headless gates driven by the HeadlessScrollProducer (six input
+    // kinds, synthetic ms/QPC stamps, deterministic frame clock) against the real Rhi.Headless/Pal.Headless pipeline. Each
+    // pins one of the confirmed root causes (R1–R6) with the spec's exact formulas. All run headless, 0-alloc phases 6–13.
+    static void ScrollV2ValidationChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+        const float k = 2.0025317f;                 // −ln(FlingDecayPerS 0.135) — the exact coast decay rate (1/s)
+        var center = new Point2(150, 200);
+
+        // gate.scroll.single-writer (§8.1, pins R1): a full contact-track + fling + top-overpan + snap-back + wheel-chase
+        // cycle records offset writes from the PHASE-7 INTEGRATOR ONLY (writer == Integrator) and AT MOST ONE offset write
+        // per active node per frame. The 0-alloc audit counts every real SetScrollOffset move and its ScrollWriter tag; a
+        // foreign writer (a synchronous phase-2 write — the R1 two-owners defect) or a second write in one frame fails it.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("v2-single-writer", new Size2(360, 460), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
+            host.Input.SmoothScroll = true;   // a wheel notch drives WheelAnimating (integrator), never a synchronous jump
+            host.RunFrame();
+            var vp = host.Scene.Root;
+            var prod = new HeadlessScrollProducer(window, host, center);
+            ScrollTrace.AuditBegin();
+            prod.ContactBegin(0f); prod.Step(16);
+            for (int i = 0; i < 6; i++) { prod.ContactUpdate(24f); prod.Step(16); }   // latch + track down ~144 DIP
+            prod.ContactEnd(); prod.Step(16);                                          // fallback lift → seeds Fling
+            for (int i = 0; i < 80; i++) { prod.Step(16); host.Scene.TryGetScroll(vp, out var s); if (s.Phase == ScrollIntegrator.Idle) break; }
+            prod.ContactBegin(0f); prod.Step(16);
+            for (int i = 0; i < 8; i++) { prod.ContactUpdate(-60f); prod.Step(16); }   // drag PAST the top edge → Overscroll band
+            prod.ContactEnd(); prod.Step(16);                                          // release → SnapBack
+            for (int i = 0; i < 80; i++) { prod.Step(16); host.Scene.TryGetScroll(vp, out var s); if (MathF.Abs(s.OverscrollPx) < 0.1f && s.Phase == ScrollIntegrator.Idle) break; }
+            prod.WheelNotch(2f); prod.Step(16);                                        // discrete notch → WheelAnimating chase
+            for (int i = 0; i < 80; i++) { prod.Step(16); host.Scene.TryGetScroll(vp, out var s); if (s.Phase == ScrollIntegrator.Idle) break; }
+            bool foreign = ScrollTrace.AuditForeignWriter;
+            int maxWrites = ScrollTrace.AuditMaxWritesPerFrame;
+            ScrollTrace.AuditStop();
+            Check("gate.scroll.single-writer a full contact+fling+overpan+snapback+wheel cycle records offset writes from the phase-7 integrator ONLY (no foreign writer) and AT MOST one offset write per active node per frame — the §2.1 single-writer invariant (pins R1)",
+                !foreign && maxWrites == 1, $"foreignWriter={foreign} maxWritesPerFrame={maxWrites} (expect no-foreign, ≤1/frame)");
+        }
+
+        // gate.scroll.dt-invariance (§8.2, pins R2/R3/R5 frame-independence): the same scripted motion at dt∈{8,16,33}ms
+        // yields the same trajectory within 1 DIP — contact (the §4.1 resampler tracks the same continuous position line
+        // regardless of frame cadence), fling coast (the closed-form CoastStep telescopes to v0/k), wheel chase (closed-form
+        // crit-damped, lands on the target), and snap-back (closed-form spring → 0).
+        {
+            const float vel = 0.4f;   // DIP/ms
+            // Contact: run the 1-packet-per-frame-at-frame-time script at dt and return max deviation from vel·(t−5ms−t0).
+            float ContactDev(float dt)
+            {
+                using var app = new HeadlessPlatformApp();
+                var w = new HeadlessWindow(new WindowDesc("v2-dtinv", new Size2(360, 460), 1f)); w.Show();
+                using var h = new AppHost(app, w, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe(), frameTime: new FixedFrameTimeSource(dt));
+                h.RunFrame();
+                var v2 = h.Scene.Root;
+                var pr = new HeadlessScrollProducer(w, h, center) { Device = (byte)ScrollDeviceClass.Touchpad };
+                double t0 = pr.FrameMs;
+                pr.ContactBegin(0f); pr.Frame(dt);
+                float maxDev = 0f;
+                for (int kf = 0; kf < 40; kf++)
+                {
+                    pr.Ms = (uint)pr.FrameMs;                       // deliver one packet AT the present time
+                    pr.ContactUpdate(vel * dt);
+                    double present = pr.FrameMs;
+                    pr.Frame(dt);
+                    h.Scene.TryGetScroll(v2, out var s);
+                    if (kf < 3 || s.Phase != ScrollIntegrator.TouchpadTracking) continue;
+                    float expected = (float)(vel * (present - ScrollTuning.ResampleLatencyMs - t0));
+                    if (s.OffsetY > 1f && s.OffsetY < 2600f) maxDev = MathF.Max(maxDev, MathF.Abs(s.OffsetY - expected));
+                }
+                return maxDev;
+            }
+            float FlingCoast(float dt) { float v = 1000f, c = 0f; for (int i = 0; i < 5000 && MathF.Abs(v) >= 0.5f; i++) c += OverscrollPhysics.CoastStep(ref v, dt, ScrollIntegrator.FlingDecayPerS); return c; }
+            float WheelChase(float dt)
+            {
+                float off = 0f, vel2 = 0f; const float pending = 200f;
+                float y = 1.3862944f / (ScrollTuning.WheelChaseHalflifeMs * 0.001f);
+                for (int i = 0; i < 4000; i++)
+                {
+                    float dtS = dt * 0.001f, j0 = off - pending, j1 = vel2 + j0 * y, e = MathF.Exp(-y * dtS);
+                    off = e * (j0 + j1 * dtS) + pending; vel2 = e * (vel2 - j1 * y * dtS);
+                    if (MathF.Abs(off - pending) < 0.5f && MathF.Abs(vel2) < ScrollIntegrator.WheelSettleVelPxPerS) break;
+                }
+                return off;
+            }
+            float SnapEnd(float dt) { float p = 60f, v = 0f; for (int i = 0; i < 6000; i++) if (OverscrollPhysics.StepSpring(ref p, ref v, dt, OverscrollPhysics.SnapBackOmega)) break; return p; }
+            float cd8 = ContactDev(8f), cd16 = ContactDev(16f), cd33 = ContactDev(33f);
+            float f8 = FlingCoast(8f), f16 = FlingCoast(16f), f33 = FlingCoast(33f);
+            float wh8 = WheelChase(8f), wh16 = WheelChase(16f), wh33 = WheelChase(33f);
+            float sn8 = SnapEnd(8f), sn16 = SnapEnd(16f), sn33 = SnapEnd(33f);
+            bool contactOk = cd8 <= 0.5f && cd16 <= 0.5f && cd33 <= 0.5f;              // each on the same line ⇒ pairwise ≤1
+            bool flingOk = MathF.Abs(f8 - f16) <= 1f && MathF.Abs(f16 - f33) <= 1f && MathF.Abs(f8 - f33) <= 1f;
+            bool wheelOk = Near(wh8, 200f, 1f) && Near(wh16, 200f, 1f) && Near(wh33, 200f, 1f);
+            bool snapOk = Near(sn8, 0f, 0.5f) && Near(sn16, 0f, 0.5f) && Near(sn33, 0f, 0.5f);
+            Check("gate.scroll.dt-invariance the same stream at dt∈{8,16,33}ms produces the same trajectory within 1 DIP across contact (resampler), fling (CoastStep), wheel chase, and snap-back — frame-rate independence (pins R2/R3/R5)",
+                contactOk && flingOk && wheelOk && snapOk,
+                $"contactDev=({cd8:0.00},{cd16:0.00},{cd33:0.00})≤0.5 fling=({f8:0.0},{f16:0.0},{f33:0.0}) wheel=({wh8:0.0},{wh16:0.0},{wh33:0.0}) snap=({sn8:0.00},{sn16:0.00},{sn33:0.00})");
+        }
+
+        // gate.scroll.resample-cadence (§8.3, pins R2): a constant-velocity stream at 1-packet/2-packet ALTERNATING cadence
+        // (8ms packets against a 12ms frame → 1,2,1,2 packets/frame) produces monotonic, NEAR-CONSTANT per-frame displacement
+        // (the §4.1 resampler samples the same linear position at frameT−5ms, so the packet cadence alias is gone). Without
+        // resampling the per-frame displacement would alternate δ,2δ — the textbook 125Hz-into-60Hz judder.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("v2-resample", new Size2(360, 460), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe(), frameTime: new FixedFrameTimeSource(12f));
+            host.RunFrame();
+            var vp = host.Scene.Root;
+            var prod = new HeadlessScrollProducer(window, host, center) { Device = (byte)ScrollDeviceClass.Touchpad };
+            const float vel = 0.5f;   // DIP/ms → 4 DIP per 8ms packet, 6 DIP per 12ms frame
+            uint packetMs = prod.Ms;
+            prod.ContactBegin(0f); prod.Frame(12f);
+            float prevOff = 0f; bool havePrev = false; float minD = float.MaxValue, maxD = 0f; bool monotonic = true; int measured = 0;
+            for (int kf = 0; kf < 40; kf++)
+            {
+                while (packetMs + 8 <= prod.FrameMs) { packetMs += 8; prod.Ms = packetMs; prod.ContactUpdate(vel * 8f); }   // deliver due 8ms packets
+                prod.Frame(12f);
+                host.Scene.TryGetScroll(vp, out var s);
+                if (kf >= 6 && s.Phase == ScrollIntegrator.TouchpadTracking && s.OffsetY < 2400f)   // past warmup, in-range
+                {
+                    if (havePrev)
+                    {
+                        float d = s.OffsetY - prevOff;
+                        if (d + 0.01f < 0f) monotonic = false;
+                        minD = MathF.Min(minD, d); maxD = MathF.Max(maxD, d); measured++;
+                    }
+                    prevOff = s.OffsetY; havePrev = true;
+                }
+            }
+            float spread = measured > 0 ? maxD - minD : 999f;
+            bool ok = monotonic && measured >= 10 && spread <= 0.6f;   // constant 6 DIP/frame ⇒ spread ≈ 0 (bound 0.6)
+            Check("gate.scroll.resample-cadence a constant-velocity stream at 1/2-packet-alternating cadence produces monotonic, near-constant per-frame displacement (spread ≤ 0.6 DIP) — the §4.1 resampler kills the packet-cadence alias (pins R2)",
+                ok, $"perFrameΔ min={minD:0.00} max={maxD:0.00} spread={spread:0.00} monotonic={monotonic} n={measured}");
+        }
+
+        // gate.scroll.contact-1to1 (§8.4): during TouchpadTracking the applied offset equals the resampled finger position
+        // (anchor + Σδ resampled to frameT−5ms) within 0.5 DIP every frame — the resampler neither lags nor gains.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("v2-1to1", new Size2(360, 460), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
+            host.RunFrame();
+            var vp = host.Scene.Root;
+            var prod = new HeadlessScrollProducer(window, host, center) { Device = (byte)ScrollDeviceClass.Touchpad };
+            const float vel = 0.4f;
+            double t0 = prod.FrameMs;
+            prod.ContactBegin(0f); prod.Frame(16f);
+            float maxErr = 0f; int frames = 0;
+            for (int kf = 0; kf < 40; kf++)
+            {
+                prod.Ms = (uint)prod.FrameMs;
+                prod.ContactUpdate(vel * 16f);
+                double present = prod.FrameMs;
+                prod.Frame(16f);
+                host.Scene.TryGetScroll(vp, out var s);
+                if (kf < 3 || s.Phase != ScrollIntegrator.TouchpadTracking) continue;
+                if (s.OffsetY > 1f && s.OffsetY < 2600f)
+                {
+                    float expected = (float)(vel * (present - ScrollTuning.ResampleLatencyMs - t0));
+                    maxErr = MathF.Max(maxErr, MathF.Abs(s.OffsetY - expected)); frames++;
+                }
+            }
+            Check("gate.scroll.contact-1to1 during TouchpadTracking the applied offset tracks the resampled finger position (anchor + Σδ @ frameT−5ms) within 0.5 DIP every frame",
+                maxErr <= 0.5f && frames >= 10, $"maxErr={maxErr:0.000} DIP over {frames} tracking frames (bound 0.5)");
+        }
+
+        // gate.scroll.coast-distance (§8.5, pins R3): a wheel notch coasts EXACTLY its perNotch distance (max(48,10%·vp)),
+        // identical at 60/120 Hz; a fling coasts v0/k (the exact closed-form asymptote) ±1 DIP. Wheel via the pipeline
+        // (WheelAnimating chase lands on the hard-clamped PendingTarget); fling via the exact CoastStep integral.
+        {
+            float WheelSettle(float dt)
+            {
+                using var app = new HeadlessPlatformApp();
+                var w = new HeadlessWindow(new WindowDesc("v2-coast-wheel", new Size2(360, 460), 1f)); w.Show();
+                using var h = new AppHost(app, w, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe(), frameTime: new FixedFrameTimeSource(dt));
+                h.Input.SmoothScroll = true; h.RunFrame();
+                var v2 = h.Scene.Root;
+                var pr = new HeadlessScrollProducer(w, h, center);
+                pr.WheelNotch(1f); pr.Frame(dt);
+                for (int i = 0; i < 400; i++) { pr.Frame(dt); h.Scene.TryGetScroll(v2, out var s); if (s.Phase == ScrollIntegrator.Idle) break; }
+                h.Scene.TryGetScroll(v2, out var fin);
+                return fin.OffsetY;
+            }
+            float perNotch = MathF.Max(48f, 0.10f * 400f);   // vp = 400 ⇒ floor 48
+            float w60 = WheelSettle(1000f / 60f), w120 = WheelSettle(1000f / 120f);
+            float vf = 1000f, coast = 0f; for (int i = 0; i < 20000 && MathF.Abs(vf) >= 0.5f; i++) coast += OverscrollPhysics.CoastStep(ref vf, 1000f / 60f, ScrollIntegrator.FlingDecayPerS);
+            float asymptote = 1000f / k;   // ≈ 499.4
+            bool wheelOk = Near(w60, perNotch, 0.5f) && Near(w120, perNotch, 0.5f);
+            bool flingOk = Near(coast, asymptote, 1f);
+            Check("gate.scroll.coast-distance a wheel notch coasts its exact perNotch distance (max(48,10%·vp)) ±0.5 DIP identically at 60/120 Hz, and a fling coasts the exact v0/k asymptote ±1 DIP (pins R3)",
+                wheelOk && flingOk, $"wheel60={w60:0.0} wheel120={w120:0.0} (perNotch={perNotch:0}) flingCoast={coast:0.0} (v0/k={asymptote:0.0})");
+        }
+
+        // gate.scroll.impulse-velocity (§8.6, pins R6): the single-window IMPULSE estimator sign(W)·√(2|W|). Five sub-cases
+        // on the phase-contract (fallback) lift path: (a) constant drag ⇒ exact hand speed; (b) a ≥40ms gap before lift ⇒ 0;
+        // (c) a decaying tail then silence ⇒ v<50 (no double inertia); (d) an abrupt lift ⇒ exactly one coast; (e) a reversal
+        // ⇒ no stale-direction (positive) coast. decay1 folds the single End-frame tick that decays the fresh seed once.
+        {
+            const byte Fb = (byte)ScrollDeviceClass.WheelHiResFallback;
+            float decay1 = MathF.Exp(MathF.Log(0.135f) * 16f / 1000f);   // ≈0.9685
+            (float v, byte phase) Drive(float[] deltas, uint packetGap, uint liftGap)
+            {
+                using var app = new HeadlessPlatformApp();
+                var w = new HeadlessWindow(new WindowDesc("v2-impulse", new Size2(360, 460), 1f)); w.Show();
+                using var h = new AppHost(app, w, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
+                h.RunFrame();
+                var v2 = h.Scene.Root;
+                var pr = new HeadlessScrollProducer(w, h, center) { Device = Fb };
+                pr.ContactBegin(0f); pr.Frame(16f);
+                foreach (float d in deltas) { pr.Ms += packetGap; pr.ContactUpdate(d); pr.Frame(16f); }
+                pr.Ms += liftGap; pr.ContactEnd(); pr.Frame(16f);
+                h.Scene.TryGetScroll(v2, out var s);
+                return (s.FlingVelocity, s.Phase);
+            }
+            float[] constStream = { 8f, 8f, 8f, 8f, 8f, 8f, 8f, 8f };            // 8 DIP / 8ms = 1000 DIP/s
+            float[] decelStream = { 8f, 8f, 8f, 8f, 4f, 2f, 1f, 0.4f };
+            float[] revStream = { 16f, 16f, 16f, 16f, -16f, -16f, -16f, -16f };
+            var a = Drive(constStream, 8, 8);                                     // (a)+(d): abrupt lift, exact speed, one coast
+            var b = Drive(constStream, 8, 60);                                    // (b): ≥40ms gap ⇒ 0
+            var c = Drive(decelStream, 16, 60);                                   // (c): decayed tail + silence ⇒ no double inertia
+            var e = Drive(revStream, 8, 8);                                       // (e): reversal ⇒ no stale-down coast
+            bool aOk = a.phase == ScrollIntegrator.Fling && MathF.Abs(a.v - 1000f * decay1) <= 1000f * decay1 * 0.04f;
+            bool bOk = b.phase != ScrollIntegrator.Fling || MathF.Abs(b.v) < 1f;
+            bool cOk = c.phase != ScrollIntegrator.Fling || MathF.Abs(c.v) < ScrollTuning.FlingSeedGate;
+            bool eOk = e.v <= 1f;   // recent motion is UP (negative); no positive downward stale coast
+            Check("gate.scroll.impulse-velocity the single 40ms IMPULSE estimator: constant drag ⇒ exact hand speed + one coast; a ≥40ms gap ⇒ 0; a decayed tail then silence ⇒ v<50; a reversal ⇒ no stale-direction coast (pins R6, one window one gate)",
+                aOk && bOk && cOk && eOk,
+                $"const={a.v:0}(exp {1000f * decay1:0}) gap={b.v:0.0} decel={c.v:0.0} reversal={e.v:0.0}");
+        }
+
+        // gate.scroll.overscroll-rational (§8.7, pins R5): the iOS asymptotic map + its EXACT inverse round-trip within 0.5
+        // DIP INCLUDING at/above the old saturation point (x = 2·limit and 10·limit) — the map never reaches the asymptote d
+        // (marginal slope > 0 everywhere); and the ω=12.5 snap-back decays to ≤10% of the band in 300–360 ms (WebKit λ=12.5).
+        {
+            const float vp = 400f;
+            float limit = OverscrollPhysics.BandLimit(vp);     // 0.1·vp = 40
+            float d = OverscrollPhysics.BandAsymptoteFraction * vp;   // 60 (asymptote)
+            float worst = 0f; bool belowAsymptote = true;
+            foreach (float x in new[] { 5f, 40f, 2f * limit, 200f, 10f * limit })
+            {
+                float band = OverscrollPhysics.BandFromExcess(x, vp);
+                if (MathF.Abs(band) >= d) belowAsymptote = false;                // never reaches the wall
+                worst = MathF.Max(worst, MathF.Abs(OverscrollPhysics.ExcessFromBand(band, vp) - x));
+            }
+            // Snap-back settle-to-10%: seed a 60-DIP band, step the ω=12.5 spring at 4ms, time to |band| ≤ 10% of x0.
+            float p0 = 60f, sp = 60f, sv = 0f, tMs = 0f; int settle10 = -1;
+            for (int i = 0; i < 400; i++)
+            {
+                OverscrollPhysics.StepSpring(ref sp, ref sv, 4f, OverscrollPhysics.SnapBackOmega); tMs += 4f;
+                if (settle10 < 0 && MathF.Abs(sp) <= 0.10f * p0) { settle10 = (int)tMs; break; }
+            }
+            bool rtOk = worst < 0.5f && belowAsymptote;
+            bool settleOk = settle10 >= 300 && settle10 <= 360;
+            // scroll-feel-v2.1 §A.1/§A.4: the edge bounce is VELOCITY-ONLY (position untouched). SeedFromEdgeMomentum
+            // leaves the band at the current stretch (0 here) and seeds bandVel = clamp(γ·v, ±Cpeak·d·ω·e); the
+            // critically-damped v0·t·e^(−ωt) peaks at v0/(ω·e) ≤ Cpeak·d = 0.6·d, so even the MAX-velocity flick never
+            // approaches the asymptote (kills F6's teleport), and a re-grab AT the peak folds a finite, well-inside-domain
+            // excess that round-trips (peak < d ⇒ the F7 near-asymptote divergence is unreachable on a bounce).
+            float bandPk = 0f, bandVk = 0f;
+            OverscrollPhysics.SeedFromEdgeMomentum(ref bandVk, ScrollTuning.FlingMaxVelocityPxPerS, vp);   // 8000 px/s max seed (velocity-only: bandPk stays 0)
+            float peak = MathF.Abs(bandPk);
+            for (float bp = bandPk, bv = bandVk, i = 0; i < 400; i++)
+            { if (OverscrollPhysics.StepSpring(ref bp, ref bv, 4f, OverscrollPhysics.SnapBackOmega)) break; peak = MathF.Max(peak, MathF.Abs(bp)); }
+            float cap = OverscrollPhysics.MomentumPeakDepthFraction * d;   // 0.6·d = 36
+            float regrabExcess = OverscrollPhysics.ExcessFromBand(peak, vp);
+            float regrabBand = OverscrollPhysics.BandFromExcess(regrabExcess, vp);
+            bool bounceOk = peak <= cap + 0.5f && float.IsFinite(regrabExcess) && MathF.Abs(regrabBand - peak) < 0.5f;
+            Check("gate.scroll.overscroll-rational the iOS rubber-band round-trips (ExcessFromBand∘BandFromExcess) within 0.5 DIP incl. x∈{2·limit,10·limit} (never reaches the asymptote), the ω=12.5 snap-back settles to 10% in 300–360 ms (pins R5), AND the velocity-only edge bounce peaks ≤ 0.6·d with a re-grab round-trip at the peak (§A.1/§A.4, F6/F7)",
+                rtOk && settleOk && bounceOk, $"worstRoundTrip={worst:0.000} belowAsymptote={belowAsymptote} settle10%={settle10}ms bouncePeak={peak:0.0}/cap={cap:0.0} regrabRT={MathF.Abs(regrabBand - peak):0.000}");
+        }
+
+        // gate.scroll.relatch-catchup (scroll-feel-v2.1 §A.6, resolves F8): an OS-momentum stream that includes a post-hitch
+        // catch-up (a 34ms stall frame delivering one big summed delta) applies the FULL owed displacement 1:1 — there is NO
+        // max-per-frame delta clamp. Chromium coalesces GSUs and applies the summed delta; Android/Flutter evaluate at
+        // absolute time (a full jump after a long frame); no shipping system clamps a catch-up. Because the resampler tracks
+        // the cumulative position line (not per-frame deltas), the final offset converges to Σ(all deltas) regardless of
+        // frame pacing — a hypothetical per-frame clamp would truncate the 193 DIP hitch and fall far short.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("v2-relatch", new Size2(360, 460), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
+            host.RunFrame();
+            var vp = host.Scene.Root;
+            var pr = new HeadlessScrollProducer(window, host, center) { Device = (byte)ScrollDeviceClass.Touchpad };
+            float total = 0f;
+            pr.ContactBegin(0f); pr.Step(16);
+            for (int i = 0; i < 6; i++) { pr.ContactUpdate(20f); total += 20f; pr.Step(16); }   // latch + track interior (~120 DIP)
+            pr.MomentumBegin(); pr.Step(16);
+            for (int i = 0; i < 4; i++) { pr.MomentumUpdate(24f); total += 24f; pr.Step(16); }   // smooth OS inertia
+            pr.MomentumUpdate(193f); total += 193f; pr.Step(34f);                                 // the F8 hitch: 34ms stall → one 193 DIP catch-up
+            for (int i = 0; i < 5; i++) { pr.MomentumUpdate(10f); total += 10f; pr.Step(16); }    // slow tail so the resampler fully realizes the jump
+            pr.MomentumEnd();
+            for (int i = 0; i < 40; i++) { pr.Step(16); host.Scene.TryGetScroll(vp, out var q); if (q.Phase == ScrollIntegrator.Idle) break; }
+            host.Scene.TryGetScroll(vp, out var s);
+            float applied = s.OffsetY;
+            // Full owed displacement (a few DIP of resampler lag = end-velocity × 5ms is the only shortfall; a real clamp
+            // would lose ~150 DIP of the 193 hitch). Stayed interior (no edge conversion) throughout.
+            bool oneToOne = MathF.Abs(applied - total) < 8f;
+            Check("gate.scroll.relatch-catchup an OS-momentum stream with a 34ms hitch (one 193 DIP catch-up) applies the full owed displacement 1:1 within a vsync — no max-per-frame delta clamp (§A.6, resolves F8)",
+                oneToOne, $"applied={applied:0.0} expectedTotal={total:0.0} phase={s.Phase}");
+        }
+
+        // gate.scroll.pointerdown-cancels (§8.8, pins R6): a pointer-down over a coasting/animating viewport zeros its motion
+        // the SAME frame with no residual drift. A mouse click, a touch-down, and a scrollbar-grab all route through the same
+        // OnCancelFling call (fixes R6's dead CancelFling). Seed a fling, then fire the down mid-coast.
+        {
+            (bool cancelled, bool noDrift) DownCancels(PointerKind kind)
+            {
+                using var app = new HeadlessPlatformApp();
+                var w = new HeadlessWindow(new WindowDesc("v2-downcancel", new Size2(360, 460), 1f)); w.Show();
+                using var h = new AppHost(app, w, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
+                h.RunFrame();
+                var v2 = h.Scene.Root;
+                var pr = new HeadlessScrollProducer(w, h, center) { Device = (byte)ScrollDeviceClass.WheelHiResFallback };
+                pr.ContactBegin(0f); pr.Frame(16f);
+                for (int i = 0; i < 8; i++) { pr.Ms += 8; pr.ContactUpdate(8f); pr.Frame(16f); }   // 1000 DIP/s
+                pr.Ms += 8; pr.ContactEnd(); pr.Frame(16f);                                          // seed a fling
+                pr.Frame(16f); pr.Frame(16f);                                                        // coast a couple frames
+                h.Scene.TryGetScroll(v2, out var mid);
+                bool wasFlinging = mid.Phase == ScrollIntegrator.Fling && MathF.Abs(mid.FlingVelocity) > 50f;
+                pr.PointerDownAt(center, kind, kind == PointerKind.Touch ? 5u : 0u); pr.Frame(16f);  // the down cancels the coast
+                h.Scene.TryGetScroll(v2, out var afterDown);
+                bool cancelled = afterDown.Phase != ScrollIntegrator.Fling && MathF.Abs(afterDown.FlingVelocity) < 1f;
+                float offAfter = afterDown.OffsetY;
+                pr.Frame(16f);                                                                       // no drift the next frame
+                h.Scene.TryGetScroll(v2, out var next);
+                return (wasFlinging && cancelled, MathF.Abs(next.OffsetY - offAfter) < 0.5f);
+            }
+            var mouse = DownCancels(PointerKind.Mouse);
+            var touch = DownCancels(PointerKind.Touch);
+            Check("gate.scroll.pointerdown-cancels a mouse click / touch-down over a live Fling zeros velocity the SAME frame with no residual drift (the shared OnCancelFling — scrollbar-grab routes here too; pins R6)",
+                mouse.cancelled && mouse.noDrift && touch.cancelled && touch.noDrift,
+                $"mouse(cancel={mouse.cancelled},noDrift={mouse.noDrift}) touch(cancel={touch.cancelled},noDrift={touch.noDrift})");
+        }
+
+        // gate.scroll.wheel-lines (§8.9): the SPI wheel-lines preference scales per-notch distance (distance =
+        // notch·(lines/3)·perNotch), page mode ⇒ 0.875·viewport per notch, and the sub-120 signed carryover accumulates the
+        // raw delta and emits one notch per 120 crossed keeping a signed remainder (reset on direction change — the Win32
+        // producer's §3.2 algorithm, verified here headlessly).
+        {
+            float NotchTarget(float preScaledNotch)
+            {
+                using var app = new HeadlessPlatformApp();
+                var w = new HeadlessWindow(new WindowDesc("v2-wheel-lines", new Size2(360, 460), 1f)); w.Show();
+                using var h = new AppHost(app, w, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
+                h.Input.SmoothScroll = true; h.RunFrame();
+                var v2 = h.Scene.Root;
+                var pr = new HeadlessScrollProducer(w, h, center);
+                pr.WheelNotch(preScaledNotch); pr.Frame(16f);
+                h.Scene.TryGetScroll(v2, out var s);
+                return s.PendingTargetY;   // WheelAnimating hard-clamped accumulated target = notch·perNotch
+            }
+            float perNotch = MathF.Max(48f, 0.10f * 400f);   // 48
+            float lines3 = NotchTarget(1f * (3f / 3f));       // lines=3 ⇒ ×1 ⇒ 48
+            float lines1 = NotchTarget(1f * (1f / 3f));       // lines=1 ⇒ ×1/3 ⇒ 16
+            float lines6 = NotchTarget(1f * (6f / 3f));       // lines=6 ⇒ ×2 ⇒ 96
+            bool linesOk = Near(lines3, perNotch, 0.5f) && Near(lines1, perNotch / 3f, 0.5f) && Near(lines6, 2f * perNotch, 0.5f);
+            // Page mode: a notch pages 0.875·viewport (a DIP delta, not a notch-scaled distance).
+            float pageExpected = 0.875f * 400f;
+            float pageTarget;
+            using (var app = new HeadlessPlatformApp())
+            {
+                var w = new HeadlessWindow(new WindowDesc("v2-wheel-page", new Size2(360, 460), 1f)); w.Show();
+                using var h = new AppHost(app, w, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
+                h.Input.SmoothScroll = true; h.RunFrame();
+                var v2 = h.Scene.Root;
+                var pr = new HeadlessScrollProducer(w, h, center);
+                w.QueueInput(new InputEvent(InputKind.Wheel, center, 0, 0, ScrollDelta: pageExpected, Pointer: PointerKind.Mouse, TimestampMs: pr.Ms));
+                pr.Frame(16f);
+                h.Scene.TryGetScroll(v2, out var s);
+                pageTarget = s.PendingTargetY;
+            }
+            bool pageOk = Near(pageTarget, pageExpected, 0.5f);
+            // Signed carryover (the §3.2 producer algorithm): accumulate raw units, emit per 120, keep signed remainder,
+            // reset the remainder on a direction change.
+            static (int notches, int rem) Carry(int prevRem, int raw) { int acc = prevRem + raw; return (acc / 120, acc % 120); }
+            var s1 = Carry(0, 60);        // (0, 60)   — sub-notch held
+            var s2 = Carry(s1.rem, 60);   // (1, 0)    — crossed 120
+            var s3 = Carry(s2.rem, 130);  // (1, 10)   — one notch + signed remainder
+            var s4 = Carry(0, -60);       // (0, -60)  — reset on direction flip, signed remainder
+            bool carryOk = s1 == (0, 60) && s2 == (1, 0) && s3 == (1, 10) && s4 == (0, -60);
+            Check("gate.scroll.wheel-lines SPI wheel-lines scales per-notch distance (lines 1/3/6 ⇒ ×1/3, ×1, ×2), page mode pages 0.875·viewport, and the signed sub-120 carryover accumulates + resets on direction change (§3.2)",
+                linesOk && pageOk && carryOk,
+                $"lines1={lines1:0.0} lines3={lines3:0.0} lines6={lines6:0.0} page={pageTarget:0.0}(exp {pageExpected:0}) carry={carryOk}");
+        }
+
+        // gate.scroll.subpixel-stability (§8.10): a slow sub-pixel pan produces monotonic WHOLE-device-px translate steps
+        // (tx = round((offset+band)·scale)/scale) while the logical offset stays continuous float — and a ScrollBind sticky
+        // pin sharing the same origin computes the SAME rounded translation (no 1px seam). scale = 2 ⇒ steps of 0.5 DIP.
+        {
+            const float scale = 2f;
+            NodePaint cp = default; var bounds = new RectF(0, 0, 300, 3200);
+            float prevTx = float.NaN; bool monotonic = true, wholePx = true, stepOk = true;
+            for (int i = 0; i <= 40; i++)
+            {
+                float off = i * 0.1f;   // 0..4 DIP in 0.1 steps (sub-device-pixel at scale 2)
+                OverscrollPhysics.WriteContentTransform(ref cp, in bounds, horizontal: false, offset: off, band: 0f, zoomFactor: 1f, scale: scale);
+                float tx = -cp.LocalTransform.Dy;                       // translation Y = −tx
+                if (MathF.Abs(tx * scale - MathF.Round(tx * scale)) > 1e-4f) wholePx = false;   // integral device px
+                if (!float.IsNaN(prevTx))
+                {
+                    float step = tx - prevTx;
+                    if (step + 1e-4f < 0f) monotonic = false;
+                    if (!(step < 1e-4f || Near(step, 1f / scale, 1e-3f))) stepOk = false;        // step is 0 or one device px
+                }
+                prevTx = tx;
+            }
+            // Sticky-header share-origin (finding-4 fix): drive a REAL pinned ScrollBind through the host across a
+            // sub-pixel offset sweep and assert the pinned header lands on the SAME device-pixel grid as the rounded
+            // content — ApplyPin now rounds its shift to whole device px (ScrollBindEval.ApplyPin), so a header never seams
+            // a sub-pixel step against the content beneath it. (The prior sub-check called WriteContentTransform TWICE with
+            // identical args and asserted equality — tautological; it never exercised ApplyPin, so a real pin/content seam
+            // — ApplyPin wrote an UNROUNDED Affine2D.Translation(0, shift) while content was device-px rounded — shipped unverified.)
+            bool pinDeviceAligned = true, pinWholePx = true, pinnedEver = false; string pinLog = "";
+            {
+                using var papp = new HeadlessPlatformApp();
+                var pwin = new HeadlessWindow(new WindowDesc("subpixel-pin", new Size2(320, 240), 2f)); pwin.Show();
+                NodeHandle headerN = NodeHandle.Null;
+                var proot = new W0fStaticProbe
+                {
+                    Build = () => Ui.ScrollView(new BoxEl
+                    {
+                        Direction = 1,
+                        Children =
+                        [
+                            new BoxEl { Height = 100f },                                  // lead-in
+                            new BoxEl { Direction = 1, Children =
+                            [
+                                new BoxEl { Height = 40f, ScrollBinds = [ new() { PinTop = 0f } ], OnRealized = h => headerN = h },
+                                new BoxEl { Height = 400f },
+                            ] },
+                            new BoxEl { Height = 800f },
+                        ],
+                    }),
+                };
+                using var phost = new AppHost(papp, pwin, new HeadlessGpuDevice(), fonts, strings, proot);
+                phost.RunFrame();
+                var ps = phost.Scene;
+                NodeHandle FindVp(NodeHandle n)
+                {
+                    if (n.IsNull) return NodeHandle.Null;
+                    if (ps.HasScroll(n)) return n;
+                    for (var c = ps.FirstChild(n); !c.IsNull; c = ps.NextSibling(c)) { var r = FindVp(c); if (!r.IsNull) return r; }
+                    return NodeHandle.Null;
+                }
+                var pvp = FindVp(ps.Root);
+                var pcontent = ps.ScrollRef(pvp).ContentNode;
+                float ds = ps.DeviceScale;   // = 2 (the window scale) — the grid the pin must share with the content
+                for (int i = 0; i <= 24 && !headerN.IsNull; i++)
+                {
+                    float y = 250f + i * 0.1f;   // sub-device-pixel offsets, all inside the header's pin range [100,500]
+                    ref ScrollState pst = ref ps.ScrollRef(pvp);
+                    pst.OffsetY = y; pst.TargetY = y;
+                    // Round the content translation exactly as the offset chokepoint does (device-px snap) so a shared-grid
+                    // pin cannot seam; then the real ApplyPinAndFlagPass pins the header with its (now rounded) shift.
+                    OverscrollPhysics.WriteContentTransform(ref ps.Paint(pcontent), in bounds, false, y, 0f, 1f, ds);
+                    ps.Mark(pcontent, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+                    pwin.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(8f, 8f), 0, 0));
+                    phost.RunFrame();
+                    if ((ps.Flags(headerN) & NodeFlags.StickyPinned) != 0) pinnedEver = true;
+                    float shiftDy = ps.Paint(headerN).LocalTransform.Dy;                         // the applied pin shift
+                    if (MathF.Abs(shiftDy * ds - MathF.Round(shiftDy * ds)) > 1e-3f) pinWholePx = false;
+                    float absY = ps.AbsoluteRect(headerN).Y;                                     // on-screen (content + pin composed)
+                    if (MathF.Abs(absY * ds - MathF.Round(absY * ds)) > 1e-3f) { pinDeviceAligned = false; if (pinLog.Length == 0) pinLog = $"seam@y={y:0.0} absY={absY:0.###}"; }
+                }
+                if (headerN.IsNull) { pinDeviceAligned = false; pinLog = "header not realized"; }
+            }
+            Check("gate.scroll.subpixel-stability a slow sub-pixel pan advances in monotonic whole-device-px steps (tx=round((off+band)·s)/s) while logical offset stays float, and a REAL pinned ScrollBind shares the content's device grid — its shift AND on-screen position snap to whole device px (no 1px seam)",
+                monotonic && wholePx && stepOk && pinnedEver && pinWholePx && pinDeviceAligned,
+                $"monotonic={monotonic} wholePx={wholePx} stepOk={stepOk} pinnedEver={pinnedEver} pinWholePx={pinWholePx} pinDeviceAligned={pinDeviceAligned} {pinLog}");
+        }
+
+        // gate.scroll.transition-matrix (§8.11, structural guard for R1): drive the feel-critical legal transitions and
+        // assert each resulting Phase; a wheel NEVER produces a band (WheelAnimating→Overscroll is undefined — the §2.2 extent
+        // asymmetry), which is asserted as a hard negative.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("v2-matrix", new Size2(360, 460), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
+            host.Input.SmoothScroll = true; host.RunFrame();
+            var vp = host.Scene.Root;
+            var log = new System.Text.StringBuilder();
+            bool AssertPhase(string label, byte got, byte want) { bool ok = got == want; if (!ok) log.Append($"[{label}:got {got}!={want}]"); return ok; }
+            bool m = true;
+
+            var pr = new HeadlessScrollProducer(window, host, center) { Device = (byte)ScrollDeviceClass.Touchpad };
+            pr.ContactBegin(0f); pr.Step(16); pr.ContactUpdate(30f); pr.Step(16);
+            host.Scene.TryGetScroll(vp, out var s1); m &= AssertPhase("Idle→Track", s1.Phase, ScrollIntegrator.TouchpadTracking);
+            pr.Device = (byte)ScrollDeviceClass.WheelHiResFallback;
+            pr.ContactBegin(0f); pr.Step(16);
+            for (int i = 0; i < 8; i++) { pr.Ms += 8; pr.ContactUpdate(8f); pr.Frame(16f); }
+            pr.Ms += 8; pr.ContactEnd(); pr.Frame(16f);
+            host.Scene.TryGetScroll(vp, out var s2); m &= AssertPhase("Track→Fling", s2.Phase, ScrollIntegrator.Fling);
+            pr.PointerDownAt(center); pr.Frame(16f);
+            host.Scene.TryGetScroll(vp, out var s3); m &= AssertPhase("Fling→Idle(down)", s3.Phase, ScrollIntegrator.Idle);
+            for (int i = 0; i < 40; i++) { pr.Frame(16f); host.Scene.TryGetScroll(vp, out var q); if (q.Phase == ScrollIntegrator.Idle && MathF.Abs(q.OverscrollPx) < 0.1f) break; }
+            pr.WheelNotch(1f); pr.Frame(16f);
+            host.Scene.TryGetScroll(vp, out var s4); m &= AssertPhase("Idle→Wheel", s4.Phase, ScrollIntegrator.WheelAnimating);
+            pr.PointerDownAt(center); pr.Frame(16f);
+            host.Scene.TryGetScroll(vp, out var s5); m &= AssertPhase("Wheel→Idle(down)", s5.Phase, ScrollIntegrator.Idle);
+            for (int i = 0; i < 40; i++) { pr.Frame(16f); host.Scene.TryGetScroll(vp, out var q); if (q.Phase == ScrollIntegrator.Idle) break; }
+            for (int i = 0; i < 30; i++) { pr.WheelNotch(-1f); pr.Frame(16f); }   // hammer the TOP extent with wheel
+            for (int i = 0; i < 60; i++) { pr.Frame(16f); host.Scene.TryGetScroll(vp, out var q); if (q.Phase == ScrollIntegrator.Idle) break; }
+            host.Scene.TryGetScroll(vp, out var s6);
+            bool wheelNoBand = MathF.Abs(s6.OverscrollPx) < 0.01f && s6.Phase != ScrollIntegrator.Overscroll;
+            if (!wheelNoBand) log.Append($"[illegal Wheel→band:{s6.OverscrollPx:0.0}]");
+            pr.Device = (byte)ScrollDeviceClass.Touchpad;
+            pr.ContactBegin(0f); pr.Step(16);
+            for (int i = 0; i < 10; i++) { pr.ContactUpdate(-60f); pr.Step(16); }   // past the top edge → Overscroll band
+            host.Scene.TryGetScroll(vp, out var sOver); bool overOk = sOver.Phase == ScrollIntegrator.Overscroll || MathF.Abs(sOver.OverscrollPx) > 1f;
+            pr.ContactEnd(); pr.Step(16);
+            host.Scene.TryGetScroll(vp, out var s7); m &= AssertPhase("Overscroll→SnapBack", s7.Phase, ScrollIntegrator.SnapBack);
+            for (int i = 0; i < 120; i++) { pr.Step(16); host.Scene.TryGetScroll(vp, out var q); if (q.Phase == ScrollIntegrator.Idle && MathF.Abs(q.OverscrollPx) < 0.1f) break; }
+            host.Scene.TryGetScroll(vp, out var s8); m &= AssertPhase("SnapBack→Idle", s8.Phase, ScrollIntegrator.Idle);
+            Check("gate.scroll.transition-matrix the feel-critical legal transitions (Idle→Track→Fling, Fling/Wheel→Idle on pointer-down, Idle→Wheel, Overscroll→SnapBack→Idle) each land on the correct §2.2 Phase, and a wheel NEVER bands at the extent (undefined ⇒ hard fail)",
+                m && overOk && wheelNoBand, log.Length == 0 ? "all transitions correct; wheelNoBand=True" : log.ToString());
+        }
+
+        // gate.scroll.alloc-zero (§8.12): a full contact + fling + momentum + wheel cycle allocates 0 managed bytes on the
+        // hot half (phases 6–13), including the DM-style momentum sink cadence. Fill-only bound rows (no per-row string
+        // intern), warmed once before the measured window.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("v2-alloc-zero", new Size2(360, 460), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new BoundVirtualFillOnlyProbe());
+            host.Input.SmoothScroll = true; host.RunFrame();
+            long Cycle(bool warm)
+            {
+                var pr = new HeadlessScrollProducer(window, host, center) { Device = (byte)ScrollDeviceClass.Touchpad };
+                long worst = 0;
+                void Acc(FrameStats f) { if (!warm && f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes; }
+                pr.ContactBegin(0f); Acc(pr.Frame(16f));
+                for (int i = 0; i < 6; i++) { pr.Ms += 8; pr.ContactUpdate(20f); Acc(pr.Frame(16f)); }
+                pr.MomentumBegin(); Acc(pr.Frame(16f));
+                for (int i = 0; i < 8; i++) { pr.Ms += 8; pr.MomentumUpdate(12f); Acc(pr.Frame(16f)); }   // OS inertia sink cadence
+                pr.MomentumEnd(); Acc(pr.Frame(16f));
+                pr.WheelNotch(2f); Acc(pr.Frame(16f));
+                for (int i = 0; i < 30; i++) Acc(pr.Frame(16f));
+                return worst;
+            }
+            Cycle(warm: true);   // JIT the whole path outside the measured window
+            for (int i = 0; i < 40; i++) host.RunFrame();
+            long worst = Cycle(warm: false);
+            Check("gate.scroll.alloc-zero a full contact+fling+momentum+wheel cycle (incl. the OS-momentum sink cadence) allocates 0 managed bytes on the hot half (phases 6–13)",
+                worst == 0, $"worstHotAlloc={worst}B across the scripted cycle");
         }
     }
 
     // ── Touch Phase-4 snap + overscroll exit criteria (gate.touch4.*): a touch fling retargets its friction decay to land
-    // EXACTLY on a configured snap point (the ScrollSnap applicable-zone math + the ScrollAnimator velocity re-solve), the
+    // EXACTLY on a configured snap point (the ScrollSnap applicable-zone math + the ScrollIntegrator velocity re-solve), the
     // snap landing is dt-invariant (the integrator-determinism sweep extended to a snap fling), a touch pan PAST the clamp
     // boundary produces a damped rubber-band displacement that springs back to exactly 0 (while ScrollState.Offset NEVER
     // leaves [0, max] — asserted via state, not pixels), a WHEEL past the edge stays hard-clamped with NO band, and the
@@ -6657,17 +7455,17 @@ static class Slice
             // snap with a generous frame budget (the free-fling gate uses 600; a snap target can be ~tens of rows away).
             TouchGesture(window, host, new Point2(150, 300), new Point2(150, 240), 10, pointerId: 51, msPerStep: 16f);
             int settledAt = -1;
-            for (int i = 0; i < 4000; i++) { host.RunFrame(); host.Scene.TryGetScroll(vp, out var s); if (s.ScrollMode == 0) { settledAt = i; break; } }
+            for (int i = 0; i < 4000; i++) { host.RunFrame(); host.Scene.TryGetScroll(vp, out var s); if (s.Phase == 0) { settledAt = i; break; } }
             host.Scene.TryGetScroll(vp, out var settled);
             float rem = settled.OffsetY % SnapFlingProbe.RowH;
             float distToSnap = MathF.Min(rem, SnapFlingProbe.RowH - rem);   // distance to the nearest RowH multiple
             float maxOff = MathF.Max(0f, settled.ContentH - settled.ViewportH);
             bool onSnap = distToSnap < 0.5f;
             bool interior = settled.OffsetY > SnapFlingProbe.RowH && settled.OffsetY < maxOff - SnapFlingProbe.RowH;   // a real snap, not the clamp
-            bool settledMode = settled.ScrollMode == 0 && settled.FlingVelocity == 0f;
+            bool settledMode = settled.Phase == 0 && settled.FlingVelocity == 0f;
             Check("gate.touch4.fling-snap-lands-on-snap a touch flick over a snap-configured virtual list (SnapInterval=RowH) retargets its friction decay to settle EXACTLY on a RowH multiple, interior to the content (not the clamp)",
                 onSnap && interior && settledMode && settledAt >= 0,
-                $"offset={settled.OffsetY:0.###} distToSnap={distToSnap:0.###} interval={SnapFlingProbe.RowH} interior={interior} mode={settled.ScrollMode} settledAtFrame={settledAt}");
+                $"offset={settled.OffsetY:0.###} distToSnap={distToSnap:0.###} interval={SnapFlingProbe.RowH} interior={interior} mode={settled.Phase} settledAtFrame={settledAt}");
         }
 
         // gate.touch4.snap-fling-dt-invariant: the integrator-determinism sweep, extended to a SNAP fling. The same event
@@ -6738,7 +7536,7 @@ static class Slice
                 host.Scene.TryGetScroll(vp, out var s);
                 if (s.OffsetY < -0.001f || s.OffsetY > maxOff + 0.001f) offsetOk = false;
                 bandAfter = s.OverscrollPx;
-                if (s.OverscrollPx == 0f && s.ScrollMode == 0) break;
+                if (s.OverscrollPx == 0f && s.Phase == 0) break;
             }
             bool sprungToZero = bandAfter == 0f;
             Check("gate.touch4.overscroll-springback a touch pan past the top clamp shows a damped displacement band (peaks ≤ 10%-viewport cap) WHILE OffsetY stays pinned at 0 (offset never negative, never > max across the whole drag), then springs back to EXACTLY 0 on release",
@@ -6793,10 +7591,11 @@ static class Slice
         }
     }
 
-    // ── Touchpad scroll-feel exit criteria (gate.touchpad.*): packet-driven precision-touchpad motion (TickTouchpad).
-    // Windows supplies the momentum tail; the engine only soft-knees, lightly filters, owns overscroll, and latches short
-    // packet gaps. The generic exact-decay kernel remains gated separately for inertial users. The mouse-wheel path is
-    // unaffected (it never enters PanTouchpad/TickTouchpad).
+    // ── Touchpad scroll-feel exit criteria (gate.touchpad.*/gate.scroll.*): the scroll-feel-rework-v2 physics kernels —
+    // the exact closed-form CoastStep fling integral (distance + frame-rate independence), the iOS asymptotic rubber-band
+    // + its exact inverse, the ω=12.5 snap-back, and the WheelAnimating hard-clamped PendingTarget chase (§4.2/§4.3/§4.4/
+    // §4.5). The deleted v1 second integrator (TickTouchpad/PanTouchpad/ShapeTouchpadPacketDelta/soft-knee band) is gone —
+    // touchpad/PTP contact now rides the phase-tagged contract into the single phase-7 integrator (see ScrollV2ValidationChecks).
     static void TouchpadFeelChecks(StringTable strings)
     {
         var fonts = new HeadlessFontSystem(strings);
@@ -6807,17 +7606,17 @@ static class Slice
         // This locks the reusable decay kernel to FlingDecayPerS = 0.135 (iOS-normal) — a wrong decay moves it outside ±2.
         {
             const float v0 = 1000f, dtMs = 1000f / 60f;
-            float settle = ScrollAnimator.FlingMinVelocityPxPerS;   // tracks the production settle cutoff (13 px/s) so the gate stays honest
+            float settle = ScrollIntegrator.FlingMinVelocityPxPerS;   // tracks the production settle cutoff (13 px/s) so the gate stays honest
             float v = v0, coast = 0f; int frames = 0;
             while (frames < 100000)
             {
-                coast += OverscrollPhysics.CoastStep(ref v, dtMs, ScrollAnimator.FlingDecayPerS);
+                coast += OverscrollPhysics.CoastStep(ref v, dtMs, ScrollIntegrator.FlingDecayPerS);
                 frames++;
                 if (MathF.Abs(v) < settle) break;
             }
             bool ok = Near(coast, 493f, 2f);
             Check("gate.scroll.decay-kernel-distance a v0=1000 px/s coast at fixed 60 Hz integrated by the exact closed-form CoastStep settles at ~493 px (locks FlingDecayPerS=0.135 + the 13 px/s settle; v0/k asymptote 499.4 px, the cutoff stops it ~6 px short)",
-                ok, $"coast={coast:0.##}px (expect ~493 ±2) frames={frames} k={-MathF.Log(ScrollAnimator.FlingDecayPerS):0.###}");
+                ok, $"coast={coast:0.##}px (expect ~493 ±2) frames={frames} k={-MathF.Log(ScrollIntegrator.FlingDecayPerS):0.###}");
         }
 
         // gate.scroll.decay-kernel-frame-rate-independence: the SAME v0=1000 px/s coast integrated at dt = 1000/60, 1000/120, 1000/144
@@ -6830,9 +7629,9 @@ static class Slice
                 float v = 1000f, coast = 0f; int frames = 0;
                 while (frames < 100000)
                 {
-                    coast += OverscrollPhysics.CoastStep(ref v, dtMs, ScrollAnimator.FlingDecayPerS);
+                    coast += OverscrollPhysics.CoastStep(ref v, dtMs, ScrollIntegrator.FlingDecayPerS);
                     frames++;
-                    if (MathF.Abs(v) < ScrollAnimator.FlingMinVelocityPxPerS) break;   // production settle cutoff (13 px/s)
+                    if (MathF.Abs(v) < ScrollIntegrator.FlingMinVelocityPxPerS) break;   // production settle cutoff (13 px/s)
                 }
                 return coast;
             }
@@ -6842,290 +7641,129 @@ static class Slice
                 ok, $"coast 60Hz={c60:0.###} 120Hz={c120:0.###} 144Hz={c144:0.###} (spread={MathF.Max(MathF.Max(c60, c120), c144) - MathF.Min(MathF.Min(c60, c120), c144):0.###})");
         }
 
-        // gate.touchpad.band-roundtrip: the softened rubber-band (soft knee = 2·limit) must round-trip — ExcessFromBand is
-        // the EXACT inverse of BandFromExcess for excess in the elastic region. Uses a large viewport (limit=300, soft=600)
-        // so x∈{5,50,200} all stay below the soft knee (none saturate the cap), and asserts the round-trip within 0.5 px.
+        // gate.touchpad.band-roundtrip (v2): the iOS rubber-band must round-trip — ExcessFromBand is the EXACT inverse of
+        // BandFromExcess for ALL excess (the v2 map never saturates, so the inverse holds everywhere with no early-out
+        // branch — scroll-feel-rework-v2 §4.4/§8 gate 7). With vp=3000 the asymptote is d=0.15·vp=450; x∈{5,50,200} sit
+        // in the near-linear region and x∈{600,3000} are the OLD saturation points (2·limit / 10·limit at the old
+        // limit=300) that the v1 min()-knee could NOT invert — v2 round-trips them within 0.5 px.
         {
-            const float vp = 3000f;   // limit = 0.1·vp = 300, soft = 600 ⇒ band(200) = 150 < limit (no saturation)
+            const float vp = 3000f;   // d = 0.15·vp = 450 ⇒ band(200)=88.4, band(3000)=353.6, all < d (never reaches the wall)
             float worst = 0f;
-            foreach (float x in new[] { 5f, 50f, 200f })
+            foreach (float x in new[] { 5f, 50f, 200f, 600f, 3000f })
             {
                 float band = OverscrollPhysics.BandFromExcess(x, vp);
                 float rt = OverscrollPhysics.ExcessFromBand(band, vp);
                 worst = MathF.Max(worst, MathF.Abs(rt - x));
             }
             bool ok = worst < 0.5f;
-            Check("gate.touchpad.band-roundtrip ExcessFromBand(BandFromExcess(x)) ≈ x for x∈{5,50,200} within 0.5px (the softened soft=2·limit knee keeps the inverse exact in the elastic region)",
+            Check("gate.touchpad.band-roundtrip ExcessFromBand(BandFromExcess(x)) ≈ x for x∈{5,50,200,600,3000} within 0.5px (the v2 iOS map never saturates ⇒ the closed-form inverse is exact everywhere, incl. at/above the old saturation point)",
                 ok, $"worstRoundTripErr={worst:0.######}px");
         }
 
-        // gate.touchpad.progressive-packet-curve: precision remains exactly 1:1, then gain increases smoothly with packet
-        // magnitude so ordinary/fast scrolling is lighter without amplifying tiny adjustments. Large flicks pass through
-        // a soft output knee, and the mapping stays odd + monotonic. This is packet shaping only — no synthetic travel.
-        {
-            float p8 = OverscrollPhysics.ShapeTouchpadPacketDelta(8f);
-            float p16 = OverscrollPhysics.ShapeTouchpadPacketDelta(16f);
-            float p18 = OverscrollPhysics.ShapeTouchpadPacketDelta(18f);
-            float p30 = OverscrollPhysics.ShapeTouchpadPacketDelta(30f);
-            float p60 = OverscrollPhysics.ShapeTouchpadPacketDelta(60f);
-            float p100 = OverscrollPhysics.ShapeTouchpadPacketDelta(100f);
-            float p140 = OverscrollPhysics.ShapeTouchpadPacketDelta(140f);
-            float p200 = OverscrollPhysics.ShapeTouchpadPacketDelta(200f);
-            float n60 = OverscrollPhysics.ShapeTouchpadPacketDelta(-60f);
-            bool monotonic = p18 < p30 && p30 < p60 && p60 < p100 && p100 < p140 && p140 < p200;
-            bool adaptive = p30 > 30f && p30 < 31f
-                            && p60 > 65f && p60 < 68f
-                            && Near(p100, 120f, 0.01f);
-            bool bounded = p140 > 150f && p140 < 160f && p200 < 180f;
-            Check("gate.touchpad.progressive-packet-curve touchpad transfer is exactly 1:1 for small adjustments, adds smoothly increasing gain to medium motion, soft-knees large flicks, and remains bounded/odd/monotonic",
-                p8 == 8f && p16 == 16f && p18 == 18f && adaptive && bounded
-                && n60 == -p60 && monotonic,
-                $"8={p8:0.###} 16={p16:0.###} 18={p18:0.###} 30={p30:0.###} 60={p60:0.###} 100={p100:0.###} 140={p140:0.###} 200={p200:0.###} -60={n60:0.###}");
-        }
+        // (The pre-rework touchpad gates — progressive-packet-curve, settle-determinism, os-tail-no-double-inertia,
+        // the touchpad alloc-zero, inter-burst-no-restart, edge-release-bounded, edge-tail-no-plateau — are DELETED with
+        // the second integrator they gated: ShapeTouchpadPacketDelta / TickTouchpad / TouchpadActive / the velocity-
+        // enveloped band no longer exist. Their behaviors re-gate on the phase-tagged contract per
+        // docs/plans/scroll-feel-rework-design.md §12/§13 (gates 2/5/6/9/11).)
 
-        // gate.touchpad.settle-determinism: a scripted touchpad packet stream → filtered settle driven through AppHost (the real
-        // PanTouchpad → TickTouchpad → ApplyTouchPan chokepoint) lands at a FIXED offset in a FIXED tick count, and a
-        // bit-identical replay produces the identical (offset, ticks). Determinism over the full live packet/filter/latch
-        // path, not just a math kernel.
-        {
-            (float off, int ticks) Run()
-            {
-                using var app = new HeadlessPlatformApp();
-                var window = new HeadlessWindow(new WindowDesc("tp-settle", new Size2(360, 460), 1f)); window.Show();
-                using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
-                host.RunFrame();
-                var vp = host.Scene.Root;
-                DriveTouchpadPan(window, host, horizontal: false, deltaPerPacket: 16f, packets: 6, msPerPacket: 16);
-                int ticks = 0;
-                for (int i = 0; i < 600; i++)
-                {
-                    host.RunFrame(); ticks++;
-                    host.Scene.TryGetScroll(vp, out var s);
-                    if (!host.Input.TouchpadActive) { break; }   // quiet latch cleared its target ⇒ settled
-                }
-                host.Scene.TryGetScroll(vp, out var settled);
-                return (settled.OffsetY, ticks);
-            }
-            var a = Run();
-            var b = Run();
-            bool deterministic = a.off == b.off && a.ticks == b.ticks;
-            bool settledForward = a.off > 5f;   // it actually moved and settled
-            Check("gate.touchpad.settle-determinism a scripted touchpad packet stream→settle through the live PanTouchpad→TickTouchpad chokepoint lands at a FIXED offset in a FIXED tick count (bit-identical on replay)",
-                deterministic && settledForward, $"runA=(off {a.off:0.###},ticks {a.ticks}) runB=(off {b.off:0.###},ticks {b.ticks})");
-        }
-
-        // gate.touchpad.os-tail-no-double-inertia: Windows already emits the touchpad's decelerating momentum packets.
-        // After the final packet, FluentGpu may finish applying its short one-pole filter but must not advance DEMAND and
-        // create extra travel. Three 16-DIP packets demand exactly 48 DIP; after six quiet frames (<120ms ownership latch)
-        // the applied offset must approach, but never exceed, that packet sum. The previous synthetic coast overshot it
-        // substantially because it integrated a second velocity tail.
+        // gate.scroll.phase-release-velocity — regression lock for two ON-DEVICE-MEASURED estimator defects on the
+        // phase-contract (touchpad wheel-fallback) path:
+        // (a) FOLD FIDELITY (the axis-swap defect): TWO ScrollUpdate packets per frame — the ring folds each pair and
+        //     deposits the overwritten packet's running sums into the velocity side ring. A constant-velocity vertical
+        //     stream must read the EXACT hand speed; the swapped-axis deposit fed the pan axis flat plateaus + per-frame
+        //     spikes and inflated the release ~4-6× (oversized flings, violent edge bounces). An abrupt stop at speed
+        //     still seeds exactly ONE fling (the trailing gate must not kill real flicks).
+        // (b) DECEL-THEN-SILENCE (the phantom-fling defect, v2 single-gate form): a stream decelerating to near-rest and
+        //     then going SILENT ≥40ms before the lift seeds NO fling. v1 leaned on a trailing-32ms displacement gate to
+        //     beat the work-energy ledger's remembered START energy; v2 DELETES that dual gate (scroll-feel-rework-v2
+        //     §4.3) — the completed tail + silence is caught by AssumeStoppedMs alone (newest sample older than 40ms at
+        //     lift ⇒ v=0). One window, one gate. (A decel ramp still MOVING at lift correctly seeds a proportional fling
+        //     — that is the honest v2 hand speed, not a phantom; the double-inertia case is specifically the silent tail.)
         {
             using var app = new HeadlessPlatformApp();
-            var window = new HeadlessWindow(new WindowDesc("tp-no-double-inertia", new Size2(360, 460), 1f)); window.Show();
+            var window = new HeadlessWindow(new WindowDesc("phase-release", new Size2(360, 460), 1f)); window.Show();
             using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
             host.RunFrame();
             var vp = host.Scene.Root;
             var pos = new Point2(150, 200);
-            uint t = 1000;
-            for (int i = 0; i < 3; i++)
+            const byte Fb = (byte)ScrollDeviceClass.WheelHiResFallback;
+            float decay1 = MathF.Exp(MathF.Log(0.135f) * 16f / 1000f);   // the End frame's phase-7 tick decays the fresh seed once
+
+            // (a) 1000 px/s hand speed: ScrollBegin + 16 ScrollUpdates of 8 DIP at 8 ms stamps, TWO per frame.
+            uint t = 5000;
+            window.QueueInput(new InputEvent(InputKind.ScrollBegin, pos, 0, 0, ScrollDelta: 8f,
+                Pointer: PointerKind.Touchpad, TimestampMs: t, PointerId: 9, DeviceClassRaw: Fb));
+            host.RunFrame();
+            for (int i = 0; i < 8; i++)
             {
-                window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, ScrollDelta: 16f,
-                    Pointer: PointerKind.Touchpad, TimestampMs: t += 16));
+                window.QueueInput(new InputEvent(InputKind.ScrollUpdate, pos, 0, 0, ScrollDelta: 8f,
+                    Pointer: PointerKind.Touchpad, TimestampMs: t += 8, PointerId: 9, DeviceClassRaw: Fb));
+                window.QueueInput(new InputEvent(InputKind.ScrollUpdate, pos, 0, 0, ScrollDelta: 8f,
+                    Pointer: PointerKind.Touchpad, TimestampMs: t += 8, PointerId: 9, DeviceClassRaw: Fb));
+                host.RunFrame();   // the pair coalesces in the ring; the overwritten packet feeds the side ring
+            }
+            window.QueueInput(new InputEvent(InputKind.ScrollEnd, pos, 0, 0,
+                Pointer: PointerKind.Touchpad, TimestampMs: t, PointerId: 9, DeviceClassRaw: Fb));   // lift = last packet's stamp (design §2)
+            host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var scA);
+            float vFold = MathF.Abs(scA.FlingVelocity);
+            bool foldExact = scA.Phase == ScrollIntegrator.Fling && MathF.Abs(vFold - 1000f * decay1) <= 1000f * decay1 * 0.03f;   // ±3%
+            for (int i = 0; i < 400; i++) { host.RunFrame(); host.Scene.TryGetScroll(vp, out var s); if (s.Phase == 0) break; }
+
+            // (b) decelerate to near-rest THEN a ≥40ms silence: steady 8-DIP packets, then a 4/2/0.6/0.3 ramp (one per
+            // frame, 16 ms stamps), then the lift arrives 60 ms after the last packet — a completed tail then silence. The
+            // v2 single 40ms IMPULSE window would read ~90 px/s over the ramp, but AssumeStoppedMs (newest sample >40ms
+            // before lift) zeroes it ⇒ NO fling. This is the v2 double-inertia guard (the deleted trailing-32ms dual gate).
+            uint t2 = t + 2000;
+            window.QueueInput(new InputEvent(InputKind.ScrollBegin, pos, 0, 0, ScrollDelta: 8f,
+                Pointer: PointerKind.Touchpad, TimestampMs: t2, PointerId: 9, DeviceClassRaw: Fb));
+            host.RunFrame();
+            foreach (float d in new[] { 8f, 8f, 8f, 8f, 8f, 8f, 8f, 4f, 2f, 0.6f, 0.3f })
+            {
+                window.QueueInput(new InputEvent(InputKind.ScrollUpdate, pos, 0, 0, ScrollDelta: d,
+                    Pointer: PointerKind.Touchpad, TimestampMs: t2 += 16, PointerId: 9, DeviceClassRaw: Fb));
                 host.RunFrame();
             }
-            for (int i = 0; i < 6; i++) host.RunFrame();   // 96ms: still one latched stream, filter essentially converged
-            host.Scene.TryGetScroll(vp, out var quiet);
-            bool noAddedTravel = quiet.OffsetY <= 48.05f && quiet.OffsetY >= 47f;
-            bool stillLatched = host.Input.TouchpadActive;
-            for (int i = 0; i < 20 && host.Input.TouchpadActive; i++) host.RunFrame();
-            Check("gate.touchpad.os-tail-no-double-inertia packet-driven touchpad motion never travels beyond the OS packet sum during silence; the quiet latch preserves ownership without synthesizing a second acceleration/deceleration tail",
-                noAddedTravel && stillLatched && !host.Input.TouchpadActive,
-                $"offsetAfter96ms={quiet.OffsetY:0.###}/48 activeAt96ms={stillLatched} settled={!host.Input.TouchpadActive}");
+            window.QueueInput(new InputEvent(InputKind.ScrollEnd, pos, 0, 0,
+                Pointer: PointerKind.Touchpad, TimestampMs: t2 + 60, PointerId: 9, DeviceClassRaw: Fb));   // 60ms silence → AssumeStopped → v=0
+            host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var scB);
+            bool decelNoFling = scB.Phase != ScrollIntegrator.Fling || MathF.Abs(scB.FlingVelocity) < 1f;
+
+            Check("gate.scroll.phase-release-velocity the phase-contract release estimator: a ring-FOLDED (two packets/frame) constant-velocity stream reads the exact hand speed and an abrupt stop seeds ONE fling (axis-swap regression lock); a decelerate-then-silence stream seeds NO fling (v2 §4.3 single 40ms IMPULSE window + AssumeStoppedMs — the deleted dual gate)",
+                foldExact && decelNoFling,
+                $"fold={vFold:0} (expect {1000f * decay1:0} ±3%) phase={scA.Phase} decelFling={(scB.Phase == ScrollIntegrator.Fling ? scB.FlingVelocity : 0f):0.0}");
         }
 
-        // gate.touchpad.alloc-zero: the full touchpad packet→filtered-settle path allocates 0 managed bytes on the hot
-        // half. The one-pole filter, quiet latch, and ApplyTouchPan → SetScrollOffset re-realize must stay non-allocating.
-        {
-            using var app = new HeadlessPlatformApp();
-            var window = new HeadlessWindow(new WindowDesc("tp-alloc", new Size2(360, 460), 1f)); window.Show();
-            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
-            host.RunFrame();
-            var vp = host.Scene.Root;
-            // Warm the path (JIT) outside the measured window, then drain to a clean rest.
-            DriveTouchpadPan(window, host, horizontal: false, deltaPerPacket: 16f, packets: 6, msPerPacket: 16);
-            for (int i = 0; i < 120 && host.Input.TouchpadActive; i++) host.RunFrame();
-            for (int i = 0; i < 20; i++) host.RunFrame();
-
-            long worst = DriveTouchpadPan(window, host, horizontal: false, deltaPerPacket: 16f, packets: 6, msPerPacket: 16);
-            int quietFrames = 0;
-            for (int i = 0; i < 200; i++)
-            {
-                bool active = host.Input.TouchpadActive;
-                var f = host.RunFrame();
-                if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes;
-                if (active) quietFrames++;
-                if (!host.Input.TouchpadActive) break;
-            }
-            Check("gate.touchpad.alloc-zero a touchpad packet→filtered-settle sequence allocates 0 managed bytes on the hot half (one-pole filter, quiet latch, and ApplyTouchPan re-realize)",
-                worst == 0 && quietFrames >= 5, $"worstHotAlloc={worst}B quietFrames={quietFrames}");
-        }
-
-        // gate.touchpad.inter-burst-no-restart: the regression lock for the A1 settle quiet-guard. The device bursts hi-res
-        // packets mid-scroll with ~60-90ms gaps; before the guard, a normal gap let the settle fire (clearing _tpTarget) and
-        // the next packet restarted fresh smoothing ownership (the "scroll, freeze, scroll" stutter). Every PRE-EXISTING
-        // touchpad gate spaced packets 16ms apart, so NONE exercised a gap — this drives 3 bursts separated by ~80ms idle
-        // gaps (shorter than the 120ms quiet-settle window s_tpSettleQuietMs)
-        // and asserts the gesture stays ONE continuous stream (TouchpadActive never drops between bursts; offset never jumps
-        // backward), while a genuine long pause still settles (the latch DELAYS settle but never adds travel).
-        {
-            using var app = new HeadlessPlatformApp();
-            var window = new HeadlessWindow(new WindowDesc("tp-burst", new Size2(360, 460), 1f)); window.Show();
-            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
-            host.RunFrame();
-            var vp = host.Scene.Root;
-
-            uint t = 1000;
-            bool stayedActiveAcrossGaps = true, monotonic = true;
-            float lastOff = 0f;
-            for (int burst = 0; burst < 3; burst++)
-            {
-                for (int p = 0; p < 3; p++)   // a burst: 3 packets one frame apart (the device delivers packets in tight bursts)
-                {
-                    t += 16;
-                    window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0, ScrollDelta: 16f, Pointer: PointerKind.Touchpad, TimestampMs: t));
-                    host.RunFrame();
-                    host.Scene.TryGetScroll(vp, out var sp); if (sp.OffsetY < lastOff - 0.5f) monotonic = false; lastOff = sp.OffsetY;
-                }
-                if (burst == 2) break;   // the long-pause settle is asserted separately below, after the final burst
-                for (int g = 0; g < 5; g++)   // inter-burst gap: 5 idle frames ≈ 80ms, under the 120ms quiet latch ⇒ must NOT settle
-                {
-                    t += 16;
-                    host.RunFrame();
-                    if (!host.Input.TouchpadActive) stayedActiveAcrossGaps = false;   // a settle fired in a normal inter-burst gap = the regression
-                    host.Scene.TryGetScroll(vp, out var sg); if (sg.OffsetY < lastOff - 0.5f) monotonic = false; lastOff = sg.OffsetY;
-                }
-            }
-            // A genuine long pause (quiet > the threshold) must STILL settle — confirms the guard delays settle, never prevents it.
-            bool settledOnLongPause = false;
-            for (int i = 0; i < 200; i++) { host.RunFrame(); if (!host.Input.TouchpadActive) { settledOnLongPause = true; break; } }
-            host.Scene.TryGetScroll(vp, out var fin);
-            Check("gate.touchpad.inter-burst-no-restart bursts ~80ms apart (under the 120ms quiet latch) stay ONE continuous packet stream — TouchpadActive never drops between bursts and offset stays monotonic — yet a long pause still settles",
-                stayedActiveAcrossGaps && monotonic && settledOnLongPause && fin.OffsetY > 5f,
-                $"stayedActive={stayedActiveAcrossGaps} monotonic={monotonic} settledOnLongPause={settledOnLongPause} finalOff={fin.OffsetY:0.0}");
-        }
-
-        // gate.touchpad.edge-release-bounded: velocity-enveloped elastic edge (the WebKit/Chromium InputScrollElasticity
-        // model adapted for Windows, which gives no finger-lift signal). An over-pull builds a band bounded by the headroom
-        // cap; once packets stop, the past-edge excess decays toward the edge every frame, so the band eases CONTINUOUSLY
-        // home — no discrete release, no spring, no plateau — reaching 0 in a bounded, non-instant frame budget.
-        {
-            using var app = new HeadlessPlatformApp();
-            var window = new HeadlessWindow(new WindowDesc("tp-edge-release", new Size2(360, 460), 1f)); window.Show();
-            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
-            host.RunFrame();
-            var vp = host.Scene.Root;
-            var pos = new Point2(150, 200);
-
-            window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, ScrollDelta: -180f,
-                Pointer: PointerKind.Touchpad, TimestampMs: 1000));
-            host.RunFrame();
-            window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, ScrollDelta: -180f,
-                Pointer: PointerKind.Touchpad, TimestampMs: 1016));
-            host.RunFrame();
-
-            host.Scene.TryGetScroll(vp, out var pulled);
-            float viewport = pulled.ViewportH;
-            float maxBand = MathF.Abs(pulled.OverscrollPx);
-            // After packets stop, the band must ease continuously home and reach 0 in a bounded budget. A non-trivial frame
-            // count (≥4) proves it's an elastic decay, not a one-frame snap; a bounded count (≤90 ≈ 1.4s) proves there is
-            // no pinned plateau. The peak stays under the 10% hard band (headroom cap + a little filter overshoot).
-            int frames = 0;
-            bool reachedHome = false;
-            for (int i = 0; i < 200; i++)
-            {
-                host.RunFrame();
-                frames++;
-                host.Scene.TryGetScroll(vp, out var s2);
-                maxBand = MathF.Max(maxBand, MathF.Abs(s2.OverscrollPx));
-                if (MathF.Abs(s2.OverscrollPx) < 0.5f) { reachedHome = true; break; }
-            }
-            bool bounded = maxBand <= viewport * 0.10f;
-            Check("gate.touchpad.edge-release-bounded a touchpad over-pull builds a bounded band and, on packet silence, eases continuously home (velocity-enveloped elastic decay) — no discrete release, no plateau — reaching 0 in a bounded, non-instant budget",
-                pulled.OverscrollPx < -1f && bounded && reachedHome && frames >= 4 && frames <= 90,
-                $"pulledBand={pulled.OverscrollPx:0.0} maxBand={maxBand:0.0}/vp={viewport:0.0} easeFrames={frames} reachedHome={reachedHome}");
-        }
-
-        // gate.touchpad.edge-tail-no-plateau: real Windows precision-touchpad streams continue sending a tapering
-        // post-lift momentum tail at a saturated edge. Waiting for packet silence holds the band visibly pinned even
-        // though no more useful movement is possible. In the velocity-enveloped model the band is sized by the momentum
-        // VELOCITY, so a DECAYING tail eases the band down WITH it (no pin at a cap) — and an inward reverse pulls the band
-        // toward range. There is no recoil/spring handoff and no lift detection.
-        {
-            using var app = new HeadlessPlatformApp();
-            var window = new HeadlessWindow(new WindowDesc("tp-edge-tail", new Size2(360, 460), 1f)); window.Show();
-            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
-            host.RunFrame();
-            var vp = host.Scene.Root;
-            var pos = new Point2(150, 200);
-            uint t = 1000;
-
-            // Slam the top edge (saturate the band), then a LONG DECAYING tail of packets that stay well above the old
-            // 8-DIP "tiny tail" threshold for most of their length. The band must ease DOWN across the tail, not pin.
-            foreach (float d in new[] { -180f, -180f }) { window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, ScrollDelta: d, Pointer: PointerKind.Touchpad, TimestampMs: t += 16)); host.RunFrame(); }
-            host.Scene.TryGetScroll(vp, out var saturated);
-            float bandAtSaturation = MathF.Abs(saturated.OverscrollPx);
-
-            // The band may first finish climbing to the cap while the tail is still fast (a stretch, not a plateau); track
-            // that peak. Then as the tail decays the velocity envelope must ease the band well DOWN from the peak.
-            float peakBand = bandAtSaturation;
-            foreach (float d in new[] { -90f, -70f, -52f, -38f, -28f, -20f, -14f, -10f, -7f, -5f, -3f, -2f })
-            {
-                window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, ScrollDelta: d, Pointer: PointerKind.Touchpad, TimestampMs: t += 16));
-                host.RunFrame();
-                host.Scene.TryGetScroll(vp, out var s);
-                peakBand = MathF.Max(peakBand, MathF.Abs(s.OverscrollPx));
-            }
-            host.Scene.TryGetScroll(vp, out var afterTail);
-            // Eased home WITH the tail (no plateau): the band dropped well below its peak while the tail was still arriving.
-            bool easedFromPeak = MathF.Abs(afterTail.OverscrollPx) < peakBand * 0.55f;
-
-            // A meaningful inward reverse pulls the band toward range (never stretches it further out).
-            window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, ScrollDelta: 40f, Pointer: PointerKind.Touchpad, TimestampMs: t += 16));
-            host.RunFrame();
-            host.Scene.TryGetScroll(vp, out var reversed);
-            bool reverseTowardRange = MathF.Abs(reversed.OverscrollPx) <= MathF.Abs(afterTail.OverscrollPx) + 0.5f;
-
-            Check("gate.touchpad.edge-tail-no-plateau a long DECAYING momentum tail eases the band well down from its peak with the velocity envelope (no pin at the cap), and an inward reverse pulls it toward range",
-                peakBand > 5f && easedFromPeak && reverseTowardRange,
-                $"bandAtSaturation={saturated.OverscrollPx:0.0} peakBand={peakBand:0.0} afterTail={afterTail.OverscrollPx:0.0} reversed={reversed.OverscrollPx:0.0}");
-        }
-
-        // gate.touchpad.mouse-wheel-takeover: a touchpad stream can still own a TOP rubber-band when a
-        // physical mouse wheel arrives (there is no touchpad-up event). The mouse must synchronously take ownership:
-        // cancel the touchpad stream, clear the band, reset Offset==Target, then seed ONE bounded wheel fling. Before this
-        // gate, TickTouchpad and WheelFlingMode wrote the same ScrollState concurrently, producing positive OffsetY with a
-        // negative top band — the measured dead-zone / wrong-boundary defect.
+        // gate.touchpad.mouse-wheel-takeover: a phase-driven scroll gesture (touchpad fallback) can still own a TOP
+        // rubber-band when a physical mouse wheel arrives (no touchpad-up event exists). The mouse must synchronously take
+        // ownership: cancel the gesture (CancelGesture), clear the band, reset Offset==Target, then seed ONE
+        // WheelAnimating chase (accumulated PendingTarget; scroll-feel-rework-v2 §4.2). Historic defect this locks: two
+        // scroll owners writing the same ScrollState concurrently produced positive OffsetY with a negative top band.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("tp-wheel-takeover", new Size2(360, 460), 1f)); window.Show();
             using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
             host.RunFrame();
-            host.Input.SmoothScroll = true;   // shipping Windows path: mouse wheel seeds WheelFlingMode
+            host.Input.SmoothScroll = true;   // shipping Windows path: mouse wheel seeds WheelAnimating
             var vp = host.Scene.Root;
             var pos = new Point2(150, 200);
 
-            // Pull above the top with two precision-touchpad packets so the touchpad owns a real negative band.
-            window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, ScrollDelta: -120f,
-                Pointer: PointerKind.Touchpad, TimestampMs: 1000));
+            // Pull above the top with two phase-contract contact packets (the wheel-fallback producer's shape) so the
+            // gesture owns a real negative band.
+            window.QueueInput(new InputEvent(InputKind.ScrollBegin, pos, 0, 0, ScrollDelta: -120f,
+                Pointer: PointerKind.Touchpad, TimestampMs: 1000, PointerId: 7,
+                DeviceClassRaw: (byte)ScrollDeviceClass.WheelHiResFallback));
             host.RunFrame();
-            window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, ScrollDelta: -120f,
-                Pointer: PointerKind.Touchpad, TimestampMs: 1016));
+            window.QueueInput(new InputEvent(InputKind.ScrollUpdate, pos, 0, 0, ScrollDelta: -120f,
+                Pointer: PointerKind.Touchpad, TimestampMs: 1016, PointerId: 7,
+                DeviceClassRaw: (byte)ScrollDeviceClass.WheelHiResFallback));
             host.RunFrame();
             host.Scene.TryGetScroll(vp, out var before);
-            bool touchpadHeldBand = host.Input.TouchpadActive && before.OverscrollPx < -1f && before.OffsetY == 0f;
+            bool touchpadHeldBand = host.Input.GestureActive && before.OverscrollPx < -1f && before.OffsetY == 0f;
 
             // Dispatch the mouse event directly so the state is observed immediately after input ownership transfers,
-            // before the animator advances the newly-seeded wheel fling.
+            // before the integrator advances the newly-seeded WheelAnimating chase.
             var mouse = new[]
             {
                 new InputEvent(InputKind.Wheel, pos, 0, 0, WheelNotch: 1f,
@@ -7133,10 +7771,11 @@ static class Slice
             };
             host.Input.Dispatch(mouse);
             host.Scene.TryGetScroll(vp, out var handed);
-            bool cleanHandoff = !host.Input.TouchpadActive
+            bool cleanHandoff = !host.Input.GestureActive
                                 && handed.OverscrollPx == 0f && !handed.Overscrolling
                                 && handed.OverscrollVel == 0f
-                                && handed.ScrollMode == 3 && handed.FlingVelocity > 0f
+                                && handed.Phase == ScrollIntegrator.WheelAnimating
+                                && !float.IsNaN(handed.PendingTargetY) && handed.PendingTargetY > 0f
                                 && handed.OffsetY == 0f && handed.TargetY == handed.OffsetY;
 
             float minOff = handed.OffsetY;
@@ -7150,37 +7789,44 @@ static class Slice
             }
             host.Scene.TryGetScroll(vp, out var after);
             bool wheelAdvanced = after.OffsetY > 5f && minOff >= 0f;
-            Check("gate.touchpad.mouse-wheel-takeover a physical mouse wheel synchronously cancels an active touchpad stream, clears its held overscroll band, and advances under one bounded wheel owner — no positive offset + negative top-band dead zone",
+            Check("gate.touchpad.mouse-wheel-takeover a physical mouse wheel synchronously cancels an active phase-driven scroll gesture, clears its held overscroll band, and advances under one WheelAnimating owner (accumulated PendingTarget) — no positive offset + negative top-band dead zone",
                 touchpadHeldBand && cleanHandoff && noBandReturned && wheelAdvanced,
-                $"before=(active {touchpadHeldBand},off {before.OffsetY:0.0},band {before.OverscrollPx:0.0}) handoff=(active {host.Input.TouchpadActive},mode {handed.ScrollMode},v {handed.FlingVelocity:0},band {handed.OverscrollPx:0.0}) after=(off {after.OffsetY:0.0},band {after.OverscrollPx:0.0})");
+                $"before=(active {touchpadHeldBand},off {before.OffsetY:0.0},band {before.OverscrollPx:0.0}) handoff=(active {host.Input.GestureActive},phase {handed.Phase},pending {handed.PendingTargetY:0},band {handed.OverscrollPx:0.0}) after=(off {after.OffsetY:0.0},band {after.OverscrollPx:0.0})");
         }
 
-        // gate.scroll.mouse-wheel-velocity-cap: a fast detented-wheel burst accumulates momentum only up to the shipping
-        // ceiling. The captured hardware trace reached 7,807 px/s; that made acceleration and boundary arrival feel
-        // detached from the wheel. The cap preserves fast-spin acceleration while bounding the resulting coast.
+        // gate.scroll.wheel-accumulates-to-extent (v2 §4.2): a fast detented-wheel burst does NOT accumulate an unbounded
+        // coast velocity — v1's WheelFlingMode + WheelFlingMaxVelocityPxPerS velocity cap is gone. Each notch advances the
+        // accumulated, HARD-CLAMPED PendingTarget; a burst of many notches stops EXACTLY at min(Σnotch, content extent),
+        // never past the edge (§2.2 extent asymmetry — a wheel hard-stops, never bands). The integrator then chases it with
+        // the velocity-preserving crit-damped WheelAnimating spring.
         {
             using var app = new HeadlessPlatformApp();
-            var window = new HeadlessWindow(new WindowDesc("wheel-velocity-cap", new Size2(360, 460), 1f)); window.Show();
+            var window = new HeadlessWindow(new WindowDesc("wheel-accum-extent", new Size2(360, 460), 1f)); window.Show();
             using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
             host.RunFrame();
-            host.Input.SmoothScroll = true;   // exercise the shipping wheel-momentum path, not direct headless scrolling
+            host.Input.SmoothScroll = true;   // exercise the shipping wheel path (WheelAnimating), not direct headless scrolling
             var pos = new Point2(150, 200);
             var burst = new InputEvent[16];
             for (int i = 0; i < burst.Length; i++)
                 burst[i] = new InputEvent(InputKind.Wheel, pos, 0, 0, WheelNotch: 1f,
                     Pointer: PointerKind.Mouse, TimestampMs: (uint)(1000 + i * 4));
-            host.Input.Dispatch(burst);
+            host.Input.Dispatch(burst);   // all 16 accumulate at offset 0 (no tick between dispatches)
             host.Scene.TryGetScroll(host.Scene.Root, out var seeded);
-            float cap = host.Input.Tuning.WheelFlingMaxVelocityPxPerS;
-            bool capped = Near(seeded.FlingVelocity, cap, 0.01f) && seeded.ScrollMode == 3;
-            Check("gate.scroll.mouse-wheel-velocity-cap a rapid wheel burst accumulates momentum up to, but never beyond, the 4,500 px/s shipping ceiling",
-                capped, $"seededV={seeded.FlingVelocity:0.###} cap={cap:0.###} mode={seeded.ScrollMode}");
+            float perNotch = host.Input.Tuning.PerNotchDip(seeded.ViewportH);
+            float maxOff = MathF.Max(0f, seeded.ContentH - seeded.ViewportH);
+            float expected = MathF.Min(16f * perNotch, maxOff);   // §4.2: clamp(Σdistance, 0, max) — hard-stops at the extent
+            bool capped = seeded.Phase == ScrollIntegrator.WheelAnimating
+                          && !float.IsNaN(seeded.PendingTargetY)
+                          && Near(seeded.PendingTargetY, expected, 0.5f)
+                          && seeded.PendingTargetY <= maxOff + 0.5f;
+            Check("gate.scroll.wheel-accumulates-to-extent a rapid 16-notch wheel burst accumulates the hard-clamped PendingTarget and stops EXACTLY at min(Σnotch, content extent) — no unbounded coast velocity, no overshoot past the edge (v2 §4.2 supersedes the v1 velocity cap)",
+                capped, $"pending={seeded.PendingTargetY:0.###} expected={expected:0.###} maxOff={maxOff:0.###} perNotch={perNotch:0.#} phase={seeded.Phase}");
         }
 
         // gate.scroll.mouse-wheel-zero-dt-survives: the real stopwatch clock intentionally returns dt=0 on the first
-        // interactive frame after Resync. The captured dead zone showed each new wheel fling being killed immediately
-        // because a zero-duration ScrollWrite made no movement and was mistaken for a clamp. Preserve the seeded fling on
-        // dt=0, then advance normally on the next positive tick.
+        // interactive frame after Resync. The §5 dt≤0 Resync bail (now covering ALL states) must preserve the freshly
+        // seeded WheelAnimating intent (Phase + PendingTarget) on the dt=0 frame — a zero-duration step made no movement
+        // and must not be mistaken for a settle/clamp — then advance normally on the next positive tick.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("wheel-zero-dt", new Size2(360, 460), 1f)); window.Show();
@@ -7192,43 +7838,22 @@ static class Slice
             var vp = host.Scene.Root;
             window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0,
                 WheelNotch: 1f, Pointer: PointerKind.Mouse, TimestampMs: 1000));
-            host.RunFrame();   // input seeds WheelFlingMode; clock still returns dt=0
+            host.RunFrame();   // input seeds WheelAnimating; clock still returns dt=0 → the tick bails, intent preserved
             host.Scene.TryGetScroll(vp, out var held);
-            bool survivedZero = held.ScrollMode == 3 && held.FlingVelocity > 0f && held.OffsetY == 0f;
+            bool survivedZero = held.Phase == ScrollIntegrator.WheelAnimating && !float.IsNaN(held.PendingTargetY) && held.OffsetY == 0f;
 
             clock.Advance(16f);
             host.RunFrame();
             host.Scene.TryGetScroll(vp, out var advanced);
-            bool advancedNext = advanced.ScrollMode == 3 && advanced.OffsetY > 0f;
-            Check("gate.scroll.mouse-wheel-zero-dt-survives a wheel fling survives the cadence-resync dt=0 frame and moves on the next positive tick — no repeated no-scroll dead zone",
+            bool advancedNext = advanced.Phase == ScrollIntegrator.WheelAnimating && advanced.OffsetY > 0f;
+            Check("gate.scroll.mouse-wheel-zero-dt-survives a WheelAnimating chase survives the cadence-resync dt=0 frame (intent preserved) and moves on the next positive tick — no repeated no-scroll dead zone",
                 survivedZero && advancedNext,
-                $"held=(mode {held.ScrollMode},v {held.FlingVelocity:0},off {held.OffsetY:0.0}) advanced=(mode {advanced.ScrollMode},v {advanced.FlingVelocity:0},off {advanced.OffsetY:0.0})");
+                $"held=(phase {held.Phase},pending {held.PendingTargetY:0},off {held.OffsetY:0.0}) advanced=(phase {advanced.Phase},off {advanced.OffsetY:0.0})");
         }
     }
 
-    /// <summary>Drive a precision-touchpad pan through the live wheel→PanTouchpad path: <paramref name="packets"/>
-    /// <see cref="PointerKind.Touchpad"/> Wheel events of <paramref name="deltaPerPacket"/> offset-space DIP each, spaced
-    /// <paramref name="msPerPacket"/> ms apart with monotonic stamps (so the windowed regression measures a real velocity),
-    /// one RunFrame per packet. Returns the worst <see cref="FrameStats.HotPhaseAllocBytes"/> across the packet frames.
-    /// The caller pumps further frames to apply filtering and end the quiet latch. Leaves the stream active (no synthetic
-    /// "up"; Windows supplies subsequent momentum packets in the real path).</summary>
-    static long DriveTouchpadPan(HeadlessWindow window, AppHost host, bool horizontal, float deltaPerPacket, int packets, uint msPerPacket)
-    {
-        long worst = 0;
-        uint t = s_touchClockMs;
-        for (int i = 0; i < packets; i++)
-        {
-            t += msPerPacket;
-            var e = horizontal
-                ? new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0, ScrollDelta: 0f, Pointer: PointerKind.Touchpad, TimestampMs: t, ScrollDeltaX: deltaPerPacket)
-                : new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0, ScrollDelta: deltaPerPacket, Pointer: PointerKind.Touchpad, TimestampMs: t);
-            window.QueueInput(e);
-            var f = host.RunFrame();
-            if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes;
-        }
-        s_touchClockMs = t + 1000;
-        return worst;
-    }
+    // (DriveTouchpadPan — the Wheel+PointerKind.Touchpad packet driver of the deleted second-integrator gates — is GONE
+    // with them; headless touchpad streams script the phase-tagged contract directly, design §1/§13.)
 
     /// <summary>Viewport inner extent along the scroll axis (for the overscroll cap assertion). Reads the published
     /// ScrollState ViewportH/W per Orientation.</summary>
@@ -7248,7 +7873,7 @@ static class Slice
         uint t = s_touchClockMs;
         // First flick up to an interior position (seeds a snap fling), let it settle.
         worst = Math.Max(worst, TouchGesture(window, host, new Point2(150, 360), new Point2(150, 140), 12, pointerId: 71, msPerStep: 16f));
-        for (int i = 0; i < 120; i++) { var f = host.RunFrame(); if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes; host.Scene.TryGetScroll(vp, out var s); if (s.ScrollMode == 0) break; }
+        for (int i = 0; i < 120; i++) { var f = host.RunFrame(); if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes; host.Scene.TryGetScroll(vp, out var s); if (s.Phase == 0) break; }
         // Now drag past the bottom: pull the finger UP hard from a low anchor so the content runs past max → band.
         t = s_touchClockMs;
         ev[0] = Touch(InputKind.PointerDown, new Point2(150, 360), t, 72); host.Input.Dispatch(ev); { var f = host.RunFrame(); if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes; }
@@ -7261,7 +7886,7 @@ static class Slice
         t += 16;
         ev[0] = Touch(InputKind.PointerUp, new Point2(150, 180), t, 72); host.Input.Dispatch(ev); { var f = host.RunFrame(); if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes; }
         s_touchClockMs = t + 1000;
-        for (int i = 0; i < 60; i++) { var f = host.RunFrame(); if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes; host.Scene.TryGetScroll(vp, out var s); if (s.OverscrollPx == 0f && s.ScrollMode == 0) break; }
+        for (int i = 0; i < 60; i++) { var f = host.RunFrame(); if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes; host.Scene.TryGetScroll(vp, out var s); if (s.OverscrollPx == 0f && s.Phase == 0) break; }
         return worst;
     }
 
@@ -7283,7 +7908,7 @@ static class Slice
         // A modest, fixed flick (event clock identical across the dt sweep ⇒ identical sampled velocity ⇒ identical snap
         // target). Generous settle budget so even the finest dt (8.33ms ⇒ ~4× the frames of 33.3ms) fully lands.
         TouchGesture(window, host, new Point2(150, 300), new Point2(150, 240), 10, pointerId: 93, msPerStep: 16f);
-        for (int i = 0; i < 8000; i++) { host.RunFrame(); host.Scene.TryGetScroll(vp, out var sc); if (sc.ScrollMode == 0) break; }
+        for (int i = 0; i < 8000; i++) { host.RunFrame(); host.Scene.TryGetScroll(vp, out var sc); if (sc.Phase == 0) break; }
         host.Scene.TryGetScroll(vp, out var settled);
         settledOff = settled.OffsetY;
         return rec.ResolutionSignature();
@@ -7902,7 +8527,7 @@ static class Slice
         // gate.touch2.bar-reveals-during-pan: while touch never latches hover, the thin scrollbar INDICATOR must still reveal
         // THROUGHOUT a finger-down content pan (the WinUI TouchIndicator shows for the whole manipulation, not just the
         // post-lift fling). A content pan drives the viewport through SetScrollOffset (Offset == Target every move), so the
-        // ScrollAnimator can't infer motion from |Target − Offset|; the synchronous-move pulse reveals FadeT for each pan frame.
+        // ScrollIntegrator can't infer motion from |Target − Offset|; the synchronous-move pulse reveals FadeT for each pan frame.
         // Contract: FadeT climbs > 0 DURING the drag moves (not only after lift) WITHOUT setting PointerOver (touch sets no
         // hover) and WITHOUT the 400ms full-gutter expand (ExpandT stays ~0) — exactly the lane-page-step flash. A plain
         // (non-virtual) 800px-over-200px ScrollProbe isolates the pan machinery from any realize-edge churn.
@@ -8863,7 +9488,7 @@ static class Slice
         }
 
         // (6) PAN+FLING: a vertical flick over a bound virtual list → the Pan member eager-wins (sweeping nothing else
-        // on a bare list, but the Pan WIN is recorded); the fling decays downstream of the arena (on ScrollAnimator).
+        // on a bare list, but the Pan WIN is recorded); the fling decays downstream of the arena (on ScrollIntegrator).
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("det-fling", new Size2(360, 460), 1f)); window.Show();
@@ -8901,7 +9526,7 @@ static class Slice
         {
             host.RunFrame();
             host.Scene.TryGetScroll(vp, out var sc);
-            if (sc.ScrollMode == 0) break;   // settled (fling ended)
+            if (sc.Phase == 0) break;   // settled (fling ended)
         }
         host.Scene.TryGetScroll(vp, out var settled);
         settledOff = settled.OffsetY;
@@ -18582,7 +19207,7 @@ static class Slice
         var device = new HeadlessGpuDevice();
         var fonts = new HeadlessFontSystem(strings);
         using var host = new AppHost(app, window, device, fonts, strings, new VirtualProbe());
-        host.SmoothScroll = true;   // engage the ScrollAnimator (TargetChase ease) — the hypothesis' path.
+        host.SmoothScroll = true;   // engage the ScrollIntegrator (TargetChase ease) — the hypothesis' path.
 
         host.RunFrame();
         var vp = host.Scene.Root;
@@ -18618,11 +19243,11 @@ static class Slice
                 if (gap > worstGap) worstGap = gap;
                 if (uncovered <= 12)
                     Console.WriteLine($"  frame {f}: UNCOVERED drawnOffset={drawnOffset:0.#} " +
-                        $"target={sc.TargetY:0.#} drawnView=[{viewTop:0.#},{viewBot:0.#}) " +
+                        $"pending={sc.PendingTargetY:0.#} drawnView=[{viewTop:0.#},{viewBot:0.#}) " +
                         $"realized=[{realizedTop:0.#},{realizedBot:0.#}) leadGap={leadGap:0.#} trailGap={trailGap:0.#}");
             }
             frames++;
-            if (Math.Abs(sc.OffsetY - sc.TargetY) < 0.5f && sc.OffsetY > 0f) break;   // ease settled
+            if (sc.Phase == ScrollIntegrator.Idle && sc.OffsetY > 0f) break;   // WheelAnimating chase settled
         }
 
         Console.WriteLine($"\nSMOOTH ease over one 4000px notch: {uncovered}/{frames} frames had the drawn viewport NOT " +
@@ -19161,6 +19786,7 @@ static class Slice
         KeyboardChecks(strings);
         AnimChecks();
         ExpressiveMotionChecks(strings);
+        BlurPinKeyChecks(strings);
         SkeletonChecks(strings);
         ProjectionChecks(strings);
         EnterExitChecks(strings);
@@ -19197,6 +19823,7 @@ static class Slice
         PinchZoomChecks(strings);      // Phase 4 pinch-zoom (gate.touch4.*): second-contact → Pinch sweeps Pan, scale-about-midpoint transform (no relayout), clamp 0.1..10.0, per-id cancel, pan continuation, 0-alloc
         TouchSnapOverscrollChecks(strings); // Phase 4 snap + overscroll (gate.touch4.*): fling-snap lands on a snap point (dt-invariant), touch-pan rubber-band + spring-back (offset never leaves clamp), wheel hard-clamps, 0-alloc
         ScrollParityChecks(strings);   // WinUI-parity scroll: content-relative wheel distance, windowed velocity sampler, engine-owned integrator (single portable scroll source)
+        ScrollV2ValidationChecks(strings);   // scroll-feel-rework-v2 §8: the twelve headless gates (single-writer, dt-invariance, resample-cadence, contact-1to1, coast-distance, impulse-velocity, overscroll-rational, pointerdown-cancels, wheel-lines, subpixel-stability, transition-matrix, alloc-zero)
         TouchpadFeelChecks(strings);   // Touchpad scroll feel: OS-tail packet drive (no duplicate inertia), softened band, deterministic settle, zero alloc, ownership/deadzone gates
         Touch4SipChecks(strings);      // Phase 4 SIP (gate.touch4.sip.*): touch focus shows the touch keyboard once (mouse focus doesn't), focus loss hides, a Showing OccludedRect reflows the caret into view, 0-alloc steady
         Touch4HoldWakeChecks(strings); // Phase 4 Hold EXECUTION + stationary-hold wake (gate.touch4.*): touch long-press fires the context flyout, the GestureHold wake bit keeps frames coming for a motionless held finger then clears, RatingControl touch tap-to-rate

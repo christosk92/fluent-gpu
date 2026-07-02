@@ -73,9 +73,11 @@ public sealed class LyricsProbe
 public static class LyricsDiagnostics
 {
     const int Cap = 24;
+    const int TrackCap = 256;   // bound the per-track store — it is published on EVERY search (the env-gate only hides the panel), so a long session would otherwise accumulate a report per distinct track forever
     static readonly object _gate = new();
     static readonly LinkedList<LyricsSearchReport> _recent = new();
     static readonly Dictionary<string, LyricsSearchReport> _byTrack = new(StringComparer.Ordinal);
+    static readonly Queue<string> _order = new();   // first-seen order of distinct track ids, for FIFO eviction of _byTrack
     static long _version;
 
     /// <summary>Monotonic publish counter — read it to detect a fresh report without holding the lock.</summary>
@@ -85,9 +87,11 @@ public static class LyricsDiagnostics
     {
         lock (_gate)
         {
-            _byTrack[report.TrackId] = report;
+            if (_byTrack.TryAdd(report.TrackId, report)) _order.Enqueue(report.TrackId);   // new track → track its first-seen order
+            else _byTrack[report.TrackId] = report;                                         // re-publish → update in place, keep its order
             _recent.AddFirst(report);
             while (_recent.Count > Cap) _recent.RemoveLast();
+            while (_byTrack.Count > TrackCap && _order.Count > 0) _byTrack.Remove(_order.Dequeue());   // FIFO-evict the oldest distinct track
         }
         Interlocked.Increment(ref _version);
     }
