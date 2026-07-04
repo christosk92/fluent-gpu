@@ -301,6 +301,8 @@ sealed class SearchSongs : Component
     static readonly ColumnSet Cols = new(Album: false, By: false, Date: false, Video: false, Plays: false, Heart: true, Thumb: true);
     static readonly TrackSize[] Columns =
         [TrackSize.Px(36f), TrackSize.Px(40f), TrackSize.Px(TrackRow.ThumbSize), TrackSize.Star(), TrackSize.Px(64f)];
+    const float RowContentH = 56f;
+    const float RowExtent = 60f;
 
     public override Element Render()
     {
@@ -308,35 +310,55 @@ sealed class SearchSongs : Component
         if (model is null) return new BoxEl();
         var bridge = UseContext(PlaybackBridge.Slot);
         var lib = UseContext(LibraryBridge.Slot);
-        var cur = bridge?.CurrentTrack.Value;            // subscribe → now-playing equalizer
-        bool playing = bridge?.IsPlaying.Value ?? false;
-        bool buffering = bridge?.IsBuffering.Value ?? false;
         var tracks = model.Tracks;
         int n = Math.Min(model.Max, tracks.Count);
-        var rows = new Element[n];
-        for (int i = 0; i < n; i++)
-        {
-            var t = tracks[i];
-            bool isNow = cur is not null && cur.Id == t.Id;
-            var st = new TrackRow.State(isNow, isNow && playing, isNow && buffering, IsTop: false,
-                                        Saved: t.Uri.Length > 0 && (lib?.IsSaved(t.Uri) ?? false));   // subscribe → heart re-skins on toggle
-            rows[i] = TrackRow.Row(t, i, st, Cols, Columns, 56f, showTrackArtist: true, model.Go,
-                onPlay: () => PlayRow(bridge, t, model),
-                onLike: t.Uri.Length > 0 ? () => lib?.ToggleSaved(t.Uri) : null);
-        }
-        return new BoxEl { Direction = 1, Children = rows };
+        if (n <= 0) return new BoxEl();
+        return ItemsView.CreateBound(
+            n,
+            scope => SelectorVisualsBound.AccentPill(scope, Embed.Comp(() => new SearchSongRow(model, scope, bridge, lib))),
+            RepeatLayout.Stack(RowExtent),
+            selectionMode: ItemsSelectionMode.Single,
+            isItemInvokedEnabled: true,
+            itemInvoked: i =>
+            {
+                if ((uint)i >= (uint)n) return;
+                var t = tracks[i];
+                TrackRow.Invoke(bridge, t, () => model.PlayTrack(t.Uri));
+            },
+            itemText: i => (uint)i < (uint)n ? tracks[i].Title : "",
+            grow: 0f);
     }
 
-    static void PlayRow(PlaybackBridge? bridge, Track t, Model model)
+    sealed class SearchSongRow : Component
     {
-        if (bridge is not null && bridge.CurrentTrack.Peek()?.Id == t.Id)
+        readonly Model _model;
+        readonly RowScope _scope;
+        readonly PlaybackBridge? _bridge;
+        readonly LibraryBridge? _lib;
+        public SearchSongRow(Model model, RowScope scope, PlaybackBridge? bridge, LibraryBridge? lib)
+        { _model = model; _scope = scope; _bridge = bridge; _lib = lib; }
+
+        public override Element Render()
         {
-            bool p = bridge.IsPlaying.Peek();
-            bridge.IsPlaying.Value = !p;
-            if (p) _ = bridge.Player.PauseAsync(); else _ = bridge.Player.ResumeAsync();
-            return;
+            int i = _scope.Index.Value;
+            int n = Math.Min(_model.Max, _model.Tracks.Count);
+            if ((uint)i >= (uint)n) return new BoxEl();
+            var t = _model.Tracks[i];
+            var st = TrackRow.StateOf(_bridge, _lib, t);
+            Element title = new TextEl(t.Title)
+            {
+                Size = 14f,
+                Weight = 600,
+                Color = st.IsNow ? Tok.AccentTextPrimary : Tok.TextPrimary,
+                Wrap = TextWrap.NoWrap,
+                MaxLines = 1,
+                Trim = TextTrim.CharacterEllipsis,
+                MinWidth = 0f,
+            };
+            return TrackRow.Grid(t, i, st, Cols, Columns, RowContentH, title, showTrackArtist: true, _model.Go,
+                onPlay: () => TrackRow.Invoke(_bridge, t, () => _model.PlayTrack(t.Uri)),
+                onLike: t.Uri.Length > 0 ? () => _lib?.ToggleSaved(t.Uri) : null);
         }
-        model.PlayTrack(t.Uri);
     }
 
     // The skeleton shape the deriver walks (SkeletonProxy at the Embed.Comp site): a few real TrackRow rows with no-op
@@ -347,7 +369,7 @@ sealed class SearchSongs : Component
         var rows = new Element[n];
         for (int i = 0; i < n; i++)
             rows[i] = TrackRow.Row(tracks[i], i, new TrackRow.State(false, false, false, IsTop: false, Saved: false),
-                                   Cols, Columns, 56f, showTrackArtist: true, static (_, _) => { },
+                                   Cols, Columns, RowContentH, showTrackArtist: true, static (_, _) => { },
                                    onPlay: static () => { }, onLike: null);
         return new BoxEl { Direction = 1, Children = rows };
     }

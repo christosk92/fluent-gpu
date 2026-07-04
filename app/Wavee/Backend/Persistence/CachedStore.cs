@@ -37,7 +37,7 @@ public sealed class CachedStore : IStore, IDisposable
         _maxResidentBytes = maxResidentBytes;
         foreach (var e in _cold.LoadAllEntities()) Replay(e);                                  // entities → memory
         foreach (var v in _cold.LoadAllVideoAssociations()) ReplayVideo(v);                     // + the video↔audio map
-        foreach (var s in _cold.LoadAllSaved()) _hot.SetSaved(s.SetId, s.Uri, true, s.Sync);   // + library state
+        foreach (var s in _cold.LoadAllSaved()) _hot.SetSaved(s.SetId, s.Uri, true, s.Sync, s.AddedAtMs);   // + library state
     }
 
     public int ResidentMembershipCount { get { lock (_lruGate) return _resident.Count; } }
@@ -121,9 +121,16 @@ public sealed class CachedStore : IStore, IDisposable
     public byte[]? PlaylistRevision(string playlistUri) => _hot.PlaylistRevision(playlistUri) ?? _cold.GetPlaylistRevision(playlistUri);
     public void SetRootlist(IReadOnlyList<RootlistEntry> entries)
     {
-        _hot.SetRootlist(entries);
+        _hot.SetRootlist(entries);   // preserve the stored revision (header hydration path)
         _cold.ReplaceRootlist(ToColdRoot(entries));
     }
+    public void SetRootlist(IReadOnlyList<RootlistEntry> entries, byte[]? rev)
+    {
+        _hot.SetRootlist(entries, rev);
+        _cold.ReplaceRootlist(ToColdRoot(entries));
+        _cold.SetRootlistRevision(rev);   // dual-write the rev to meta
+    }
+    public byte[]? RootlistRevision() => _hot.RootlistRevision() ?? _cold.GetRootlistRevision();
     public IReadOnlyList<RootlistEntry> Rootlist()
     {
         var r = _hot.Rootlist();
@@ -190,7 +197,16 @@ public sealed class CachedStore : IStore, IDisposable
     public void UpsertShow(Show s) { _hot.UpsertShow(s); _cold.UpsertEntity(s.Uri, EntityKind.Show, JsonSerializer.SerializeToUtf8Bytes(s, EntityJson.Default.Show)); }
     public void UpsertVideoAssociation(VideoAssociation a) { _hot.UpsertVideoAssociation(a); _cold.UpsertVideoAssociation(a.Uri, JsonSerializer.SerializeToUtf8Bytes(a, EntityJson.Default.VideoAssociation)); }
     public void UpsertEpisode(Episode e) { _hot.UpsertEpisode(e); _cold.UpsertEntity(e.Uri, EntityKind.Episode, JsonSerializer.SerializeToUtf8Bytes(e, EntityJson.Default.Episode)); }
-    public void SetSaved(string setId, string uri, bool saved, SyncState sync) { _hot.SetSaved(setId, uri, saved, sync); _cold.UpsertSaved(setId, uri, saved, sync); }
+    // Ask the hot tier whether the write actually changed state (§7.4 no-op elision) and skip the cold dual-write when it
+    // didn't — so an idempotent echo/delta-overlap costs neither a change signal nor a SQLite round-trip. added_at rides
+    // both tiers (0 = preserve-existing, resolved per tier); a pure timestamp refinement still reaches the cold tier.
+    public void SetSaved(string setId, string uri, bool saved, SyncState sync) => SetSaved(setId, uri, saved, sync, 0);
+    public void SetSaved(string setId, string uri, bool saved, SyncState sync, long addedAtMs)
+    {
+        bool changed = _hot.SetSavedCore(setId, uri, saved, sync, addedAtMs);
+        if (changed || (saved && addedAtMs != 0)) _cold.UpsertSaved(setId, uri, saved, sync, addedAtMs);
+    }
+    public IReadOnlyList<SavedItem> SavedItems(string setId) => _hot.SavedItems(setId);
 
     public void Flush() => _cold.Flush();
     public void Dispose() => _cold.Dispose();

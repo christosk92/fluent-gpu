@@ -17,7 +17,9 @@ public static class CollectionWireMapper
     static IReadOnlyList<CollectionItem> Map(RepeatedField<Col.CollectionItem> items)
     {
         var list = new List<CollectionItem>(items.Count);
-        foreach (var it in items) list.Add(new CollectionItem(it.Uri, it.IsRemoved, it.AddedAt));
+        // added_at is int32 UNIX SECONDS on the collection wire (the collection trap — playlist timestamps are int64 ms);
+        // the domain carries ms, so convert here at the one boundary.
+        foreach (var it in items) list.Add(new CollectionItem(it.Uri, it.IsRemoved, it.AddedAt * 1000L));
         return list;
     }
 

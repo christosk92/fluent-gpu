@@ -47,7 +47,9 @@ public static class PlaylistWireMapper
                     list.Add(new PlaylistOp(PlaylistOpKind.Add, FromIndex: add.FromIndex, AddFirst: add.AddFirst, AddLast: add.AddLast, Items: ToMembers(add.Items)));
                     break;
                 case Pl.Op.Types.Kind.Rem when op.Rem is { } rem:
-                    list.Add(new PlaylistOp(PlaylistOpKind.Remove, FromIndex: rem.FromIndex, Length: rem.Length));
+                    list.Add(rem.ItemsAsKey
+                        ? new PlaylistOp(PlaylistOpKind.Remove, Items: ToMembers(rem.Items), ItemsAsKey: true)
+                        : new PlaylistOp(PlaylistOpKind.Remove, FromIndex: rem.FromIndex, Length: rem.Length));
                     break;
                 case Pl.Op.Types.Kind.Mov when op.Mov is { } mov:
                     list.Add(new PlaylistOp(PlaylistOpKind.Move, FromIndex: mov.FromIndex, Length: mov.Length, ToIndex: mov.ToIndex));
@@ -95,21 +97,73 @@ public static class PlaylistWireMapper
         return changes.ToByteArray();
     }
 
-    static Pl.Op ToWireOp(PlaylistOp op) => op.Kind switch
+    // ── §2.5/§2.7 — the rootlist ListChanges body (follow = ADD, unfollow = REM) ──
+    /// <summary>Serialize a rootlist edit into the ListChanges wire body. Extends <see cref="BuildChanges"/> with
+    /// <c>Delta.Info { User, Timestamp }</c>, <c>want_resulting_revisions</c> / <c>want_sync_result</c>, one random nonce,
+    /// and <c>public=true</c> ItemAttributes on ADD items (the rootlist path; the timestamp rides the member's AddedAt).</summary>
+    public static byte[] BuildRootlistChanges(byte[]? baseRev, IReadOnlyList<PlaylistOp> ops, string username, long nowMs)
     {
-        PlaylistOpKind.Add => new Pl.Op { Kind = Pl.Op.Types.Kind.Add, Add = BuildAdd(op) },
-        PlaylistOpKind.Remove => new Pl.Op { Kind = Pl.Op.Types.Kind.Rem, Rem = new Pl.Rem { FromIndex = op.FromIndex, Length = op.Length } },
+        var changes = new Pl.ListChanges { WantResultingRevisions = true, WantSyncResult = true };
+        var delta = new Pl.Delta { Info = new Pl.ChangeInfo { User = username, Timestamp = nowMs } };
+        if (baseRev is not null)
+        {
+            var rev = ByteString.CopyFrom(baseRev);
+            changes.BaseRevision = rev;
+            delta.BaseVersion = rev;
+        }
+        for (int i = 0; i < ops.Count; i++) delta.Ops.Add(ToWireOp(ops[i], rootlistPublic: true));
+        changes.Deltas.Add(delta);
+        changes.Nonces.Add(System.Random.Shared.NextInt64(1, int.MaxValue));   // positive int64 dedup nonce
+        return changes.ToByteArray();
+    }
+
+    /// <summary>The resulting revision of a /changes (or bootstrap) response: the top-level <c>revision</c> when present,
+    /// else the first <c>resulting_revisions</c> entry (§2.5 step 5 / §2.7).</summary>
+    public static byte[]? ResultingRevision(Pl.SelectedListContent slc)
+    {
+        if (slc.HasRevision) return slc.Revision.ToByteArray();
+        if (slc.ResultingRevisions.Count > 0) return slc.ResultingRevisions[0].ToByteArray();
+        return null;
+    }
+
+    static Pl.Op ToWireOp(PlaylistOp op, bool rootlistPublic = false) => op.Kind switch
+    {
+        PlaylistOpKind.Add => new Pl.Op { Kind = Pl.Op.Types.Kind.Add, Add = BuildAdd(op, rootlistPublic) },
+        PlaylistOpKind.Remove => new Pl.Op { Kind = Pl.Op.Types.Kind.Rem, Rem = BuildRem(op) },
         PlaylistOpKind.Move => new Pl.Op { Kind = Pl.Op.Types.Kind.Mov, Mov = new Pl.Mov { FromIndex = op.FromIndex, Length = op.Length, ToIndex = op.ToIndex } },
         PlaylistOpKind.UpdateList => new Pl.Op { Kind = Pl.Op.Types.Kind.UpdateListAttributes },
         _ => new Pl.Op { Kind = Pl.Op.Types.Kind.Unknown },
     };
 
-    static Pl.Add BuildAdd(PlaylistOp op)
+    // Keyed REM (items_as_key, the rootlist-unfollow shape): remove by uri, order-independent — no FromIndex/Length, so the
+    // server resolves the row regardless of local position drift from the optimistic edit. Index REM stays the edit path.
+    static Pl.Rem BuildRem(PlaylistOp op)
+    {
+        if (!op.ItemsAsKey) return new Pl.Rem { FromIndex = op.FromIndex, Length = op.Length };
+        var rem = new Pl.Rem { ItemsAsKey = true };
+        if (op.Items is { } items)
+            for (int i = 0; i < items.Count; i++) rem.Items.Add(new Pl.Item { Uri = items[i].ItemUri });
+        return rem;
+    }
+
+    // ADD items carry ItemAttributes when the member supplies add facts (timestamp/added_by) — the reference sends a
+    // timestamp on playlist-edit ADDs too — and additionally public=true on the rootlist path. A bare uri-only member
+    // (AddedAt==0, AddedBy==null, non-rootlist) still emits a uri-only Item, preserving the plain BuildChanges behavior.
+    static Pl.Add BuildAdd(PlaylistOp op, bool rootlistPublic = false)
     {
         var add = new Pl.Add { FromIndex = op.FromIndex, AddFirst = op.AddFirst, AddLast = op.AddLast };
         if (op.Items is { } items)
             for (int i = 0; i < items.Count; i++)
-                add.Items.Add(new Pl.Item { Uri = items[i].ItemUri });
+            {
+                var m = items[i];
+                var item = new Pl.Item { Uri = m.ItemUri };
+                Pl.ItemAttributes? attrs = null;
+                if (m.AddedAt > 0) (attrs ??= new Pl.ItemAttributes()).Timestamp = m.AddedAt;
+                if (!string.IsNullOrEmpty(m.AddedBy)) (attrs ??= new Pl.ItemAttributes()).AddedBy = m.AddedBy;
+                if (rootlistPublic) (attrs ??= new Pl.ItemAttributes()).Public = true;
+                if (attrs is not null) item.Attributes = attrs;
+                add.Items.Add(item);
+            }
         return add;
     }
 

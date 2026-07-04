@@ -50,6 +50,7 @@ public sealed class VirtualCollection<T>
     private T[]?[] _chunks = Array.Empty<T[]>();   // _chunks[p] == null ⇒ page p not loaded (pages are all-or-nothing)
     private bool[] _requested = Array.Empty<bool>(); // page p loaded OR in-flight ⇒ true (request dedup)
     private int _count = -1;                          // total; -1 until the first page lands
+    private bool _provisional;                        // _count is a seeded estimate a real page may still correct (see Seed/Fill)
 
     public VirtualCollection(Fetch fetch, int pageSize = 50, Action<Action>? post = null, CancellationToken ct = default)
     {
@@ -92,10 +93,14 @@ public sealed class VirtualCollection<T>
     }
 
     /// <summary>Seed an already-known prefix — the artist overview returns the first window + totals, so page 0 (and any
-    /// further already-held items) is free, no refetch. Call once before any <see cref="EnsureRange"/>.</summary>
-    public void Seed(int total, ReadOnlySpan<T> items)
+    /// further already-held items) is free, no refetch. Call once before any <see cref="EnsureRange"/>. When
+    /// <paramref name="provisional"/> is true, <paramref name="total"/> is an ESTIMATE: it renders identically to a real
+    /// count (<see cref="CountOr0"/>/indexer/<see cref="EnsureRange"/> can't tell), but the first real page that reports a
+    /// different total wins — <see cref="Fill"/> re-sizes to the authoritative value. Only takes effect when the total is
+    /// still unknown; a total already learned from a real page is never downgraded to provisional.</summary>
+    public void Seed(int total, ReadOnlySpan<T> items, bool provisional = false)
     {
-        if (_count < 0) SetCount(total);
+        if (_count < 0) { SetCount(total); _provisional = provisional; }
         for (int i = 0; i < items.Length && i < _count; i += _pageSize)
         {
             int p = i / _pageSize;
@@ -158,7 +163,10 @@ public sealed class VirtualCollection<T>
     private void Fill(int page, in PageResult<T> r)
     {
         bool learnedTotal = _count < 0;
+        bool corrected = false;
         if (learnedTotal) SetCount(r.Total);
+        else if (_provisional && r.Total != _count) { SetCount(r.Total); corrected = true; }  // authoritative page corrects the seeded estimate
+        _provisional = false;                                           // a real page has now spoken (whether it agreed or not)
         int cap = (uint)page < (uint)_chunks.Length ? Math.Min(_pageSize, _count - page * _pageSize) : 0;
         if (cap > 0)
         {
@@ -168,20 +176,23 @@ public sealed class VirtualCollection<T>
             _chunks[page] = chunk;
             Bump();
         }
-        // An empty facet (Total 0) stores no chunk but MUST still signal that the total is now known, so a consumer
-        // watching Version can tell "loaded & empty" from "still loading" (and stop re-requesting). Bump once on learn.
-        else if (learnedTotal) Bump();
+        // An empty facet (Total 0) stores no chunk but MUST still signal that the total is now known — or that a
+        // provisional estimate was corrected to a smaller total that leaves this page out of range (e.g. seeded N > 0,
+        // live facet empty) — so a consumer watching Version re-windows instead of showing stale shimmer slots forever.
+        else if (learnedTotal || corrected) Bump();
     }
 
+    // Sizes _chunks/_requested to EXACTLY the page count for the new total. Grow or shrink: surviving pages are preserved,
+    // pages that fall out of range are dropped (so a later grow can't resurrect a stale chunk, and an in-flight result for a
+    // now-out-of-range page is a no-op via the cap==0 guard in Fill). A reused array of the same length is left in place.
     private void SetCount(int total)
     {
         _count = Math.Max(0, total);
         int pages = (_count + _pageSize - 1) / _pageSize;
-        if (_chunks.Length < pages)
-        {
-            var c = new T[pages][]; _chunks.CopyTo(c, 0); _chunks = c;
-            var rq = new bool[pages]; _requested.CopyTo(rq, 0); _requested = rq;
-        }
+        if (pages == _chunks.Length) return;
+        int keep = Math.Min(pages, _chunks.Length);
+        var c = new T[pages][]; Array.Copy(_chunks, c, keep); _chunks = c;
+        var rq = new bool[pages]; Array.Copy(_requested, rq, keep); _requested = rq;
     }
 
     private void EnsureCapacity(int page)

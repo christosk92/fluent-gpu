@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -19,10 +18,6 @@ sealed partial class ArtistPage : Component
     // The discography grid now expands an album INLINE on click (iTunes-style: a full-width track drawer opens after the
     // clicked album's row) via ExpandableAlbumGrid, instead of navigating away. The drawer header still links to the full
     // album page. svc is threaded in so the drawer can lazy-load each album's tracks.
-    Element DiscographyGrid(string title, IReadOnlyList<Album> albums, Services svc, Action<string, string?> go, Action<string> play)
-        => SectionN(title, albums.Count,
-            Embed.Comp(() => new ExpandableAlbumGrid(albums.Take(24).ToList(), svc, go, play)));
-
     Element AppearsOnShelf(IReadOnlyList<Album> albums, Action<string, string?> go, Action<string> play) => new BoxEl
     {
         Direction = 1,

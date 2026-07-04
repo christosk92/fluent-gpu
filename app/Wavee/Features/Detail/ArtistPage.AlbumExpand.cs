@@ -79,7 +79,8 @@ sealed class ExpandableAlbumGrid : Component
         return MediaCard.GridCard(al.Cover, al.Name, subtitle, al.Uri,
             onClick: () => _expanded.Value = _expanded.Peek() == al.Uri ? null : al.Uri,
             onPlay: () => _play(al.Uri),
-            onNavigate: () => _go("album:" + al.Uri, al.Name));
+            onNavigate: () => _go("album:" + al.Uri, al.Name),
+            accent: al.Palette is { } p ? WaveePalette.Lift(WaveePalette.Accent(p)) : null);
     }
 
     int IndexOf(string uri)
@@ -246,13 +247,13 @@ static class AlbumNavAction
 // Builds the paged data source for one (artist, facet): pages of 60; the source reports the facet total from page 0.
 static class DiscoVc
 {
-    public static VirtualCollection<Album> Make(Services svc, string artistUri, DiscographyKind kind, Action<Action> post)
-        => new(async (off, cnt, ct) =>
+    public static VirtualCollection<Album> Make(Services svc, string artistUri, DiscographyKind kind, Action<Action> post, System.Threading.CancellationToken ct)
+        => new(async (off, cnt, c) =>
         {
-            var p = await svc.Library.GetDiscographyAsync(artistUri, kind, off, cnt, ct);
+            var p = await svc.Library.GetDiscographyAsync(artistUri, kind, off, cnt, c);
             var arr = p.Items as Album[] ?? p.Items.ToArray();
             return new PageResult<Album>(p.Total, arr);
-        }, pageSize: 60, post: post);
+        }, pageSize: 60, post: post, ct: ct);
 }
 
 // The reusable, virtualized discography grid over a (host-owned) VirtualCollection<Album>, with iTunes-style inline track
@@ -267,17 +268,21 @@ sealed class AlbumDrawerPanel : Component
     public AlbumDrawerPanel(Services svc, Album thin, float panelH, Action<string> play, Action<string, string?> go, ColorF accent)
     { _svc = svc; _thin = thin; _panelH = panelH; _play = play; _go = go; _accent = accent; }
 
-    static string Dur(long ms) { var t = TimeSpan.FromMilliseconds(ms); return t.Hours > 0 ? $"{t.Hours}:{t.Minutes:D2}:{t.Seconds:D2}" : $"{t.Minutes}:{t.Seconds:D2}"; }
+    static readonly ColumnSet DrawerCols = new(Album: false, By: false, Date: false, Video: false, Plays: false, Heart: true, Thumb: false);
+    static readonly TrackSize[] DrawerColumns =
+        [TrackSize.Px(30f), TrackSize.Px(40f), TrackSize.Star(), TrackSize.Px(52f)];
+    const float DrawerRowContentH = 40f;
 
     public override Element Render()
     {
+        var bridge = UseContext(PlaybackBridge.Slot);
+        var lib = UseContext(LibraryBridge.Slot);
         var full = UseAsyncResource(ct => _svc.Library.GetAlbumAsync(_thin.Uri, ct), (Album?)null, _thin.Uri);
         var tracks = (full.Value.Value?.Tracks ?? _thin.Tracks) ?? System.Array.Empty<Track>();
         bool loading = tracks.Count == 0 && full.State.Value == (byte)LoadState.Pending;
         int n = loading ? Math.Clamp(_thin.TrackCount, 1, 10) : Math.Min(tracks.Count, 10);
 
-        var rows = new Element[n];
-        for (int i = 0; i < n; i++) rows[i] = loading ? ShimmerRow() : Row(i + 1, tracks[i]);
+        Element body = loading ? ShimmerRows(n) : Rows(tracks, n, bridge, lib);
 
         return new BoxEl
         {
@@ -285,7 +290,7 @@ sealed class AlbumDrawerPanel : Component
             Padding = new Edges4(WaveeSpace.L, WaveeSpace.S, WaveeSpace.L, WaveeSpace.S),
             Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-            Children = [ Head(), .. rows ],
+            Children = [ Head(), body ],
         };
     }
 
@@ -303,22 +308,64 @@ sealed class AlbumDrawerPanel : Component
         ],
     };
 
-    Element Row(int num, Track t) => new BoxEl
+    Element Rows(IReadOnlyList<Track> tracks, int n, PlaybackBridge? bridge, LibraryBridge? lib)
+        => ItemsView.CreateBound(
+            n,
+            scope => SelectorVisualsBound.AccentPill(scope, Embed.Comp(() => new DrawerTrackRow(this, scope, tracks, n, bridge, lib))),
+            RepeatLayout.Stack(TrackRow.CompactListItemExtent),
+            selectionMode: ItemsSelectionMode.Single,
+            isItemInvokedEnabled: true,
+            itemInvoked: i =>
+            {
+                if ((uint)i >= (uint)n) return;
+                var t = tracks[i];
+                TrackRow.Invoke(bridge, t, () => _ = _svc.Player.PlayAsync(_thin.Uri, i));
+            },
+            itemText: i => (uint)i < (uint)n ? tracks[i].Title : "",
+            grow: 0f);
+
+    sealed class DrawerTrackRow : Component
     {
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Height = 34f,
-        Padding = new Edges4(WaveeSpace.S, 0f, WaveeSpace.S, 0f), Corners = CornerRadius4.All(6f), HoverFill = Tok.FillSubtleSecondary,
-        OnClick = () => _ = _svc.Player.PlayAsync(_thin.Uri, num - 1),
-        Children =
-        [
-            new TextEl(num.ToString()) { Width = 22f, Size = 12f, Color = Tok.TextTertiary },
-            new TextEl(t.Title) { Grow = 1f, Basis = 0f, Size = 13f, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-            new TextEl(Dur(t.DurationMs)) { Size = 11f, Color = Tok.TextSecondary },
-        ],
-    };
+        readonly AlbumDrawerPanel _o;
+        readonly RowScope _scope;
+        readonly IReadOnlyList<Track> _tracks;
+        readonly int _count;
+        readonly PlaybackBridge? _bridge;
+        readonly LibraryBridge? _lib;
+        public DrawerTrackRow(AlbumDrawerPanel o, RowScope scope, IReadOnlyList<Track> tracks, int count, PlaybackBridge? bridge, LibraryBridge? lib)
+        { _o = o; _scope = scope; _tracks = tracks; _count = count; _bridge = bridge; _lib = lib; }
+
+        public override Element Render()
+        {
+            int i = _scope.Index.Value;
+            if ((uint)i >= (uint)_count) return new BoxEl();
+            var t = _tracks[i];
+            var st = TrackRow.StateOf(_bridge, _lib, t);
+            Element title = new TextEl(t.Title)
+            {
+                Size = 13f,
+                Weight = 600,
+                Color = st.IsNow ? Tok.AccentTextPrimary : Tok.TextPrimary,
+                MaxLines = 1,
+                Trim = TextTrim.CharacterEllipsis,
+                MinWidth = 0f,
+            };
+            return TrackRow.Grid(t, i, st, DrawerCols, DrawerColumns, DrawerRowContentH, title, showTrackArtist: false, _o._go,
+                onPlay: () => TrackRow.Invoke(_bridge, t, () => _ = _o._svc.Player.PlayAsync(_o._thin.Uri, i)),
+                onLike: t.Uri.Length > 0 ? () => _lib?.ToggleSaved(t.Uri) : null);
+        }
+    }
+
+    static Element ShimmerRows(int n)
+    {
+        var rows = new Element[n];
+        for (int i = 0; i < n; i++) rows[i] = ShimmerRow();
+        return new BoxEl { Direction = 1, Children = rows };
+    }
 
     static Element ShimmerRow() => new BoxEl
     {
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Height = 34f, Padding = new Edges4(WaveeSpace.S, 0f, WaveeSpace.S, 0f),
+        Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Height = TrackRow.CompactListItemExtent, Padding = new Edges4(WaveeSpace.S, 0f, WaveeSpace.S, 0f),
         Children =
         [
             new BoxEl { Width = 16f, Height = 11f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary },
@@ -348,6 +395,7 @@ sealed class DiscoGrid : Component
     const float RowGap     = 20f;       // vertical gap between card rows  (rowExtra = CardChrome + RowGap)
     const float TopGap     = 8f;        // expanded card → drawer (hug it)
     const float BottomGap  = 30f;       // drawer → next row (breathing room below it)
+    const float DrawerHeaderH = 56f;
     const float DrawerLift = RowGap - TopGap;              // paint pull-up: the drawer rises into the row slack to hug the card
     const float SlotExtra  = TopGap + BottomGap - RowGap;  // reserved drawer slot beyond the panel → becomes the bottom room
 
@@ -383,7 +431,8 @@ sealed class DiscoGrid : Component
         Element card = MediaCard.GridCard(al.Cover, al.Name, subtitle, al.Uri,
             onClick: () => _expanded.Value = _expanded.Peek() == idx ? -1 : idx,
             onPlay: () => _play(al.Uri),
-            onNavigate: () => _go("album:" + al.Uri, al.Name));
+            onNavigate: () => _go("album:" + al.Uri, al.Name),
+            accent: al.Palette is { } p ? WaveePalette.Lift(WaveePalette.Accent(p)) : null);
         if (card is BoxEl b)
         {
             // Force ONE height (square cover + chrome) so every card is uniform → the drawer's hug spacing is exact.
@@ -415,7 +464,7 @@ sealed class DiscoGrid : Component
         ],
     };
 
-    float PanelHeight(int idx) { int n = Math.Min(_vc?[idx]?.TrackCount ?? 0, 10); return 56f + n * 34f; }
+    float PanelHeight(int idx) { int n = Math.Min(_vc?[idx]?.TrackCount ?? 0, 10); return DrawerHeaderH + n * TrackRow.CompactListItemExtent; }
     // Reserved slot the windowing math accounts for = panel + the bottom breathing room (the panel is pulled UP by
     // DrawerLift to hug the card, so the slack falls BELOW it as BottomGap).
     float DrawerHeight(int idx) => PanelHeight(idx) + SlotExtra;
@@ -472,6 +521,8 @@ sealed class DiscographySection : Component
     readonly ColorF _accent;
     readonly Signal<bool> _collapsed = new(false);
     VirtualCollection<Album>? _vc;
+    System.Threading.CancellationTokenSource? _cts;   // per-instance; cancelled on unmount (feeds the VC + the seed probe)
+    bool _seeded;                                      // one-shot latch: guards the provisional Seed (Seed bumps Version)
 
     const int Cap = DiscographyRoute.PreviewCap;
 
@@ -481,7 +532,16 @@ sealed class DiscographySection : Component
     public override Element Render()
     {
         var post = UsePost();
-        _vc ??= DiscoVc.Make(_svc, _artistUri, _kind, post);
+        _cts ??= new System.Threading.CancellationTokenSource();
+        _vc ??= DiscoVc.Make(_svc, _artistUri, _kind, post, _cts.Token);
+        // Once per mount (a signal-free effect runs exactly once): cancel the CTS on unmount — cancelling the VC's paged
+        // fetches AND the seed probe — and fire the total-only probe so shimmer-up-to-N renders before page 0 lands.
+        // Mirrors the HomePage / LyricsTicker UseSignalEffect + Reactive.OnCleanup lifecycle pattern.
+        UseSignalEffect(() =>
+        {
+            Reactive.OnCleanup(() => { _cts?.Cancel(); _cts?.Dispose(); });
+            SeedProbe(post);
+        });
         _ = _vc.Version.Value;                       // subscribe → header count + "See all N" update as the facet loads
         int total = _vc.CountOr0;
         bool collapsed = _collapsed.Value;
@@ -497,6 +557,30 @@ sealed class DiscographySection : Component
             Direction = 1, Gap = WaveeSpace.M, Padding = new Edges4(0f, 0f, 0f, WaveeSpace.XXL),
             Children = children.ToArray(),
         };
+    }
+
+    // Total-only probe (limit 0 → NO network; resolves same-tick from the cached artist the page header already fetched).
+    // Seeds the VC COUNT ONLY (items = default) as PROVISIONAL so shimmers render instantly; the first real page reconciles
+    // the count. Behind a one-shot latch because Seed bumps Version → an unlatched seed would re-render-loop. A cancelled or
+    // failed probe, or a non-positive total, leaves _seeded clear so a remount retries (existing total>0 gate still governs).
+    async void SeedProbe(Action<Action> post)
+    {
+        var cts = _cts;
+        if (_seeded || cts is null) return;
+        var ct = cts.Token;
+        var vc = _vc;
+        try
+        {
+            var p = await _svc.Library.GetDiscographyAsync(_artistUri, _kind, 0, 0, ct).ConfigureAwait(false);
+            int total = p.Total;
+            post(() =>
+            {
+                if (_seeded || ct.IsCancellationRequested || total <= 0 || vc is null) return;
+                _seeded = true;
+                vc.Seed(total, default, provisional: true);
+            });
+        }
+        catch { /* OCE (nav away) or a failed probe → _seeded stays clear so a remount retries */ }
     }
 
     Element Header(int total, bool collapsed) => new BoxEl

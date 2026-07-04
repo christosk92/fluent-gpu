@@ -7,7 +7,7 @@ namespace Wavee.SpotifyLive;
 // Shared live spclient bring-up: login (AP) -> client-token (attestation) -> login5 (spclient access token) -> resolve an
 // spclient host -> the middleware HttpPipeline (bearer + client-token + 429-backoff) + a SessionContext. The metadata and
 // library probes build on this. Needs creds + network — the USER runs the probes; only the wire shape is unverifiable here.
-public sealed record LiveSpclient(HttpPipeline Pipeline, string BaseUrl, SessionContext Session, string Username, string AccessToken, string DeviceId, Credential ReusableCredential, Func<CancellationToken, Task<string>> TokenProvider, string? ClientToken = null, ApConnection? ApChannel = null, Wavee.Backend.Persistence.ICredentialStore? CredStore = null);
+public sealed record LiveSpclient(HttpPipeline Pipeline, string BaseUrl, SessionContext Session, string Username, string AccessToken, string DeviceId, Credential ReusableCredential, Func<CancellationToken, Task<string>> TokenProvider, string? ClientToken = null, ApConnection? ApChannel = null, Wavee.Backend.Persistence.ICredentialStore? CredStore = null, Func<CancellationToken, Task<string>>? ForceTokenProvider = null);
 
 public static class SpotifyLiveSpclient
 {
@@ -76,6 +76,7 @@ public static class SpotifyLiveSpclient
         var session = new SessionContext(welcome.Username, welcome.Country ?? "US",
             tier == Tier.Premium ? "premium" : "free", "en", tier, false);
         var reusable = new Credential(CredentialKind.ReusableBlob, welcome.Username, System.Convert.ToBase64String(welcome.ReusableCredentials));
-        return new LiveSpclient(pipeline, baseUrl, session, welcome.Username, accessToken, deviceId, reusable, c => Provider(false, c), clientToken, login.Channel, login.CredStore);
+        return new LiveSpclient(pipeline, baseUrl, session, welcome.Username, accessToken, deviceId, reusable, c => Provider(false, c), clientToken, login.Channel, login.CredStore,
+            ForceTokenProvider: c => Provider(true, c));   // G6 — the dealer force-mints after a failed wss handshake
     }
 }

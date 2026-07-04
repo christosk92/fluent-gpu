@@ -412,16 +412,19 @@ passes; a HIT is a single region composite. The pin lives in `OpacityLayerCompos
 `threading-render-seam.md`) and is keyed by a **position-INDEPENDENT content key** computed by the portable
 `FluentGpu.Render.BlurPinKey.TryCompute` (so the headless VerticalSlice can gate it).
 
-- **Key** = FNV-1a over `{ σ, round(DeviceRect.W), round(DeviceRect.H) }` (the absolute `DeviceRect.X/Y` is **excluded**)
-  **+** the subtree's op bytes with each op's `Transform.Dx/Dy` (and each `ClipCmd` rect origin) **rebased to the layer
-  origin and rounded to the integer grid** — `Dx → round(Dx − DeviceRect.X)`, `Dy → round(Dy − DeviceRect.Y)`. Scale/
-  rotation (`M11..M22`) and every content field (glyph text/color, the karaoke wipe `Split`, image id, …) fold
-  **verbatim**. Rebasing is exact-under-translation because op `Rect`/`Bounds` are node-local (origin 0,0 — the
+- **Key** = FNV-1a over `{ round(σ/0.5), round(DeviceRect.W), round(DeviceRect.H) }` (the absolute `DeviceRect.X/Y` is
+  **excluded**) **+** the subtree's op bytes with each op's `Transform.Dx/Dy` (and each `ClipCmd` rect origin) **rebased
+  to the layer origin and rounded to the integer grid** — `Dx → round(Dx − DeviceRect.X)`, `Dy → round(Dy − DeviceRect.Y)`.
+  Scale/rotation (`M11..M22`) fold bucketed at 1 % in the key; glyph text/color, the karaoke wipe `Split`, image id, …
+  fold **verbatim**. Rebasing is exact-under-translation because op `Rect`/`Bounds` are node-local (origin 0,0 — the
   recorder emits `local` + a `world` transform) and all absolute position lives in `Transform.Dx/Dy`; the rounding is in
   the recorder's DIP space and gates hit/miss granularity only (the compositor always places a HIT from the CURRENT
   layer's `RegionBox`, so placement follows the true sub-pixel position — the key never yields a stale composite). A
   **nested `PushLayer`** or any **unknown op** ⇒ `TryCompute` returns false ⇒ uncacheable ⇒ render normally (never a
   stale pin). This replaced the old absolute-`DeviceRect` hash, which missed on every scroll.
+- **Key bucketing rationale.** Bucketed σ/scale in the identity stabilizes the key across consecutive animation frames
+  (lyrics DoF springs) so a pin mints once per bucket instead of every frame, without applied-radius stepping. Applied
+  σ/scale on a MISS stay exact; settle re-mint is pixel-exact at rest. Static σ/scale blurs round to a stable bucket.
 - **Invalidation contract.** A **HIT** (reuse the pin; no subtree render, no Gaussian) requires identical content bytes
   **and** identical `round(device W/H)` **and** identical σ **and** identical rebased-rounded per-op positions — this
   **includes** a pure scroll/translation and an opacity animation (opacity is applied at composite as `GroupAlpha`, not

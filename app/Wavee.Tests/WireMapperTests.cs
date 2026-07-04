@@ -88,7 +88,7 @@ public class CollectionWireMapperTests
         Assert.Equal("tok-9", delta.NewRevision);
         Assert.Equal(2, delta.Items.Count);
         Assert.False(delta.Items[0].Removed);
-        Assert.Equal(100L, delta.Items[0].AddedAt);
+        Assert.Equal(100_000L, delta.Items[0].AddedAt);   // wire added_at is int32 SECONDS; the domain carries ms
         Assert.True(delta.Items[1].Removed);
     }
 

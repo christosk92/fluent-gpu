@@ -154,6 +154,20 @@ sealed class MarqueeProbeRoot : Component
     };
 }
 
+// M3 gate: ping-pong marquee with no start delay so mid-scroll edge-fade is reachable quickly.
+sealed class MarqueePingPongProbe : Component
+{
+    public override Element Render() => new BoxEl
+    {
+        Width = 150f, Height = 40f, Direction = 1, AlignItems = FluentGpu.Foundation.FlexAlign.Stretch,
+        Children =
+        [
+            Marquee.Of("This is a very long track title that should overflow and scroll",
+                new Marquee.Style { FontSize = 14f, StartDelayMs = 0f, Speed = 200f, Mode = Marquee.ScrollMode.PingPong, Trigger = Marquee.TriggerMode.Always }),
+        ],
+    };
+}
+
 // The M2 gate's root: mirrors the PlayerBar's now-playing meta column — a grow/shrink, clip-to-bounds column whose
 // marquee title is bound to a REACTIVE Signal<string> (the real app uses Prop.Of(() => NowPlaying(b).Title), empty until
 // a track loads). Lets the gate grow the title AFTER mount and assert the marquee then scrolls (the title-after-mount bug).
@@ -223,6 +237,42 @@ sealed class ScrollProbe : Component
             Content = new BoxEl { Direction = 1, Children = items },
         };
     }
+}
+
+// A vertical scroller of CLICKABLE rows (OnClick ⇒ ClickBit ⇒ handler-gated HitTest returns the row + it carries
+// NodeFlags.Hovered): a wheel-scroll under a STATIONARY pointer must move Hovered from the old row to the new row that
+// slid under the cursor (gate.scroll.hover-follows-content). 20 × 40px rows in a 200px viewport (matches ScrollProbe).
+sealed class ScrollHoverProbe : Component
+{
+    public override Element Render()
+    {
+        var rows = new Element[20];
+        for (int i = 0; i < rows.Length; i++)
+            rows[i] = new BoxEl { Width = 180, Height = 40, Fill = ColorF.FromRgba(40, 40, 40), OnClick = static () => { } };
+        return new ScrollEl
+        {
+            Width = 200, Height = 200, Fill = ColorF.FromRgba(20, 20, 20),
+            Content = new BoxEl { Direction = 1, Children = rows },
+        };
+    }
+}
+
+// The RECYCLED-SLOT variant of gate.scroll.hover-follows-content: a BOUND virtual list (Virtual.ListBound) recycles slot
+// HANDLES — a one-row boundary-crossing scroll keeps the SAME child handle under a fixed screen point but rebinds it to
+// the next item, and the reconciler's rebind Unmark clears that handle's Hovered flag. Because the handle is unchanged,
+// SetState early-outs and (pre-fix) leaves it un-hovered — the exact case the non-virtual ScrollHoverProbe cannot
+// reproduce (there HitTest returns a genuinely different handle). Rows carry OnClick ⇒ ClickBit so handler-gated HitTest
+// resolves the row and it carries NodeFlags.Hovered. 1000 × 40px rows in a 200px viewport.
+sealed class ScrollHoverVirtualProbe : Component
+{
+    public override Element Render()
+        => Virtual.ListBound(1000, 40f, idx => new BoxEl
+           {
+               Width = 180, Height = 40,
+               Fill = Prop.Of(() => ColorF.FromRgba(40, 40, (byte)(idx.Value % 2 == 0 ? 40 : 60))),
+               OnClick = static () => { },
+           })
+           with { Width = 200, Height = 200, Fill = ColorF.FromRgba(20, 20, 20) };
 }
 
 // [Validatable] sample (form-validation.md): the ValidatorGenerator emits SignupRules.Validators.{Email,Password,Age}.
@@ -393,6 +443,56 @@ sealed class BoundItemsViewProbe : Component
                 }, RepeatLayout.Stack(RowH), selectionMode: ItemsSelectionMode.Multiple, selection: Selection),
             ],
         };
+}
+
+// Detail-resize-flicker Fix-1 gate: a tier-keyed remount with cold stagger OFF realizes the full viewport window in
+// ONE frame (mirrors TrackList's !_listRealizedOnce stagger gate after the first Ready mount).
+sealed class ColdStaggerRemountProbe : Component
+{
+    public readonly Signal<int> Tier = new(0);
+    public int TemplateCalls;
+    bool _listRealizedOnce;
+
+    public override Element Render()
+    {
+        int tier = Tier.Value;
+        bool staggerCold = !_listRealizedOnce;
+        _listRealizedOnce = true;
+        return new BoxEl
+        {
+            Width = 400, Height = 320, Direction = 1,
+            Children =
+            [
+                new BoxEl
+                {
+                    Key = "tier:" + tier, Grow = 1f,
+                    Children =
+                    [
+                        ItemsView.CreateBound(80, scope =>
+                        {
+                            TemplateCalls++;
+                            return new BoxEl { MinHeight = 40f, Children = [new TextEl("row") { Size = 13f }] };
+                        }, RepeatLayout.Stack(40f), staggerColdRealize: staggerCold),
+                    ],
+                },
+            ],
+        };
+    }
+}
+
+// Detail-resize-flicker Fix-2 gate: a warming staggered list must keep refilling during modal-loop keep-alive paints
+// even when ambient loop animation is the only other wake reason.
+sealed class ModalWarmProbe : Component
+{
+    public override Element Render() => new BoxEl
+    {
+        Width = 400, Height = 320,
+        Children =
+        [
+            ItemsView.CreateBound(200, _ => new BoxEl { MinHeight = 40f, Fill = ColorF.FromRgba(30, 30, 30) },
+                RepeatLayout.Stack(40f), staggerColdRealize: true),
+        ],
+    };
 }
 
 // Reproduces the Wavee bound-row SHAPE exactly: a ZStack skin (OnPointerPressed = the row tap) whose content is a
@@ -920,6 +1020,23 @@ sealed class ImageProbe : Component
     {
         Width = 120, Height = 120, Padding = Edges4.All(10),
         Children = [Ui.Image("album/1.jpg", 80, 80, 6f)],
+    };
+}
+
+// Two image nodes initially share one cache handle. Rebinding the second image must unpin its owner without canceling
+// the still-visible first image's decode.
+sealed class SharedImageSwapProbe : Component
+{
+    public readonly Signal<string> SecondSource = new("album/shared");
+
+    public override Element Render() => new BoxEl
+    {
+        Direction = 0, Gap = 8f,
+        Children =
+        [
+            Ui.Image("album/shared", 40, 40),
+            new ImageEl { Source = Prop.Of(() => SecondSource.Value), Width = 40, Height = 40 },
+        ],
     };
 }
 
@@ -4882,6 +4999,103 @@ static class Slice
         Check("26. hover/pressed states track the pointer", hov && prs && released && unhov, "enter→hover, down→pressed, up→release, leave→unhover");
     }
 
+    // gate.scroll.hover-follows-content (input-a11y.md §5.4/§15 "stuck hover"): wheel-scrolling a list under a STATIONARY
+    // mouse cursor re-resolves hover — the row that slides under the point becomes Hovered and the row that left it is
+    // cleared — WITHOUT a PointerMove, and the synthesized re-eval frame allocates 0 managed bytes (phases 6–13).
+    static void ScrollHoverChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("scroll-hover", new Size2(320, 320), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new ScrollHoverProbe());
+        host.RunFrame();   // mount + layout (SmoothScroll defaults false ⇒ a wheel writes the offset synchronously)
+
+        var vp = host.Scene.AbsoluteRect(host.Scene.Root);
+        var pt = new Point2(vp.X + 60f, vp.Y + 20f);   // fixed point over ROW 0 (top 40px), inside the 180px-wide row
+
+        // Warm the hover + scroll + re-eval path (JIT + seed both rows' hover anim-slab channels) OUTSIDE the measured
+        // frame, so the zero-alloc assertion measures steady state (mirrors gate.scroll.alloc-zero's warm pass).
+        window.QueueInput(new InputEvent(InputKind.PointerMove, pt, 0, 0)); host.RunFrame();
+        for (int w = 0; w < 2; w++)
+        {
+            window.QueueInput(new InputEvent(InputKind.Wheel, pt, 0, 0, 40f)); host.RunFrame();    // row 0 → row 1
+            window.QueueInput(new InputEvent(InputKind.Wheel, pt, 0, 0, -40f)); host.RunFrame();   // row 1 → row 0
+        }
+        for (int i = 0; i < 8; i++) host.RunFrame();   // settle bars/anim back to rest
+
+        // Establish hover on ROW 0 at the fixed point.
+        window.QueueInput(new InputEvent(InputKind.PointerMove, pt, 0, 0)); host.RunFrame();
+        var a = host.Input.HitTest(pt);
+        bool hovA = !a.IsNull && (host.Scene.Flags(a) & NodeFlags.Hovered) != 0;
+
+        // MEASURED: wheel one row DOWN with the pointer NOT moving. Offset 0→40 ⇒ row 1 slides under the fixed point.
+        window.QueueInput(new InputEvent(InputKind.Wheel, pt, 0, 0, 40f));
+        var f = host.RunFrame();
+        var b = host.Input.HitTest(pt);
+        bool contentMoved = !b.IsNull && b != a;                                        // a DIFFERENT node is under the point
+        bool hovB = !b.IsNull && (host.Scene.Flags(b) & NodeFlags.Hovered) != 0;         // the NEW node is Hovered
+        bool oldCleared = a.IsNull || (host.Scene.Flags(a) & NodeFlags.Hovered) == 0;    // the OLD node is NOT Hovered
+        bool zero = f.HotPhaseAllocBytes == 0;                                           // the synthesized re-eval is 0-alloc
+
+        Check("gate.scroll.hover-follows-content a wheel-scroll under a stationary cursor moves NodeFlags.Hovered to the row that slid under the point (old row cleared), with no PointerMove and 0 managed alloc on the re-eval frame",
+            hovA && contentMoved && hovB && oldCleared && zero,
+            $"a={(a.IsNull ? "null" : a.Raw.Index.ToString())} b={(b.IsNull ? "null" : b.Raw.Index.ToString())} hovA={hovA} moved={contentMoved} hovB={hovB} oldCleared={oldCleared} alloc={f.HotPhaseAllocBytes}B");
+
+        ScrollHoverVirtualCheck(strings);
+    }
+
+    // gate.scroll.hover-follows-content.recycled-slot: the VIRTUAL-LIST variant. A boundary-crossing scroll in a bound
+    // recycler (Virtual.ListBound) keeps the SAME slot HANDLE under a fixed screen point but rebinds it to the next item;
+    // the reconciler's rebind Unmark clears that handle's Hovered flag while _hovered still points at it. Since the handle
+    // is unchanged, SetState early-outs — so RefreshHoverAfterScroll must re-assert the bit, else the recycled row shows no
+    // hover tint until the next real PointerMove. (Unlike the non-virtual gate above, HitTest returns the SAME handle here,
+    // which is exactly why that gate cannot reproduce this case. No alloc assertion: a boundary-crossing rebind legitimately
+    // allocates — the zero-alloc guarantee of the refresh path itself is already covered by the non-virtual gate above.)
+    static void ScrollHoverVirtualCheck(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("scroll-hover-virt", new Size2(320, 320), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new ScrollHoverVirtualProbe());
+        host.RunFrame();   // mount + layout (SmoothScroll defaults false ⇒ a wheel writes the offset synchronously)
+
+        var vp = host.Scene.Root;
+        var pt = new Point2(60f, 20f);   // fixed point 20px down (top row of the 200px viewport), inside the 180px-wide row
+
+        // Scroll PAST the overscan buffer so FirstRealized is off zero — then the ordinal under a fixed screen point is
+        // pinned at `overscan` (first = floor(offset/extent) − overscan, so index_under_point − first == overscan for any
+        // offset), i.e. the SAME child HANDLE stays under the point across every re-realize. Warm the rebind + re-eval path.
+        for (int i = 0; i < 12; i++) { window.QueueInput(new InputEvent(InputKind.Wheel, pt, 0, 0, 40f)); host.RunFrame(); }
+        for (int i = 0; i < 8; i++) host.RunFrame();   // settle bars/anim back to rest
+
+        // Establish hover on the row currently under the fixed point.
+        window.QueueInput(new InputEvent(InputKind.PointerMove, pt, 0, 0)); host.RunFrame();
+        var a = host.Input.HitTest(pt);
+        bool hovA = !a.IsNull && (host.Scene.Flags(a) & NodeFlags.Hovered) != 0;
+        host.Scene.TryGetScroll(vp, out var scA);
+        int firstA = scA.FirstRealized;
+
+        // MEASURED: scroll DOWN several rows with the pointer NOT moving — enough to force a re-realize (NeedsRealize fires
+        // in ~guard-sized jumps, not 1:1). FirstRealized advances ⇒ the slot at ordinal `overscan` (the SAME handle) is
+        // rebound to a new item and the reconciler's Unmark clears its Hovered flag. RefreshHoverAfterScroll must re-assert
+        // it: the handle is unchanged, so SetState early-outs and (pre-fix) leaves the row un-hovered.
+        window.QueueInput(new InputEvent(InputKind.Wheel, pt, 0, 0, 200f));
+        host.RunFrame();
+        var b = host.Input.HitTest(pt);
+        host.Scene.TryGetScroll(vp, out var scB);
+        bool reRealized = scB.FirstRealized > firstA;                                   // the realize window shifted (rebind ran)
+        bool sameHandle = !b.IsNull && b == a;                                          // the SAME slot handle stayed under the point
+        bool hovB = !b.IsNull && (host.Scene.Flags(b) & NodeFlags.Hovered) != 0;         // the recycled slot is (re-)Hovered
+
+        Check("gate.scroll.hover-follows-content.recycled-slot a boundary-crossing virtual scroll re-asserts NodeFlags.Hovered on the recycled slot handle that stays under a stationary cursor (the reconciler's rebind Unmark would otherwise leave it un-hovered)",
+            hovA && reRealized && sameHandle && hovB,
+            $"a={(a.IsNull ? "null" : a.Raw.Index.ToString())} b={(b.IsNull ? "null" : b.Raw.Index.ToString())} firstA={firstA} firstB={scB.FirstRealized} hovA={hovA} reRealized={reRealized} sameHandle={sameHandle} hovB={hovB}");
+    }
+
     // Controls are barebone + a default Fluent style on top, overrideable per-instance (ButtonStyle) or via modifiers.
     static void StyleChecks()
     {
@@ -5393,6 +5607,68 @@ static class Slice
             if (!r.IsNull) return r;
         }
         return NodeHandle.Null;
+    }
+
+    static int BoundSlotCount(SceneStore scene, NodeHandle root)
+    {
+        var vp = FindScrollNode(scene, root);
+        if (vp.IsNull || !scene.TryGetScroll(vp, out var sc)) return 0;
+        int n = 0;
+        for (var c = scene.FirstChild(sc.ContentNode); !c.IsNull; c = scene.NextSibling(c)) n++;
+        return n;
+    }
+
+    // Detail-shell resize flicker — engine + app contract gates (detail-resize-flicker-fix-proposal.md §Fix 3).
+    static void DetailResizeFlickerChecks(StringTable strings)
+    {
+        // Fix 1 — tier remount without cold stagger fills the viewport window in the remount frame.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("tier-remount", new Size2(400, 320), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var probe = new ColdStaggerRemountProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, probe);
+
+            host.RunFrame();
+            for (int i = 0; i < 24 && host.Reconciler.HasWarmingVirtuals; i++) host.RunFrame();
+            int staggered = BoundSlotCount(host.Scene, host.Scene.Root);
+            bool wasWarming = host.Reconciler.HasWarmingVirtuals;
+            probe.Tier.Value = 1;   // keyed remount — staggerColdRealize:false (list already realized once)
+            host.RunFrame();
+            var vp = FindScrollNode(host.Scene, host.Scene.Root);
+            host.Scene.TryGetScroll(vp, out var sc);
+            int remountSlots = BoundSlotCount(host.Scene, host.Scene.Root);
+            int windowRows = sc.LastRealized - sc.FirstRealized;
+            Check("RZ-TIER. tier remount without cold stagger realizes the full viewport window in one frame",
+                !wasWarming && staggered <= 8 && remountSlots >= windowRows && remountSlots >= 8,
+                $"staggered={staggered} remount={remountSlots} window={windowRows} first={sc.FirstRealized} last={sc.LastRealized}");
+        }
+
+        // Fix 2 — modal-loop keep-alive must not swallow warming virtual refill when ambient animation is live.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("modal-warm", new Size2(400, 320), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var probe = new ModalWarmProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, probe);
+
+            host.RunFrame();
+            bool warming = host.Reconciler.HasWarmingVirtuals;
+            int slots0 = BoundSlotCount(host.Scene, host.Scene.Root);
+            host.Animation.Keyframes(host.Scene.Root, AnimChannel.Opacity,
+                [new Keyframe(0f, 0.5f, Easing.Linear), new Keyframe(1f, 1f, Easing.Linear)], 1000f, loop: true);
+            bool ambient = host.CurrentWakeReasons.HasFlag(WakeReasons.Anim);
+            window.InModalLoop = true;
+            host.Paint(0, keepAlive: true);
+            int slots1 = BoundSlotCount(host.Scene, host.Scene.Root);
+            Check("RZ-MODAL. modal-loop keep-alive refills a warming virtual list under ambient-only animation wake",
+                warming && ambient && slots0 <= 4 && slots1 > slots0,
+                $"warming={warming} ambient={ambient} slots {slots0}→{slots1} wake={host.CurrentWakeReasons}");
+        }
     }
 
     // ItemsView BOUND row path (CreateBound): selection / now-playing re-skin the persistent slots IN PLACE via binds —
@@ -9852,6 +10128,261 @@ static class Slice
 
         Check("46g. Residency: evicts unpinned LRU + frees its GPU texture; never evicts pinned", freed && pinnedSafe,
             $"evicted={evicted.Count} pinnedEvicted={evicted2.Count}");
+    }
+
+    // Decoder that fails the first completion with Timeout, then succeeds — exercises transient-failure retry.
+    sealed class TimeoutThenOkDecoder : IImageDecoder
+    {
+        readonly Dictionary<int, int> _attempts = new();
+        readonly Queue<(int id, int w, int h)> _pending = new();
+        byte[] _scratch = Array.Empty<byte>();
+
+        public bool Begin(int id, string source, int targetW, int targetH, ImagePriority priority = ImagePriority.Visible)
+        {
+            _pending.Enqueue((id, targetW <= 0 ? 1 : targetW, targetH <= 0 ? 1 : targetH));
+            return true;
+        }
+
+        public void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels)
+        {
+            while (_pending.Count > 0)
+            {
+                var (id, w, h) = _pending.Dequeue();
+                int n = _attempts.TryGetValue(id, out var a) ? a + 1 : 1;
+                _attempts[id] = n;
+                if (n == 1) { onComplete(id, false, 0, 0, ImageFailureKind.Timeout, 1); continue; }
+                int bytes = w * h * 4;
+                if (_scratch.Length < bytes) _scratch = new byte[bytes];
+                _scratch.AsSpan(0, bytes).Fill(0xFF);
+                onPixels(id, _scratch.AsSpan(0, bytes), w, h);
+                onComplete(id, true, w, h, ImageFailureKind.None, n);
+            }
+        }
+    }
+
+    // Decoder that reports Canceled when Cancel(id) was called before Pump drains the job.
+    sealed class CancelAwareDecoder : IImageDecoder
+    {
+        readonly Queue<(int id, int w, int h)> _pending = new();
+        readonly HashSet<int> _canceled = new();
+        byte[] _scratch = Array.Empty<byte>();
+
+        public bool Begin(int id, string source, int targetW, int targetH, ImagePriority priority = ImagePriority.Visible)
+        {
+            _canceled.Remove(id);
+            _pending.Enqueue((id, targetW <= 0 ? 1 : targetW, targetH <= 0 ? 1 : targetH));
+            return true;
+        }
+
+        public void Cancel(int id) => _canceled.Add(id);
+
+        public void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels)
+        {
+            while (_pending.Count > 0)
+            {
+                var (id, w, h) = _pending.Dequeue();
+                if (_canceled.Remove(id)) { onComplete(id, false, 0, 0, ImageFailureKind.Canceled, 1); continue; }
+                int bytes = w * h * 4;
+                if (_scratch.Length < bytes) _scratch = new byte[bytes];
+                _scratch.AsSpan(0, bytes).Fill(0xFF);
+                onPixels(id, _scratch.AsSpan(0, bytes), w, h);
+                onComplete(id, true, w, h, ImageFailureKind.None, 1);
+            }
+        }
+    }
+
+    // Decoder that withholds completion until Arm() — lets us observe Pending→Ready across two frames.
+    sealed class GatedDecoder : IImageDecoder
+    {
+        readonly Queue<(int id, int w, int h)> _pending = new();
+        byte[] _scratch = Array.Empty<byte>();
+        bool _armed;
+
+        public void Arm() => _armed = true;
+
+        public bool Begin(int id, string source, int targetW, int targetH, ImagePriority priority = ImagePriority.Visible)
+        {
+            _pending.Enqueue((id, targetW <= 0 ? 1 : targetW, targetH <= 0 ? 1 : targetH));
+            return true;
+        }
+
+        public void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels)
+        {
+            if (!_armed) return;
+            while (_pending.Count > 0)
+            {
+                var (id, w, h) = _pending.Dequeue();
+                int bytes = w * h * 4;
+                if (_scratch.Length < bytes) _scratch = new byte[bytes];
+                _scratch.AsSpan(0, bytes).Fill(0xFF);
+                onPixels(id, _scratch.AsSpan(0, bytes), w, h);
+                onComplete(id, true, w, h, ImageFailureKind.None, 1);
+            }
+        }
+    }
+
+    sealed class GatedCancelAwareDecoder : IImageDecoder
+    {
+        readonly Queue<(int id, int w, int h)> _pending = new();
+        readonly HashSet<int> _canceled = new();
+        readonly Dictionary<int, int> _cancelCounts = new();
+        byte[] _scratch = Array.Empty<byte>();
+        bool _armed;
+
+        public void Arm() => _armed = true;
+        public int CancelCount(int id) => _cancelCounts.TryGetValue(id, out int n) ? n : 0;
+
+        public bool Begin(int id, string source, int targetW, int targetH, ImagePriority priority = ImagePriority.Visible)
+        {
+            _canceled.Remove(id);
+            _pending.Enqueue((id, targetW <= 0 ? 1 : targetW, targetH <= 0 ? 1 : targetH));
+            return true;
+        }
+
+        public void Cancel(int id)
+        {
+            _canceled.Add(id);
+            _cancelCounts[id] = CancelCount(id) + 1;
+        }
+
+        public void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels)
+        {
+            if (!_armed) return;
+            while (_pending.Count > 0)
+            {
+                var (id, w, h) = _pending.Dequeue();
+                if (_canceled.Remove(id)) { onComplete(id, false, 0, 0, ImageFailureKind.Canceled, 1); continue; }
+                int bytes = w * h * 4;
+                if (_scratch.Length < bytes) _scratch = new byte[bytes];
+                _scratch.AsSpan(0, bytes).Fill(0xFF);
+                onPixels(id, _scratch.AsSpan(0, bytes), w, h);
+                onComplete(id, true, w, h, ImageFailureKind.None, 1);
+            }
+        }
+    }
+
+    static void ImageLifecycleChecks(StringTable strings)
+    {
+        var retryDec = new TimeoutThenOkDecoder();
+        var retryCache = new ImageCache(retryDec);
+        var rh = retryCache.Request("retry-me", 64, 64, ImagePriority.Prefetch);
+        retryCache.Pump();
+        bool timedOut = retryCache.StateOf(rh) == ImageState.Failed
+            && retryCache.FailureOf(rh) == ImageFailureKind.Timeout;
+        retryCache.Tick(3000);
+        retryCache.Pin(rh);
+        bool restarted = retryCache.StateOf(rh) == ImageState.Pending;
+        retryCache.Pump();
+        bool retryReady = retryCache.StateOf(rh) == ImageState.Ready;
+        Check("46i. image.retry.visible: transient Timeout retries after backoff when pinned",
+            timedOut && restarted && retryReady,
+            $"state={retryCache.StateOf(rh)} fail={retryCache.FailureOf(rh)}");
+
+        var cancelDec = new CancelAwareDecoder();
+        var cancelCache = new ImageCache(cancelDec);
+        var ch = cancelCache.Request("cancel-me", 64, 64);
+        cancelCache.Cancel(ch);
+        cancelCache.Pump();
+        bool canceled = cancelCache.StateOf(ch) == ImageState.Failed
+            && cancelCache.FailureOf(ch) == ImageFailureKind.Canceled;
+        cancelCache.Tick(3000);
+        var ch2 = cancelCache.Request("cancel-me", 64, 64, ImagePriority.Visible);
+        bool sameHandle = ch2 == ch && cancelCache.StateOf(ch2) == ImageState.Pending;
+        cancelCache.Pump();
+        bool cancelReady = cancelCache.StateOf(ch2) == ImageState.Ready;
+        Check("46j. image.cancel.recycle: canceled decode restarts and completes",
+            canceled && sameHandle && cancelReady,
+            $"state={cancelCache.StateOf(ch2)} fail={cancelCache.FailureOf(ch2)}");
+
+        var gated = new GatedDecoder();
+        var gatedCache = new ImageCache(gated);
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("imgdirty", new Size2(200, 200), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new ImageProbe(), gatedCache);
+        host.RunFrame();
+        bool pendingDraw = device.LastImages.Count == 1 && device.LastImages[0].Ready == 0;
+        gated.Arm();
+        host.RunFrame();
+        bool readyDraw = device.LastImages.Count == 1 && device.LastImages[0].Ready == 1
+            && gatedCache.StateOf(new ImageHandle(device.LastImages[0].ImageId)) == ImageState.Ready;
+        Check("46k. image.status.marks-dirty: Pending→Ready repaints with ready=true",
+            pendingDraw && readyDraw,
+            $"frame1Ready={!pendingDraw} frame2Ready={device.LastImages.Count > 0 && device.LastImages[0].Ready == 1}");
+
+        var entered = new System.Threading.ManualResetEventSlim(false);
+        var release = new System.Threading.ManualResetEventSlim(false);
+        int decodeCalls = 0;
+        var blockingCodec = new TestCodec(() =>
+        {
+            if (System.Threading.Interlocked.Increment(ref decodeCalls) == 1)
+            {
+                entered.Set();
+                release.Wait();
+            }
+        });
+        bool queuedRestarted, queuedReady;
+        using (var sched = new DecodeScheduler(blockingCodec, new TestFetcher(), new DecodeOptions { MaxConcurrency = 1 }))
+        {
+            var queuedCache = new ImageCache(sched);
+            queuedCache.Request("blocker", 8, 8);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            while (!entered.IsSet && sw.ElapsedMilliseconds < 5000) System.Threading.Thread.Sleep(2);
+
+            var victim = queuedCache.Request("queued-victim", 8, 8);
+            queuedCache.Cancel(victim);
+            var visibleVictim = queuedCache.Request("queued-victim", 8, 8, ImagePriority.Visible);
+            queuedCache.Pin(visibleVictim);
+            queuedCache.Pump();
+            queuedRestarted = visibleVictim == victim
+                && queuedCache.StateOf(victim) == ImageState.Pending
+                && queuedCache.RefsOf(victim) == 1;
+
+            release.Set();
+            sw.Restart();
+            while (queuedCache.StateOf(victim) != ImageState.Ready && sw.ElapsedMilliseconds < 5000)
+            {
+                queuedCache.Pump();
+                System.Threading.Thread.Sleep(2);
+            }
+            queuedReady = queuedCache.StateOf(victim) == ImageState.Ready;
+        }
+        entered.Dispose(); release.Dispose();
+        Check("46l. image.cancel.queued: queued scheduler cancel does not leave a visible handle forever-pending",
+            queuedRestarted && queuedReady,
+            $"restarted={queuedRestarted} ready={queuedReady}");
+
+        var sharedDec = new GatedCancelAwareDecoder();
+        var sharedCache = new ImageCache(sharedDec);
+        using var sharedApp = new HeadlessPlatformApp();
+        var sharedWindow = new HeadlessWindow(new WindowDesc("shared-img", new Size2(200, 120), 1f));
+        sharedWindow.Show();
+        var sharedDevice = new HeadlessGpuDevice();
+        var sharedFonts = new HeadlessFontSystem(strings);
+        var sharedProbe = new SharedImageSwapProbe();
+        using var sharedHost = new AppHost(sharedApp, sharedWindow, sharedDevice, sharedFonts, strings, sharedProbe, sharedCache);
+        sharedHost.RunFrame();
+        int sharedId = sharedDevice.LastImages.Count >= 2 ? sharedDevice.LastImages[0].ImageId : 0;
+        var sharedHandle = new ImageHandle(sharedId);
+        bool sharedInitial = sharedId != 0
+            && sharedDevice.LastImages.Count >= 2
+            && sharedDevice.LastImages[1].ImageId == sharedId
+            && sharedCache.RefsOf(sharedHandle) == 2
+            && sharedCache.StateOf(sharedHandle) == ImageState.Pending;
+        sharedProbe.SecondSource.Value = "album/other";
+        sharedHost.RunFrame();
+        bool sharedNotCanceled = sharedInitial
+            && sharedDec.CancelCount(sharedId) == 0
+            && sharedCache.RefsOf(sharedHandle) == 1
+            && sharedCache.StateOf(sharedHandle) == ImageState.Pending;
+        sharedDec.Arm();
+        for (int i = 0; i < 4 && sharedCache.StateOf(sharedHandle) != ImageState.Ready; i++) sharedHost.RunFrame();
+        bool sharedReady = sharedCache.StateOf(sharedHandle) == ImageState.Ready;
+        Check("46m. image.shared-handle: rebinding one ImageEl does not cancel another visible owner",
+            sharedNotCanceled && sharedReady,
+            $"initial={sharedInitial} cancels={sharedDec.CancelCount(sharedId)} refs={sharedCache.RefsOf(sharedHandle)} state={sharedCache.StateOf(sharedHandle)}");
     }
 
     static void UseImageChecks(StringTable strings)
@@ -17551,8 +18082,10 @@ static class Slice
         var col = new Signal<ColorF>(ColorF.FromRgba(0x18, 0xA0, 0x57, 0xFF));
         var tint = new Signal<ColorF>(ColorF.FromRgba(0x2D, 0x7D, 0xF6, 0xFF));
         var canCol = new Signal<ColorF>(ColorF.FromRgba(0xF5, 0xC5, 0x18, 0xFF));
+        var hov = new Signal<ColorF>(ColorF.FromRgba(0x00, 0x00, 0x00, 0x12));
+        var prs = new Signal<ColorF>(ColorF.FromRgba(0x00, 0x00, 0x00, 0x17));
 
-        NodeHandle nFill = default, nOp = default, nW = default, nH = default, nT = default,
+        NodeHandle nFill = default, nOp = default, nW = default, nH = default, nT = default, nHov = default,
                    wTxt = default, wCol = default, wImg = default, wCan = default;   // wrappers: OnRealized is BoxEl-only
         var root = new W0fStaticProbe
         {
@@ -17570,6 +18103,7 @@ static class Slice
                         new BoxEl { Height = 10, BorderWidth = proof, Width = Prop.Of(() => w.Value), OnRealized = nh => nW = nh },
                         new BoxEl { Width = 40, BorderWidth = proof, Height = Prop.Of(() => h.Value), OnRealized = nh => nH = nh },
                         new BoxEl { Width = 40, Height = 10, BorderWidth = proof, Transform = Prop.Of(() => Affine2D.Translation(tx.Value, 0f)), OnRealized = nh => nT = nh },
+                        new BoxEl { Width = 40, Height = 10, BorderWidth = proof, HoverFill = Prop.Of(() => hov.Value), PressedFill = Prop.Of(() => prs.Value), OnRealized = nh => nHov = nh },
                         new BoxEl { OnRealized = nh => wTxt = nh, Children = [ new TextEl("") { Underline = (r & 1) == 1, Text = Prop.Of(() => txt.Value) } ] },
                         new BoxEl { OnRealized = nh => wCol = nh, Children = [ new TextEl("c") { Underline = (r & 1) == 1, Color = Prop.Of(() => col.Value) } ] },
                         new BoxEl { OnRealized = nh => wImg = nh, Children = [ new ImageEl { Width = 24, Height = 24, Placeholder = Prop.Of(() => tint.Value) } ] },
@@ -17591,6 +18125,7 @@ static class Slice
         op.Value = 0.4f; w.Value = 96f; h.Value = 48f; tx.Value = 31f;
         txt.Value = "t2"; col.Value = ColorF.FromRgba(0xE8, 0x8C, 0x1C, 0xFF);
         tint.Value = ColorF.FromRgba(0x18, 0xA0, 0xA0, 0xFF); canCol.Value = ColorF.FromRgba(0x3C, 0x8B, 0xC9, 0xFF);
+        hov.Value = ColorF.FromRgba(0x00, 0x00, 0x00, 0x22); prs.Value = ColorF.FromRgba(0x00, 0x00, 0x00, 0x2E);
         host.RunFrame();
 
         // OWNER re-render: fresh element records, bound signals untouched
@@ -17604,6 +18139,9 @@ static class Slice
 
         Check("prop-net.fill bound Fill survives an owner re-render between signal fires",
             host.Scene.Paint(nFill).Fill == fill.Peek(), $"paint={host.Scene.Paint(nFill).Fill} want={fill.Peek()}");
+        Check("prop-net.hoverfill bound HoverFill/PressedFill re-fire and survive an owner re-render (theme/palette-reactive row states)",
+            host.Scene.Paint(nHov).HoverFill == hov.Peek() && host.Scene.Paint(nHov).PressedFill == prs.Peek(),
+            $"hover={host.Scene.Paint(nHov).HoverFill} pressed={host.Scene.Paint(nHov).PressedFill}");
         Check("prop-net.opacity bound Opacity survives an owner re-render",
             Near(host.Scene.Paint(nOp).Opacity, 0.4f, 0.001f), $"paint={host.Scene.Paint(nOp).Opacity}");
         Check("prop-net.width bound Width survives an owner re-render",
@@ -19716,6 +20254,41 @@ static class Slice
         for (int i = 0; i < 40; i++) { host2.RunFrame(); maxTrack2 = MathF.Max(maxTrack2, MaxAbsTrackX(host2, host2.Scene.Root)); }
         Check("M2. marquee scrolls when its reactive title grows AFTER mount (OnBoundsChanged edge-triggers on the real arranged-rect change, not the Measure-corrupted Bounds delta)",
               maxTrack2 > 1f, $"maxAbsTrackX={maxTrack2:0.##}");
+
+        // M3: scroll-aware edge fade — at translateX=0 fade right only; mid-scroll left band appears; scrollX must track motion.
+        const float fadeCw = 150f, fadeTw = 485f, fadeBand = 24f;
+        var fadeStyle = new Marquee.Style { FontSize = 14f, StartDelayMs = 0f, Speed = 200f, Mode = Marquee.ScrollMode.PingPong, Trigger = Marquee.TriggerMode.Always };
+        var fadeAt0 = MarqueeScroller.ResolveEdgeFade(fadeStyle, 0f, fadeCw, fadeTw, fadeBand);
+        var fadeMid = MarqueeScroller.ResolveEdgeFade(fadeStyle, -120f, fadeCw, fadeTw, fadeBand);
+        var fadeAtEnd = MarqueeScroller.ResolveEdgeFade(fadeStyle, -(fadeTw - fadeCw), fadeCw, fadeTw, fadeBand);
+        bool startRightOnly = fadeAt0 is { } f0 && (f0.Edges & EdgeMask.Right) != 0 && f0.Band(EdgeMask.Left) <= 0.5f;
+        bool midHasLeft = fadeMid is { } fm && fm.Band(EdgeMask.Left) > 0.5f;
+        bool endLeftOnly = fadeAtEnd is { } fe && fe.Band(EdgeMask.Left) > 0.5f && fe.Band(EdgeMask.Right) <= 0.5f;
+        Check("M3a. marquee ResolveEdgeFade is position-aware (right at start, left mid-scroll, left-only at tail)",
+              startRightOnly && midHasLeft && endLeftOnly,
+              $"startR={startRightOnly} midL={midHasLeft} endL={endLeftOnly}");
+
+        var probe3 = new MarqueePingPongProbe();
+        var window3 = new HeadlessWindow(new WindowDesc("marquee-edge", new Size2(220, 120), 1f)); window3.Show();
+        using var host3 = new AppHost(app, window3, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe3);
+        float maxTrack3 = 0f, maxLeftBand = 0f;
+        for (int i = 0; i < 60; i++)
+        {
+            host3.RunFrame();
+            maxTrack3 = MathF.Max(maxTrack3, MaxAbsTrackX(host3, host3.Scene.Root));
+            maxLeftBand = MathF.Max(maxLeftBand, MaxEdgeFadeLeftBand(host3.Scene, host3.Scene.Root));
+        }
+        Check("M3b. marquee edge-fade left band appears after scroll (scrollX ticker wired)",
+              maxTrack3 > 10f && maxLeftBand > 0.5f, $"maxAbsTrackX={maxTrack3:0.##} maxLeftBand={maxLeftBand:0.##}");
+    }
+
+    static float MaxEdgeFadeLeftBand(SceneStore s, NodeHandle n)
+    {
+        float best = 0f;
+        if (s.TryGetEdgeFade(n, out var ef)) best = MathF.Max(best, ef.Band(EdgeMask.Left));
+        for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+            best = MathF.Max(best, MaxEdgeFadeLeftBand(s, c));
+        return best;
     }
 
     static int Main()
@@ -19777,6 +20350,7 @@ static class Slice
         FlexChecks(strings);
         ShellDockChecks(strings);
         ShellResizeChecks(strings);
+        DetailResizeFlickerChecks(strings);
         ResponsiveResizeChecks(strings);
         SidebarResizeSimChecks(strings);
         ShellSidebarScrollChecks(strings);
@@ -19796,6 +20370,7 @@ static class Slice
         NestedChecks(strings);
         ContextChecks(strings);
         HoverChecks(strings);
+        ScrollHoverChecks(strings);
         StyleChecks();
         AnimValueChecks();
         WrapChecks(strings);
@@ -19834,6 +20409,7 @@ static class Slice
         BlurHashChecks(strings);
         ImageTransitionChecks();
         ImageEvictChecks();
+        ImageLifecycleChecks(strings);
         UseImageChecks(strings);
         ControlsChecks(strings);
         NavigationChecks();
@@ -19940,9 +20516,104 @@ static class Slice
         // attribution, compositor-only 0-alloc) — the leak-hunting invariants asserted headless.
         DiagnosticsLeakGateChecks(strings);
 
+        PaletteContrastChecks();
+
         Console.WriteLine();
         if (s_failures == 0) { Console.WriteLine($"ALL CHECKS PASSED — the vertical slice exercises every seam end-to-end.{ArenaSummarySuffix()}"); return 0; }
         Console.WriteLine($"{s_failures} CHECK(S) FAILED."); return 1;
+    }
+
+    /// <summary>Seed-derived palette presets: Warm calibration anchor + WCAG contrast + adjacent-shell luminance
+    /// deltas + preset distinctness. The shell chrome is translucent (Mica-first, both themes), so every surface is
+    /// FLATTENED over the <see cref="MicaRef"/> reference backdrop before being asserted — raw token values no
+    /// longer reflect what actually renders.</summary>
+    static void PaletteContrastChecks()
+    {
+        var warm = Tok.WarmPalette;
+        // Warm calibration: flattened shell anchors (values verified against the anchor-solve math) + the untouched
+        // opaque warm TokenSet anchors.
+        bool warmFrame = PaletteBuilder.NearColor(ColorContrast.Flatten(warm.LightShell.Toolbar, MicaRef.LightDefault), ColorF.FromRgba(0xE4, 0xDF, 0xD3));
+        bool warmFile = PaletteBuilder.NearColor(ColorContrast.Flatten(warm.LightShell.FileArea, MicaRef.LightDefault), ColorF.FromRgba(0xF0, 0xF0, 0xEE));
+        bool warmCard = PaletteBuilder.NearColor(warm.Light.FillCardDefault, ColorF.FromRgba(0xFC, 0xFB, 0xF9));
+        bool warmTert = PaletteBuilder.NearColor(warm.Light.TextTertiary, ColorF.FromRgba(0x65, 0x64, 0x60));
+        Check("palette.warm.calibration flattened shell + token anchors (toolbar, file area, card fill, tertiary text)",
+            warmFrame && warmFile && warmCard && warmTert, $"frame={warmFrame} file={warmFile} card={warmCard} tertiary={warmTert}");
+
+        ThemePalette[] all = [Tok.WarmPalette, Tok.SlatePalette, Tok.NeutralPalette, Tok.AccentTintedPalette];
+        bool contrastOk = true;
+        bool ladderOk = true;
+        var detail = new System.Text.StringBuilder();
+        foreach (var p in all)
+        {
+            foreach (var (themeKind, set, shell) in new (ThemeKind, TokenSet, ShellPalette)[]
+            {
+                (ThemeKind.Light, p.Light, p.LightShell),
+                (ThemeKind.Dark, p.Dark, p.DarkShell),
+            })
+            {
+                // The hardest background for a theme's ink is its BRIGHTEST composited surface (dark-on-light and
+                // light-on-dark both max the ratio's denominator there): the zebra row flattened over the
+                // translucent page card on the brightest assumed Mica, or (light only) the opaque card if lighter.
+                // Ink alpha is intentionally ignored (as before): tiers assert at full ink strength — WinUI's own
+                // translucent dark tiers would fail a strict flattened-ink check and they're not ours to redesign.
+                ColorF micaBright = themeKind == ThemeKind.Light ? MicaRef.LightBright : MicaRef.DarkBright;
+                ColorF zebraHost = ColorContrast.Flatten(shell.RowZebra, ColorContrast.Flatten(shell.FileArea, micaBright));
+                ColorF hardestHost = themeKind == ThemeKind.Light && ColorContrast.RelativeLuminance(set.FillCardDefault) >= ColorContrast.RelativeLuminance(zebraHost)
+                    ? set.FillCardDefault : zebraHost;
+                if (!ColorContrast.MeetsAaText(set.TextPrimary, hardestHost)) { contrastOk = false; detail.Append($" {p.Id}/{themeKind}/primary"); }
+                if (!ColorContrast.MeetsAaText(set.TextSecondary, hardestHost)) { contrastOk = false; detail.Append($" {p.Id}/{themeKind}/secondary"); }
+                if (!ColorContrast.MeetsAaText(set.TextTertiary, hardestHost)) { contrastOk = false; detail.Append($" {p.Id}/{themeKind}/tertiary"); }
+                if (themeKind == ThemeKind.Light)
+                {
+                    ColorF fFrame = ColorContrast.Flatten(shell.Toolbar, MicaRef.LightDefault);
+                    ColorF fRail = ColorContrast.Flatten(shell.Sidebar, MicaRef.LightDefault);
+                    ColorF fPage = ColorContrast.Flatten(shell.FileArea, MicaRef.LightDefault);
+                    if (ColorContrast.LuminanceDelta(fFrame, fRail) < 0.05f) { ladderOk = false; detail.Append($" {p.Id}/frame-rail"); }
+                    if (ColorContrast.LuminanceDelta(fRail, fPage) < 0.05f) { ladderOk = false; detail.Append($" {p.Id}/rail-page"); }
+                    if (ColorContrast.LuminanceDelta(fPage, set.FillCardDefault) < 0.05f) { ladderOk = false; detail.Append($" {p.Id}/page-card"); }
+                }
+            }
+        }
+        Check("palette.contrast all presets pass AA text tiers on the brightest composited hosting surface", contrastOk, detail.ToString());
+        Check("palette.ladder light shell adjacent flattened surfaces have >=5% luminance delta", ladderOk, detail.ToString());
+
+        // Preset distinctness: pairwise max-channel delta of the flattened chrome bar must be perceptible in both
+        // themes. Accent-involving pairs get a relaxed floor — the accent seed legitimately converges on its blue
+        // neighbors while the (default 210°) OS accent is blue; it diverges with any non-blue accent.
+        static int MaxChannelDelta(in ColorF a, in ColorF b)
+        {
+            static int Ch(float f) => (int)MathF.Round(f * 255f);
+            return Math.Max(Math.Abs(Ch(a.R) - Ch(b.R)), Math.Max(Math.Abs(Ch(a.G) - Ch(b.G)), Math.Abs(Ch(a.B) - Ch(b.B))));
+        }
+        bool distinctOk = true;
+        var dDetail = new System.Text.StringBuilder();
+        for (int i = 0; i < all.Length; i++)
+        {
+            for (int j = i + 1; j < all.Length; j++)
+            {
+                bool involvesAccent = all[i].Id == "accent" || all[j].Id == "accent";
+                int lightDelta = MaxChannelDelta(
+                    ColorContrast.Flatten(all[i].LightShell.Toolbar, MicaRef.LightDefault),
+                    ColorContrast.Flatten(all[j].LightShell.Toolbar, MicaRef.LightDefault));
+                int darkDelta = MaxChannelDelta(
+                    ColorContrast.Flatten(all[i].DarkShell.Toolbar, MicaRef.DarkDefault),
+                    ColorContrast.Flatten(all[j].DarkShell.Toolbar, MicaRef.DarkDefault));
+                int lightFloor = involvesAccent ? 5 : 8, darkFloor = involvesAccent ? 3 : 6;
+                if (lightDelta < lightFloor || darkDelta < darkFloor)
+                {
+                    distinctOk = false;
+                    dDetail.Append($" {all[i].Id}-{all[j].Id}(L{lightDelta}/D{darkDelta})");
+                }
+            }
+        }
+        Check("palette.distinct presets read visibly different (pairwise flattened-toolbar max-channel delta)", distinctOk, dDetail.ToString());
+
+        int e0 = Tok.Epoch;
+        var kind = Tok.Theme;
+        Tok.Use(Tok.SlatePalette, kind);
+        bool epochBumps = Tok.Epoch > e0;
+        Tok.Use(Tok.WarmPalette, kind);
+        Check("palette.switch Tok.Use(palette, kind) bumps Epoch on palette-only change", epochBumps, $"epoch={Tok.Epoch}");
     }
 
     /// <summary>The Phase-3 (GestureArena, §7A/§7B) evidence appended to the success tail so the orchestrator reads arena

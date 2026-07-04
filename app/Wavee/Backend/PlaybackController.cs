@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Wavee.Backend.Audio;
 using Wavee.Backend.Spotify;
 using Wavee.Core;
 
@@ -40,6 +41,7 @@ public interface IOutboundControl
     /// <summary>Set a remote device's volume via the dedicated PUT /connect-state/v1/connect/volume endpoint (NOT a
     /// player/command verb). <paramref name="volume0_65535"/> is Spotify's 0..65535 scale.</summary>
     Task<OutboundResult> SetVolumeAsync(string targetDeviceId, int volume0_65535, CancellationToken ct = default);
+    Task<OutboundResult> TransferAsync(string fromDeviceId, string targetDeviceId, CancellationToken ct = default);
 }
 
 /// <summary>POSTs /connect-state/v1/player/command/from/{us}/to/{target} with the command JSON envelope, and parses the
@@ -73,12 +75,27 @@ public sealed class LiveOutboundControl : IOutboundControl
         return new OutboundResult(resp.Ok, ParseAckId(resp), resp.Status);
     }
 
+    public async Task<OutboundResult> TransferAsync(string fromDeviceId, string targetDeviceId, CancellationToken ct = default)
+    {
+        var route = $"/connect-state/v1/connect/transfer/from/{fromDeviceId}/to/{targetDeviceId}";
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Content-Type"] = "application/x-www-form-urlencoded",
+        };
+        if (_connectionId?.Invoke() is { Length: > 0 } connId) headers["X-Spotify-Connection-Id"] = connId;
+        var body = Encoding.UTF8.GetBytes(OutboundEnvelope.Transfer(NewId(), NewId(), Guid.NewGuid().ToString(), "premium"));
+        var resp = await _transport.Request(Channel.Spclient, route, body, ct, headers: headers).ConfigureAwait(false);
+        return new OutboundResult(resp.Ok, ParseAckId(resp), resp.Status);
+    }
+
     static string? ParseAckId(Resp resp)
     {
         if (!resp.Ok || resp.Body is null || resp.Body.Length == 0) return null;
         try { using var doc = JsonDocument.Parse(resp.Body); return doc.RootElement.TryGetProperty("ack_id", out var a) ? a.GetString() : null; }
         catch { return null; }
     }
+
+    static string NewId() => Guid.NewGuid().ToString("N");
 }
 
 public sealed class PlaybackController : IPlaybackPlayer, IDisposable
@@ -86,6 +103,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     readonly QueueCore _queue = new();
     readonly IAudioHost _host;
     readonly ITrackResolver _resolver;
+    readonly IFastTrackResolver? _fast;   // when set, local play uses instant-start (head before key); else the plain resolve
     readonly NowPlayingProjection _projection;
     readonly IContextResolver _contexts;
     readonly IOutboundControl? _outbound;
@@ -96,16 +114,19 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     readonly IDisposable _hostSub;
     readonly IDisposable _projSub;
     readonly SemaphoreSlim _lock = new(1, 1);
+    readonly object _ownershipGate = new();
     string _lastActive = "";
     double _lastVolume = -1;
+    bool _ownsActivePlayback;
 
     public PlaybackController(IAudioHost host, ITrackResolver resolver, NowPlayingProjection projection,
         IContextResolver contexts,
         string ourDeviceId, IOutboundControl? outbound = null, IReadOnlyList<IPlaybackProjection>? extraProjections = null, Action<string>? log = null,
-        string? playFeatureVersion = null)
+        string? playFeatureVersion = null, IFastTrackResolver? fast = null)
     {
         _host = host;
         _resolver = resolver;
+        _fast = fast;
         _projection = projection;
         _contexts = contexts;
         _ourDeviceId = ourDeviceId;
@@ -119,6 +140,55 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
 
     public IPlaybackState State => _projection;
 
+    /// <summary>When set, LOCAL playback is rejected at every point that would start/seed the (silent) local host: the hook
+    /// fires (the app shows the "playback on this device isn't supported yet — choose a remote device" toast) and the
+    /// operation aborts. Null (the default — unit tests, and a future real-audio build) leaves local playback enabled.
+    /// Remote forwarding is never affected. Wired by the live bootstrap to <c>PlaybackBridge.NotifyLocalPlaybackUnsupported</c>.</summary>
+    public Action? OnLocalPlaybackRejected { get; set; }
+
+    bool RejectLocalPlay()
+    {
+        if (OnLocalPlaybackRejected is not { } reject) return false;
+        _log?.Invoke("local playback unsupported — rejecting local play intent (choose a remote device)");
+        reject();
+        return true;
+    }
+
+    /// <summary>When set, an outbound command to the active remote device that FAILS (transfer / play) surfaces to the app
+    /// (a "couldn't reach that device" toast) instead of failing silently. Null (unit tests) = log-only.</summary>
+    public Action? OnRemoteCommandFailed { get; set; }
+
+    /// <summary>When set, a LOCAL playback attempt that fails to resolve/decrypt/decode surfaces a typed
+    /// <see cref="PlaybackErrorInfo"/> (reason + technical detail + user message) instead of a silently-dropped
+    /// fire-and-forget Task. The live bootstrap logs the detail at Error and toasts the user message.</summary>
+    public Action<PlaybackErrorInfo>? OnPlaybackError { get; set; }
+
+    void ReportPlaybackError(Exception ex)
+    {
+        var reason = ex is AudioPlaybackException ape ? ape.Reason : AudioKeyFailureReason.None;
+        string userMsg = reason != AudioKeyFailureReason.None ? reason.ToUserMessage() : "Couldn't play this track.";
+        string detail = ex is AudioPlaybackException a ? (a.Message == reason.ToString() ? reason.ToString() : $"{reason}: {a.Message}") : ex.ToString();
+        _log?.Invoke("local playback error: " + detail);
+        OnPlaybackError?.Invoke(new PlaybackErrorInfo(reason, userMsg, detail));
+    }
+
+    // Instant-start body supply: await the (parallel) key+CDN resolve and hand it to the host; a body failure surfaces
+    // as a typed playback error (the head already started, so this is the "couldn't continue" case).
+    async Task SupplyBodyWhenReadyAsync(Task<AudioStreamHandle> body)
+    {
+        try { var h = await body.ConfigureAwait(false); _host.SupplyBody(h); }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { ReportPlaybackError(ex); }
+    }
+
+    /// <summary>Re-attempt the current track after a surfaced playback error (the toast/player-bar "Retry" action).</summary>
+    public async Task RetryCurrentAsync(CancellationToken ct = default)
+    {
+        await _lock.WaitAsync(ct).ConfigureAwait(false);
+        try { if (_queue.Current is not null) await LoadAndPlayCurrentAsync(EvKind.Started, ct).ConfigureAwait(false); }
+        finally { _lock.Release(); }
+    }
+
     // The routing spine: local iff nobody is active or we are. (No _localActive flag — the cluster is the truth.)
     bool RouteLocal()
     {
@@ -127,6 +197,42 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     }
 
     // "Another device became active" → stop our local host so we don't double-play.
+    bool IsActiveOwner()
+    {
+        lock (_ownershipGate)
+        {
+            if (_ownsActivePlayback) return true;
+            if (_projection.ActiveDeviceId != _ourDeviceId) return false;
+            _ownsActivePlayback = true;
+            return true;
+        }
+    }
+
+    void SetActiveOwner(bool value)
+    {
+        lock (_ownershipGate) _ownsActivePlayback = value;
+    }
+
+    public void DeactivateIfActiveOwner()
+    {
+        bool deactivate;
+        lock (_ownershipGate)
+        {
+            deactivate = _ownsActivePlayback;
+            if (deactivate) _ownsActivePlayback = false;
+        }
+        if (!deactivate) return;
+        _host.Stop();
+        EmitState(EvKind.BecameInactive);
+    }
+
+    void StopStrayLocalHost(string message)
+    {
+        if (!_host.IsPlaying) return;
+        _log?.Invoke(message);
+        _host.Stop();
+    }
+
     void OnProjectionChanged(IPlaybackState s)
     {
         // Apply a volume change (incl. one a remote controller made to the active device) to the local host when WE are
@@ -135,12 +241,18 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         if (Math.Abs(vol - _lastVolume) > 0.0009) { _lastVolume = vol; if (RouteLocal()) _host.SetVolume(vol); }
 
         var aid = s.ActiveDeviceId ?? "";
+        if (aid == _ourDeviceId) SetActiveOwner(true);
         if (aid == _lastActive) return;
+        var previousActive = _lastActive;
         _lastActive = aid;
-        if (!string.IsNullOrEmpty(aid) && aid != _ourDeviceId && _host.IsPlaying)
+        if (aid != _ourDeviceId && (previousActive == _ourDeviceId || IsActiveOwner()))
         {
             _log?.Invoke("another device became active — stopping local playback");
-            _host.Stop();
+            DeactivateIfActiveOwner();
+        }
+        else if (!string.IsNullOrEmpty(aid) && aid != _ourDeviceId)
+        {
+            StopStrayLocalHost("another device became active - stopping stray local playback");
         }
     }
 
@@ -231,6 +343,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         {
             if (_queue.Current is null)   // add-to-queue while idle → start playing it (rule §3)
             {
+                if (RejectLocalPlay()) return;   // can't start local playback → toast + abort (don't seed a phantom local queue)
                 _queue.SetContext(trackUri, new[] { SyntheticTrack(trackUri) }, 0);
                 await LoadAndPlayCurrentAsync(EvKind.Started, ct).ConfigureAwait(false);
             }
@@ -248,6 +361,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         if (refs.Length == 0) return;
         if (RouteLocal())
         {
+            if (RejectLocalPlay()) return;   // local play-next would seed a local queue that can never play → toast + abort
             var hydrated = await _contexts.HydrateAsync(refs, ct).ConfigureAwait(false);
             await _lock.WaitAsync(ct).ConfigureAwait(false);
             try { for (int i = hydrated.Count - 1; i >= 0; i--) _queue.EnqueueNext(hydrated[i]); PushQueueAndPublish(); }
@@ -294,14 +408,17 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     {
         if (targetDeviceId == _ourDeviceId)
         {
+            if (RejectLocalPlay()) return;   // transfer-to-this-device = local playback, which is unsupported → toast + abort
             await _lock.WaitAsync(ct).ConfigureAwait(false);
-            try { if (_queue.Current is not null) _host.Play(); else await GhostResumeAsync(ct).ConfigureAwait(false); }
+            try { if (_queue.Current is not null) { _host.Play(); EmitState(EvKind.Resumed); } else await GhostResumeAsync(ct).ConfigureAwait(false); }
             finally { _lock.Release(); }
             return;
         }
-        await ForwardTransferAsync(targetDeviceId, ct).ConfigureAwait(false);
-        _host.Stop();
-        EmitState(EvKind.BecameInactive);   // publish a clean is_active=false hand-off
+        bool wasActiveOwner = IsActiveOwner();
+        bool ok = await TryForwardTransferAsync(targetDeviceId, ct).ConfigureAwait(false);
+        if (!ok) return;
+        if (wasActiveOwner) DeactivateIfActiveOwner();
+        else StopStrayLocalHost("remote transfer accepted while Wavee was not active - stopping stray local playback");
     }
 
     // ── Inbound remote commands (WE are the target) — ALWAYS local, regardless of the routing rule ───────────────────
@@ -350,6 +467,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             {
                 if (_queue.Current is null)
                 {
+                    if (RejectLocalPlay()) return;   // inbound add-to-queue while idle would start local playback → toast + abort
                     _queue.SetContext(hydrated[0].Uri, hydrated, 0);
                     await LoadAndPlayCurrentAsync(EvKind.Started, default).ConfigureAwait(false);
                 }
@@ -439,7 +557,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         await _lock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            if (_queue.Current is not null) { _host.Play(); EmitState(EvKind.Resumed); }   // we have a local context → normal resume
+            if (_queue.Current is not null) { if (RejectLocalPlay()) return; _host.Play(); EmitState(EvKind.Resumed); }   // we have a local context → normal resume
             else await GhostResumeAsync(ct).ConfigureAwait(false);   // cold/ghost → seed from the cluster snapshot
         }
         finally { _lock.Release(); }
@@ -476,13 +594,17 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     // from the cluster snapshot, then play locally (we take over). Caller holds _lock.
     async Task GhostResumeAsync(CancellationToken ct)
     {
+        if (RejectLocalPlay()) return;   // local audio unsupported → toast + abort (covers cold resume / self-transfer / bare inbound transfer)
         var track = _projection.CurrentTrack;
         if (track is null) { _log?.Invoke("ghost resume: nothing in the cluster to resume"); return; }
         var ctxUri = _projection.ContextUri ?? track.Uri;
         var tracks = new List<Track>(1 + _projection.Queue.Count) { track };
         foreach (var qe in _projection.Queue) if (qe.Bucket == QueueBucket.NextUp) tracks.Add(qe.Track);
         _queue.SetContext(ctxUri, tracks, 0);
-        var handle = await _resolver.ResolveAsync(track, ct).ConfigureAwait(false);
+        AudioStreamHandle handle;
+        try { handle = await _resolver.ResolveAsync(track, ct).ConfigureAwait(false); }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { ReportPlaybackError(ex); return; }   // no silent drop — surface a typed reason
         _host.Load(handle);
         long pos = _projection.PositionMs;
         if (pos > 0) _host.Seek(pos);
@@ -493,9 +615,30 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
 
     async Task LoadAndPlayCurrentAsync(EvKind kind, CancellationToken ct)
     {
+        if (RejectLocalPlay()) return;   // local audio unsupported → toast + abort (covers play / next / prev / enqueue-idle / inbound)
         var cur = _queue.Current;
         if (cur is null) { _host.Stop(); return; }
-        var handle = await _resolver.ResolveAsync(cur, ct).ConfigureAwait(false);
+
+        if (_fast is not null)
+        {
+            // Instant-start: play the clear head immediately; the encrypted body (key + CDN) resolves in parallel and is
+            // supplied to the host when ready — hiding key/derive latency behind the head's ~3 s of audio.
+            FastStartPlan plan;
+            try { plan = await _fast.ResolveFastAsync(cur, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { ReportPlaybackError(ex); return; }
+            _host.LoadFastStart(plan.Start);
+            _host.Play();
+            PushQueue();
+            Emit(new PlaybackEvent(kind, cur, 0));
+            _ = SupplyBodyWhenReadyAsync(plan.Body);
+            return;
+        }
+
+        AudioStreamHandle handle;
+        try { handle = await _resolver.ResolveAsync(cur, ct).ConfigureAwait(false); }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { ReportPlaybackError(ex); return; }   // no silent drop — surface a typed reason
         _host.Load(handle);
         _host.Play();
         PushQueue();                                              // queue first, so the published snapshot carries it
@@ -503,7 +646,13 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     }
 
     // Fan the event log out to the now-playing projection + every extra projection (telemetry, the PutState publisher).
-    void Emit(in PlaybackEvent e) { _projection.OnEvent(e); for (int i = 0; i < _extra.Count; i++) _extra[i].OnEvent(e); }
+    void Emit(in PlaybackEvent e)
+    {
+        if (e.Kind is EvKind.Started or EvKind.Resumed or EvKind.TrackChanged && e.Track is not null) SetActiveOwner(true);
+        else if (e.Kind is EvKind.Ended or EvKind.BecameInactive) SetActiveOwner(false);
+        _projection.OnEvent(e);
+        for (int i = 0; i < _extra.Count; i++) _extra[i].OnEvent(e);
+    }
 
     // Emit a state event carrying the current track + position (drives the projection slab + the PutState publish).
     void EmitState(EvKind kind) => Emit(new PlaybackEvent(kind, _queue.Current, _host.PositionMs));
@@ -522,6 +671,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     {
         _projection.OnHostSignal(s);
         if (s.Kind == AudioHostSignalKind.Ended) _ = AutoAdvanceAsync();
+        else if (s.Kind == AudioHostSignalKind.Error) ReportPlaybackError(new AudioPlaybackException(AudioKeyFailureReason.EmulationFault, "host playback error"));
     }
 
     async Task AutoAdvanceAsync() { try { await LocalNextAsync(default).ConfigureAwait(false); } catch (Exception ex) { _log?.Invoke("auto-advance error: " + ex.Message); } }
@@ -572,7 +722,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             skipIndex, request.SkipTrackUri, skipUid, request.OrderedTracks,
             _queue.Shuffle, FeatureOf(request.ContextUri), _featureVersion, NewId(), NewId(), Now());
         var r = await _outbound.SendAsync(target, json, ct).ConfigureAwait(false);
-        if (!r.Ok) _log?.Invoke($"outbound play → {target}: failed ({r.Status})");
+        if (!r.Ok) { _log?.Invoke($"outbound play → {target}: failed ({r.Status})"); OnRemoteCommandFailed?.Invoke(); }
     }
 
     // add_to_queue: a single track as command.track {uri,uid,metadata} + options — NOT the flat command.uri Forward verb.
@@ -585,9 +735,26 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         if (!r.Ok) _log?.Invoke($"outbound add_to_queue → {target}: failed ({r.Status})");
     }
 
-    Task ForwardTransferAsync(string target, CancellationToken ct)
-        => _outbound is null ? Done : _outbound.SendAsync(target,
-            OutboundEnvelope.Command(_ourDeviceId, "transfer", Array.Empty<(string, object)>(), NewId(), NewId(), Now()), ct);
+    async Task<bool> TryForwardTransferAsync(string target, CancellationToken ct)
+    {
+        if (_outbound is null) { _log?.Invoke($"transfer to {target} ignored - no outbound control"); return false; }
+        var from = string.IsNullOrEmpty(_projection.ActiveDeviceId) ? _ourDeviceId : _projection.ActiveDeviceId;
+        var r = await _outbound.TransferAsync(from, target, ct).ConfigureAwait(false);
+        if (r.Ok) { _log?.Invoke($"connect transfer {from} -> {target}: ok ({r.Status})"); return true; }
+        _log?.Invoke($"connect transfer {from} -> {target}: failed ({r.Status})");
+        OnRemoteCommandFailed?.Invoke();
+        return false;
+    }
+
+    async Task ForwardTransferAsync(string target, CancellationToken ct)
+    {
+        if (_outbound is null) { _log?.Invoke($"transfer → {target} ignored — no outbound control"); return; }
+        var json = OutboundEnvelope.Command(_ourDeviceId, "transfer", Array.Empty<(string, object)>(), NewId(), NewId(), Now());
+        var r = await _outbound.SendAsync(target, json, ct).ConfigureAwait(false);
+        if (r.Ok) { _log?.Invoke($"outbound transfer → {target}: ok (ack {r.AckId})"); return; }
+        _log?.Invoke($"outbound transfer → {target}: failed ({r.Status})");   // parity with the other forwards (was silent)
+        OnRemoteCommandFailed?.Invoke();
+    }
 
     static string NewId() => Guid.NewGuid().ToString("N");
     static long Now() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();

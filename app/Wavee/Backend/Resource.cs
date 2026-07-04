@@ -49,6 +49,7 @@ public sealed class Resource<TKey, TValue> where TKey : notnull
         public DateTime FetchedAt;
         public Task? InFlight;
         public bool NeedsRevalidate;   // set by the dealer route (MarkStale); the revision policies gate IsStale on it
+        public string? Error;          // last fetch failure (cleared on success) — surfaced via Loaded.Error, not swallowed
     }
 
     public Resource(Func<TKey, SessionContext, Task<TValue>> fetch, FreshnessPolicy fresh, Func<SessionContext> ctx)
@@ -64,20 +65,22 @@ public sealed class Resource<TKey, TValue> where TKey : notnull
         // can tear on a weak memory model (Apple Silicon is a target).
         bool hasVal, stale;
         TValue? val;
+        string? error;
         lock (_gate)
         {
             if (!_cache.TryGetValue(key, out var e)) { e = new Entry(); _cache[key] = e; }
             hasVal = e.HasVal;
             val = e.Val;
             stale = hasVal && IsStale(e);
+            error = hasVal ? null : e.Error;
         }
         if (hasVal)
         {
             if (stale) _ = Revalidate(key);      // SWR: serve stale, refresh in the background
             return Loaded<TValue>.Ready(val!, stale);
         }
-        _ = Revalidate(key);
-        return Loaded<TValue>.Loading;
+        _ = Revalidate(key);                     // (re)try — on an errored entry this is the recovery attempt
+        return error != null ? Loaded<TValue>.Err(error) : Loaded<TValue>.Loading;
     }
 
     public Task Revalidate(TKey key)
@@ -104,8 +107,11 @@ public sealed class Resource<TKey, TValue> where TKey : notnull
     {
         lock (_gate)
         {
-            if (!_cache.TryGetValue(key, out var e) || !e.HasVal) return Loaded<TValue>.Loading;
-            return Loaded<TValue>.Ready(e.Val!, IsStale(e));
+            if (!_cache.TryGetValue(key, out var e)) return Loaded<TValue>.Loading;
+            if (e.HasVal) return Loaded<TValue>.Ready(e.Val!, IsStale(e));
+            if (e.InFlight != null) return Loaded<TValue>.Loading;   // a fetch is in progress — not yet an error
+            if (e.Error != null) return Loaded<TValue>.Err(e.Error); // surface the last failure (was silently swallowed)
+            return Loaded<TValue>.Loading;
         }
     }
 
@@ -118,6 +124,7 @@ public sealed class Resource<TKey, TValue> where TKey : notnull
             if (!_cache.TryGetValue(key, out var e)) { e = new Entry(); _cache[key] = e; }
             e.Val = value;
             e.HasVal = true;
+            e.Error = null;
             e.FetchedAt = DateTime.UtcNow;
             e.NeedsRevalidate = false;
         }
@@ -141,12 +148,13 @@ public sealed class Resource<TKey, TValue> where TKey : notnull
         {
             Interlocked.Increment(ref _fetchCount);
             var v = await _fetch(key, _ctx()).ConfigureAwait(false);
-            lock (_gate) { e.Val = v; e.HasVal = true; e.FetchedAt = DateTime.UtcNow; e.NeedsRevalidate = false; }
+            lock (_gate) { e.Val = v; e.HasVal = true; e.Error = null; e.FetchedAt = DateTime.UtcNow; e.NeedsRevalidate = false; }
         }
-        catch
+        catch (Exception ex)
         {
-            // Fetch failed — leave the entry as-is (a later Use retries). Swallowed so this fire-and-forget revalidation
-            // can't fault unobserved (TaskScheduler.UnobservedTaskException). A richer impl would set a Loaded.Error.
+            // Fetch failed — record the error ON THE ENTRY so Use/Peek surface it (typed reasons, error UI) and a later
+            // Use retries. Still caught here so this fire-and-forget revalidation can't fault unobserved.
+            lock (_gate) e.Error = ex.Message;
         }
         finally
         {

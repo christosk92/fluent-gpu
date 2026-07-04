@@ -25,6 +25,8 @@ static class WaveeSettings
     // Theme preference: 0 = System (follow the OS live), 1 = Light, 2 = Dark. Default System so a fresh install matches
     // the OS; an explicit in-app toggle pins Light/Dark and stops following the OS. Seeded at startup before the first frame.
     public static readonly SettingKey<int> ThemeMode = new("theme.mode", 0);
+    // Color palette preset: warm (default) | slate | neutral | accent (OS-accent-tinted neutrals).
+    public static readonly SettingKey<string> PaletteId = new("theme.palette", "warm");
     public static readonly SettingKey<int> RowDensity = new("detail.rowdensity", 1);   // 0 Compact · 1 Default · 2 Cozy · 3 Comfortable
     // The saved / liked / followed library set (Mutations facet) — a newline-joined list of uris. The single in-process
     // outbox: every optimistic save/follow rewrites it. (A real source would reconcile server-side + revision conflicts.)

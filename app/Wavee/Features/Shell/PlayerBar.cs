@@ -71,7 +71,7 @@ readonly record struct PlayerBarLayout(
         return new PlayerBarLayout(
             Band: band,
             ShowExpand: w >= 1240f,
-            ShowDevices: w >= 1180f,
+            ShowDevices: true,   // the device picker is the ONLY way to play (local playback unsupported) → always visible
             ShowQueue: w >= 1100f,
             ShowVolumeSlider: w >= 1010f,
             ShowShuffleRepeat: w >= 680f,
@@ -150,9 +150,10 @@ sealed class PlayerBarContent : Component
 
     // A soft critical red for the Error state's title (app-local; the chrome stays WinUI-faithful elsewhere).
     static readonly ColorF Critical = new(0.93f, 0.42f, 0.45f, 1f);
-    // Shared marquee cadence for the now-playing title + subtitle: a FIXED cycle (vs constant speed) so the two lines
-    // advance through the same fraction of their own text in lockstep and reset together — i.e. they read as synced.
-    const float MarqueeCycleMs = 12000f;
+    // Shared marquee cadence for the now-playing title: a FIXED one-way travel time (vs constant speed) so sibling lines
+    // can stay phase-locked when they share a CycleMs. PingPong holds at the tail before bouncing back.
+    const float MarqueeCycleMs = 10000f;
+    const float MarqueeEndPauseMs = 2500f;
     // Dark glyph for the WHITE primary play/pause face (the musa/Spotify treatment — a white circle, dark icon).
     // Thin volume rail — the WinUI Slider trimmed to a 4px track + a small 12px thumb so it reads as a level line.
     static readonly Slider.Style RailStyle = Slider.DefaultStyle with
@@ -230,10 +231,10 @@ sealed class PlayerBarContent : Component
         // Marquee is an autonomous component, so a parent re-render does not push new constructor args into it — the
         // thunk (captured once, reading the stable bridge's signals) is what keeps the inner TextEl re-measuring and
         // repainting as the track changes. Passing the strings directly would freeze them at the first-mount value.
-        // Both lines scroll only on hover (TriggerMode.Hover) and share ONE gate (titleHover) driven by the meta column
-        // below — so they start together and stay phase-locked (CycleMs), instead of each toggling under its own line.
+        // Both lines auto-scroll when the title overflows (PauseOnHover) and share ONE hover gate (titleHover) on the
+        // meta column — hovering pauses so the user can read / click; CycleMs keeps any sibling lines phase-locked.
         // The edge fade is unaffected: a right-edge "there's more" cue at rest, both edges while scrolling.
-        // Now-playing is clickable: art + title → the album; the subtitle splits into an artist link + an album link.
+        // Now-playing is clickable: art + title → the album; artists are per-name links inside a scrolling row.
         var npAlbum = track?.Album;
         bool albumNav = npAlbum is { Uri.Length: > 0 };
         void NavAlbum() { if (albumNav) go?.Invoke("album:" + npAlbum!.Uri, npAlbum.Name); }
@@ -241,9 +242,15 @@ sealed class PlayerBarContent : Component
         var titleLinkHover = UseSignal(false);
         bool titleHot = albumNav && titleLinkHover.Value;
         Element titleEl = Marquee.Of(Prop.Of(() => NowPlaying(b).Title),
-            new Marquee.Style { FontSize = 14f, Weight = 700, Foreground = Prop.Of(() => titleHot ? Tok.AccentTextPrimary : NowPlaying(b).Color), CycleMs = MarqueeCycleMs, Trigger = Marquee.TriggerMode.Hover },
+            new Marquee.Style
+            {
+                FontSize = 14f, Weight = 700,
+                Foreground = Prop.Of(() => titleHot ? Tok.AccentTextPrimary : NowPlaying(b).Color),
+                CycleMs = MarqueeCycleMs, EndPauseMs = MarqueeEndPauseMs,
+                Mode = Marquee.ScrollMode.PingPong, Trigger = Marquee.TriggerMode.PauseOnHover,
+            },
             scrollWhen: titleHover);
-        if (albumNav)   // the title opens the album (click); hover still scrolls the marquee (the metaCol drives titleHover)
+        if (albumNav)   // the title opens the album (click); hover pauses the marquee (the metaCol drives titleHover)
             titleEl = new BoxEl
             {
                 MinWidth = 0f, Grow = 1f, Shrink = 1f, AlignSelf = FlexAlign.Stretch, ClipToBounds = true,
@@ -268,18 +275,20 @@ sealed class PlayerBarContent : Component
         metaKids.Add(titleEl);
         if (showSubtitle && track is not null && err is null)
         {
-            var subKids = new List<Element>(Math.Max(3, track.Artists.Count * 2 + 2));
-            AddArtistLinks(subKids, track.Artists, go);
-            if (subKids.Count > 0)
-                metaKids.Add(new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, ClipToBounds = true, Children = subKids.ToArray() });
+            metaKids.Add(Marquee.Content(() => new NowPlayingArtistLinks(),
+                new Marquee.Style
+                {
+                    CycleMs = MarqueeCycleMs, EndPauseMs = MarqueeEndPauseMs,
+                    Mode = Marquee.ScrollMode.PingPong, Trigger = Marquee.TriggerMode.PauseOnHover,
+                },
+                scrollWhen: titleHover));
         }
 
         var metaCol = new BoxEl
         {
             Key = "meta", Animate = MoveMotion,
             Direction = 1, Grow = 1f, Shrink = 1f, Gap = 2f, Justify = FlexJustify.Center, ClipToBounds = true,
-            // The shared hover target: the title marquee reads titleHover, so this column is the deepest pointer target
-            // over the now-playing text → hovering anywhere on it scrolls the title.
+            // The shared hover target: the title marquee reads titleHover, so hovering anywhere on the meta column pauses it.
             OnHoverMove = _ => { if (!titleHover.Peek()) titleHover.Value = true; },
             OnPointerExit = () => { if (titleHover.Peek()) titleHover.Value = false; },
             Children = metaKids.ToArray(),
@@ -366,8 +375,7 @@ sealed class PlayerBarContent : Component
         // controls live — the queue rail, the device picker, the big transport).
         if (!showQueue)
             overflowCommands.Add(new AppBarCommand(Icons.Queue, Loc.Get(Strings.Player.Queue), () => { b.Expanded.Value = true; }, Enabled: canTransport));
-        if (!showDevices)
-            overflowCommands.Add(new AppBarCommand(Icons.Devices, Loc.Get(Strings.Player.Devices), () => { b.Expanded.Value = true; }, Enabled: canTransport));
+        // (Devices button is always visible now — no overflow fallback.)
         if (!showExpand)
             overflowCommands.Add(new AppBarCommand(Icons.ChevronUp, Loc.Get(Strings.Player.NowPlaying), () => { b.Expanded.Value = true; }, Enabled: canTransport));
 
@@ -395,7 +403,9 @@ sealed class PlayerBarContent : Component
         if (showVolumeSlider)
             rightKids.Add(Slider.Bind(b.Volume, v => { _ = b.Player.SetVolumeAsync(v); }, 96f, 16f, RailStyle) with { Key = "volume-slider", Animate = ItemMotion });
         if (ui is not null && active)
-            rightKids.Add(Transport(Mdl.Lyrics, () => ui.Toggle(RailMode.Lyrics), true,
+            rightKids.Add(Transport(Mdl.Lyrics,
+                () => { if (ui.RailFits.Peek()) ui.Toggle(RailMode.Lyrics); else { b.ExpandedWithLyrics.Value = true; b.Expanded.Value = true; } },
+                true,
                 ui.RailOpen.Value && ui.Mode.Value == RailMode.Lyrics, accent, buttonBox, buttonGlyph)
                 with { Key = "lyrics", Animate = ItemMotion });
         // Switch-to-video toggle — shown only when the now-playing track has a music video (async-detected). The swap is a
@@ -406,9 +416,9 @@ sealed class PlayerBarContent : Component
                 Loc.Get(preferVideo ? Strings.Player.SwitchToAudio : Strings.Player.SwitchToVideo))
                 with { Key = "video" });
         if (showQueue)
-            rightKids.Add(Embed.Comp(() => new QueueButton(b, accent, buttonBox, buttonGlyph)) with { Key = "queue" });
+            rightKids.Add(Embed.Comp(() => new QueueButton(b, buttonBox, buttonGlyph)) with { Key = "queue" });
         if (showDevices)
-            rightKids.Add(Embed.Comp(() => new DevicesButton(b, accent, buttonBox, buttonGlyph)) with { Key = "devices" });
+            rightKids.Add(Embed.Comp(() => new DevicesButton(b, buttonBox, buttonGlyph, DevicePickerScope.Bar)) with { Key = "devices" });
         if (showExpand)
             rightKids.Add(Transport(Icons.ChevronUp, () => { b.Expanded.Value = true; }, canTransport, false, accent, buttonBox, buttonGlyph)
                 with { Key = "expand", Animate = ItemMotion });
@@ -441,6 +451,7 @@ sealed class PlayerBarContent : Component
         return new BoxEl
         {
             Direction = 1, Height = WaveeSize.PlayerBarH, Fill = WaveeColors.PlayerBar, ClipToBounds = true,
+            Shadow = Elevation.DockTop,
             Children = [topEdge, row],
         };
     }
@@ -507,10 +518,12 @@ sealed class PlayerBarContent : Component
 
     internal static List<MenuFlyoutItem> DeviceMenuItems(PlaybackBridge b, IReadOnlyList<PlaybackDevice> devices, string? activeId)
     {
-        var items = new List<MenuFlyoutItem>(Math.Max(1, devices.Count));
+        var items = new List<MenuFlyoutItem>(Math.Max(2, devices.Count));
         if (devices.Count == 0)
         {
-            items.Add(new MenuFlyoutItem(Loc.Get(Strings.Player.Devices), null, false, () => { }));
+            // Empty state: pre-login, or no other Spotify client is online for this account.
+            items.Add(new MenuFlyoutItem(Loc.Get(Strings.Player.NoDevices), Icons.Devices, false, () => { }));
+            items.Add(new MenuFlyoutItem(Loc.Get(Strings.Player.NoDevicesHint), null, false, () => { }));
             return items;
         }
 
@@ -518,11 +531,22 @@ sealed class PlayerBarContent : Component
         {
             var dev = d;
             bool isActive = dev.Id == activeId || dev.IsActive;
+            bool isThis = dev.Kind == DeviceKind.ThisDevice;   // local playback unsupported → not a valid transfer target
             items.Add(MenuFlyoutItem.Toggle(dev.Name, isActive,
-                () => { _ = b.DeviceControl.TransferAsync(dev.Id); }, Icons.Devices, enabled: true));
+                    isThis ? null : () => { _ = b.DeviceControl.TransferAsync(dev.Id); }, DeviceGlyph(dev.Kind), enabled: !isThis)
+                with { AcceleratorText = isThis ? Loc.Get(Strings.Player.Unavailable) : null });
         }
         return items;
     }
+
+    // Segoe Fluent glyph per Connect device kind (app-local Mdl set; the engine Icons.* set doesn't carry these).
+    static string DeviceGlyph(DeviceKind k) => k switch
+    {
+        DeviceKind.Phone => Mdl.CellPhone,
+        DeviceKind.Speaker => Mdl.Speakers,
+        DeviceKind.Tv => Mdl.TvMonitor,
+        _ => Mdl.ThisPc,   // ThisDevice / Computer
+    };
 
     internal static string Fmt(long ms)
     {
@@ -541,6 +565,25 @@ sealed class PlayerBarContent : Component
             bool enabled = a.Uri.Length > 0;
             into.Add(NavSpan(a.Name, () => { if (enabled) go?.Invoke("artist:" + a.Uri, a.Name); }, enabled)
                 with { Key = "artist:" + (a.Uri.Length > 0 ? a.Uri : a.Id + ":" + a.Name) });
+        }
+    }
+
+    // Reactive artist row for the player-bar marquee — reads bridge/nav from context so track changes re-skin without remount.
+    sealed class NowPlayingArtistLinks : Component
+    {
+        public override Element Render()
+        {
+            var b = UseContext(PlaybackBridge.Slot);
+            var go = UseContext(HistoryStore.NavCtx);
+            var artists = b?.CurrentTrack.Value?.Artists;
+            var kids = new List<Element>(artists is { Count: > 0 } ? artists.Count * 2 : 0);
+            if (artists is { Count: > 0 })
+                AddArtistLinks(kids, artists, go);
+            return new BoxEl
+            {
+                Direction = 0, AlignItems = FlexAlign.Center, Shrink = 0f,
+                Children = kids.ToArray(),
+            };
         }
     }
 
@@ -831,14 +874,23 @@ sealed class RemoteDeviceLine : Component
     }
 }
 
+// Which mounted DevicesButton instance responds to a bridge DevicePickerRequest (the "Choose device" toast action): the
+// player-bar one when the now-playing view is collapsed, the now-playing footer one when it's expanded. None = never auto-open.
+enum DevicePickerScope : byte { None, Bar, NowPlaying }
+
 // The Connect device picker: opens a MenuFlyout of the live device roster (from the bridge) UPWARD out of the button.
 // Each row toggles active + transfers playback to that device on click. Re-renders when the roster / active device changes.
+// Also opens itself when the bridge's DevicePickerRequest is bumped (the critical "playback unsupported" toast's action),
+// but only the instance whose scope matches the current Expanded state — so the toast opens exactly one picker.
 sealed class DevicesButton : Component
 {
-    readonly PlaybackBridge _b; readonly ColorF _accent; readonly float _box, _glyph;
-    public DevicesButton(PlaybackBridge b, ColorF accent, float box = 36f, float glyph = 16f)
+    // No accent ctor arg: ctor args freeze at mount (Embed.Comp preserves the instance across parent re-renders),
+    // so the accent is read in Render() where it stays live — RethemeAll re-renders this component on any Tok.Epoch
+    // bump, and the now-playing scope's TrackPalette read subscribes to art changes.
+    readonly PlaybackBridge _b; readonly float _box, _glyph; readonly DevicePickerScope _scope;
+    public DevicesButton(PlaybackBridge b, float box = 36f, float glyph = 16f, DevicePickerScope scope = DevicePickerScope.None)
     {
-        _b = b; _accent = accent; _box = box; _glyph = glyph;
+        _b = b; _box = box; _glyph = glyph; _scope = scope;
     }
 
     public override Element Render()
@@ -849,6 +901,8 @@ sealed class DevicesButton : Component
         var devices = _b.Devices.Value;               // subscribe → re-render on roster change
         string? activeId = _b.ActiveDeviceId.Value;   // subscribe → the active row shows a check + the glyph highlights
         bool active = !string.IsNullOrEmpty(activeId);
+        int req = _b.DevicePickerRequest.Value;       // subscribe → re-render (and re-run the effect) on a toast "Choose device" click
+        var lastReq = UseRef(req);                     // seeded at mount → a request that predates this mount is ignored
 
         void Toggle()
         {
@@ -862,7 +916,19 @@ sealed class DevicesButton : Component
             handle.Value.ClosedAction = () => handle.Value = null;
         }
 
-        return PlayerBarContent.Transport(Icons.Devices, Toggle, true, active, _accent, _box, _glyph, h => anchor.Value = h);
+        // Open the picker in response to the toast action — in an effect (post-render), never during render. Both mounted
+        // instances consume the request (each has its own lastReq), but only the scope matching Expanded actually opens it.
+        UseEffect(() =>
+        {
+            if (_scope == DevicePickerScope.None || req == lastReq.Value) return;
+            lastReq.Value = req;
+            var want = _b.Expanded.Peek() ? DevicePickerScope.NowPlaying : DevicePickerScope.Bar;
+            if (_scope == want && handle.Value is not { IsOpen: true }) Toggle();
+        }, req);
+
+        ColorF accentNow = _scope == DevicePickerScope.NowPlaying && _b.TrackPalette.Value is { } pal
+            ? WaveePalette.Accent(pal) : Tok.AccentDefault;
+        return PlayerBarContent.Transport(Icons.Devices, Toggle, true, active, accentNow, _box, _glyph, h => anchor.Value = h);
     }
 }
 
@@ -871,10 +937,11 @@ sealed class DevicesButton : Component
 // skip-to-queue-item needs a seam addition). Re-renders when the queue changes.
 sealed class QueueButton : Component
 {
-    readonly PlaybackBridge _b; readonly ColorF _accent; readonly float _box, _glyph;
-    public QueueButton(PlaybackBridge b, ColorF accent, float box = 36f, float glyph = 16f)
+    // No accent ctor arg for the same freeze-at-mount reason as DevicesButton above — read live in Render().
+    readonly PlaybackBridge _b; readonly float _box, _glyph;
+    public QueueButton(PlaybackBridge b, float box = 36f, float glyph = 16f)
     {
-        _b = b; _accent = accent; _box = box; _glyph = glyph;
+        _b = b; _box = box; _glyph = glyph;
     }
 
     public override Element Render()
@@ -914,7 +981,7 @@ sealed class QueueButton : Component
             handle.Value.ClosedAction = () => handle.Value = null;
         }
 
-        return PlayerBarContent.Transport(Icons.Queue, Toggle, true, false, _accent, _box, _glyph, h => anchor.Value = h);
+        return PlayerBarContent.Transport(Icons.Queue, Toggle, true, false, Tok.AccentDefault, _box, _glyph, h => anchor.Value = h);
     }
 }
 

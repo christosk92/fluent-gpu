@@ -26,6 +26,8 @@ public static class Elevation
     public static ShadowSpec Flyout => Tok.Theme == ThemeKind.Dark ? FlyoutDark : FlyoutLight;
     private static readonly ShadowSpec FlyoutDark = new(Blur: 16f, OffsetY: 8f, OffsetX: 0f, Color: ColorF.FromRgba(0, 0, 0, 0x42));   // ~0.26
     private static readonly ShadowSpec FlyoutLight = new(Blur: 16f, OffsetY: 8f, OffsetX: 0f, Color: ColorF.FromRgba(0, 0, 0, 0x24));  // ~0.14
+    /// <summary>Player dock band — upward cast shadow so the transport reads as floating above the page.</summary>
+    public static readonly ShadowSpec DockTop = new(Blur: 12f, OffsetY: -2f, OffsetX: 0f, Color: ColorF.FromRgba(0, 0, 0, 0x28));
     /// <summary>Dialog band (WinUI depth-128 class) — ContentDialog and full-window modal surfaces.</summary>
     public static readonly ShadowSpec Dialog = new(Blur: 64f, OffsetY: 16f, OffsetX: 0f, Color: ColorF.FromRgba(0, 0, 0, 0x66));
 }

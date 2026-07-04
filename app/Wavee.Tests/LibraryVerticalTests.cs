@@ -66,19 +66,24 @@ public class LibraryVerticalTests
                 Assert.Equal("T-a", pl.Tracks[0].Title);
 
                 // 3) EDIT optimistically (remove the first track) → the read reflects it immediately
-                var eng = new MutationEngine(store, new IMutationStrategy[] { new SetReplayStrategy(), new OpRebaseStrategy() });
+                var eng = new MutationEngine(store, new IMutationStrategy[] { new SetReplayStrategy(), new OpRebaseStrategy(store) });
                 eng.Edit("spotify:playlist:p", new[] { new PlaylistOp(PlaylistOpKind.Remove, FromIndex: 0, Length: 1) }, store.PlaylistRevision("spotify:playlist:p"));
                 var edited = await src.GetPlaylistAsync("spotify:playlist:p");
                 Assert.Equal("spotify:track:b", Assert.Single(edited!.Tracks!).Uri);
 
-                // 4) DEALER PUSH (parent-rev match) adds a track back → applied in place, membership grows
+                // 4) DEALER PUSH (parent-rev match) adds a track back → decoded + enqueued onto the sync loop, applied in place
                 var transport = new StubTransport();
-                using var router = new DealerRouter(transport, store, _ => { }, _ => { });
+                var collections = new Wavee.Backend.Collections.CollectionFetcher(http, () => "https://spclient.test", () => "bob", store,
+                    _ => null, (_, _) => { }, Hydrate);
+                await using var sync = new Wavee.Backend.Sync.LibrarySync(store, fetcher, collections, eng, transport,
+                    () => new SessionContext("bob", "US", "premium", "en", Tier.Premium, false), () => "bob", _ => { }, ct);
+                using var router = new DealerRouter(transport, sync);
                 var mod = new Pl.PlaylistModificationInfo { Uri = ByteString.CopyFromUtf8("spotify:playlist:p"), ParentRevision = store.PlaylistRevision("spotify:playlist:p") is { } r ? ByteString.CopyFrom(r) : ByteString.Empty, NewRevision = ByteString.CopyFrom((byte)9) };
                 var add = new Pl.Add { AddLast = true };
                 add.Items.Add(new Pl.Item { Uri = "spotify:track:b" });   // re-add b
                 mod.Ops.Add(new Pl.Op { Kind = Pl.Op.Types.Kind.Add, Add = add });
                 transport.PushEvent(new WireEvent("hm://playlist/v2/playlist/p", mod.ToByteArray()));
+                await sync.WaitForIdleAsync();
                 Assert.Equal(2, store.Membership("spotify:playlist:p").Count);                 // applied in place
                 Assert.Equal(new byte[] { 9 }, store.PlaylistRevision("spotify:playlist:p"));   // revision advanced
 

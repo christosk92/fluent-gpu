@@ -94,7 +94,8 @@ public sealed class SharedHttpLyricFetch : ILyricHttp
 public sealed record LyricsOptions(
     bool EnableGreyProviders = false,
     int PerSourceTimeoutMs = 6000,
-    int TotalTimeoutMs = 9000)
+    int TotalTimeoutMs = 9000,
+    int FirstHitGraceMs = 2000)
 {
     public static LyricsOptions Default { get; } = new();
 }

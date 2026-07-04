@@ -292,7 +292,13 @@
     "nowPlaying": "Now playing",
     "switchToVideo": "Switch to video",
     "switchToAudio": "Switch to audio",
-    "playingOn": "Playing on {device}"
+    "playingOn": "Playing on {device}",
+    "localPlaybackUnsupported": "Playback isn’t supported on this device yet",
+    "chooseDevice": "Choose device",
+    "noDevices": "No devices found",
+    "noDevicesHint": "Open Spotify on another device",
+    "unavailable": "Unavailable",
+    "remoteCommandFailed": "Couldn’t reach that device — make sure it’s online and try again"
   },
 
   "nav": {

@@ -22,7 +22,8 @@ public class PlaylistFetcherTests
     {
         var store = new InMemoryStore();
         var slc = new Pl.SelectedListContent { Revision = ByteString.CopyFrom(7), Length = 2, OwnerUsername = "bob" };
-        slc.Attributes = new Pl.ListAttributes { Name = "My Mix", Description = "d" };
+        slc.Attributes = new Pl.ListAttributes { Name = "My Mix", Description = "d", Collaborative = true };
+        slc.Capabilities = new Pl.Capabilities { CanView = true, CanEditItems = true, CanEditMetadata = true };
         var contents = new Pl.ListItems { Pos = 0, Truncated = false };
         contents.Items.Add(new Pl.Item { Uri = "spotify:track:a", Attributes = new Pl.ItemAttributes { AddedBy = "me", Timestamp = 5 } });
         contents.Items.Add(new Pl.Item { Uri = "spotify:track:b" });
@@ -50,6 +51,10 @@ public class PlaylistFetcherTests
         Assert.NotNull(header);
         Assert.Equal("My Mix", header!.Name);
         Assert.Equal("bob", header.OwnerName);
+        Assert.True(header.Capabilities.IsCollaborative);
+        Assert.True(header.Capabilities.CanView);
+        Assert.True(header.Capabilities.CanEditItems);
+        Assert.True(header.Capabilities.CanEditMetadata);
 
         Assert.Equal(new[] { "spotify:track:a", "spotify:track:b" }, hydrated);   // membership uris handed to the hydrator
     }

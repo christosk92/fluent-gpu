@@ -143,6 +143,37 @@ stops). They produce a `GradientSpec` consumed by the `BoxEl.BorderBrush` field 
 `DrawGradientStroke` opcode renders (scene-memory.md §4.1 / gpu-renderer.md §3.1a) — the gradient *fill* path is
 unchanged; only the gradient-as-stroke raster is new (owned by gpu-renderer.md).
 
+### 2.2bis T0 multi-palette axis (SHIPPED — `ThemePalette` + `PaletteSeed`, Mica-first both themes)
+
+Beyond the Light/Dark kind switch, T0 tokens support **N base-color presets** (shadcn-style semantic slots +
+multiple value sets). Owner: `src/FluentGpu.Engine/Dsl/{Tokens,PaletteBuilder}.cs`.
+
+| Artifact | Role |
+|---|---|
+| `PaletteSeed` | Hue/chroma + light luminance anchors (frame / rail / page / card) + per-theme chrome saturations (`LightChromeSat` / `DarkChromeSat`) |
+| `PaletteBuilder` | Build-time generator → paired `TokenSet` + `ShellPalette` per seed |
+| `ThemePalette` | `{ Id, Light, Dark, LightShell, DarkShell }` — one preset |
+| `Tok.Use(ThemePalette, ThemeKind)` | Pointer swap + `Epoch++` (palette-only changes bump Epoch) |
+| `MicaRef` (`Foundation`) | Reference DWM Mica tones (`Light/Dark` × `Default/Bright/Dim`, ±0x14 assumed swing) — the flatten targets for anchor solving + gates |
+| `ColorContrast.Flatten` | Straight-alpha composite of a translucent surface over an opaque backdrop (what actually renders) |
+| `ColorRamp.Tinted` | No-softening HSL tint — chrome tints that survive at extreme lightness (`Neutral`'s extreme-L chroma softening crushes them) |
+| Presets | `warm` (default), `slate` (230°), `neutral`, `accent` (OS-accent-tinted; `SetAccent` rebuilds it AND re-points the active palette) |
+
+**Both theme shells are translucent-over-Mica** (Mica-first). Dark keeps the WinUI stack (seed-tinted
+`LayerOnMicaBaseAlt`-class bars @0x73 + white-alpha page/rows). Light mirrors it: the seed's luminance anchors
+are solved as **flattened targets** — `tintL = (anchorL − micaL·(1−a)) / a` against `MicaRef.LightDefault` — so
+the frame < rail < page ladder holds on the reference backdrop and compresses (never inverts) under wallpaper
+swings; bars @0x73, frame/page @0x8C; rows are neutral overlays (white-alpha zebra, ink-alpha hover/press) so
+row states are preset-independent. `TokenSet` values stay opaque (`WindowBackground` remains the inactive-window
+fallback the host flattens to when DWM stops the backdrop).
+
+Wavee app shell surfaces (`WaveeColors`) read `Tok.Palette.LightShell` / `DarkShell`; persistence via
+`WaveeSettings.PaletteId`. Regression: VerticalSlice `palette.*` checks assert on **flattened** colors — warm
+calibration anchors, AA text tiers vs the brightest composited hosting surface, the ≥5% flattened luminance
+ladder, and pairwise preset distinctness (flattened-toolbar max-channel delta floors, relaxed for accent pairs).
+`HoverFill`/`PressedFill` are bindable `Prop<ColorF>` channels (like `Fill`), so recycled list rows re-fire on
+`Epoch` (`prop-net.hoverfill` gate).
+
 ---
 
 ## 3. Core POD types (Foundation/Theme)

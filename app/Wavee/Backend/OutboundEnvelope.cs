@@ -237,6 +237,26 @@ public static class OutboundEnvelope
     // with a protobuf SetVolumeCommand body. That message is a fixed 3-field wire spec (volume / empty logging_params /
     // connection_type), hand-encoded here so the outbound path stays proto-free. Round-trips to the captured bytes
     // (volume 19496 → 08 a8 98 01 1a 00 22 04 'wlan').
+    public static string Transfer(string transferIntentId, string commandId, string interactionId, string license)
+    {
+        var buf = new ArrayBufferWriter<byte>(256);
+        using (var w = new Utf8JsonWriter(buf))
+        {
+            w.WriteStartObject();
+            w.WriteStartObject("options");
+            w.WriteString("restore_paused", "restore");
+            w.WriteString("restore_position", "extrapolate");
+            w.WriteString("restore_track", "only_current");
+            w.WriteString("license", license);
+            w.WriteEndObject();
+            w.WriteString("transfer_intent_id", transferIntentId);
+            w.WriteString("command_id", commandId);
+            w.WriteString("interaction_id", interactionId);
+            w.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buf.WrittenSpan);
+    }
+
     public static byte[] ConnectVolumeBody(int volume0_65535)
     {
         int v = Math.Clamp(volume0_65535, 0, 65535);

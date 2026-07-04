@@ -48,19 +48,22 @@ internal static partial class WaveeResizeProbe
         Directory.CreateDirectory(@"C:\tmp");
         string csvPath = @"C:\tmp\wavee-resize-probe.csv";
         string summaryPath = @"C:\tmp\wavee-resize-probe-summary.txt";
-        int[] widths =
+        float scale = window.Scale <= 0f ? 1f : window.Scale;
+        int heightPx = Px(Height, scale);
+        int[] widths = DipToPx(scale,
         [
             1500, 1320, 1241, 1240, 1239, 1181, 1180, 1179, 1101, 1100, 1099,
             1011, 1010, 1009, 901, 900, 899, 861, 860, 859, 761, 760, 759,
-            701, 700, 699, 681, 680, 679, 621, 620, 619, 561, 560, 559,
-            541, 540, 539, 521, 520, 519, 441, 440, 439, 401, 400, 399,
+            701, 700, 699, 681, 680, 679, 621, 620, 619, 585, 580, 579,
+            561, 560, 559, 541, 540, 539, 535, 521, 520, 519, 441, 440, 439, 401, 400, 399,
             360, 520, 760, 1180, 1500
-        ];
-        int[] screenshots = [1500, 1180, 1010, 760, 680, 540, 440, 360];
+        ]);
+        int[] screenshots = DipToPx(scale, [1500, 1180, 1010, 760, 680, 585, 580, 579, 561, 560, 559, 541, 540, 539, 535, 440, 360]);
 
-        for (int i = 0; i < 8 && !window.IsClosed; i++) host.RunFrame();
+        Console.Error.WriteLine($"[wavee-resize-probe] scale={scale:0.00} heightPx={heightPx}");
+        WarmupAndNavigateDetail(host, window);
 
-        RunBandAnimCapture(host, window, gpu);
+        RunBandAnimCapture(host, window, gpu, heightPx);
 
         var csv = new StringBuilder(4096);
         csv.AppendLine("step,width,kind,elapsedMs,frameMs,rendered,components,nodes,drawCommands,hotAlloc,fps");
@@ -71,7 +74,7 @@ internal static partial class WaveeResizeProbe
         {
             int width = widths[i];
             long start = Stopwatch.GetTimestamp();
-            window.SetClientSize(width, Height);                 // real WM_SIZE -> PaintRequested -> AppHost.Paint
+            window.SetClientSize(width, heightPx);               // real WM_SIZE -> PaintRequested -> AppHost.Paint
             double resizeMs = ElapsedMs(start);
             var resizeStats = host.LastStats;
             AddRow(csv, i, width, "wm-size", resizeMs, resizeStats);
@@ -96,8 +99,8 @@ internal static partial class WaveeResizeProbe
             }
         }
 
-        RunWithinBandProbe(host, window, csv);
-        RunModalResizeProbe(host, window, csv);
+        RunWithinBandProbe(host, window, csv, scale, heightPx);
+        RunModalResizeProbe(host, window, csv, scale, heightPx);
         RunMoveProbe(host, window, csv);
 
         File.WriteAllText(csvPath, csv.ToString());
@@ -109,16 +112,37 @@ internal static partial class WaveeResizeProbe
         Console.Error.WriteLine($"[wavee-resize-probe] {summary}");
     }
 
+    static void WarmupAndNavigateDetail(AppHost host, Win32Window window)
+    {
+        for (int i = 0; i < 240 && WaveeShell.ProbeNav is null && !window.IsClosed; i++) host.RunFrame();
+        if (WaveeShell.ProbeNav is null)
+        {
+            Console.Error.WriteLine("[wavee-resize-probe] ProbeNav not wired; running on the current page");
+            return;
+        }
+
+        string route = Environment.GetEnvironmentVariable("WAVEE_RESIZE_ROUTE") ?? "liked";
+        if (string.IsNullOrWhiteSpace(route)) route = "liked";
+        string? arg = Environment.GetEnvironmentVariable("WAVEE_RESIZE_ARG");
+        if (string.IsNullOrWhiteSpace(arg)) arg = null;
+
+        Console.Error.WriteLine($"[wavee-resize-probe] route={route}");
+        WaveeShell.ProbeNav(route, arg);
+        for (int i = 0; i < 50 && !window.IsClosed; i++) host.RunFrame();
+        System.Threading.Thread.Sleep(350);
+        for (int i = 0; i < 50 && !window.IsClosed; i++) host.RunFrame();
+    }
+
     // Within-ONE-band resizes (all widths >= 1240 => PlayerBar band 15 => NO re-render): isolates the pure full-root
     // FlexLayout cost from the band-crossing reconcile, so we can tell whether the "layout" segment is flex or reconcile.
-    static void RunWithinBandProbe(AppHost host, Win32Window window, StringBuilder csv)
+    static void RunWithinBandProbe(AppHost host, Win32Window window, StringBuilder csv, float scale, int heightPx)
     {
-        int[] widths = [1480, 1300, 1481, 1301, 1482, 1302, 1483, 1303, 1484, 1304, 1485, 1305];
+        int[] widths = DipToPx(scale, [1480, 1300, 1481, 1301, 1482, 1302, 1483, 1303, 1484, 1304, 1485, 1305]);
         Console.Error.WriteLine("[wavee-resize-probe] within-band start (expect comps=0)");
         for (int i = 0; i < widths.Length && !window.IsClosed; i++)
         {
             long start = Stopwatch.GetTimestamp();
-            window.SetClientSize(widths[i], Height);
+            window.SetClientSize(widths[i], heightPx);
             AddRow(csv, i, widths[i], "within-band", ElapsedMs(start), host.LastStats);
             host.RunFrame();   // drain settle
         }
@@ -128,17 +152,17 @@ internal static partial class WaveeResizeProbe
     // WAVEE_ANIM_CAP=1: capture the Devices-button Enter (cross 1180 upward) then Exit (cross back) frame-by-frame from
     // the swapchain (no DWM/screen-margin issues). Real wall-time sleeps advance the one-shot transition so consecutive
     // frames show the button fading/scaling if the ItemMotion enter/exit is actually playing on a resize band crossing.
-    static void RunBandAnimCapture(AppHost host, Win32Window window, D3D12Device gpu)
+    static void RunBandAnimCapture(AppHost host, Win32Window window, D3D12Device gpu, int heightPx)
     {
         if (!Diag.EnvFlag("WAVEE_ANIM_CAP")) return;
         // Bands are DIP; SetClientSize is PHYSICAL px → multiply by the DPI scale so we actually cross 1180 DIP.
         float scale = window.Scale <= 0f ? 1f : window.Scale;
-        int belowPx = (int)(1160 * scale);   // 1160 DIP — Devices hidden
-        int abovePx = (int)(1240 * scale);   // 1240 DIP — Devices (1180) AND Expand-edge clear; well past the band
+        int belowPx = Px(1160, scale);   // 1160 DIP — Devices hidden
+        int abovePx = Px(1240, scale);   // 1240 DIP — Devices (1180) AND Expand-edge clear; well past the band
         Console.Error.WriteLine($"[anim-cap] scale={scale:0.00} belowPx={belowPx} abovePx={abovePx}");
         Console.Error.WriteLine("[anim-cap] enter: cross 1180 upward (Devices appears)");
-        window.SetClientSize(belowPx, Height); for (int i = 0; i < 5 && !window.IsClosed; i++) host.RunFrame();
-        window.SetClientSize(abovePx, Height);  // crosses 1180 → Devices mounts → SeedEnter
+        window.SetClientSize(belowPx, heightPx); for (int i = 0; i < 5 && !window.IsClosed; i++) host.RunFrame();
+        window.SetClientSize(abovePx, heightPx);  // crosses 1180 → Devices mounts → SeedEnter
         for (int k = 0; k < 16 && !window.IsClosed; k++)
         {
             host.RunFrame();
@@ -147,7 +171,7 @@ internal static partial class WaveeResizeProbe
             System.Threading.Thread.Sleep(8);
         }
         Console.Error.WriteLine("[anim-cap] exit: cross 1180 downward (Devices disappears)");
-        window.SetClientSize(belowPx, Height);  // crosses 1180 → Devices unmounts → SeedExit (orphan fades)
+        window.SetClientSize(belowPx, heightPx);  // crosses 1180 → Devices unmounts → SeedExit (orphan fades)
         for (int k = 0; k < 10 && !window.IsClosed; k++)
         {
             host.RunFrame();
@@ -180,16 +204,16 @@ internal static partial class WaveeResizeProbe
         Console.Error.WriteLine("[wavee-resize-probe] modal-move done");
     }
 
-    static void RunModalResizeProbe(AppHost host, Win32Window window, StringBuilder csv)
+    static void RunModalResizeProbe(AppHost host, Win32Window window, StringBuilder csv, float scale, int heightPx)
     {
         nint hwnd = window.Handle.Value;
-        int[] burst = [1480, 1460, 1440, 1420, 1400, 1380, 1360, 1340, 1320, 1300, 1280, 1260, 1240, 1220, 1200, 1180];
+        int[] burst = DipToPx(scale, [1480, 1460, 1440, 1420, 1400, 1380, 1360, 1340, 1320, 1300, 1280, 1260, 1240, 1220, 1200, 1180]);
         Console.Error.WriteLine("[wavee-resize-probe] modal-resize burst start");
         SendMessageW(hwnd, WM_ENTERSIZEMOVE, 0, 0);
         for (int i = 0; i < burst.Length && !window.IsClosed; i++)
         {
             long start = Stopwatch.GetTimestamp();
-            window.SetClientSize(burst[i], Height);
+            window.SetClientSize(burst[i], heightPx);
             AddRow(csv, i, burst[i], "modal-size-msg", ElapsedMs(start), host.LastStats);
         }
 
@@ -200,6 +224,24 @@ internal static partial class WaveeResizeProbe
         long exitStart = Stopwatch.GetTimestamp();
         SendMessageW(hwnd, WM_EXITSIZEMOVE, 0, 0);
         AddRow(csv, 0, burst[^1], "modal-size-exit", ElapsedMs(exitStart), host.LastStats);
+
+        int[] thresholdBurst = DipToPx(scale, [590, 585, 580, 575, 570, 565, 561, 560, 559, 555, 550, 545, 541, 540, 539, 535, 530]);
+        Console.Error.WriteLine("[wavee-resize-probe] detail-threshold modal-resize burst start");
+        SendMessageW(hwnd, WM_ENTERSIZEMOVE, 0, 0);
+        for (int i = 0; i < thresholdBurst.Length && !window.IsClosed; i++)
+        {
+            long start = Stopwatch.GetTimestamp();
+            window.SetClientSize(thresholdBurst[i], heightPx);
+            AddRow(csv, i, thresholdBurst[i], "detail-modal-size-msg", ElapsedMs(start), host.LastStats);
+        }
+
+        pumpStart = Stopwatch.GetTimestamp();
+        pumped = host.RunFrame();
+        AddRow(csv, 0, thresholdBurst[^1], "detail-modal-size-pump", ElapsedMs(pumpStart), pumped);
+
+        exitStart = Stopwatch.GetTimestamp();
+        SendMessageW(hwnd, WM_EXITSIZEMOVE, 0, 0);
+        AddRow(csv, 0, thresholdBurst[^1], "detail-modal-size-exit", ElapsedMs(exitStart), host.LastStats);
         Console.Error.WriteLine("[wavee-resize-probe] modal-resize burst done");
     }
 
@@ -220,6 +262,15 @@ internal static partial class WaveeResizeProbe
 
     static double ElapsedMs(long start)
         => (Stopwatch.GetTimestamp() - start) * 1000.0 / Stopwatch.Frequency;
+
+    static int Px(int dip, float scale) => Math.Max(1, (int)MathF.Round(dip * scale));
+
+    static int[] DipToPx(float scale, int[] dips)
+    {
+        var px = new int[dips.Length];
+        for (int i = 0; i < dips.Length; i++) px[i] = Px(dips[i], scale);
+        return px;
+    }
 
     static bool Contains(int[] values, int value)
     {

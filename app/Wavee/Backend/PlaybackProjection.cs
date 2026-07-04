@@ -80,7 +80,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     string? _contextUri;
     string _activeDeviceId = "";
     string _queueRevision = "";
-    bool _isPlaying, _isBuffering, _shuffle;
+    bool _isPlaying, _isBuffering, _isPrebuffering, _shuffle;
     RepeatMode _repeat;
     double _volume = 0.7;
     long _posMs, _posAnchorWall, _durMs;
@@ -122,7 +122,10 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     public Track? CurrentTrack { get { lock (_gate) return _track; } }
     public string? ContextUri { get { lock (_gate) return _contextUri; } }
     public bool IsPlaying { get { lock (_gate) return _isPlaying; } }
-    public bool IsBuffering { get { lock (_gate) return _isBuffering; } }
+    // Prebuffering (playing the clear head while key+body resolve) reads as "buffering" to the UI so the player-bar's
+    // indeterminate edge shows during the instant-start window without a new interface member.
+    public bool IsBuffering { get { lock (_gate) return _isBuffering || _isPrebuffering; } }
+    public bool IsPrebuffering { get { lock (_gate) return _isPrebuffering; } }
     public long PositionMs { get { lock (_gate) return Pos(); } }
     public long DurationMs { get { lock (_gate) return _durMs; } }
     public double Volume { get { lock (_gate) return _volume; } }
@@ -292,10 +295,12 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         {
             switch (s.Kind)
             {
-                case AudioHostSignalKind.Playing: _isPlaying = true; _isBuffering = false; break;
+                case AudioHostSignalKind.Playing: _isPlaying = true; _isBuffering = false; _isPrebuffering = false; break;
                 case AudioHostSignalKind.Paused: _isPlaying = false; break;
                 case AudioHostSignalKind.Buffering: _isBuffering = true; break;
+                case AudioHostSignalKind.Prebuffering: _isPrebuffering = true; _isBuffering = false; break;
                 case AudioHostSignalKind.Ended: _isPlaying = false; break;
+                case AudioHostSignalKind.Error: _isPlaying = false; _isBuffering = false; _isPrebuffering = false; break;
             }
             _speed = 1.0; _posMs = s.PositionMs; _posAnchorWall = _now();
         }

@@ -148,6 +148,12 @@ public sealed class InputDispatcher
     // focus-causing pointer's device type). Mouse/pen focus never raises the panel. Defaults to Mouse (the safe identity).
     private PointerKind _lastPointerKind = PointerKind.Mouse;
 
+    // Stuck-hover fix (input-a11y.md §5.4/§15): the last mouse/pen window position + whether it is known. Written on
+    // every mouse/pen Down/Move/Up (below, next to _lastPointerKind), invalidated on WindowBlur. Drives the synthesized
+    // stationary hover re-resolve (RefreshHoverAfterScroll) after a phase-7 scroll write moves content under a still cursor.
+    private Point2 _lastPointerPx;
+    private bool _lastPointerValid;
+
     // ── pinch-zoom session (Phase-4; a singleton across the TWO pinching contacts — the DragController precedent) ──────
     // Opened when a second touch contact lands over the same Zoomable viewport a still-down contact is over; both contacts'
     // moves drive ZoomFor (the magnification about the gesture midpoint), and the FIRST up/cancel commits the scale and
@@ -811,6 +817,10 @@ public sealed class InputDispatcher
             // fires OnFocusChanged → the EditableText SIP policy reads LastPointerWasTouch). PointerCancel is capture LOSS,
             // not a focus-moving input, so it never rewrites the kind (a touch-up's cancel must not look like a mouse).
             if (e.Kind is InputKind.PointerDown or InputKind.PointerMove or InputKind.PointerUp) _lastPointerKind = e.Pointer;
+            // §5.4: remember the last mouse/pen position so a phase-7 scroll can re-resolve hover at this point when the
+            // cursor is stationary. Mouse/pen only — a touch contact never latches a resting hover (the kind gate below).
+            if (e.Pointer != PointerKind.Touch && e.Kind is InputKind.PointerDown or InputKind.PointerMove or InputKind.PointerUp)
+            { _lastPointerPx = e.PositionPx; _lastPointerValid = true; }
             if (pointerEvent)
             {
                 SlotIn(e.PointerId);
@@ -1121,6 +1131,7 @@ public sealed class InputDispatcher
                     EndScrollGesture(springBand: true);   // a live gesture dies with activation; its band springs home
                     CancelKeyArm(fire: false);
                     SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
+                    _lastPointerValid = false;   // §5.4: the cursor left the client area — no stationary point to re-resolve hover at
                     _accessKeyMode = false; _altPending = false;
                     OnWindowBlur?.Invoke();
                     OnWindowActivationChanged?.Invoke();   // custom titlebar dims (TextTertiary / disabled glyphs)
@@ -2950,6 +2961,43 @@ public sealed class InputDispatcher
         if (!TryGetScrollbarMetrics(n, out var m)) return false;
         var local = new Point2(p.X - m.Bounds.X, p.Y - m.Bounds.Y);
         return InScrollbarLane(local, in m);
+    }
+
+    /// <summary>Stuck-hover fix (input-a11y.md §5.4/§15): a phase-7 scroll offset write moved content under a possibly
+    /// STATIONARY mouse/pen cursor, so synthesize the hover re-resolve a real <see cref="InputKind.PointerMove"/> would
+    /// have done — HitTest at the last known pointer position and drive the SAME _hovered / scroll-hover / cursor path.
+    /// This is the sanctioned per-frame exception to §14's one-hit-test-per-event budget (it is offset-changed-gated,
+    /// not per-event). Mouse/pen only — a touch pan (_panClaimed) and an item-drag capture (Drag.IsActive) deliberately
+    /// suppress hover, and an unknown/off-window position (invalidated on WindowBlur) is skipped. Called by AppHost AFTER
+    /// the phase-7 scroll tick + the virtual re-realize catch-up, so the hit-test sees the finalized realized/transformed
+    /// content. Zero managed allocation — scalar walks through the existing hover chokepoints + cached delegate fields.</summary>
+    internal void RefreshHoverAfterScroll()
+    {
+        if (!_lastPointerValid || _lastPointerKind == PointerKind.Touch || _panClaimed || Drag.IsActive) return;
+        NodeHandle before = _hovered;
+        NodeHandle next = HitTest(_lastPointerPx);
+        // Recycled virtual-list slot: a boundary-crossing scroll rebinds the slot HANDLE still under the cursor to a new
+        // item, and the reconciler's rebind Unmark (Reconciler.cs) cleared this node's Hovered SCENE flag while _hovered
+        // still points AT it. SetState below early-outs on slot==next and would leave the row painted un-hovered until the
+        // next real PointerMove (the stuck-hover symptom, virtual-list variant) — so re-assert the bit here BEFORE the
+        // early-out. The recorder reads NodeFlags.Hovered directly (SceneRecorder.cs) and re-records after this refresh; a
+        // no-op when the flag survived (normal in-window scroll). Only the exact _hovered handle needs it — a changed hit
+        // goes through SetState's full enter transition, which sets the flag itself.
+        if (next == _hovered && !next.IsNull && _scene.IsLive(next))
+            _scene.Flags(next) |= NodeFlags.Hovered;
+        // The hover resolve + enter/leave + HoverWithin diff + cursor publish all ride through this single SetState (it
+        // early-outs when the node under the point is unchanged — no redundant OnHoverChanged / cursor churn, §3-gate).
+        SetState(ref _hovered, next, NodeFlags.Hovered);
+        // A same-text-node re-resolve over a Hyperlink still needs the per-span cursor refresh — the span boundary moved
+        // under the cursor even though the text node didn't change (mirrors the PointerMove path at ~855-857).
+        if (!_hovered.IsNull && _scene.IsLive(_hovered)
+            && (_scene.Interaction(_hovered).HandlerMask & InteractionInfo.SpanLinksBit) != 0)
+            UpdateSpanCursor(_hovered, _lastPointerPx);
+        UpdateScrollHover(_lastPointerPx);   // scrollbar-reveal target follows the content (early-outs with no subscribers)
+        // Bare-hover preview (OnHoverMove) ONLY when the hovered node actually CHANGED this refresh — never re-fire it for
+        // an unchanged target (SetState's early-out already covers the flag/enter/leave).
+        if (before != _hovered && !_hovered.IsNull && _scene.GetHoverMove(_hovered) is { } hm)
+            hm(LocalPos(_hovered, _lastPointerPx));
     }
 
     /// <summary>Diagnostic only: drive the wheel-routing path (hit-test → nearest vertical scroller) directly, bypassing the

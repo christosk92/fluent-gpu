@@ -102,6 +102,13 @@ public static class PathfinderOps
     public const string QueryArtistOverview = "queryArtistOverview";
     public const string QueryArtistOverviewHash = "7f86ff63e38c24973a2842b672abe44c910c1973978dc8a4a0cb648edef34527";
 
+    // Paged discography facets. All THREE share the one persisted hash below; the server disambiguates by operationName
+    // (sending the shared hash with the wrong name returns the wrong facet).
+    public const string QueryArtistDiscographyAlbums = "queryArtistDiscographyAlbums";
+    public const string QueryArtistDiscographySingles = "queryArtistDiscographySingles";
+    public const string QueryArtistDiscographyCompilations = "queryArtistDiscographyCompilations";
+    public const string QueryArtistDiscographyHash = "5e07d323febb57b4a56a42abbf781490e58764aa45feb6e3dc0591564fc56599";
+
     public const string GetAlbum = "getAlbum";
     public const string GetAlbumHash = "b9bfabef66ed756e5e13f68a942deb60bd4125ec1f1be8cc42769dc0259b4b10";
 

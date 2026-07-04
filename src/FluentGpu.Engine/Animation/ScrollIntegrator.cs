@@ -190,6 +190,13 @@ public sealed class ScrollIntegrator
     /// <see cref="ScrollState.UserScrollActive"/>.</summary>
     public bool AnyUserScrollActiveThisFrame { get; private set; }
 
+    /// <summary>True only for the frame just ticked when at least one viewport's scroll OFFSET actually advanced this
+    /// frame — the precise "content moved under the cursor" signal for the §5.4 stationary-hover re-resolve. Unlike
+    /// <see cref="AnyUserScrollActiveThisFrame"/> it is driven by a REAL offset write (an integrator tick chase OR a
+    /// synchronous dispatch write, via the ScrollMoved pulse), so it EXCLUDES clamped/settled/band-only frames and
+    /// INCLUDES the non-smooth (SmoothScroll=false) synchronous wheel path and programmatic bring-into-view.</summary>
+    public bool AnyOffsetWroteThisFrame { get; private set; }
+
     /// <summary>Quiesce / resume an armed viewport on a KeepAlive park edge: a parked viewport is not ticked (its
     /// mid-fling / target-chase scroll freezes) and is excluded from <see cref="HasActive"/>, so a backgrounded tab
     /// can't keep the frame loop awake; it resumes on un-park. No-op for a viewport that isn't currently armed.</summary>
@@ -292,6 +299,7 @@ public sealed class ScrollIntegrator
     public void Tick(float dtMs)
     {
         AnyUserScrollActiveThisFrame = false;
+        AnyOffsetWroteThisFrame = false;
         // §5 pacing: StopwatchFrameTimeSource deliberately emits one zero-delta frame after a cadence Resync. A zero
         // simulation step cannot move; treating it as a clamp killed newly-seeded motion (the wheel dead-zone). No
         // simulation time elapsed, so preserve every armed state unchanged and advance on the next positive tick. This
@@ -308,6 +316,7 @@ public sealed class ScrollIntegrator
             bool horizontal = sc.Orientation == 1;
             float off = horizontal ? sc.OffsetX : sc.OffsetY;
             byte phase = sc.Phase;
+            bool beganProgrammatic = (sc.PhaseFlags & ScrollState.PhaseProgrammatic) != 0;
 
             bool moved = false;
             bool flinging = false;
@@ -576,8 +585,9 @@ public sealed class ScrollIntegrator
             bool movingNow = flinging || syncMoved || bandActive || MathF.Abs(tgt - off) > 0.5f;
             // Persist the record-phase self-blur (DoF) defer gate: TRUE only while this is a USER scroll in motion this
             // frame (TouchpadTracking / Fling incl. OsOwned / WheelAnimating / SnapBack), NOT a Programmatic bring-into-view.
-            sc.UserScrollActive = movingNow && (sc.PhaseFlags & ScrollState.PhaseProgrammatic) == 0;
+            sc.UserScrollActive = movingNow && !beganProgrammatic && (sc.PhaseFlags & ScrollState.PhaseProgrammatic) == 0;
             if (sc.UserScrollActive) AnyUserScrollActiveThisFrame = true;
+            if (moved || syncMoved) AnyOffsetWroteThisFrame = true;   // §5.4: a real offset advance (tick chase OR synchronous ScrollMoved pulse) — the stationary-hover re-resolve gate
             bool over = sc.PointerOver;
             bool lane = sc.PointerOverScrollbar;
 

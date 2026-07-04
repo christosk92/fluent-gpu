@@ -18,9 +18,9 @@ public static class Marquee
     public enum ScrollMode { Loop, PingPong, SinglePass }
 
     /// <summary>What turns scrolling on. <see cref="Always"/> auto-scrolls whenever the text overflows.
-    /// <see cref="Hover"/> scrolls only while the control is hovered - note self-hover makes the control a
-    /// pointer target, so prefer <see cref="Always"/> when the control sits inside a clickable row.</summary>
-    public enum TriggerMode { Hover, Always }
+    /// <see cref="Hover"/> scrolls only while the control is hovered.
+    /// <see cref="PauseOnHover"/> auto-scrolls when the text overflows and pauses while hovered (read the full title).</summary>
+    public enum TriggerMode { Hover, Always, PauseOnHover }
 
     public sealed record Style
     {
@@ -32,7 +32,7 @@ public static class Marquee
         /// repaints reactively without re-rendering the marquee.</summary>
         public Prop<ColorF> Foreground { get; init; } = Tok.TextPrimary;
         public string? FontFamily { get; init; }
-        public float Speed { get; init; } = 15f;         // pixels per second — a calm reading pace (constant velocity:
+        public float Speed { get; init; } = 9f;           // pixels per second — a calm reading pace (constant velocity:
                                                           // longer text scrolls for longer, never faster). Used only when CycleMs == 0.
         // Fixed scroll-cycle duration (ms) for ONE traversal, OVERRIDING Speed when > 0. Constant velocity (Speed) makes
         // a line's duration depend on its width, so two lines of different widths drift out of phase. Giving sibling
@@ -41,10 +41,10 @@ public static class Marquee
         // distance, so wider text moves faster). 0 ⇒ derive the duration from Speed (a standalone, constant-pace line).
         public float CycleMs { get; init; } = 0f;
         public float Gap { get; init; } = 48f;           // space between the two copies in Loop mode
-        public float FadeBand { get; init; } = 12f;      // edge fade width in px
-        public float FadeStrength { get; init; } = 0.35f; // edge-fade intensity 0..1 (1 = fades fully to transparent; lower = softer)
+        public float FadeBand { get; init; } = 24f;      // edge fade width in px
+        public float FadeStrength { get; init; } = 1f;   // edge-fade intensity 0..1 (1 = fades fully to transparent)
         public float StartDelayMs { get; init; } = 350f;  // pause showing the START of the text before it scrolls
-        public float EndPauseMs { get; init; } = 900f;    // pause at each end (Loop start / PingPong turns)
+        public float EndPauseMs { get; init; } = 900f;    // pause at the tail before bouncing back (PingPong) / loop reset (Loop)
         public ScrollMode Mode { get; init; } = ScrollMode.Loop;
         public TriggerMode Trigger { get; init; } = TriggerMode.Always;
         public bool Enabled { get; init; } = true;
@@ -59,11 +59,11 @@ public static class Marquee
     /// (e.g. a now-playing title). The text is forwarded to the inner <c>TextEl.Text</c>, whose bind re-measures and
     /// re-scrolls on change; a static string never subscribes. (A frozen constructor arg would NOT update — components
     /// are autonomous; reactive data crosses through the Prop, not the factory closure.)</para></summary>
-    /// <param name="scrollWhen">An OPTIONAL external "scroll now" gate (used with <see cref="TriggerMode.Hover"/>):
-    /// when supplied the marquee scrolls while this signal is true and does NOT wire its own self-hover — so a GROUP of
-    /// marquees (a now-playing title + subtitle) can be driven by ONE shared hover over their common area and stay in
-    /// sync, instead of each toggling only when the pointer is over its own line. Null = self-hover (Hover) / always
-    /// (Always), unchanged. The edge fade is unaffected either way (right-edge cue at rest, both edges while scrolling).</param>
+    /// <param name="scrollWhen">An OPTIONAL external hover gate (used with <see cref="TriggerMode.Hover"/> or
+    /// <see cref="TriggerMode.PauseOnHover"/>): when supplied the marquee does NOT wire its own self-hover — a GROUP of
+    /// marquees can share ONE parent hover zone. For <see cref="TriggerMode.Hover"/> the gate scrolls while true; for
+    /// <see cref="TriggerMode.PauseOnHover"/> it pauses while true. Null = self-hover. The edge fade is unaffected
+    /// (right-edge cue at rest, both edges while scrolling).</param>
     public static Element Of(Prop<string> text, Style? style = null, IReadSignal<bool>? scrollWhen = null)
         => new BoxEl
         {
@@ -73,6 +73,20 @@ public static class Marquee
             AlignSelf = FlexAlign.Stretch,
             ClipToBounds = true,
             Children = [Embed.Comp(() => new MarqueeHost { Text = text, Sty = style ?? Default, External = scrollWhen })],
+        };
+
+    /// <summary>Like <see cref="Of"/> but scrolls arbitrary interactive content (e.g. a row of links) when it overflows.
+    /// <paramref name="content"/> is a <see cref="Component"/> factory — reactive data must be read inside that component
+    /// (context/signals), not captured from the parent's render.</summary>
+    public static Element Content(Func<Component> content, Style? style = null, IReadSignal<bool>? scrollWhen = null)
+        => new BoxEl
+        {
+            MinWidth = 0f,
+            Grow = 1f,
+            Shrink = 1f,
+            AlignSelf = FlexAlign.Stretch,
+            ClipToBounds = true,
+            Children = [Embed.Comp(() => new MarqueeHost { Content = content, Sty = style ?? Default, External = scrollWhen })],
         };
 }
 
@@ -84,14 +98,16 @@ public static class Marquee
 internal sealed class MarqueeHost : Component
 {
     public Prop<string> Text = string.Empty;
+    public Func<Component>? Content;
     public Marquee.Style Sty = Marquee.Default;
-    const float MaxFadeViewportFraction = 0.22f;
+    const float MaxFadeViewportFraction = 0.3f;
     public IReadSignal<bool>? External;     // an external "scroll now" gate (a shared group hover) — replaces self-hover
 
     public override Element Render()
     {
         var containerW = UseSignal(0f);     // set from this node's bounds
         var textW = UseSignal(0f);          // set by the child after it measures one copy
+        var scrollX = UseSignal(0f);        // live TranslateX of the scroller (drives per-edge fade)
         var hovered = UseSignal(false);     // scroll gate: self-hover (Trigger.Hover), or mirrored from External below
 
         // An external gate (a group's shared hover) drives the SAME `hovered` signal both this host and the scroller
@@ -100,15 +116,12 @@ internal sealed class MarqueeHost : Component
 
         float cw = containerW.Value, tw = textW.Value;
         bool overflow = tw > cw + 1f && cw > 0f;
-        bool active = Sty.Trigger == Marquee.TriggerMode.Always || hovered.Value;
-        bool scrolling = Sty.Enabled && overflow && active && !Motion.ReducedMotion;
-
         float fadeBand = overflow ? MathF.Min(Sty.FadeBand, MathF.Max(0f, cw * MaxFadeViewportFraction)) : 0f;
-        EdgeFadeSpec? fade = fadeBand <= 0f ? null
-            : scrolling ? new EdgeFadeSpec(EdgeMask.Horizontal, fadeBand, FadeFalloff.Smoothstep, Sty.FadeStrength)
-                        : new EdgeFadeSpec(EdgeMask.Right, fadeBand, FadeFalloff.Smoothstep, Sty.FadeStrength);
+        EdgeFadeSpec? fade = overflow && fadeBand > 0f
+            ? MarqueeScroller.ResolveEdgeFade(Sty, scrollX.Value, cw, tw, fadeBand)
+            : null;
 
-        bool selfHover = Sty.Trigger == Marquee.TriggerMode.Hover && External is null;
+        bool selfHover = External is null && Sty.Trigger is Marquee.TriggerMode.Hover or Marquee.TriggerMode.PauseOnHover;
 
         return new BoxEl
         {
@@ -124,7 +137,8 @@ internal sealed class MarqueeHost : Component
             [
                 Embed.Comp(() => new MarqueeScroller
                 {
-                    Text = Text, Sty = Sty, ContainerW = containerW, TextW = textW, Hovered = hovered,
+                    Text = Text, Content = Content, Sty = Sty, ContainerW = containerW, TextW = textW,
+                    ScrollX = scrollX, Hovered = hovered,
                 }),
             ],
         };
@@ -137,38 +151,62 @@ internal sealed class MarqueeHost : Component
 internal sealed class MarqueeScroller : Component
 {
     public Prop<string> Text = string.Empty;
+    public Func<Component>? Content;
     public Marquee.Style Sty = Marquee.Default;
     public Signal<float> ContainerW = null!;
     public Signal<float> TextW = null!;
+    public Signal<float> ScrollX = null!;
     public Signal<bool> Hovered = null!;
 
     public override Element Render()
     {
         float cw = ContainerW.Value;
         float tw = TextW.Value;
-        bool active = Sty.Trigger == Marquee.TriggerMode.Always || Hovered.Value;
         bool overflow = tw > cw + 1f && cw > 0f;
-        bool scrolling = Sty.Enabled && overflow && active && !Motion.ReducedMotion;
+        bool active = Sty.Trigger switch
+        {
+            Marquee.TriggerMode.Always => true,
+            Marquee.TriggerMode.Hover => Hovered.Value,
+            Marquee.TriggerMode.PauseOnHover => !Hovered.Value,
+            _ => true,
+        };
+        bool canScroll = Sty.Enabled && overflow && !Motion.ReducedMotion;
+        bool paused = canScroll && !active;
+
+        var scrollerHost = UseRef(NodeHandle.Null);
+        UseLayoutEffect(() => { scrollerHost.Value = Context.HostNode; });
 
         bool loop = Sty.Mode == Marquee.ScrollMode.Loop;
-        bool seamless = loop && scrolling;
+        bool textMode = Content is null;
+        bool seamless = textMode && loop && canScroll && !paused;
         float loopDist = tw + Sty.Gap;
         float tailDist = MathF.Max(0f, tw - cw);
+
+        // Park/unpark the translate track on hover-pause — never re-seed a "0,0" idle track (that snapped back to start).
+        UseLayoutEffect(() =>
+        {
+            if (Context.Anim is { } a && !Context.HostNode.IsNull)
+                a.SetNodeParked(Context.HostNode, paused);
+        }, paused, canScroll);
 
         // One animation hook per Mode (Mode is fixed for an instance, so the hook order is stable across renders).
         if (Sty.Mode == Marquee.ScrollMode.SinglePass)
         {
-            UseSpring(AnimChannel.TranslateX, scrolling ? -tailDist : 0f,
-                      SpringParams.FromResponse(0.45f, 0.9f), scrolling, tailDist);
+            UseSpring(AnimChannel.TranslateX, canScroll ? -tailDist : 0f,
+                      SpringParams.FromResponse(0.45f, 0.9f), canScroll, tailDist);
         }
         else
         {
-            (Keyframe[] keys, float durMs, bool looping) = BuildTrack(loop, scrolling, loopDist, tailDist);
-            UseKeyframes(AnimChannel.TranslateX, keys, durMs, looping, scrolling, loopDist, tailDist);
+            (Keyframe[] keys, float durMs, bool looping) = BuildTrack(loop, canScroll, loopDist, tailDist);
+            UseKeyframes(AnimChannel.TranslateX, keys, durMs, looping, canScroll, loop, loopDist, tailDist);
         }
 
         var copies = new List<Element>(seamless ? 2 : 1) { Measured() };
         if (seamless) copies.Add(Copy());
+        copies.Add(Embed.Comp(() => new MarqueeScrollTicker
+        {
+            ContainerW = ContainerW, TextW = TextW, ScrollX = ScrollX, ScrollerHost = scrollerHost,
+        }));
 
         return new BoxEl
         {
@@ -185,7 +223,7 @@ internal sealed class MarqueeScroller : Component
     {
         Shrink = 0f,
         OnBoundsChanged = r => { if (r.W != TextW.Value) TextW.Value = r.W; },
-        Children = [Glyphs()],
+        Children = [Content is { } mk ? Embed.Comp(mk) : Glyphs()],
     };
 
     private Element Copy() => new BoxEl { Shrink = 0f, Children = [Glyphs()] };
@@ -200,9 +238,9 @@ internal sealed class MarqueeScroller : Component
         MaxLines = 1,
     };
 
-    private (Keyframe[] keys, float durMs, bool loop) BuildTrack(bool loop, bool scrolling, float loopDist, float tailDist)
+    private (Keyframe[] keys, float durMs, bool loop) BuildTrack(bool loop, bool canScroll, float loopDist, float tailDist)
     {
-        if (!scrolling)
+        if (!canScroll)
             return ([new Keyframe(0f, 0f), new Keyframe(1f, 0f)], 200f, false);
 
         float speed = MathF.Max(1f, Sty.Speed);
@@ -223,13 +261,14 @@ internal sealed class MarqueeScroller : Component
             ], dur, true);
         }
 
-        // PingPong: pause, out to the tail, pause, back.
+        // PingPong: pause at start, scroll out, hold at tail, bounce back.
+        float startPause = Sty.StartDelayMs;
+        float endPause = Sty.EndPauseMs;
         float travelP = fixedCycle ? Sty.CycleMs : tailDist / speed * 1000f;
-        float pause = Sty.EndPauseMs;
-        float total = MathF.Max(1f, 2f * travelP + 2f * pause);
-        float f1 = pause / total;
+        float total = MathF.Max(1f, startPause + endPause + 2f * travelP);
+        float f1 = startPause / total;
         float f2 = f1 + travelP / total;
-        float f3 = f2 + pause / total;
+        float f3 = f2 + endPause / total;
         return (
         [
             new Keyframe(0f, 0f, Easing.Linear),
@@ -238,5 +277,72 @@ internal sealed class MarqueeScroller : Component
             new Keyframe(f3, -tailDist, Easing.Linear),
             new Keyframe(1f, 0f, Easing.Linear),
         ], total, true);
+    }
+
+    // Feather only edges with hidden overflow (scroll-cue parity): at translateX=0 fade right only; at the tail fade left only.
+    internal static EdgeFadeSpec? ResolveEdgeFade(Marquee.Style sty, float translateX, float viewportW, float contentW, float maxBand)
+    {
+        float tail = MathF.Max(0f, contentW - viewportW);
+        if (tail <= 0.5f) return null;
+
+        if (sty.Mode == Marquee.ScrollMode.Loop)
+            return new EdgeFadeSpec(EdgeMask.Horizontal, maxBand, FadeFalloff.Smoothstep, sty.FadeStrength);
+
+        float scrolled = MathF.Max(0f, -translateX);
+        float pastL = scrolled;
+        float pastR = MathF.Max(0f, tail - scrolled);
+        const float runway = 24f;
+        EdgeMask edges = EdgeMask.None;
+        float bl = 0f, br = 0f;
+        if (pastL > 0.5f) { edges |= EdgeMask.Left; bl = maxBand * MathF.Min(1f, pastL / runway); }
+        if (pastR > 0.5f) { edges |= EdgeMask.Right; br = maxBand * MathF.Min(1f, pastR / runway); }
+        return edges == EdgeMask.None ? null : new EdgeFadeSpec(edges, bl, 0f, br, 0f, FadeFalloff.Smoothstep, sty.FadeStrength);
+    }
+}
+
+/// <summary>After <c>_anim.Tick</c>, mirrors the scroller host's live <see cref="AnimChannel.TranslateX"/> into the
+/// shared <see cref="MarqueeScroller.ScrollX"/> signal so <see cref="MarqueeHost"/> can derive per-edge fade bands.
+/// ReactiveComponent + <see cref="InputHooks.SetAfterAnimations"/> avoids the stale-closure trap of wiring this inside
+/// <see cref="MarqueeScroller.Render"/> (where <c>UseSignalEffect</c> freezes <c>canScroll</c> from the first mount).</summary>
+internal sealed class MarqueeScrollTicker : ReactiveComponent
+{
+    public Signal<float> ContainerW = null!;
+    public Signal<float> TextW = null!;
+    public Signal<float> ScrollX = null!;
+    public Ref<NodeHandle> ScrollerHost = null!;
+
+    public override Element Setup()
+    {
+        var hooks = UseContext(InputHooks.Current);
+        UseEffect(() => hooks.SetAfterAnimations(this, Sample));
+        return new BoxEl { HitTestVisible = false, Width = 0f, Height = 0f };
+    }
+
+    void Sample()
+    {
+        float cw = ContainerW.Peek(), tw = TextW.Peek();
+        if (tw <= cw + 1f || cw <= 0f)
+        {
+            if (ScrollX.Peek() != 0f) ScrollX.Value = 0f;
+            return;
+        }
+        var host = ScrollerHost.Value;
+        if (host.IsNull) return;
+        if (Context.Scene is { } scene && !scene.IsLive(host))
+        {
+            UseContext(InputHooks.Current).SetAfterAnimations(this, null);
+            return;
+        }
+        float tx = ReadTranslateX(host);
+        if (ScrollX.Peek() != tx) ScrollX.Value = tx;
+    }
+
+    float ReadTranslateX(NodeHandle host)
+    {
+        if (Context.Anim?.TryGetTrackValue(host, AnimChannel.TranslateX, out float tx) == true)
+            return tx;
+        if (Context.Scene is { } scene && scene.IsLive(host))
+            return scene.Paint(host).LocalTransform.Dx;
+        return 0f;
     }
 }

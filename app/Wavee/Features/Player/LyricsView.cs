@@ -64,6 +64,20 @@ sealed class LyricsView : Component
     long _lastWipeWallMs;
     int _lastWipeLine = -1;
 
+    // Glow cross-fade (the halo must never hard-toggle): per-line alpha SIGNALS, bound as each row's glow-wrapper Opacity.
+    // Bound (not a static element value) so a row re-render re-asserts the LIVE fade value instead of snapping it — the
+    // reconciler skips paint writes for bound Opacity. OnFrame ramps the incoming voice line in and the outgoing one out
+    // over GlowFadeMs; at rest no signal is written, so settled frames stay byte-identical (skip-submit intact).
+    const float GlowFadeMs = 240f;
+    const float GlowOutMs = 320f;           // end-of-line melt window (BetterLyrics ≈350 ms; clamped to line end on media clock)
+    const float GlowBloomTaperStart = 0.75f;// wipe fraction where mid-line bloom starts tapering before retire
+    const float GlowBloomTaperK = 1.4f;     // tuned so halo reads ~65 % at split→1 (dial to 0 to disable taper)
+    const float ResumeDelayMs = 1500f;        // auto-follow resumes this long after the user stops scrolling the list
+    FloatSignal[] _glowAlpha = Array.Empty<FloatSignal>();
+    int _glowInLine = -1; long _glowInStart; float _glowInFrom;
+    int _glowOutLine = -1; long _glowOutStart; float _glowOutFrom;
+    long _resumeAtWallMs;
+
     bool _scrollSnapped;
     readonly Signal<int> _activeLine = new(-1);   // emphasis + scroll target (lead-shifted)
     readonly Signal<int> _voiceLine = new(-1);    // line currently being sung (true time) — owns the karaoke wipe/glow
@@ -75,8 +89,11 @@ sealed class LyricsView : Component
     NodeHandle[] _glowNodes = Array.Empty<NodeHandle>();
 
     LyricsDocument? _doc;
+    LyricsDocument? _pendingUpgrade;
+    Loadable<LyricsDocument?>? _docLoadable;
     LyricsMeasuredLayout? _layout;
     PlaybackBridge? _b;
+    Services? _svc;
 
     readonly bool _large;
     readonly Func<bool>? _visible;
@@ -96,6 +113,8 @@ sealed class LyricsView : Component
         var b = UseContext(PlaybackBridge.Slot);
         var svc = UseContext(Services.Slot);
         _b = b;
+        _svc = svc;
+        var post = UsePost();
 
         var track = b?.CurrentTrack.Value;
         bool open = _visible is not null ? _visible() : (ui?.RailOpen.Value ?? false);
@@ -114,6 +133,24 @@ sealed class LyricsView : Component
                 ? lp.GetLyricsAsync(trackId, ct)
                 : Task.FromResult<LyricsDocument?>(null),
             (LyricsDocument?)null, fetchKey);
+        _docLoadable = docL;
+        UseSignalEffect(() =>
+        {
+            string currentTrackId = _b?.CurrentTrack.Value?.Id ?? "";
+            if (currentTrackId.Length == 0 || _svc?.Lyrics is not IUpgradingLyricsProvider up) return;
+
+            var sub = up.LyricsUpgraded.Subscribe(new LyricsUpgradeObserver(upgrade =>
+            {
+                if (!StringComparer.Ordinal.Equals(upgrade.TrackId, currentTrackId)) return;
+                post(() =>
+                {
+                    string liveTrackId = _b?.CurrentTrack.Peek()?.Id ?? "";
+                    if (StringComparer.Ordinal.Equals(liveTrackId, upgrade.TrackId))
+                        ReceiveUpgrade(upgrade);
+                });
+            }));
+            Reactive.OnCleanup(() => sub.Dispose());
+        });
 
         var doc = docL.Value.Value;
 
@@ -276,6 +313,10 @@ sealed class LyricsView : Component
         _doc = doc;
         _lineNodes = new NodeHandle[doc.Lines.Count];
         _glowNodes = new NodeHandle[doc.Lines.Count];
+        _glowAlpha = new FloatSignal[doc.Lines.Count];
+        for (int i = 0; i < _glowAlpha.Length; i++) _glowAlpha[i] = new FloatSignal(0f);
+        _glowInLine = -1; _glowOutLine = -1;
+        _resumeAtWallMs = 0L;
         _activeLine.Value = ResolveLine(doc.Lines, posMs);
         _nowMs.Value = posMs;
         _scrollSnapped = false;
@@ -285,16 +326,76 @@ sealed class LyricsView : Component
 
     void ClearDocument()
     {
-        if (_doc is null && _lineNodes.Length == 0) return;
+        if (_doc is null && _lineNodes.Length == 0)
+        {
+            _pendingUpgrade = null;
+            return;
+        }
         _doc = null;
+        _pendingUpgrade = null;
         _lineNodes = Array.Empty<NodeHandle>();
         _glowNodes = Array.Empty<NodeHandle>();
+        _glowAlpha = Array.Empty<FloatSignal>();
+        _glowInLine = -1; _glowOutLine = -1;
+        _resumeAtWallMs = 0L;
         _activeLine.Value = -1;
         _nowMs.Value = 0f;
         _scrollSnapped = false;
         ResetWipeThrottle();
         _lastAuthMs = long.MinValue;   // reset so a freshly loaded doc re-anchors on the next snapshot
         _lastDisplay = 0L;
+    }
+
+    void ReceiveUpgrade(LyricsDocument upgrade)
+    {
+        if (upgrade.Lines.Count == 0) return;
+        var current = _docLoadable?.Value.Peek() ?? _doc;
+        if (current is not null && !StringComparer.Ordinal.Equals(current.TrackId, upgrade.TrackId)) return;
+        if (current is not null && !IsRicherLyrics(upgrade, current)) return;
+
+        bool playing = _b?.IsPlaying.Peek() == true;
+        if (!playing || _doc is null || _activeLine.Peek() < 0)
+            ApplyLyricsUpgrade(upgrade, _b?.PositionMs.Peek() ?? 0L);
+        else
+            _pendingUpgrade = upgrade;
+    }
+
+    void ApplyLyricsUpgrade(LyricsDocument upgrade, long posMs)
+    {
+        long resumeAt = _resumeAtWallMs;
+        _pendingUpgrade = null;
+        _docLoadable?.SetReady(upgrade);
+        PrepareDocument(upgrade, posMs);
+        if (resumeAt > _resumeAtWallMs) _resumeAtWallMs = resumeAt;
+    }
+
+    static bool IsRicherLyrics(LyricsDocument next, LyricsDocument current)
+    {
+        int nr = Richness(next), cr = Richness(current);
+        if (nr != cr) return nr > cr;
+        if (nr < 3) return false;
+        return SyllableCount(next) > SyllableCount(current);
+    }
+
+    static int Richness(LyricsDocument doc)
+    {
+        foreach (var l in doc.Lines)
+            if (l.IsWordByWord && l.Syllables.Count > 0)
+                return 3;
+        return doc.Sync switch
+        {
+            LyricsSyncKind.Syllable => 3,
+            LyricsSyncKind.Line => 2,
+            LyricsSyncKind.Unsynced => 1,
+            _ => 0,
+        };
+    }
+
+    static int SyllableCount(LyricsDocument doc)
+    {
+        int n = 0;
+        foreach (var l in doc.Lines) n += l.Syllables.Count;
+        return n;
     }
 
     // Seed every dejittered-clock field from an authoritative position so all re-anchor sites (doc load, click-seek) agree.
@@ -334,11 +435,13 @@ sealed class LyricsView : Component
             {
                 var idx = i;
                 return Embed.Comp(() => new LyricLineView(
-                    idx, lines[idx], _activeLine, _voiceLine, _interlude, _nowMs, fontSz, lineHt, rowPad, sidePad, centered,
+                    idx, lines[idx], _activeLine, _voiceLine, _interlude, _nowMs,
+                    idx < _glowAlpha.Length ? _glowAlpha[idx] : null,
+                    fontSz, lineHt, rowPad, sidePad, centered,
                     ReportLineNode, ReportGlowNode, () => SeekToLine(idx))) with { Key = "ll" + idx };
             },
             keyOf: i => "ll" + i,
-            overscan: _large ? 8 : 7) with
+            overscan: _large ? 5 : 4) with
         {
             Grow = 1f,
             MinHeight = 0f,
@@ -468,50 +571,80 @@ sealed class LyricsView : Component
         // index would retarget the wipe to the not-yet-singing line, killing the fill on the line you are hearing).
         int active = ResolveLine(doc.Lines, nowMs + LeadMs);   // emphasis + scroll (anticipates)
         int voiceLine = ResolveLine(doc.Lines, nowMs);          // wipe + glow (on true time)
+        // A line stops being the VOICE at its own SUNG-OUT point, not when the next line starts: ResolveLine keeps
+        // returning the previous line through the whole inter-line gap, which left it fully lit + glowing NEXT TO the
+        // already-risen (lead) new active line — the "previous line is still fully active on the next line" double
+        // emphasis. Between sung-out and the next start nothing is being sung ⇒ no voice.
+        if (voiceLine >= 0)
+        {
+            var vl = doc.Lines[voiceLine];
+            long vEnd = vl.IsWordByWord && vl.Syllables.Count > 0 ? vl.Syllables[^1].EndMs
+                : vl.EndMs ?? (voiceLine + 1 < doc.Lines.Count ? doc.Lines[voiceLine + 1].StartMs : long.MaxValue);
+            if (nowMs >= vEnd) voiceLine = -1;
+        }
         bool activeChanged = active != _activeLine.Peek();
         if (activeChanged) _activeLine.Value = active;
         int prevVoiceLine = _voiceLine.Peek();
         bool voiceChanged = voiceLine != prevVoiceLine;
         if (voiceChanged) _voiceLine.Value = voiceLine;
         _nowMs.Value = nowMs;
+        if (activeChanged && _pendingUpgrade is { } upgrade)
+        {
+            ApplyLyricsUpgrade(upgrade, nowMs);
+            return;
+        }
+
+        // Main-content scroll tightens the shared GPU budget — defer lyrics glow/wipe only (Core lane never gated).
+        bool deferHeavy = Context.PeekMainScrollBusy?.Invoke() == true;
+        bool runVisual = !deferHeavy || activeChanged || voiceChanged || forceVisual;
 
         var scene = Context.Scene;
         if (scene is null) return;
-        if (voiceChanged) ClearGlowNode(scene, prevVoiceLine);
-        if (active < 0 || (uint)active >= (uint)doc.Lines.Count) return;
 
-        // Instrumental-gap (interlude) state — word-by-word only. During a gap the lead keeps `active` on the just-sung
-        // line N until 140 ms before N+1; if N is sung out and a long (>=4 s) gap precedes N+1, recede N instead of
-        // leaving it frozen-fully-lit. It auto-ends when the lead flips active to N+1 (whose syllables aren't sung yet ⇒
-        // not sung-out). Line-synced lyrics have no syllable end (EndMs == next StartMs ⇒ gap delta 0), so interlude stays
-        // false — correct: there is no word timing to recede against, so don't fake it.
-        var al = doc.Lines[active];
-        long sungOutPoint = al.IsWordByWord && al.Syllables.Count > 0 ? al.Syllables[^1].EndMs : al.EndMs.GetValueOrDefault();
-        long nextStartMs = active + 1 < doc.Lines.Count ? doc.Lines[active + 1].StartMs : long.MaxValue;
-        bool interlude = nowMs >= sungOutPoint && (nextStartMs - sungOutPoint) >= 4000;
-        if (interlude != _interlude.Peek()) _interlude.Value = interlude;
+        // ── Core lane (always): interlude + programmatic scroll follow ──
+        if (active >= 0 && (uint)active < (uint)doc.Lines.Count)
+        {
+            var al = doc.Lines[active];
+            bool wordTimed = al.IsWordByWord && al.Syllables.Count > 0;
+            long sungOutPoint = wordTimed ? al.Syllables[^1].EndMs : 0L;
+            long nextStartMs = active + 1 < doc.Lines.Count ? doc.Lines[active + 1].StartMs : long.MaxValue;
+            bool interlude = wordTimed && nowMs >= sungOutPoint && (nextStartMs - sungOutPoint) >= 4000;
+            if (interlude != _interlude.Peek()) _interlude.Value = interlude;
 
-        if (!_scrollSnapped || activeChanged || forceVisual)
-            ScrollActiveIntoView(scene, active);
+            if (!_scrollSnapped || activeChanged || forceVisual)
+                ScrollActiveIntoView(scene, active, wallMs);
+        }
         LastFrameDiagnostics = new(nowMs, auth, active, voiceLine, activeChanged, voiceChanged, _scrollSnapped, playing, doc.Lines.Count);
 
-        // The karaoke wipe/glow live on the VOICE line (true time), which trails the emphasis line during the lead window.
-        if ((uint)voiceLine >= (uint)_lineNodes.Length) return;
-        var line = _lineNodes[voiceLine];
-        if (line.IsNull || !scene.IsLive(line)) return;
+        // ── Visual lane (budget-deferred): glow cross-fade + karaoke wipe ──
+        if (!runVisual) return;
 
-        if (scene.TryGetGlyphWipe(line, out var w))
+        // Voice handoff: CROSS-FADE the halos (incoming line ramps in, outgoing ramps out) instead of a hard clear — the
+        // old instant σ/content toggle popped the glow on and off in one frame at every line change.
+        if (voiceChanged) BeginGlowFades(scene, prevVoiceLine, voiceLine, wallMs);
+        DriveGlowFades(scene, wallMs);
+        // Voice-line glow envelope (FIX B): monotone min(inFade, outFade) on the media clock — no hard gate against the
+        // in-cross-fade, so short chorus lines compress to a smooth triangle instead of snapping. Authoritative for the
+        // live voice row; the cross-fade above only handles the OUTGOING line (and seek handoffs routed through ease()).
+        if (voiceLine >= 0 && (uint)voiceLine < (uint)doc.Lines.Count)
+            ApplyVoiceGlowEnvelope(scene, doc, voiceLine, nowMs);
+
+        // The karaoke wipe/glow live on the VOICE line (true time), trailing the emphasis line during the lead window. Drive
+        // the READABLE main text wipe (the visible reveal) as the primary; the glow wipe (sung-only bloom) rides the same
+        // split. Gate on the MAIN node's wipe — it is present on every word-by-word line (line-synced main has no wipe, so
+        // this whole block correctly no-ops for line-synced, whose glow is a static child-blur, not an OnFrame-driven node).
+        if ((uint)voiceLine >= (uint)_lineNodes.Length) return;
+        var mainNode = _lineNodes[voiceLine];
+        var glowNode = (uint)voiceLine < (uint)_glowNodes.Length ? _glowNodes[voiceLine] : NodeHandle.Null;
+        if (mainNode.IsNull || !scene.IsLive(mainNode)) return;
+
+        if (scene.TryGetGlyphWipe(mainNode, out var mw))
         {
             float split = LyricLineView.ComputeSplit(doc.Lines[voiceLine], nowMs);
-            // Small POSITIVE wipe lead: nudge the bright boundary a few % ahead of the strictly-played fraction so the edge
-            // reads as anticipating the voice. Keep it tiny — the GlyphWipe band is centered (the leading feather already
-            // sits ~Fade/2 ahead); a large lead would render glyphs fully-sung ahead of the voice. Body stays linear.
-            const float WipeLead = 0.04f;
-            if (split > 0f && split < 1f) split = Math.Clamp(split + WipeLead, 0f, 1f);
-            // Pixel-quantize the wipe boundary (mirror SeekBar): snapping Split to the line's on-screen pixel width makes
-            // sub-pixel ticks produce byte-identical DrawGlyphRunGradient bytes, so the host skip-submit hash gate elides
-            // the karaoke ticks that don't move the wipe a whole pixel (most of them, during slow syllables).
-            float runW = scene.AbsoluteRect(line).W;
+            if (split > 0f && split < 1f) split = Math.Clamp(split + LyricLineView.WipeLeadFrac, 0f, 1f);
+            // Pixel-quantize the boundary so sub-pixel ticks produce byte-identical gradient bytes ⇒ the host skip-submit hash
+            // elides them (and the blur pin-cache HITS). main and glow share this run width (same text/size/wrap).
+            float runW = scene.AbsoluteRect(mainNode).W;
             if (runW > 1f) split = MathF.Round(split * runW) / runW;
             bool forceWipe = forceVisual || voiceLine != _lastWipeLine || _lastWipeWallMs == 0L;
             if (!forceWipe && wallMs - _lastWipeWallMs < KaraokeWipeIntervalMs) return;
@@ -519,39 +652,97 @@ sealed class LyricsView : Component
             _lastWipeWallMs = wallMs;
             _lastWipeLine = voiceLine;
 
-            bool splitMoved = MathF.Abs(split - w.Split) > 0.0008f;
-            if (splitMoved)
+            // Readable main wipe — the karaoke reveal the user sees (S2).
+            if (MathF.Abs(split - mw.Split) > 0.0008f)
             {
-                scene.SetGlyphWipe(line, w with { Split = split });
-                scene.Mark(line, NodeFlags.PaintDirty);
+                scene.SetGlyphWipe(mainNode, mw with { Split = split });
+                scene.Mark(mainNode, NodeFlags.PaintDirty);
             }
 
-            // Voice-line glow node: keep its wipe split in sync (when it moved) AND drive the held-syllable bloom —
-            // a SUSTAINED syllable (>= BetterLyrics' 700 ms LongDurationSyllable gate) swells the glow's blur, then
-            // releases. The bloom is independent of the split delta (a long held note barely advances the split but must
-            // still swell), so it is NOT gated by splitMoved. The bloom sigma is quantized to a 0.25 grid
-            // (ComputeHeldGlowSigma), so a slow/held note keeps byte-identical bytes and DOES skip-submit.
-            if ((uint)voiceLine < (uint)_glowNodes.Length)
+            // Glow bloom — same split; σ co-decays with the bound glow alpha (FIX B melt) so the halo tightens as it dims.
+            if (!glowNode.IsNull && scene.IsLive(glowNode) && scene.TryGetGlyphWipe(glowNode, out var w))
             {
-                var g = _glowNodes[voiceLine];
-                if (!g.IsNull && scene.IsLive(g))
-                {
-                    bool glowDirty = false;
-                    if (splitMoved && scene.TryGetGlyphWipe(g, out var gw))
-                    {
-                        scene.SetGlyphWipe(g, gw with { Split = split });
-                        glowDirty = true;
-                    }
-                    float baseSigma = _large ? 6f : 4f;                  // the active line's constant soft glow
-                    float peakExtra = (_large ? 46f : 33f) * 0.09f;      // held-syllable bloom amplitude — a gentle swell (~base*1.6 at peak), not a ballooning halo that reads as straining in/out breathing
-                    float sigma = LyricLineView.ComputeHeldGlowSigma(doc.Lines[voiceLine], nowMs, baseSigma, peakExtra);
-                    ref var gp = ref scene.Paint(g);
-                    if (gp.BlurCachePolicy != BlurCachePolicy.HoldOrSkipOnMiss) { gp.BlurCachePolicy = BlurCachePolicy.HoldOrSkipOnMiss; glowDirty = true; }
-                    if (MathF.Abs(gp.BlurSigma - sigma) > 0.05f) { gp.BlurSigma = sigma; glowDirty = true; }
-                    if (glowDirty) scene.Mark(g, NodeFlags.PaintDirty);
-                }
+                bool glowDirty = MathF.Abs(split - w.Split) > 0.0008f;
+                if (glowDirty) scene.SetGlyphWipe(glowNode, w with { Split = split });
+                float baseSigma = _large ? 6f : 4f;
+                float glowA = GlowAlphaOf(voiceLine);
+                float sigma = baseSigma * glowA;
+                ref var gp = ref scene.Paint(glowNode);
+                if (MathF.Abs(gp.BlurSigma - sigma) > 0.01f) { gp.BlurSigma = sigma; glowDirty = true; }
+                if (glowDirty) scene.Mark(glowNode, NodeFlags.PaintDirty);
             }
         }
+    }
+
+    // Arm the halo cross-fade at a voice handoff. Each fade remembers its FROM alpha so a handoff landing mid-fade (rapid
+    // line runs, or scrubbing back onto a fading line) continues from the current value instead of jumping to 0/1. If a
+    // THIRD line's out-fade is still in flight, finish it instantly — at most two halos ever animate.
+    void BeginGlowFades(SceneStore scene, int prev, int next, long wallMs)
+    {
+        if (_glowOutLine >= 0 && _glowOutLine != prev && _glowOutLine != next) FinishGlowOut(scene, _glowOutLine);
+        _glowOutLine = prev;
+        _glowOutStart = wallMs;
+        // From the LIVE alpha (not an assumed 1): the end-of-line pre-fade usually already took it near 0, so a normal
+        // handoff finishes the out-fade almost instantly instead of re-airing a 240 ms halo tail over the new line.
+        _glowOutFrom = GlowAlphaOf(prev);
+        _glowInLine = next;
+        _glowInStart = wallMs;
+        _glowInFrom = GlowAlphaOf(next);
+    }
+
+    // Step halo cross-fades (called every OnFrame tick). Sine-Out eased (FIX B). The live voice line's envelope is
+    // ApplyVoiceGlowEnvelope — this handles OUTGOING lines only; the in-ramp is the envelope's min(in,out) form.
+    void DriveGlowFades(SceneStore scene, long wallMs)
+    {
+        if (_glowOutLine >= 0)
+        {
+            float t = EaseOutSine(Math.Clamp((wallMs - _glowOutStart) / GlowFadeMs, 0f, 1f));
+            float a = _glowOutFrom * (1f - t);
+            if (a <= 0f) { FinishGlowOut(scene, _glowOutLine); _glowOutLine = -1; }
+            else SetGlowAlpha(_glowOutLine, a);
+        }
+    }
+
+    // Monotone voice-line glow envelope: min(eased in-ramp, eased out-ramp) on the media clock + optional bloom taper.
+    void ApplyVoiceGlowEnvelope(SceneStore scene, LyricsDocument doc, int voiceLine, long nowMs)
+    {
+        var line = doc.Lines[voiceLine];
+        long lineStart = line.StartMs;
+        long lineEnd = line.IsWordByWord && line.Syllables.Count > 0 ? line.Syllables[^1].EndMs
+            : line.EndMs ?? (voiceLine + 1 < doc.Lines.Count ? doc.Lines[voiceLine + 1].StartMs : long.MaxValue);
+        float inFade = EaseOutSine(Math.Clamp((nowMs - lineStart) / GlowFadeMs, 0f, 1f));
+        float alphaOut = EaseOutSine(Math.Clamp((lineEnd - nowMs) / GlowOutMs, 0f, 1f));
+        float alpha = MathF.Min(inFade, alphaOut);
+        if (GlowBloomTaperK > 0f && line.IsWordByWord && line.Syllables.Count > 0)
+        {
+            float split = ComputeSplit(line, nowMs);
+            if (split > GlowBloomTaperStart)
+                alpha *= 1f - GlowBloomTaperK * (split - GlowBloomTaperStart);
+        }
+        alpha = MathF.Max(0f, alpha);
+        SetGlowAlpha(voiceLine, alpha);
+        // Envelope owns the live voice row — retire any redundant in-cross-fade arm.
+        if (_glowInLine == voiceLine) _glowInLine = -1;
+    }
+
+    static float EaseOutSine(float t) => MathF.Sin(t * MathF.PI * 0.5f);
+
+    static float ComputeSplit(LyricLine line, long nowMs) => LyricLineView.ComputeSplit(line, nowMs);
+
+    float GlowAlphaOf(int line) => (uint)line < (uint)_glowAlpha.Length ? _glowAlpha[line].Peek() : 0f;
+
+    void SetGlowAlpha(int line, float a)
+    {
+        if ((uint)line < (uint)_glowAlpha.Length) _glowAlpha[line].Value = a;
+    }
+
+    void FinishGlowOut(SceneStore scene, int line)
+    {
+        SetGlowAlpha(line, 0f);
+        // Word-by-word glow σ is paint-driven (element Blur = 0) — return it to rest once invisible so the halo layer
+        // costs nothing. Line-synced glow σ is a constant element Blur: leave it (alpha 0 hides it; settled bytes pin-hit).
+        if (_doc is { } d && (uint)line < (uint)d.Lines.Count && d.Lines[line].IsWordByWord)
+            ClearGlowNode(scene, line);
     }
 
     void ClearGlowNode(SceneStore scene, int line)
@@ -566,7 +757,7 @@ sealed class LyricsView : Component
         if (dirty) scene.Mark(g, NodeFlags.PaintDirty);
     }
 
-    void ScrollActiveIntoView(SceneStore scene, int active)
+    void ScrollActiveIntoView(SceneStore scene, int active, long wallMs)
     {
         var viewport = _viewportNode;
         var layout = _layout;
@@ -575,6 +766,10 @@ sealed class LyricsView : Component
 
         ref ScrollState sc = ref scene.ScrollRef(viewport);
         if (sc.ViewportH <= 0.5f || sc.ContentH <= 0.5f) return;
+
+        // FIX C2: never fight a live user wheel/fling in the lyrics list — resume auto-follow after a grace window.
+        if (sc.UserScrollActive) { _resumeAtWallMs = wallMs + (long)ResumeDelayMs; return; }
+        if (wallMs < _resumeAtWallMs) return;
 
         // Keep the measured layout's focal top/bottom pad in sync with the live viewport. The engine's measured arrange
         // path does NOT push the viewport to the layout (unlike the fixed path), so the app does it here; the value is an
@@ -742,6 +937,7 @@ sealed class LyricLineView : Component
     readonly Signal<int> _voiceLine;
     readonly Signal<bool> _interlude;
     readonly FloatSignal _nowMs;
+    readonly FloatSignal? _glowFade;   // per-line halo alpha (owned + ramped by LyricsView); bound as the glow wrapper's Opacity
     readonly float _fontSz;
     readonly float _lineHt;
     readonly float _rowPad;
@@ -752,57 +948,53 @@ sealed class LyricLineView : Component
     readonly Action _onSeek;
 
     public LyricLineView(int index, LyricLine line, Signal<int> activeLine, Signal<int> voiceLine, Signal<bool> interlude, FloatSignal nowMs,
+        FloatSignal? glowFade,
         float fontSz, float lineHt, float rowPad, float sidePad, bool centered, Action<int, NodeHandle> reportNode, Action<int, NodeHandle> reportGlow, Action onSeek)
     {
         _index = index; _line = line; _activeLine = activeLine; _voiceLine = voiceLine; _interlude = interlude; _nowMs = nowMs;
+        _glowFade = glowFade;
         _fontSz = fontSz; _lineHt = lineHt; _rowPad = rowPad; _sidePad = sidePad; _centered = centered;
         _reportNode = reportNode; _reportGlow = reportGlow; _onSeek = onSeek;
     }
+
+    // The halo wrapper's opacity: BOUND to the per-line fade signal so a row re-render re-asserts the live fade value
+    // (the reconciler skips bound Opacity) — a static value here would snap the halo at exactly the re-render moments
+    // (active/voice flips) the fade exists to smooth.
+    Prop<float> GlowOpacity() => _glowFade is { } s ? (Prop<float>)s : 0f;
 
     public override Element Render()
     {
         int active = _activeLine.Value;
         int voice = _voiceLine.Value;
         bool isActive = _index == active;
-        bool isKaraokeLive = isActive || _index == voice;
-        bool isVoice = _index == voice;   // currently being sung — owns the karaoke wipe (trails emphasis during the lead)
         bool interlude = isActive && _interlude.Value;   // active line sung out into a long instrumental gap — recede it
         int dist = active < 0 ? 6 : Math.Abs(_index - active);
 
         float f = MathF.Min(dist / 5f, 1f);
         // Emphasis targets. Active line: full focus (scale 1 / opacity 1 / crisp). During an instrumental interlude the
         // still-active sung-out line recedes to a calm look instead of sitting frozen-fully-lit. Dimmed lines fall off by
-        // distance. Active is the single visual focus for scale, opacity, and blur; voice only drives the karaoke wipe
-        // and glow during the lead split, so depth never disagrees with emphasis.
+        // distance in opacity, scale AND DoF blur. Voice only drives the karaoke wipe and glow during the lead split, so
+        // depth never disagrees with emphasis.
         float scale = interlude ? 0.92f : isActive ? 1f : 1f - 0.25f * f;
+        // Row emphasis follows ACTIVE only — voice keeps the karaoke wipe/glow but must not hold full brightness once
+        // focus moves (the lead window used to leave the previous line white for its entire sung tail).
         float opacity = interlude ? 0.55f : isActive ? 1f : MathF.Max(0.16f, 0.55f * (1f - f));
-        float blur = interlude ? LyricsFx.DofSigma(1) : isKaraokeLive ? 0f : LyricsFx.DofSigma(dist);
+        float blur = interlude ? LyricsFx.DofSigma(1) : isActive ? 0f : LyricsFx.DofSigma(dist);
 
-        // Emphasis scale AND the DoF blur are STATIC per-dist STEPS (not springs); only opacity is a spring. A scale
-        // spring animates the row's world scale for ~0.55 s on every line advance — but the self-blur subtree shares this
-        // node, so an animating scale changes its device size + world transform every frame ⇒ a cross-frame pin cache
-        // CONTENT-miss every frame (backdrop-effects-animation.md §FA-2a), forcing ~12 Gaussians/frame during the
-        // auto-scroll ease. Stepping scale (co-stepped with the DofSigma step below, same integer `dist`) makes each row
-        // POSITION-ONLY during the ease ⇒ the pin cache HITS (~12 cheap composites instead of ~12 Gaussians/frame). The
-        // one-frame size step coincides with the σ step + the wipe jump on the line-change frame (the eye is on the moving
-        // active line). Opacity STAYS a spring: it drives only the composite GroupAlpha (cache-neutral, not in the pin
-        // key), so the fade-into-focus stays smooth for free. DepKey folds in the interlude bit so opacity retargets on
-        // interlude entry/exit. Same persistent-node path — no remount, no all-lines-pulse.
-        var key = DepKey.From(dist, interlude ? 1 : 0);
-        UseSpring(AnimChannel.Opacity, opacity, SpringParams.FromResponse(0.55f, 1.0f), key);
-        // The DoF blur is a pure STEP of integer distance (DofSigma): a spring would manufacture intermediate sigmas every
-        // settle frame — each marking the node TransformDirty (defeating skip-submit) and stepping the heavy Gaussian
-        // kernel frame-to-frame = the during-a-line DoF breathing. The bucketed sigma is set STATICALLY as the row's Blur
-        // element property (see the BoxEl below); scale is set STATICALLY alongside it (ScaleX/ScaleY). A settled line is
-        // then byte-identical frame-to-frame, and a line change jumps both one bucket in a single frame. On a change the
-        // leaving/entering line re-renders via _activeLine/_voiceLine, so the reconciler re-asserts the new static values.
+        // Springs on every row (rules-of-hooks), but only the ACTIVE line gets a perceptual response — inactive rows use
+        // a ~1 ms snap so virtual overscan mounts land at the correct dim/blurred look instantly (no bright flash).
+        var key = DepKey.From(dist, (interlude ? 1 : 0) | (isActive ? 2 : 0));
+        var lead = isActive ? SpringParams.FromResponse(0.30f, 1.0f) : SpringParams.FromResponse(0.001f, 1.0f);
+        var trail = isActive ? SpringParams.FromResponse(0.55f, 1.0f) : SpringParams.FromResponse(0.001f, 1.0f);
+        UseSpring(AnimChannel.Opacity, opacity, lead, key);
+        UseSpring(AnimChannel.ScaleX, scale, lead, key);
+        UseSpring(AnimChannel.ScaleY, scale, lead, key);
+        UseSpring(AnimChannel.BlurSigma, blur, trail, key);
 
         var wrap = _centered ? TextWrap.NoWrap : TextWrap.Wrap;
         int maxLines = _centered ? 1 : 2;
         Element textEl;
 
-        // ~half-glyph wipe feather (BetterLyrics LyricsLineRendererBase: fadeBand ≈ 0.5/charCount) — softer than a flat edge.
-        float soft = Math.Clamp(0.5f / Math.Max(1, _line.Text.Length), 0.03f, 0.08f);
         // The karaoke wipe sub-tree renders on the active line AND the voice line — during the ~140 ms lead the voice line
         // (still being sung) trails the emphasis line, but its fill must keep running. Emphasis (scale/opacity) follows
         // `active`; the wipe split follows true time via _nowMs.
@@ -812,65 +1004,83 @@ sealed class LyricLineView : Component
         // re-shaped the glyph run + missed the blur cache = the one-frame flicker on the lines above active. The main
         // text's glyphs never re-shape on that transition (its string is unchanged), and because both nodes persist,
         // OnRealized (which fires only on mount) keeps the wipe/glow node reports (_reportNode/_reportGlow, read by
-        // OnFrame) valid across every transition WITHOUT a remount. (Line-synced lines keep the isActive/else shapes below.)
+        // OnFrame) valid across every transition WITHOUT a remount. (Line-synced lines use the same persistent ZStack below.)
         if (_line.IsWordByWord && _line.Syllables.Count > 0)
         {
-            bool lit = isKaraokeLive;
-            float split = lit ? ComputeSplit(_line, (long)_nowMs.Peek()) : 0f;
-            // Soft glow = a blurred copy of the played glyphs UNDER the main text; OnFrame drives its NodePaint.BlurSigma
-            // (base + held-syllable bloom) while it is the voice line. Empty string when dimmed so a peripheral line pays
-            // no second glyph run — it re-shapes once as it ENTERS the voice slot (one line, entering focus), never on the
-            // line leaving it (the flicker case).
-            Element glow = lit
+            // Karaoke split for THIS line on the true clock: 0 = upcoming (unsung), advancing = being sung, 1 = passed.
+            // Apply the SAME small lead the OnFrame driver uses so the reconcile re-render seeds a value consistent with the
+            // per-frame writer (kills the ~4% boundary snap-back on the handoff frame — S3-4).
+            float split = ComputeSplit(_line, (long)_nowMs.Peek());
+            if (split > 0f && split < 1f) split = Math.Clamp(split + WipeLeadFrac, 0f, 1f);
+            // MAIN = the readable foreground, and it CARRIES THE WIPE — this is the progressive reveal the user SEES:
+            // sung glyphs full-bright Primary (Before), unsung glyphs dim-but-readable (After = Primary @ 0.45). The row
+            // group opacity spring (active-only emphasis) dims the whole row once focus moves; this wipe does sung/unsung.
+            Element main = LineText(_line.Text, Tok.TextPrimary) with
+            {
+                Wipe = new GlyphWipe(Before: Tok.TextPrimary, After: Tok.TextPrimary with { A = 0.45f }, Split: split, Softness: 0.14f),
+                OnRealized = h => _reportNode(_index, h),
+            };
+            // GLOW = a soft blurred bloom UNDER the main, on the SUNG glyphs only (After.A = 0 ⇒ unsung glyphs fully
+            // transparent). Its glyphs mount once the row is NEAR the focus (dist ≤ 2 — still dim + blurred, so the
+            // content swap itself can never pop on the focal row); a peripheral line pays no second glyph run. OnFrame
+            // drives its split (same value as main) + its constant σ; its VISIBILITY is the cross-fade wrapper below.
+            bool near = dist <= 2;
+            Element glowText = (near
                 ? LineText(_line.Text, Tok.TextPrimary) with
                   {
                       Wipe = new GlyphWipe(Before: Tok.TextPrimary, After: Tok.TextPrimary with { A = 0f }, Split: split, Softness: 0.14f),
-                      OnRealized = h => _reportGlow(_index, h),
                   }
-                : LineText("", Tok.TextPrimary) with { OnRealized = h => _reportGlow(_index, h) };
-            // Main text: base Secondary; when lit the wipe reveals Primary up to Split (Lift cut to 0.03·lineHeight — a
-            // subtle lift-into-focus, BetterLyrics' transient per-glyph rise). When dimmed it is the plain Secondary text
-            // (no wipe) — the SAME node updated in place, so its glyphs do not re-bake as it leaves the voice slot.
-            Element main = lit
-                ? LineText(_line.Text, Tok.TextSecondary) with
-                  {
-                      Wipe = new GlyphWipe(Before: Tok.TextPrimary, After: Tok.TextPrimary with { A = 0.4f }, Split: split, Softness: soft, Lift: _lineHt * 0.03f),
-                      OnRealized = h => _reportNode(_index, h),
-                  }
-                : LineText(_line.Text, Tok.TextSecondary) with { OnRealized = h => _reportNode(_index, h) };
+                : LineText("", Tok.TextPrimary)) with { OnRealized = h => _reportGlow(_index, h) };
+            // The wrapper's bound opacity is the per-line glow-fade signal: OnFrame ramps it in over ~240 ms as this line
+            // becomes the voice and out as it leaves — the halo never appears/vanishes in one frame (the old handoff pop).
+            Element glow = new BoxEl { Opacity = GlowOpacity(), HitTestVisible = false, Children = [glowText] };
             textEl = new BoxEl { ZStack = true, Children = [glow, main] };
-        }
-        else if (isActive)
-        {
-            // Line-level active line (no syllables ⇒ no held-note bloom): a static soft glow halo under the crisp text.
-            var crisp = LineText(_line.Text, Tok.TextPrimary) with { OnRealized = h => _reportNode(_index, h) };
-            var glow = new BoxEl
-            {
-                Blur = _centered ? 13f : 9f, HitTestVisible = false,
-                Children = [LineText(_line.Text, Tok.TextPrimary with { A = 0.4f })],
-            };
-            textEl = new BoxEl { ZStack = true, Children = [glow, crisp] };
         }
         else
         {
-            textEl = LineText(_line.Text, Tok.TextSecondary) with { OnRealized = h => _reportNode(_index, h) };
+            // Line-level lyrics (no syllables ⇒ no karaoke wipe / no held-note bloom). PERSISTENT 2-child ZStack in EVERY
+            // state — same shape whether karaoke-live or dimmed — so a line handoff is an in-place property toggle, NOT the
+            // BoxEl↔TextEl child-TYPE swap that forced a Remove+Mount (glyph reshape + blur-cache miss + OnRealized re-fire)
+            // on the text subtree every activation (L1 / the line-synced handoff flicker). Text color tracks active emphasis;
+            // voice-only rows keep the glow cross-fade but recede to Secondary so the eye stays on the rising active line.
+            bool lit = isActive;
+            bool near = dist <= 2;
+            Element glow = new BoxEl
+            {
+                // Constant σ halo while NEAR the focus (dist ≤ 2); its VISIBILITY is the bound glow-fade signal, ramped by
+                // OnFrame at the voice handoff — the halo cross-fades instead of the old one-frame σ 0↔9 + text swap pop.
+                // Glyphs + the blur layer mount/step while the row is still dim + blurred (never on the focal row), and a
+                // peripheral line pays neither a second glyph run nor a blur layer.
+                Blur = near ? (_centered ? 13f : 9f) : 0f,
+                Opacity = GlowOpacity(),
+                HitTestVisible = false,
+                Children = [LineText(near ? _line.Text : "", Tok.TextPrimary with { A = 0.4f })],
+            };
+            Element main = LineText(_line.Text, lit ? Tok.TextPrimary : Tok.TextSecondary) with
+            {
+                // ~150 ms brush cross-fade so the Primary↔Secondary color flip at the handoff never snaps in one frame.
+                BrushTransitionMs = 150f,
+                OnRealized = h => _reportNode(_index, h),
+            };
+            textEl = new BoxEl { ZStack = true, Children = [glow, main] };
         }
 
         return new BoxEl
         {
             Direction = 1,
-            // Static depth-of-field: the dimmed-line sigma is a Blur element property (DofSigma step), not a per-frame
-            // spring — so a settled line's bytes never change and the kernel never breathes. Active line ⇒ blur 0 ⇒ no
-            // self-blur layer (SceneRecorder drops sigma ≤ 0.01); its soft glow is a child blur group instead.
+            // Element-side values = the springs' REST targets (identical numbers): while a spring is in flight the slab's
+            // phase-7 fold-and-write-once compose overwrites these every frame (the slab wins), and at settle both agree —
+            // so a later re-render re-asserting the element value can never snap a settled row (nor can a slab retire
+            // revert it). Active line ⇒ σ rests at 0 ⇒ the self-blur layer drops out (SceneRecorder drops sigma ≤ 0.01);
+            // its soft glow is a child blur group instead. Scale pivots on TransformOriginX/Y below.
             Blur = blur,
-            // Emphasis scale is a STATIC per-dist step (co-stepped with Blur), pivoting on TransformOriginX/Y below — see
-            // the comment above: a scale spring here would content-miss the self-blur pin cache every ease frame.
             ScaleX = scale,
             ScaleY = scale,
-            // Normal (not HoldIfCached): DofSigma STEPS one bucket on every line switch, so the blur-subtree hash always
-            // misses the cache that frame — and HoldIfCached's miss fallback draws the subtree CRISP for one frame (the
-            // whole panel flashing sharp on switch). Normal re-blurs synchronously on a miss; a settled row's stable hash
-            // still pin-hits and skip-submits, so byte-identical settled frames are preserved.
+            Opacity = opacity,   // element rest target — reconciler re-asserts the dim value (not 1), not bound (no mount flash)
+            // Normal (not HoldIfCached): while σ animates, the blur-subtree hash misses the cache every frame — and
+            // HoldIfCached's miss fallback draws the subtree CRISP for a frame (the whole panel flashing sharp on
+            // switch). Normal re-blurs synchronously on a miss; a settled row's stable hash still pin-hits and
+            // skip-submits, so byte-identical settled frames are preserved.
             BlurCachePolicy = BlurCachePolicy.Normal,
             // No fixed Height — the row sizes to its text (1 line short, 2 lines tall); the measured layout reads that
             // natural height so there is no dead space. Vertical padding (_rowPad) is the inter-line gap.
@@ -902,6 +1112,11 @@ sealed class LyricLineView : Component
         };
     }
 
+    // Small POSITIVE wipe lead: nudge the bright boundary a few % ahead of the strictly-played fraction so the edge reads
+    // as anticipating the voice. Shared by the element seed (LyricLineView.Render) and the per-frame driver (OnFrame) so
+    // the reconcile re-render and the OnFrame writer agree on the boundary (no snap-back — S3-4).
+    internal const float WipeLeadFrac = 0.04f;
+
     internal static float ComputeSplit(LyricLine line, long now)
     {
         var syl = line.Syllables;
@@ -920,45 +1135,13 @@ sealed class LyricLineView : Component
         return Math.Clamp(played / total, 0f, 1f);
     }
 
-    // Held / long-syllable glow bloom (BetterLyrics LongDurationSyllable scope). A syllable sustained >= 700 ms (the
-    // BetterLyrics LyricsGlowEffectLongSyllableDuration default) swells the active line's glow; a short syllable gets
-    // none. Envelope = a soft trapezoid over the syllable (rise ~22%, hold, fall ~22%), the smooth analogue of
-    // BetterLyrics' Keyframe(target,in)->Keyframe(0,out). Amplitude <paramref name="peakExtra"/> (~lineHeight*0.2, its
-    // auto glow target) is added over the constant <paramref name="baseSigma"/>. Returns baseSigma outside any held note.
-    internal const long HeldSyllableMs = 700;
-    internal static float ComputeHeldGlowSigma(LyricLine line, long now, float baseSigma, float peakExtra)
-    {
-        if (peakExtra <= 0f) return baseSigma;
-        var syl = line.Syllables;
-        for (int i = 0; i < syl.Count; i++)
-        {
-            long s = syl[i].StartMs, e = syl[i].EndMs;
-            if (now < s) break;            // playhead hasn't reached this syllable yet
-            if (now >= e) continue;        // already past it
-            long dur = e - s;
-            if (dur < HeldSyllableMs) return baseSigma;   // short syllable: no bloom
-            float t = Math.Clamp((float)(now - s) / dur, 0f, 1f);
-            // Wide shoulders (slow rise/fall) plus a floor so the envelope never collapses to 0 mid-note: consecutive
-            // sustained syllables then hold a steady elevated glow that only swells gently toward peak, instead of
-            // dipping to base at every syllable boundary (the ~1 Hz in/out breathing the eye reads as straining).
-            float env = MathF.Max(0.45f, Smooth01(0f, 0.35f, t) * (1f - Smooth01(0.65f, 1f, t)));
-            // Snap the bloom to a 0.25 grid: under the 16 ms timer's jitter (15/16/17/coalesced) the raw envelope steps
-            // irregularly, and the call site only delta-gates at 0.05 — so the held note's glow sigma keeps creeping,
-            // marking PaintDirty on a self-blur node every tick (the sustained-note breathing). Quantized, a held/slow
-            // note yields byte-identical sigma frame-to-frame, so consecutive frames stay byte-stable and the skip-submit
-            // hash elides them. The glow analogue of the wipe's pixel-quantize. baseSigma (4/6) is already on the grid,
-            // so the resting (no-bloom) glow is unchanged.
-            return MathF.Round((baseSigma + peakExtra * env) * 4f) / 4f;
-        }
-        return baseSigma;
-    }
+}
 
-    static float Smooth01(float a, float b, float x)
-    {
-        float t = Math.Clamp((x - a) / MathF.Max(1e-5f, b - a), 0f, 1f);
-        return t * t * (3f - 2f * t);
-    }
-
+sealed class LyricsUpgradeObserver(Action<LyricsDocument> onNext) : IObserver<LyricsDocument>
+{
+    public void OnCompleted() { }
+    public void OnError(Exception error) { }
+    public void OnNext(LyricsDocument value) => onNext(value);
 }
 
 sealed class LyricsTicker : ReactiveComponent

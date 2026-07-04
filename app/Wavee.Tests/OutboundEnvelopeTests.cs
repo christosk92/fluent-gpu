@@ -244,6 +244,38 @@ public class OutboundEnvelopeTests
     }
 
     [Fact]
+    public void Transfer_MatchesDesktopConnectTransferBodyShape()
+    {
+        var json = OutboundEnvelope.Transfer("transfer-id", "command-id", "interaction-id", "premium");
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        var options = root.GetProperty("options");
+        Assert.Equal("restore", options.GetProperty("restore_paused").GetString());
+        Assert.Equal("extrapolate", options.GetProperty("restore_position").GetString());
+        Assert.Equal("only_current", options.GetProperty("restore_track").GetString());
+        Assert.Equal("premium", options.GetProperty("license").GetString());
+        Assert.Equal("transfer-id", root.GetProperty("transfer_intent_id").GetString());
+        Assert.Equal("command-id", root.GetProperty("command_id").GetString());
+        Assert.Equal("interaction-id", root.GetProperty("interaction_id").GetString());
+    }
+
+    [Fact]
+    public async Task LiveOutboundControl_Transfer_PostsToConnectTransferEndpoint()
+    {
+        var stub = new StubTransport();
+        await new LiveOutboundControl(stub, "us", () => "conn-123").TransferAsync("active", "target");
+        Assert.Equal("/connect-state/v1/connect/transfer/from/active/to/target", stub.LastRequestRoute);
+        Assert.Equal("POST", stub.LastRequestMethod);
+        Assert.Equal("application/x-www-form-urlencoded", stub.LastRequestHeaders!["Content-Type"]);
+        Assert.Equal("conn-123", stub.LastRequestHeaders!["X-Spotify-Connection-Id"]);
+
+        using var doc = JsonDocument.Parse(stub.LastRequestBody!);
+        Assert.Equal("restore", doc.RootElement.GetProperty("options").GetProperty("restore_paused").GetString());
+        Assert.Equal("extrapolate", doc.RootElement.GetProperty("options").GetProperty("restore_position").GetString());
+        Assert.Equal("only_current", doc.RootElement.GetProperty("options").GetProperty("restore_track").GetString());
+    }
+
+    [Fact]
     public async Task LiveOutboundControl_SetVolume_PutsToConnectVolumeEndpoint()
     {
         var stub = new StubTransport();

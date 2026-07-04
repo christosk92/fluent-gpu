@@ -23,10 +23,13 @@ public class CachedStoreTests
         public readonly Dictionary<string, byte[]> VideoAssoc = new();
         public IEnumerable<ColdVideoAssoc> LoadAllVideoAssociations() { foreach (var kv in VideoAssoc) yield return new ColdVideoAssoc(kv.Key, kv.Value); }
         public void UpsertVideoAssociation(string uri, byte[] payload) => VideoAssoc[uri] = payload;
-        public void UpsertSaved(string setId, string uri, bool saved, SyncState sync) { if (saved) Saved[(setId, uri)] = sync; else Saved.Remove((setId, uri)); }
+        public void UpsertSaved(string setId, string uri, bool saved, SyncState sync, long addedAtMs = 0) { if (saved) Saved[(setId, uri)] = sync; else Saved.Remove((setId, uri)); }
         public readonly Dictionary<string, string?> Revisions = new();
         public string? GetCollectionRevision(string setId) => Revisions.TryGetValue(setId, out var r) ? r : null;
         public void SetCollectionRevision(string setId, string? revision, long syncedAt) => Revisions[setId] = revision;
+        public byte[]? RootlistRev;
+        public byte[]? GetRootlistRevision() => RootlistRev;
+        public void SetRootlistRevision(byte[]? rev) => RootlistRev = rev;
         public readonly Dictionary<string, (IReadOnlyList<ColdPlaylistItem> Rows, byte[]? Rev)> Membership = new();
         public IReadOnlyList<ColdPlaylistItem> LoadMembership(string playlistUri) => Membership.TryGetValue(playlistUri, out var m) ? m.Rows : Array.Empty<ColdPlaylistItem>();
         public void ReplaceMembership(string playlistUri, IReadOnlyList<ColdPlaylistItem> rows, byte[]? baseRev) => Membership[playlistUri] = (rows, baseRev);

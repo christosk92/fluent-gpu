@@ -1,18 +1,17 @@
-using System;
+using Wavee.Backend.Audio;
 
 namespace Wavee.SpotifyLive;
 
 // ── Desktop-parity / anti-fraud identity (ported VERBATIM — decision #11) ─────────────────────────────────────────────
 // The strings Wavee presents to Spotify (DeviceInfo software version, spirc version, private_device_info.platform, the
-// app-version/user-agent headers). The server cross-checks them; drift gets the client flagged client-deprecated and
-// throttled, and silently breaks Recently Played. Do NOT "tidy" — bump all together against current desktop.
+// app-version/user-agent headers). Version pins delegate to SpotifyRuntimeIdentity; Connect-only fields stay here.
 public static class SpotifyClientIdentity
 {
-    public const string DesktopSemver = "1.2.88.483";
-    public const string DesktopBuildSha = "g8aa8628e";
-    public const string DeviceSoftwareVersion = DesktopSemver + "." + DesktopBuildSha;   // DeviceInfo.device_software_version
-    public const string AppVersionHeader = "128800483";                                  // spotify-app-version header
-    public const string AppPlatform = "Win32_x86_64";                                    // app-platform header
+    public static string DesktopSemver => SpotifyRuntimeIdentity.Default.DesktopSemver;
+    public static string DesktopBuildSha => SpotifyRuntimeIdentity.DefaultClientVersion[(SpotifyRuntimeIdentity.DefaultClientVersion.LastIndexOf('g') + 1)..];
+    public static string DeviceSoftwareVersion => SpotifyRuntimeIdentity.DefaultClientVersion;
+    public static string AppVersionHeader => SpotifyRuntimeIdentity.DefaultAppVersion;
+    public static string AppPlatform => SpotifyRuntimeIdentity.AppPlatform;
     public const string SpircVersion = "3.2.6";                                          // DeviceInfo.spirc_version
     public const string XpuiSnapshotVersion = "xpui-snapshot_2026-05-06_1778061618835_fb3c63a";  // play_origin.feature_version
 
@@ -20,7 +19,7 @@ public static class SpotifyClientIdentity
     public static string GetPrivateDevicePlatform() => GetOsDescriptor();
 
     /// <summary>User-Agent for spclient/pathfinder calls: Spotify/{build} {platform}/{os}.</summary>
-    public static string GetUserAgent() => $"Spotify/{AppVersionHeader} {AppPlatform}/{GetOsDescriptor()}";
+    public static string GetUserAgent() => SpotifyRuntimeIdentity.Default.UserAgent;
 
     // Windows: "Windows {major} ({full-version}; {arch})". Spotify always claims x64 (x64[native:ARM] under ARM emulation).
     static string GetOsDescriptor()

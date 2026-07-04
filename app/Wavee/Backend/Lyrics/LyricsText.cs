@@ -144,24 +144,7 @@ public static partial class LyricsText
             var main = new StringBuilder();
 
             foreach (var node in p.Nodes())
-            {
-                if (node is XText t) { main.Append(t.Value); continue; }
-                if (node is not XElement span || span.Name.LocalName != "span") continue;
-
-                string role = Attr(span, "role") ?? "";   // ttm:role
-                string spanText = span.Value;
-                if (role.Contains("translation", StringComparison.OrdinalIgnoreCase)) { translation = spanText.Trim(); continue; }
-                if (role.Contains("roman", StringComparison.OrdinalIgnoreCase)) { romanization = spanText.Trim(); continue; }
-
-                long? sb = ParseTtmlTime(Attr(span, "begin"));
-                long? se = ParseTtmlTime(Attr(span, "end"));
-                if (sb is not null && spanText.Length > 0)
-                {
-                    syl.Add(new LyricSyllable(sb.Value, se ?? sb.Value + 200, spanText));
-                    anyWord = true;
-                }
-                main.Append(spanText);
-            }
+                AppendTtmlContent(node, main, syl, ref translation, ref romanization, ref anyWord);
 
             string text = CollapseWs(main.ToString());
             if (text.Length == 0 && syl.Count == 0) continue;
@@ -176,6 +159,56 @@ public static partial class LyricsText
 
     static string? Attr(XElement e, string localName)
         => e.Attributes().FirstOrDefault(a => a.Name.LocalName == localName)?.Value;
+
+    static void AppendTtmlContent(
+        XNode node,
+        StringBuilder main,
+        List<LyricSyllable> syl,
+        ref string? translation,
+        ref string? romanization,
+        ref bool anyWord)
+    {
+        if (node is XText t) { main.Append(t.Value); return; }
+        if (node is not XElement span || span.Name.LocalName != "span") return;
+
+        string role = Attr(span, "role") ?? "";   // ttm:role
+        if (role.Contains("translation", StringComparison.OrdinalIgnoreCase)) { translation = span.Value.Trim(); return; }
+        if (role.Contains("roman", StringComparison.OrdinalIgnoreCase)) { romanization = span.Value.Trim(); return; }
+        if (role.Contains("bg", StringComparison.OrdinalIgnoreCase)) return;
+
+        if (string.Equals(Attr(span, "ruby"), "container", StringComparison.OrdinalIgnoreCase))
+        {
+            var baseSpan = span.Descendants().FirstOrDefault(e => string.Equals(Attr(e, "ruby"), "base", StringComparison.OrdinalIgnoreCase));
+            var textSpans = span.Descendants().Where(e => string.Equals(Attr(e, "ruby"), "text", StringComparison.OrdinalIgnoreCase)).ToList();
+            string rubyText = baseSpan?.Value ?? span.Value;
+            long? rb = ParseTtmlTime(Attr(textSpans.FirstOrDefault() ?? span, "begin")) ?? ParseTtmlTime(Attr(span, "begin"));
+            long? re = ParseTtmlTime(Attr(textSpans.LastOrDefault() ?? span, "end")) ?? ParseTtmlTime(Attr(span, "end"));
+            if (rb is not null && rubyText.Length > 0)
+            {
+                syl.Add(new LyricSyllable(rb.Value, re ?? rb.Value + 200, rubyText));
+                anyWord = true;
+            }
+            main.Append(rubyText);
+            return;
+        }
+
+        long? sb = ParseTtmlTime(Attr(span, "begin"));
+        long? se = ParseTtmlTime(Attr(span, "end"));
+        if (sb is null && span.Elements().Any(e => e.Name.LocalName == "span"))
+        {
+            foreach (var child in span.Nodes())
+                AppendTtmlContent(child, main, syl, ref translation, ref romanization, ref anyWord);
+            return;
+        }
+
+        string spanText = span.Value;
+        if (sb is not null && spanText.Length > 0)
+        {
+            syl.Add(new LyricSyllable(sb.Value, se ?? sb.Value + 200, spanText));
+            anyWord = true;
+        }
+        main.Append(spanText);
+    }
 
     /// <summary>TTML time: <c>hh:mm:ss.mmm</c>, <c>mm:ss.mmm</c>, <c>ss.mmm</c>, or offset form <c>12.5s</c>/<c>900ms</c>.</summary>
     public static long? ParseTtmlTime(string? v)

@@ -18,6 +18,12 @@ public sealed class ItemsViewController
     internal Action<int, float, bool>? BringIntoViewImpl;
     internal Func<int>? GetCurrent;
     internal Action<float>? ScrollByImpl;
+    internal Func<float>? GetOffsetImpl;
+
+    /// <summary>The live scroll offset along the view's scroll axis (DIP; 0 before the viewport realizes / for a
+    /// non-virtual host). The scroll-anchoring read: pair with <see cref="ScrollBy"/> to keep the visible content
+    /// stationary across a data insert/remove above the viewport.</summary>
+    public float ScrollOffset => GetOffsetImpl?.Invoke() ?? 0f;
 
     /// <summary>The live selection model — Select/Deselect/IsSelected/SelectAll/DeselectAll/InvertSelection
     /// (ItemsView.idl:53-58) are its methods; range-based, so they never realize items.</summary>
@@ -186,6 +192,16 @@ public sealed class ItemsView : Component
     /// by itself make the seed a no-op — the seed animates the row's LIVE translate back to that 0, which is exactly
     /// the ownership conflict the DragGhost-flag skip prevents.</summary>
     public IReadSignal<int>? DraggedSlot;
+    /// <summary>OPTIONAL FLIP start override for the displacement seed: when non-null for a resting index, that row's
+    /// translate animation starts from THIS value instead of its live translate — the "first" of first-invert-play, so a
+    /// data reorder can glide surviving rows old-position → new-position in the SAME bump that lands the new order
+    /// (return the old-minus-new residual; the target stays <see cref="ItemDisplacement"/>, normally (0,0)). Null (the
+    /// delegate or its per-item result) ⇒ the live translate — the velocity-continuous drag-reorder retarget.</summary>
+    public Func<int, (float dx, float dy)?>? ItemFlipFrom;
+    /// <summary>OPTIONAL per-row opacity seed consumed by the SAME displacement bump: non-null ⇒ animate the row's
+    /// Opacity from the value to 1 after the per-row delay (an added-row ease-in with a stagger, without a slot remount —
+    /// bound slots recycle, so mount-keyed Enter can't express this). The delay also staggers the row's translate seed.</summary>
+    public Func<int, (float from, float delayMs)?>? ItemFadeFrom;
 
     public int OverscanItems = 4;
     /// <summary>Flex participation of the view (host box + viewport). 1 (default) = FILL the parent-given size — the
@@ -209,6 +225,7 @@ public sealed class ItemsView : Component
     /// <summary>Scroll-position restoration key (see <see cref="VirtualListEl.ScrollKey"/>): a stable per-content identity
     /// so a revisit lands at the saved row on the first realized window. Forwarded onto the built VirtualListEl.</summary>
     public string? ScrollKey;
+    public (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action)? OnScrollGeometryChanged;
 
     /// <summary>Legacy demo factory (compat): a single-selectable grid of labeled tiles, now riding the full
     /// L0–L3 substrate (virtualized grid + ItemContainer chrome + keyboard nav). Natural-sized (Grow 0): the demo
@@ -293,7 +310,10 @@ public sealed class ItemsView : Component
                                       bool suppressScrollBar = false,
                                       bool autoEdgeFade = false,
                                       bool staggerColdRealize = false,
-                                      string? scrollKey = null)
+                                      string? scrollKey = null,
+                                      Func<int, (float dx, float dy)?>? itemFlipFrom = null,
+                                      Func<int, (float from, float delayMs)?>? itemFadeFrom = null,
+                                      (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action)? onScrollGeometryChanged = null)
         => Embed.Comp(() => new ItemsView
         {
             ItemCount = itemCount,
@@ -318,6 +338,9 @@ public sealed class ItemsView : Component
             ItemDisplacement = itemDisplacement,
             DisplacementVersion = displacementVersion,
             DraggedSlot = draggedSlot,
+            ItemFlipFrom = itemFlipFrom,
+            ItemFadeFrom = itemFadeFrom,
+            OnScrollGeometryChanged = onScrollGeometryChanged,
         });
 
     // ── built-in presets (the former ListView/GridView controls, folded onto ItemsView) ──────────────
@@ -829,6 +852,13 @@ public sealed class ItemsView : Component
             ctl.GetCurrent = current.Peek;
             ctl.Selection = model;
             ctl.ScrollByImpl = ScrollByDelta;
+            ctl.GetOffsetImpl = () =>
+            {
+                if (sceneRef is null) return 0f;
+                var vp = viewportNode.Value;
+                if (vp.IsNull || !sceneRef.IsLive(vp) || !sceneRef.TryGetScroll(vp, out var sc)) return 0f;
+                return horizontal ? sc.OffsetX : sc.OffsetY;
+            };
         }
 
         // Post-layout: focus the (now realized) keyboard-current container so the engine ring lands on it.
@@ -871,6 +901,8 @@ public sealed class ItemsView : Component
             var disp = ItemDisplacement;
             var anim = Context.Anim;
             if (disp is null || anim is null || sceneRef is null) return;
+            var flip = ItemFlipFrom;                   // optional FLIP start override (data-reorder glide)
+            var fade = ItemFadeFrom;                   // optional opacity seed + stagger delay (added-row ease-in)
             var vp = viewportNode.Value;
             if (vp.IsNull || !sceneRef.IsLive(vp)) return;
             int dragged = DraggedSlot?.Peek() ?? -1;   // resting index whose translate DragController owns (skip the seed)
@@ -901,12 +933,17 @@ public sealed class ItemsView : Component
                 // currently leaves it null) or its index doesn't align with the realized window.
                 if ((sceneRef.Flags(n) & NodeFlags.DragGhost) != 0 || item == dragged) continue;
                 var (dx, dy) = disp(item);             // (0,0) for non-displaced (non-dragged) items
+                var fd = fade?.Invoke(item);           // opacity seed (from→1) + the row's stagger delay
+                float delay = fd?.delayMs ?? 0f;
                 ref NodePaint p = ref sceneRef.Paint(n);
-                float fromX = p.LocalTransform.Dx, fromY = p.LocalTransform.Dy;
+                var f = flip?.Invoke(item);            // FLIP "first": start from the OLD visual position, not the live translate
+                float fromX = f?.dx ?? p.LocalTransform.Dx, fromY = f?.dy ?? p.LocalTransform.Dy;
                 if (MathF.Abs(dx - fromX) > DisplacementEpsilon)
-                    anim.Animate(n, AnimChannel.TranslateX, fromX, dx, DisplacementAnimMs, Easing.FluentDecelerate);
+                    anim.Animate(n, AnimChannel.TranslateX, fromX, dx, DisplacementAnimMs, Easing.FluentDecelerate, delayMs: delay);
                 if (MathF.Abs(dy - fromY) > DisplacementEpsilon)
-                    anim.Animate(n, AnimChannel.TranslateY, fromY, dy, DisplacementAnimMs, Easing.FluentDecelerate);
+                    anim.Animate(n, AnimChannel.TranslateY, fromY, dy, DisplacementAnimMs, Easing.FluentDecelerate, delayMs: delay);
+                if (fd is { } o)
+                    anim.Animate(n, AnimChannel.Opacity, o.from, 1f, DisplacementAnimMs, Easing.FluentDecelerate, delayMs: o.delayMs);
             }
         }, dispVer);
 
@@ -1036,6 +1073,7 @@ public sealed class ItemsView : Component
                 AutoEdgeFade = AutoEdgeFade,
                 SuppressScrollBar = SuppressScrollBar,
                 ScrollKey = ScrollKey,
+                OnScrollGeometryChanged = OnScrollGeometryChanged,
                 Grow = Grow,
                 OnRealized = h => viewportNode.Value = h,
             }
@@ -1052,6 +1090,7 @@ public sealed class ItemsView : Component
                 AutoEdgeFade = AutoEdgeFade,
                 SuppressScrollBar = SuppressScrollBar,
                 ScrollKey = ScrollKey,
+                OnScrollGeometryChanged = OnScrollGeometryChanged,
                 // Grow rides through to the viewport: 1 = fill the parent (hard viewport, never content-measured);
                 // 0 = natural — FlexLayout.MeasureViewport sizes a non-flexing viewport to the layout's ContentExtent
                 // (the gallery card shape; D1).

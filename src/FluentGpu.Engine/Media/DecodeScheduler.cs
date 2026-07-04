@@ -87,14 +87,18 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
         return true;
     }
 
-    // Cancel a queued/in-flight decode. If the request is still queued (TryRemove succeeds) the _reqs removal alone
-    // suppresses it — TryClaim will dequeue the lane entry, find _reqs empty, and drop it; NO tombstone is needed, so a
-    // cancel-before-claim leaves nothing behind (this is the bulk of recycled-row cancels under virtualized scroll). The
-    // tombstone is set ONLY when the request was already claimed (TryRemove fails ⇒ a worker owns it and is mid-Process):
-    // then _canceled is the sole channel that aborts the in-flight decode/upload, and that worker reclaims it (Process's
-    // finally / the Pump drain). Invariant: every live _canceled entry maps to one in-flight decode and is reclaimed at
-    // its terminal point — so the map is bounded by Inflight, not by total cancels.
-    public void Cancel(int id) { if (!_reqs.TryRemove(id, out _)) _canceled[id] = 1; }
+    // Cancel a queued/in-flight decode. A queued request publishes a terminal Canceled completion so ImageCache does not
+    // keep a forever-Pending handle for work workers will later skip. A claimed request uses a tombstone that the worker
+    // reclaims at its terminal point, so the map stays bounded by Inflight.
+    public void Cancel(int id)
+    {
+        if (_reqs.TryRemove(id, out _))
+        {
+            Complete(id, false, 0, 0, ImageFailureKind.Canceled, 0, null, 0);
+            return;
+        }
+        _canceled[id] = 1;
+    }
 
     public void Prioritize(int id, ImagePriority priority)
     {

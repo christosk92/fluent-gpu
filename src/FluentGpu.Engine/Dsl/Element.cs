@@ -84,8 +84,11 @@ public sealed record BoxEl : Element
     public Edges4 Margin { get; init; }
     /// <summary>Unified channel (Prop&lt;T&gt;): a static color, a <c>Func&lt;ColorF&gt;</c> thunk, or a concrete signal.</summary>
     public Prop<ColorF> Fill { get; init; }
-    public ColorF HoverFill { get; init; }
-    public ColorF PressedFill { get; init; }
+    /// <summary>Bindable like <see cref="Fill"/>: a bound hover/press fill re-fires on RethemeAll (theme/palette
+    /// switch) and can read recycle-varying state (e.g. a virtual list's slot index for zebra-aware hover depth)
+    /// without remounting the slot. A==0 ⇒ the recorder auto-lightens/darkens <see cref="Fill"/> instead.</summary>
+    public Prop<ColorF> HoverFill { get; init; }
+    public Prop<ColorF> PressedFill { get; init; }
     public ColorF BorderColor { get; init; }
     public ColorF HoverBorderColor { get; init; }    // A==0 ⇒ recorder auto-lightens BorderColor on hover; else eases to this exact state token
     public ColorF PressedBorderColor { get; init; }  // A==0 ⇒ recorder auto-darkens BorderColor on press; else eases to this exact state token

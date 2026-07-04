@@ -101,6 +101,13 @@ public sealed class QueueCore
         return _cur?.Track;
     }
 
+    public Track? PeekNext()
+    {
+        if (_userQueue.Count > 0) return _userQueue[0].Track;
+        int next = _cursor + 1;
+        return next >= 0 && next < _context.Count ? _context[next].Track : null;
+    }
+
     public void SetRepeat(RepeatMode m) => Repeat = m;
 
     public void SetShuffle(bool on)

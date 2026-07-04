@@ -56,6 +56,8 @@ sealed class DiscographyPage : Component
 
     VirtualCollection<Album>? _vc;
     string _key = "";
+    System.Threading.CancellationTokenSource? _cts;   // re-scoped per facet route; cancelled on route change + unmount
+    bool _seeded;                                      // one-shot latch (per route): guards the provisional Seed
 
     public override Element Render()
     {
@@ -69,7 +71,18 @@ sealed class DiscographyPage : Component
         this.UseSoftReveal(dy: 0f, blur: 0f);
 
         var post = UsePost();
-        if (_vc is null || _key != route.Name) { _key = route.Name; _vc = DiscoVc.Make(svc, uri, kind, post); }
+        if (_vc is null || _key != route.Name)
+        {
+            // New facet route → cancel the prior route's fetches/probe, re-scope the CTS + seed latch, rebuild the VC.
+            _cts?.Cancel(); _cts?.Dispose();
+            _cts = new System.Threading.CancellationTokenSource();
+            _seeded = false;
+            _key = route.Name;
+            _vc = DiscoVc.Make(svc, uri, kind, post, _cts.Token);
+            SeedProbe(svc, uri, kind, post, _cts);   // probe keyed on the route's uri+kind → shimmer-up-to-N instantly
+        }
+        // Cancel whatever CTS is current when the page unmounts (signal-free effect → runs once on mount).
+        UseSignalEffect(() => Reactive.OnCleanup(() => { _cts?.Cancel(); _cts?.Dispose(); }));
 
         var pageScroll = UseSignal(0f);
         void Play(string u) => _ = svc.Player.PlayAsync(u, 0);
@@ -110,5 +123,28 @@ sealed class DiscographyPage : Component
             OnScrollGeometryChanged = (g => (long)(g.OffsetY / 24f), g => pageScroll.Value = g.OffsetY),
         };
         return Ctx.Provide(LazyScroll.Slot, (IReadSignal<float>)pageScroll, scroll);
+    }
+
+    // Total-only probe (limit 0 → NO network; resolves same-tick from the cached artist). Seeds the VC COUNT ONLY as
+    // PROVISIONAL so the whole-facet grid shows shimmer-up-to-N instantly; the first real page reconciles the count. Behind a
+    // one-shot latch (Seed bumps Version → an unlatched seed would re-render-loop); a cancelled/failed probe or a non-positive
+    // total leaves _seeded clear so a re-nav retries. Captures the route's VC + token so a stale completion after a facet
+    // switch is a no-op.
+    async void SeedProbe(Services svc, string uri, DiscographyKind kind, Action<Action> post, System.Threading.CancellationTokenSource cts)
+    {
+        var ct = cts.Token;
+        var vc = _vc;
+        try
+        {
+            var p = await svc.Library.GetDiscographyAsync(uri, kind, 0, 0, ct).ConfigureAwait(false);
+            int total = p.Total;
+            post(() =>
+            {
+                if (_seeded || ct.IsCancellationRequested || total <= 0 || vc is null || _vc != vc) return;
+                _seeded = true;
+                vc.Seed(total, default, provisional: true);
+            });
+        }
+        catch { /* OCE (facet switch / nav away) or a failed probe → _seeded stays clear so a re-nav retries */ }
     }
 }

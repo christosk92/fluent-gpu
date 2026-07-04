@@ -41,8 +41,9 @@ sealed class WaveeApp : Component
         {
             FluentApp.SystemColorsChanged += () =>
             {
-                if (_services.Settings.Get(WaveeSettings.ThemeMode) != 0) return;   // explicit Light/Dark pinned → ignore OS
-                Theme.Dark = !FluentApp.SystemUsesLightTheme();
+                if (_services.Settings.Get(WaveeSettings.ThemeMode) != 0) return;
+                var kind = FluentApp.SystemUsesLightTheme() ? ThemeKind.Light : ThemeKind.Dark;
+                Tok.Use(WaveeTheme.ResolvePalette(_services.Settings.Get(WaveeSettings.PaletteId)), kind);
                 if (FluentApp.SystemAccent() is { } a) Tok.SetAccent(a);
                 requestTheme?.Invoke(250f);
             };
@@ -144,11 +145,12 @@ sealed class WaveeApp : Component
             }
             else
             {
-                // Fake demo: connect instantly + start in-memory playback so the INITIAL launch lands on the shell (no
-                // takeover flash, --screenshot renders the shell). After a logout the gate shows the demo two-pane instead.
+                // Fake demo: connect the fake session instantly so the INITIAL launch lands on the shell (no takeover flash,
+                // --screenshot renders the shell). Playback is NOT auto-started — local playback is unsupported, so a play
+                // intent shows the "choose a remote device" toast; the bar rests at "Nothing playing". After a logout the
+                // gate shows the demo two-pane instead.
                 _ = _services.Session.ConnectAsync();
-                _ = _services.Player.ResumeAsync();
-                _services.Log.Info("app", "Demo backend; fake session + playback started");
+                _services.Log.Info("app", "Demo backend; fake session started (playback remote-only)");
             }
             // Diagnostic: open the full now-playing view on launch (for --screenshot visual diffing of that surface).
             if (Diag.EnvFlag("WAVEE_NOWPLAYING_OPEN")) _services.Playback.Expanded.Value = true;

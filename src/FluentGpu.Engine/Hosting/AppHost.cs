@@ -428,6 +428,8 @@ public sealed class AppHost : IDisposable
     private static readonly long ScrollGraceTicks = (long)(0.15 * Stopwatch.Frequency);
     private long _selfBlurHoldUntil;
     private static readonly long SelfBlurHoldAfterScrollTicks = (long)(0.12 * Stopwatch.Frequency);
+    private long _mainScrollHoldUntil;   // any-viewport user scroll — apps peek via Reconciler.PeekMainScrollBusy
+    private static readonly long MainScrollHoldTicks = (long)(0.45 * Stopwatch.Frequency);
     public int AmbientAnimationFps { get; set; } = s_ambientFpsDefault;
     private static readonly int s_ambientFpsDefault = ReadAmbientFps();
     private static int ReadAmbientFps() => int.TryParse(Environment.GetEnvironmentVariable("FG_ANIM_FPS"), out var v) && v >= 0 ? v : 0;
@@ -439,6 +441,14 @@ public sealed class AppHost : IDisposable
         // the instant the fling settles (a driver of the "scroll feels 24 fps then 120 fps" inconsistency). Both bits
         // clear the moment decode/reveal finishes, so this never holds the loop awake the way a perpetual loop would.
         WakeReasons.ImageCrossfades | WakeReasons.ImagesPending;
+    // Modal-loop keep-alive paints must still run when any of these wake bits are set — even if ambient animation is
+    // also live (playback seek ticker). Without this mask the InModalLoop+AnimIsAmbient bail swallowed warming virtual
+    // lists mid-drag (detail-resize-flicker fix).
+    private const WakeReasons ModalLoopEssentialWake =
+        WakeReasons.FrameNeeded | WakeReasons.RuntimePending | WakeReasons.ScrollAnim |
+        WakeReasons.DragDropWork | WakeReasons.DragActive | WakeReasons.GestureHold |
+        WakeReasons.PopupAnim | WakeReasons.ImagesPending | WakeReasons.ImageCrossfades | WakeReasons.Orphans;
+    private static bool OnlyAmbientWakeReasons(WakeReasons reasons) => (reasons & ModalLoopEssentialWake) == 0;
     // Dynamic-text (HUD) intern-on-change cache, indexed by (int)DynamicTextKind (None..FrameMs = 0..5). Each slot
     // holds the last DISPLAYED quantized value (the int fps / int cmd|draw|cull / 0.1-rounded ms — exactly the display
     // granularity) and the StringId it interned to (the host holds ONE ref per cached id). When a kind's quantized
@@ -862,6 +872,7 @@ public sealed class AppHost : IDisposable
         _reconciler.Anim = _anim;
         _reconciler.Connected = _connected;   // shared-element (connected-animation) participant registry, fed by Element.MorphId
         _reconciler.ArmScroll = _scrollAnim.Arm;   // controls can request a smooth programmatic scroll (set Target + arm → phase 7 eases)
+        _reconciler.PeekMainScrollBusy = () => Stopwatch.GetTimestamp() < _mainScrollHoldUntil;
         // KeepAlive park/un-park → quiesce/resume the parked subtree's animation + scroll tickers so a backgrounded tab's
         // looping animation or mid-fling scroll can't keep the frame loop awake (defeating the idle wake-stop). A parked
         // shared-element node also captures its reverse-fly snapshot here (Back returns to it via the like-tagged dest).
@@ -899,7 +910,12 @@ public sealed class AppHost : IDisposable
             _images.SetPixelAttemptSink(_device.TryUploadImage);
             _images.SetEvictSink(_device.EvictImage);
         }
-        _images.ImageStatusChanged += (_, _, _, _) => { if (_imageEpoch.HasSubscribers) _imageEpoch.Value = _imageEpoch.Peek() + 1; WakeFrame(); };
+        _images.ImageStatusChanged += (id, _, _, _) =>
+        {
+            _reconciler.MarkImageDirty(id);
+            if (_imageEpoch.HasSubscribers) _imageEpoch.Value = _imageEpoch.Peek() + 1;
+            WakeFrame();
+        };
 
         // Publish ambient contexts before the first render so UseContext(Viewport.Size)/FrameDiagnostics resolve.
         _lastViewportDip = ClientSizeDip();
@@ -1251,9 +1267,13 @@ public sealed class AppHost : IDisposable
             //      resize) is a finite track, so AnimIsAmbient() is false and we DON'T bail — the button animates in/out
             //      while only the perpetual playback ticker is dropped. A real resize / band-crossing relayout still
             //      paints; WM_EXITSIZEMOVE flushes any deferred work in one settle frame, so nothing visible is lost.
+            //      Warming virtual lists (FrameNeeded from HasWarmingVirtuals) and any other essential wake bit still
+            //      paint — OnlyAmbientWakeReasons masks them off so a seek ticker cannot starve mid-drag refill.
+            var wakeReasons = ComputeWakeReasons();
             if (keepAlive && !resized && _everLaidOut && !_needFullLayout
                 && _uiPosts.IsEmpty && !_scene.AnyLayoutDirty
-                && (ComputeWakeReasons() == WakeReasons.None || (_window.InModalLoop && AnimIsAmbient())))
+                && (wakeReasons == WakeReasons.None
+                    || (_window.InModalLoop && AnimIsAmbient() && OnlyAmbientWakeReasons(wakeReasons))))
                 return LastStats;
 
             var layoutSize = ClientSizeDip();
@@ -1434,7 +1454,10 @@ public sealed class AppHost : IDisposable
             _scrollAnim.Tick(dtMs);                            // 7 smooth scroll + fling + overscroll spring + scrollbar fade (the engine-owned integrator)
             long scrollHoldNow = Stopwatch.GetTimestamp();
             if (_scrollAnim.AnyUserScrollActiveThisFrame)
+            {
                 _selfBlurHoldUntil = scrollHoldNow + SelfBlurHoldAfterScrollTicks;
+                _mainScrollHoldUntil = scrollHoldNow + MainScrollHoldTicks;
+            }
             bool holdSelfBlurForScroll = scrollHoldNow < _selfBlurHoldUntil;
             ScrollBindEval.ApplyPinAndFlagPass(_scene);       // 7 generic scroll-bind pins + the predicate-flag channel (sticky etc.)
             ScrollBindEval.RunObservers(_scene);              // 7 change-only scroll-geometry observers (pull-to-refresh / analytics)
@@ -1463,6 +1486,13 @@ public sealed class AppHost : IDisposable
                 _invalidator.RunDirty(layoutSize);
                 _scene.ClearLayoutDirty();
             }
+
+            // Stuck-hover fix (input-a11y.md §5.4/§15): a phase-7 offset write above moved content under a possibly
+            // stationary mouse/pen cursor. Re-resolve hover NOW — AFTER the re-realize catch-up, so the hit-test sees the
+            // finalized realized/transformed rows and a rebound virtual slot's Unmark (Reconciler) can't clobber the
+            // refreshed hover. Gated on an ACTUAL offset write this frame; the dispatcher self-gates mouse/pen + a valid
+            // last position + no touch pan. Zero-alloc scalar walk through the existing hover chokepoints.
+            if (_scrollAnim.AnyOffsetWroteThisFrame) _dispatcher.RefreshHoverAfterScroll();
 
             var focus = new FocusVisualStyle(Tok.FocusOuter, Tok.FocusInner, Tok.FocusThickness);
             // WinUI text-edit decor brushes: selection = TextControlSelectionHighlightColor (= AccentFillColorSelectedTextBackgroundBrush),

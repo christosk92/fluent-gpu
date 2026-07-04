@@ -1,4 +1,5 @@
 using FluentGpu.Hooks;
+using FluentGpu.Localization;
 using FluentGpu.Signals;
 using Wavee.Backend;
 using Wavee.Core;
@@ -65,6 +66,10 @@ public sealed class PlaybackBridge
     /// panel as a top layer. Lives on the bridge so any component under the playback context can open/close it.</summary>
     public Signal<bool> Expanded { get; } = new(false);
 
+    /// <summary>One-shot: the fullscreen now-playing was opened via the player-bar lyrics button when the rail didn't fit
+    /// — <c>NowPlayingView</c> seeds <c>showLyrics=true</c> on mount then clears this so a later normal reopen seeds false.</summary>
+    public Signal<bool> ExpandedWithLyrics { get; } = new(false);
+
     /// <summary>The now-playing track has an accompanying music video (the <c>VideoService</c> association, detected
     /// asynchronously after the track resolves). Drives the player-bar video button's visibility. Fed by the optional
     /// store probe (<see cref="AttachStore"/>); the fake backend has none, so it stays false.</summary>
@@ -72,6 +77,11 @@ public sealed class PlaybackBridge
     /// <summary>UI-only swap intent: the user picked "video" for the now-playing track. The actual video surface/host is a
     /// follow-up — for now this is the seam the player-bar button toggles (reset on every track change).</summary>
     public Signal<bool> PreferVideo { get; } = new(false);
+
+    /// <summary>Monotonic "open the device picker" request. The critical "playback unsupported" toast's <em>Choose device</em>
+    /// action bumps it; the player-bar / now-playing <c>DevicesButton</c> watch it and open their flyout. Signals-first so the
+    /// toast (a plain static service) can drive the picker without a direct component reference.</summary>
+    public Signal<int> DevicePickerRequest { get; } = new(0);
 
     // ── intents (UI → Core) ─────────────────────────────────────────────────────────────────────────────────────────
     public IPlaybackPlayer Player => _player;
@@ -101,6 +111,50 @@ public sealed class PlaybackBridge
             User.Value = _session.CurrentUser;            // profile chip (name/avatar) follows the session
         })));
         WireStore();   // if a store was attached before mount, start observing it now
+    }
+
+    /// <summary>Surface the standard "local playback isn't supported yet — choose a remote device" notice: a critical toast
+    /// whose <em>Choose device</em> action opens the device picker. Marshalled onto the UI thread via the post delegate, so
+    /// it is safe to call from a dealer/background thread (the live <c>PlaybackController</c> rejection hook) or from a UI
+    /// intent (the pre-login <see cref="UnsupportedPlaybackPlayer"/>). No-op before <see cref="Activate"/> (headless CLI).</summary>
+    public void NotifyLocalPlaybackUnsupported()
+    {
+        if (_post is not { } post) return;
+        post(() => Toasts.Show(
+            Loc.Get(Strings.Player.LocalPlaybackUnsupported),
+            ToastSeverity.Critical,
+            Loc.Get(Strings.Player.ChooseDevice),
+            () => DevicePickerRequest.Value = DevicePickerRequest.Peek() + 1));
+    }
+
+    /// <summary>An outbound Connect command (transfer / play) to the active remote device failed — surface it as a critical
+    /// toast instead of failing silently. Marshalled to the UI thread; no-op before <see cref="Activate"/>.</summary>
+    public void NotifyRemoteCommandFailed()
+    {
+        if (_post is not { } post) return;
+        post(() => Toasts.Show(Loc.Get(Strings.Player.RemoteCommandFailed), ToastSeverity.Critical));
+    }
+
+    /// <summary>A LOCAL playback attempt failed (key/CDN/decode/provisioning) — surface a typed, user-facing message as a
+    /// critical toast AND drive the player-bar into its Error state (retry offered on the primary). Marshalled to the UI
+    /// thread; no-op before <see cref="Activate"/>. The optional retry action (e.g. re-provision + reset latch) becomes the
+    /// toast's CTA. Cleared automatically when a track next plays (see <see cref="PushState"/>).</summary>
+    public void NotifyPlaybackError(string message, string? retryLabel = null, Action? retry = null)
+    {
+        if (_post is not { } post) return;
+        post(() =>
+        {
+            Error.Value = message;      // → PlayerBar PlayerState.Error (primary becomes Play/retry)
+            IsLoading.Value = false;
+            Toasts.Show(message, ToastSeverity.Critical, retryLabel, retry);
+        });
+    }
+
+    /// <summary>Clear a surfaced playback error (e.g. the user picked a working device / a retry succeeded).</summary>
+    public void ClearPlaybackError()
+    {
+        if (_post is not { } post) return;
+        post(() => Error.Value = null);
     }
 
     /// <summary>Attach the persistent store so the bridge can reflect async per-track enrichment (music video). Wired by
@@ -159,7 +213,9 @@ public sealed class PlaybackBridge
         TrackPalette.Value = s.Palette;
         Queue.Value = s.Queue;
         IsLoading.Value = s.IsLoading;
-        Error.Value = s.Error;
+        // A surfaced local-playback error (set via NotifyPlaybackError) is owned by the bridge, not the projection (whose
+        // Error is inert). Don't clobber it on every structural tick — clear it only once a track is actually playing again.
+        if (s.IsPlaying && s.CurrentTrack is not null) Error.Value = null;
         CanSkipNext.Value = s.CanSkipNext;
         CanSkipPrev.Value = s.CanSkipPrev;
         CanSeek.Value = s.CanSeek;

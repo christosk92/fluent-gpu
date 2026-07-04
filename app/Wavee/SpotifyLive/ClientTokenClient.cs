@@ -1,22 +1,26 @@
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+using System.Security.Principal;
 using Google.Protobuf;
+using Microsoft.Win32;
+using Wavee.Backend.Audio;
 using Wavee.Backend.Spotify;
 using Wavee.Protocol.ClientToken;
 
 namespace Wavee.SpotifyLive;
 
 // Obtains + caches the Spotify client-token (required on every spclient request — extended-metadata 403s without it).
-// Lifted faithfully from the desktop wire: POST a CLIENT_DATA request to clienttoken.spotify.com; if the server answers
-// with a hashcash CHALLENGE, solve it (HashcashSolver) and re-submit; cache the granted token until ~5 min before refresh.
+// Wire shape decoded from desktop 1.2.93.667 capture: CLIENT_DATA carries client_version + client_id +
+// ConnectivitySdkData{ platform_specific_data.desktop_windows, device_id = local-machine SID prefix }.
 public sealed class ClientTokenClient
 {
     const string Endpoint = "https://clienttoken.spotify.com/v1/clienttoken";
     const int MaxChallengeRetries = 3;
 
     readonly string _clientId;
-    readonly string _deviceId;
+    readonly string _fallbackDeviceId;
     readonly SemaphoreSlim _lock = new(1, 1);
     string? _cached;
     DateTimeOffset _expiresAt;
@@ -24,7 +28,7 @@ public sealed class ClientTokenClient
     public ClientTokenClient(string clientId, string deviceId)
     {
         _clientId = clientId;
-        _deviceId = deviceId;
+        _fallbackDeviceId = deviceId;
     }
 
     /// <summary>A valid client-token, fetching/refreshing as needed. Returns null on failure (the caller proceeds without).</summary>
@@ -80,16 +84,22 @@ public sealed class ClientTokenClient
 
     ConnectivitySdkData BuildConnectivity()
     {
-        var data = new ConnectivitySdkData { DeviceId = _deviceId, PlatformSpecificData = new PlatformSpecificData() };
+        // device_id is the local-machine SID prefix on desktop (S-1-5-21-…), NOT the Spotify Connect device id.
+        var data = new ConnectivitySdkData
+        {
+            DeviceId = TryGetWindowsMachineSid() ?? _fallbackDeviceId,
+            PlatformSpecificData = new PlatformSpecificData(),
+        };
         if (OperatingSystem.IsWindows())
             data.PlatformSpecificData.DesktopWindows = new NativeDesktopWindowsData
             {
                 OsVersion = 10,
                 OsBuild = Environment.OSVersion.Version.Build,
                 PlatformId = 2,
-                UnknownValue5 = 9,
-                UnknownValue6 = 9,
+                UnknownValue5 = 12,   // wire-observed on 1.2.93.667 ARM64 desktop
+                UnknownValue6 = 12,
                 PeMachine = PeMachine(),
+                // image_file_machine + unknown_value_10 intentionally omitted — part of genuine-client signature
             };
         else if (OperatingSystem.IsLinux())
             data.PlatformSpecificData.DesktopLinux = new NativeDesktopLinuxData
@@ -109,7 +119,6 @@ public sealed class ClientTokenClient
         return data;
     }
 
-    // PE machine constant for the current architecture (System.Reflection.PortableExecutable.Machine values).
     static int PeMachine() => RuntimeInformation.ProcessArchitecture switch
     {
         Architecture.X86 => 332,
@@ -118,6 +127,36 @@ public sealed class ClientTokenClient
         Architecture.Arm64 => 43620,
         _ => 34404,
     };
+
+    [SupportedOSPlatformGuard("windows")]
+    static string? TryGetWindowsMachineSid()
+    {
+        if (!OperatingSystem.IsWindows()) return null;
+        try { return ReadLocalMachineSidFromRegistry() ?? GetCurrentUserSid(); }
+        catch { return null; }
+    }
+
+    [SupportedOSPlatform("windows")]
+    static string? ReadLocalMachineSidFromRegistry()
+    {
+        using var profiles = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList");
+        if (profiles is null) return null;
+        foreach (var name in profiles.GetSubKeyNames())
+        {
+            if (!name.StartsWith("S-1-5-21-", StringComparison.Ordinal)) continue;
+            var lastDash = name.LastIndexOf('-');
+            if (lastDash <= "S-1-5-21".Length) continue;
+            return name[..lastDash];
+        }
+        return null;
+    }
+
+    [SupportedOSPlatform("windows")]
+    static string GetCurrentUserSid()
+    {
+        using var identity = WindowsIdentity.GetCurrent();
+        return identity.User?.Value ?? string.Empty;
+    }
 
     static ClientTokenRequest SolveChallenge(ChallengesResponse challenges)
     {
@@ -130,7 +169,6 @@ public sealed class ClientTokenClient
         {
             if (challenge.Type == ChallengeType.ChallengeHashCash && challenge.EvaluateHashcashParameters is { } hp)
             {
-                // client-token hashcash: context is empty; the answer suffix is UPPERCASE hex (login5 differs — raw bytes).
                 var suffix = HashcashSolver.Solve([], Convert.FromHexString(hp.Prefix), hp.Length);
                 request.ChallengeAnswers.Answers.Add(new ChallengeAnswer
                 {
@@ -147,6 +185,10 @@ public sealed class ClientTokenClient
         using var msg = new HttpRequestMessage(HttpMethod.Post, Endpoint) { Content = new ByteArrayContent(request.ToByteArray()) };
         msg.Content.Headers.ContentType = new MediaTypeHeaderValue("application/x-protobuf");
         msg.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/x-protobuf"));
+        msg.Headers.TryAddWithoutValidation("User-Agent", SpotifyRuntimeIdentityHost.Current.ClientTokenUserAgent);
+        msg.Headers.TryAddWithoutValidation("Origin", "https://clienttoken.spotify.com");
+        msg.Headers.TryAddWithoutValidation("Cache-Control", "no-cache, no-store, max-age=0");
+        msg.Headers.TryAddWithoutValidation("Pragma", "no-cache");
         using var resp = await SharedHttp.Client.SendAsync(msg, ct).ConfigureAwait(false);
         resp.EnsureSuccessStatusCode();
         var bytes = await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);

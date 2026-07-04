@@ -29,6 +29,7 @@ sealed class ProfileMenu : Component
     {
         var services = UseContext(Services.Slot);
         var overlay = UseContext(Overlay.Service);
+        var requestTheme = UseContext(ThemeControl.Request);
         var anchor = UseRef<NodeHandle>(default);
         var handle = UseRef<OverlayHandle?>(null);
 
@@ -56,6 +57,12 @@ sealed class ProfileMenu : Component
                 new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.Modal, Chrome: PopupChrome.Modal));
         }
 
+        void SetPalette(string id)
+        {
+            WaveeTheme.ApplyPalette(id, services?.Settings);
+            requestTheme?.Invoke(250f);
+        }
+
         void OpenMenu()
         {
             if (handle.Value is { IsOpen: true }) { Close(); return; }
@@ -63,7 +70,8 @@ sealed class ProfileMenu : Component
                 () => anchor.Value,
                 () => MenuContent(name, premium, avatar, email,
                     onAccount: () => { Close(); LoginView.OpenUrl("https://www.spotify.com/account"); },
-                    onSettings: () => Close(),   // no in-app settings page yet
+                    onSettings: () => Close(),
+                    onPalette: SetPalette,
                     onLogout: () => { Close(); ConfirmLogout(); }),
                 FlyoutPlacement.BottomEdgeAlignedRight,
                 new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
@@ -82,7 +90,8 @@ sealed class ProfileMenu : Component
     }
 
     // The dropdown: an account header (gold-ringed avatar + name + tier badge) over icon menu rows.
-    static Element MenuContent(string name, bool premium, string avatar, string? email, Action onAccount, Action onSettings, Action onLogout) => new BoxEl
+    static Element MenuContent(string name, bool premium, string avatar, string? email,
+        Action onAccount, Action onSettings, Action<string> onPalette, Action onLogout) => new BoxEl
     {
         Direction = 1, MinWidth = 280f, Padding = new Edges4(0, 6, 0, 6),
         Children =
@@ -114,10 +123,55 @@ sealed class ProfileMenu : Component
             Divider(),
             MenuRow(Icons.Contact, Loc.Get(Strings.Auth.Account), onAccount, trailing: Icons.OpenInNewWindow),
             MenuRow(Icons.Settings, Loc.Get(Strings.Auth.Settings), onSettings),
+            PaletteSwatchRow(onPalette),
             Divider(),
             MenuRow(Icons.SignOut, Loc.Get(Strings.Auth.LogOut), onLogout, danger: true),
         ],
     };
+
+    static Element PaletteSwatchRow(Action<string> onPalette)
+    {
+        string active = Tok.Palette.Id;
+        return new BoxEl
+        {
+            Direction = 1, Gap = 6f, Padding = new Edges4(14, 4, 14, 4), Margin = new Edges4(6, 0, 6, 0),
+            Children =
+            [
+                new TextEl("Palette") { Size = 12f, Weight = 600, Color = Tok.TextTertiary },
+                new BoxEl
+                {
+                    Direction = 0, Gap = 10f, AlignItems = FlexAlign.Center,
+                    Children =
+                    [
+                        PaletteSwatch("warm", "Warm", WaveeColors.PresetSwatch(Tok.WarmPalette), active, onPalette),
+                        PaletteSwatch("slate", "Slate", WaveeColors.PresetSwatch(Tok.SlatePalette), active, onPalette),
+                        PaletteSwatch("neutral", "Neutral", WaveeColors.PresetSwatch(Tok.NeutralPalette), active, onPalette),
+                        PaletteSwatch("accent", "Accent", WaveeColors.PresetSwatch(Tok.AccentTintedPalette), active, onPalette),
+                    ],
+                },
+            ],
+        };
+    }
+
+    static Element PaletteSwatch(string id, string label, ColorF fill, string activeId, Action<string> onPalette)
+    {
+        bool on = activeId == id;
+        return new BoxEl
+        {
+            Direction = 1, Gap = 4f, AlignItems = FlexAlign.Center, Width = 52f,
+            Role = AutomationRole.Button, Focusable = true, OnClick = () => onPalette(id),
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = 28f, Height = 28f, Corners = CornerRadius4.All(14f), Fill = fill,
+                    BorderWidth = on ? 2f : 1f,
+                    BorderColor = on ? Tok.AccentDefault : Tok.StrokeControlDefault,
+                },
+                new TextEl(label) { Size = 10f, Color = on ? Tok.TextPrimary : Tok.TextTertiary },
+            ],
+        };
+    }
 
     static Element Divider() => new BoxEl { Height = 1f, Margin = new Edges4(10, 4, 10, 4), Fill = Tok.StrokeDividerDefault };
 

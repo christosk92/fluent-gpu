@@ -29,6 +29,8 @@ public class ConnectControllerTests
         public bool IsPlaying { get; private set; }
         public bool IsBuffering => false;
         public void Load(in AudioStreamHandle s) { Calls.Add("load:" + s.TrackUri); }
+        public void LoadFastStart(in AudioFastStart s) { Calls.Add("faststart:" + s.TrackUri); }
+        public void SupplyBody(in AudioStreamHandle s) { Calls.Add("body:" + s.TrackUri); }
         public void Play() { IsPlaying = true; Calls.Add("play"); }
         public void Pause() { IsPlaying = false; Calls.Add("pause"); }
         public void Stop() { IsPlaying = false; Calls.Add("stop"); }
@@ -42,6 +44,8 @@ public class ConnectControllerTests
     {
         public readonly List<(string Target, string Json)> Sent = new();
         public readonly List<(string Target, int Volume)> Volumes = new();
+        public readonly List<(string From, string Target)> Transfers = new();
+        public bool TransferOk { get; set; } = true;
         public string? LastTarget => Sent.Count > 0 ? Sent[^1].Target : null;
         public string? LastJson => Sent.Count > 0 ? Sent[^1].Json : null;
         public int? LastVolume => Volumes.Count > 0 ? Volumes[^1].Volume : null;
@@ -49,6 +53,18 @@ public class ConnectControllerTests
         { Sent.Add((targetDeviceId, commandJson)); return Task.FromResult(new OutboundResult(true, "ack-test", 200)); }
         public Task<OutboundResult> SetVolumeAsync(string targetDeviceId, int volume0_65535, CancellationToken ct = default)
         { Volumes.Add((targetDeviceId, volume0_65535)); return Task.FromResult(new OutboundResult(true, "ack-test", 200)); }
+        public Task<OutboundResult> TransferAsync(string fromDeviceId, string targetDeviceId, CancellationToken ct = default)
+        {
+            Transfers.Add((fromDeviceId, targetDeviceId));
+            return Task.FromResult(new OutboundResult(TransferOk, TransferOk ? "ack-test" : null, TransferOk ? 200 : 500));
+        }
+    }
+
+    sealed class RecordingProjection : IPlaybackProjection
+    {
+        public readonly List<PlaybackEvent> Events = new();
+        public void OnEvent(in PlaybackEvent e) => Events.Add(e);
+        public int Count(EvKind kind) => Events.Count(e => e.Kind == kind);
     }
 
     static ClusterDelta Cluster(string active, RemoteTrack? track = null, long pos = 0, bool playing = false) =>
@@ -59,12 +75,12 @@ public class ConnectControllerTests
     static RemoteTrack Remote(string uri, long dur = 200000) => new(uri, "G", "A", "spotify:artist:a", "Al", "spotify:album:al", null, dur);
 
     PlaybackController Make(out RecordingAudioHost host, out NowPlayingProjection proj, out RecordingOutbound outbound,
-        IContextResolver? ctx = null, Func<long>? clock = null)
+        IContextResolver? ctx = null, Func<long>? clock = null, IReadOnlyList<IPlaybackProjection>? extra = null)
     {
         host = new RecordingAudioHost();
         proj = new NowPlayingProjection("us", clock ?? (() => 0));
         outbound = new RecordingOutbound();
-        return new PlaybackController(host, new StubTrackResolver(), proj, ctx ?? Ctx("spotify:track:a", "spotify:track:b"), "us", outbound);
+        return new PlaybackController(host, new StubTrackResolver(), proj, ctx ?? Ctx("spotify:track:a", "spotify:track:b"), "us", outbound, extra);
     }
 
     [Fact]
@@ -112,7 +128,8 @@ public class ConnectControllerTests
     [Fact]
     public async Task RemoteActive_Pause_Seek_Volume_Play_AllForward()
     {
-        using var c = Make(out var host, out var proj, out var outbound);
+        var events = new RecordingProjection();
+        using var c = Make(out var host, out var proj, out var outbound, extra: new[] { events });
         proj.OnCluster(Cluster("other-device"));
         await c.PauseAsync();
         await c.SeekAsync(4242);
@@ -196,18 +213,21 @@ public class ConnectControllerTests
     [Fact]
     public async Task AnotherDeviceBecomesActive_StopsLocalPlayback()
     {
-        using var c = Make(out var host, out var proj, out _);
+        var events = new RecordingProjection();
+        using var c = Make(out var host, out var proj, out _, extra: new[] { events });
         await c.PlayAsync("spotify:playlist:p");
         Assert.True(host.IsPlaying);
         proj.OnCluster(Cluster("other-device"));   // someone else takes over
         Assert.Contains("stop", host.Calls);
         Assert.False(host.IsPlaying);
+        Assert.Equal(1, events.Count(EvKind.BecameInactive));
     }
 
     [Fact]
     public async Task TransferToSelf_GhostResumes_TransferAway_ForwardsAndStops()
     {
-        using var c = Make(out var host, out var proj, out var outbound);
+        var events = new RecordingProjection();
+        using var c = Make(out var host, out var proj, out var outbound, extra: new[] { events });
         proj.OnCluster(Cluster("", Remote("spotify:track:ghost"), pos: 1000));
         await c.TransferToAsync("us");                 // self → ghost resume
         await Task.Delay(20);
@@ -215,8 +235,66 @@ public class ConnectControllerTests
 
         host.Calls.Clear();
         await c.TransferToAsync("other-device");        // away → forward + stop
-        Assert.Contains(outbound.Sent, s => s.Json.Contains("transfer") && s.Target == "other-device");
+        Assert.Contains(outbound.Transfers, t => t.From == "us" && t.Target == "other-device");
         Assert.Contains("stop", host.Calls);
+        Assert.Equal(1, events.Count(EvKind.BecameInactive));
+    }
+
+    [Fact]
+    public async Task RemoteViewer_TransferToAnotherDevice_UsesConnectTransfer_WithoutInactive()
+    {
+        var events = new RecordingProjection();
+        using var c = Make(out var host, out var proj, out var outbound, extra: new[] { events });
+        proj.OnCluster(Cluster("active-device", Remote("spotify:track:remote"), playing: true));
+
+        await c.TransferToAsync("target-device");
+
+        Assert.Contains(outbound.Transfers, t => t.From == "active-device" && t.Target == "target-device");
+        Assert.DoesNotContain("stop", host.Calls);
+        Assert.Equal(0, events.Count(EvKind.BecameInactive));
+    }
+
+    [Fact]
+    public async Task ActiveOwner_TransferFailure_DoesNotStopOrPublishInactive()
+    {
+        var events = new RecordingProjection();
+        using var c = Make(out var host, out _, out var outbound, extra: new[] { events });
+        await c.PlayAsync("spotify:playlist:p");
+        Assert.True(host.IsPlaying);
+        outbound.TransferOk = false;
+        host.Calls.Clear();
+
+        await c.TransferToAsync("target-device");
+
+        Assert.Contains(outbound.Transfers, t => t.From == "us" && t.Target == "target-device");
+        Assert.DoesNotContain("stop", host.Calls);
+        Assert.True(host.IsPlaying);
+        Assert.Equal(0, events.Count(EvKind.BecameInactive));
+    }
+
+    [Fact]
+    public async Task RemoteViewer_ActiveDeviceSwitch_DoesNotPublishInactive()
+    {
+        var events = new RecordingProjection();
+        using var c = Make(out var host, out var proj, out _, extra: new[] { events });
+        proj.OnCluster(Cluster("remote-a", Remote("spotify:track:a"), playing: true));
+        proj.OnCluster(Cluster("remote-b", Remote("spotify:track:b"), playing: true));
+
+        Assert.DoesNotContain("stop", host.Calls);
+        Assert.Equal(0, events.Count(EvKind.BecameInactive));
+    }
+
+    [Fact]
+    public async Task ActiveOwner_ActiveDeviceClears_PublishesInactiveOnce()
+    {
+        var events = new RecordingProjection();
+        using var c = Make(out _, out var proj, out _, extra: new[] { events });
+        await c.PlayAsync("spotify:playlist:p");
+        proj.OnCluster(Cluster("us", Remote("spotify:track:a"), playing: true));
+
+        proj.OnCluster(Cluster(""));
+
+        Assert.Equal(1, events.Count(EvKind.BecameInactive));
     }
 
     [Fact]
@@ -498,5 +576,57 @@ public class ConnectControllerTests
         Assert.Equal(0.5, proj.Volume, 2);   // the active device's volume drives the slider
         proj.OnCluster(Cluster("other-device") with { ActiveVolume0_65535 = 13107 });   // a remote controller turned it down
         Assert.Equal(0.2, proj.Volume, 2);   // reacted to the remote change
+    }
+
+    // ── Local playback rejection: with OnLocalPlaybackRejected set (local audio unsupported), every local play path aborts
+    // + fires the hook (the app's "choose a remote device" toast); remote forwarding is untouched. Default (null) = the
+    // existing tests above, which prove local playback still works when the hook is absent. ─────────────────────────────
+    [Fact]
+    public async Task LocalPlay_Rejected_WhenHookSet()
+    {
+        using var c = Make(out var host, out _, out var outbound);   // no active device → routes local
+        int rejects = 0; c.OnLocalPlaybackRejected = () => rejects++;
+        await c.PlayAsync("spotify:playlist:p");
+        await Task.Delay(20);
+        Assert.DoesNotContain(host.Calls, x => x == "play" || x.StartsWith("load:"));   // nothing loaded / played locally
+        Assert.True(rejects >= 1);                                                       // the toast hook fired
+        Assert.Empty(outbound.Sent);                                                     // and nothing was forwarded
+    }
+
+    [Fact]
+    public async Task Resume_GhostResume_Rejected_WhenHookSet()
+    {
+        using var c = Make(out var host, out var proj, out _, ctx: Ctx());
+        proj.OnCluster(Cluster("", Remote("spotify:track:ghost"), pos: 5000));   // a cluster track, nobody active → local ghost-resume
+        int rejects = 0; c.OnLocalPlaybackRejected = () => rejects++;
+        await c.ResumeAsync();
+        await Task.Delay(20);
+        Assert.DoesNotContain(host.Calls, x => x == "play" || x.StartsWith("load:"));
+        Assert.True(rejects >= 1);
+    }
+
+    [Fact]
+    public async Task TransferToSelf_Rejected_WhenHookSet()
+    {
+        using var c = Make(out var host, out var proj, out _);
+        proj.OnCluster(Cluster("", Remote("spotify:track:ghost"), pos: 1000));
+        int rejects = 0; c.OnLocalPlaybackRejected = () => rejects++;
+        await c.TransferToAsync("us");   // transfer to THIS device = local playback → rejected
+        await Task.Delay(20);
+        Assert.DoesNotContain(host.Calls, x => x == "play" || x.StartsWith("load:"));
+        Assert.True(rejects >= 1);
+    }
+
+    [Fact]
+    public async Task RemoteForward_Unaffected_WhenHookSet()
+    {
+        using var c = Make(out var host, out var proj, out var outbound);
+        proj.OnCluster(Cluster("other-device"));           // another device active → routes REMOTE
+        int rejects = 0; c.OnLocalPlaybackRejected = () => rejects++;
+        await c.PlayAsync("spotify:playlist:p");
+        await c.PauseAsync();
+        Assert.Equal(0, rejects);                                                        // remote routing never trips the local hook
+        Assert.Contains(outbound.Sent, s => s.Json.Contains("\"endpoint\":\"play\""));   // forwarded to the remote device
+        Assert.DoesNotContain(host.Calls, x => x == "play");                             // nothing played locally
     }
 }

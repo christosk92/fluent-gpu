@@ -89,7 +89,8 @@ sealed class HomePage : Component
             else Play(c.Uri);
         }
 
-        Element Tile(HomeCard c) => MediaCard.QuickPick(c.Image, c.Title, c.Uri, () => NavCard(c), () => PlayCard(c));
+        Element Tile(HomeCard c) => MediaCard.QuickPick(c.Image, c.Title, c.Uri, () => NavCard(c), () => PlayCard(c),
+            accent: c.Accent is { } a ? WaveePalette.Lift(WaveePalette.ToColor(a)) : null);
 
         Element Shelf(HomeGroup g) => PagedShelf.Create(
             g.Cards.Count,

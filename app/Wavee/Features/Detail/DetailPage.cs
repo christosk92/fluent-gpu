@@ -53,6 +53,67 @@ sealed class DetailPage : Component
         // the reused shell pinned to the first item — the master-detail reactivity bug). KeepAlive caches the parked page.
         var model = UseAsyncResource(ct => LoadAsync(svc, kind, id, ct), preview ?? DetailModel.Empty, route.Name);
 
+        // §4.1 — open-playlist LIVE in-place refresh (kills the skeleton flash). Subscribe the REAL store; when a push lands
+        // for THIS playlist (or a Bulk), debounce the burst 150ms, re-run the SAME load off-thread, and SetReady the SAME
+        // loadable in place — NEVER SetPending (that would re-seed to Empty = the shimmer). The UseAsyncResource dep stays
+        // route.Name, untouched. Offline / fake backend (RealStore null) → a no-op. The subscription reads the LIVE route
+        // (so one mount-lifetime subscription serves successive playlists), and eager-push context tracks the open uri.
+        var post = Context.UsePost();
+        var realStore = svc.RealStore;
+        var realSync = svc.RealSync;
+        UseEffect(() => realSync?.SetOpenContext(kind == DetailKind.Playlist ? id : null), route.Name);
+        Context.UseSignalEffect(() =>
+        {
+            if (realStore is null) return;
+            var gate = new object();
+            System.Threading.CancellationTokenSource? debounce = null;
+            var sub = realStore.Changes.Subscribe(Wavee.Backend.Observers.From<Wavee.Backend.StoreChange>(c =>
+            {
+                var (k, pid) = ParseDetail(_route.Peek());
+                // Live kinds: an open PLAYLIST refreshes on its own uri (membership/diff writes bump it); the LIKED page
+                // refreshes on any Liked-kind change (an unlike bumps the track uri with Kind=Liked — the list must drop
+                // the row) — both also on a Bulk (hydrate/delta bursts coalesce into one).
+                bool relevant = k switch
+                {
+                    DetailKind.Playlist when pid is not null => c.IsBulk || c.Uri == pid,
+                    DetailKind.Liked => c.IsBulk || c.Kind == Wavee.Core.CollectionKind.Liked,
+                    _ => false,
+                };
+                if (!relevant) return;
+                System.Threading.CancellationTokenSource cts;
+                lock (gate) { debounce?.Cancel(); debounce?.Dispose(); debounce = cts = new System.Threading.CancellationTokenSource(); }
+                var token = cts.Token;
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        // Short settle: long enough to fold a diff-apply + hydration burst into one re-map, short enough
+                        // that a SELF-action (unlike the row you're looking at) reads as immediate, not laggy.
+                        await Task.Delay(50, token).ConfigureAwait(false);
+                        var fresh = await LoadAsync(svc, k, pid, token).ConfigureAwait(false);
+                        if (!token.IsCancellationRequested) post(() =>
+                        {
+                            if (token.IsCancellationRequested) return;
+                            // Nav-away race: the debounced load may land after the user routed to a DIFFERENT detail page,
+                            // which now reuses this same loadable cell. Re-resolve the LIVE route and drop the write unless
+                            // it still points at THIS page — otherwise the old model flashes into the new page.
+                            var (k2, pid2) = ParseDetail(_route.Peek());
+                            if (k2 != k || pid2 != pid) return;
+                            model.SetReady(fresh);
+                        });
+                    }
+                    catch (OperationCanceledException) { }
+                    catch { /* a failed background refresh keeps the current content — never surfaces */ }
+                });
+            }));
+            Reactive.OnCleanup(() =>
+            {
+                sub.Dispose();
+                lock (gate) { debounce?.Cancel(); debounce?.Dispose(); debounce = null; }
+                realSync?.SetOpenContext(null);
+            });
+        });
+
         // Pre-loaded: render the shell straight away from the preview (header live), tracks stream in via Skel.Region.
         // Thread the preview's cover as the fallback so a loaded null cover never drops the flown-in art to a placeholder.
         if (preview is not null)
@@ -140,7 +201,30 @@ sealed class DetailPage : Component
             Artists: Array.Empty<ArtistRef>(), Description: p.Description, MetaLine: meta,
             Tracks: tracks, AboutArtist: null, Palette: p.Palette,
             HasDateAdded: hasDate, HasAddedBy: contributors.Count >= 2, HasVideo: hasVideo,
-            Capabilities: p.Capabilities);
+            Capabilities: p.Capabilities,
+            Collaborators: p.Collaborators,
+            UserProfilesById: UserProfileMap(p));
+    }
+
+    static IReadOnlyDictionary<string, Owner>? UserProfileMap(Playlist p)
+    {
+        var map = new Dictionary<string, Owner>(StringComparer.OrdinalIgnoreCase);
+        Add(p.Owner);
+        if (p.Collaborators is { Count: > 0 } collaborators)
+            for (int i = 0; i < collaborators.Count; i++) Add(collaborators[i]);
+        return map.Count == 0 ? null : map;
+
+        void Add(Owner? owner)
+        {
+            if (owner is null) return;
+            if (owner.Id.Length > 0) map[owner.Id] = owner;
+            var canonical = UserProfileIds.Normalize(owner.Id);
+            if (canonical is not null)
+            {
+                map[canonical] = owner;
+                map[UserProfileIds.BareId(canonical)] = owner;
+            }
+        }
     }
 
     static DetailModel MapLiked(IReadOnlyList<Track> tracks)
@@ -150,7 +234,9 @@ sealed class DetailPage : Component
             Title: Loc.Get(Strings.Detail.LikedSongs), Cover: null, ContextUri: "spotify:collection:tracks",
             BadgeType: null, Year: null, OwnerName: null, OwnerImage: null,
             Artists: Array.Empty<ArtistRef>(), Description: null, MetaLine: meta,
-            Tracks: tracks, AboutArtist: null, Palette: null, HasVideo: tracks.Any(t => t.HasVideo));
+            Tracks: tracks, AboutArtist: null, Palette: null,
+            HasDateAdded: tracks.Any(t => t.AddedAt is not null),   // liked rows carry the collection add time → Date-added column + sort
+            HasVideo: tracks.Any(t => t.HasVideo));
     }
 
     // The album model: hero + tracklist + the "More by" shelf the getAlbum payload carries. The below-the-fold

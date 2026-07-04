@@ -20,6 +20,7 @@ public sealed class LiveDealerTransport : ITransport, IDisposable
 {
     readonly IReadOnlyList<string> _dealerHosts;
     readonly Func<CancellationToken, Task<string>> _accessToken;
+    readonly Func<CancellationToken, Task<string>>? _forceRefreshToken;   // G6 — force-mint after a failed wss handshake
     readonly IHttpExchange _spclient;
     readonly Func<string> _spclientBaseUrl;
     readonly Action<string>? _log;
@@ -39,10 +40,12 @@ public sealed class LiveDealerTransport : ITransport, IDisposable
     const int DeadAfterMs = 70_000;
 
     public LiveDealerTransport(IReadOnlyList<string> dealerHosts, Func<CancellationToken, Task<string>> accessToken,
-        IHttpExchange spclient, Func<string> spclientBaseUrl, Action<string>? log = null, Connectivity? connectivity = null)
+        IHttpExchange spclient, Func<string> spclientBaseUrl, Action<string>? log = null, Connectivity? connectivity = null,
+        Func<CancellationToken, Task<string>>? forceRefreshToken = null)
     {
         _dealerHosts = dealerHosts;
         _accessToken = accessToken;
+        _forceRefreshToken = forceRefreshToken;
         _spclient = spclient;
         _spclientBaseUrl = spclientBaseUrl;
         _log = log;
@@ -107,16 +110,30 @@ public sealed class LiveDealerTransport : ITransport, IDisposable
     async Task RunAsync(CancellationToken ct)
     {
         int attempt = 0;
+        bool forceToken = false;   // a failed HANDSHAKE may be an expired/invalid token (G6) — force-mint once before the retry
         while (!ct.IsCancellationRequested)
         {
             string host = HostAt(attempt);   // rotate hosts across attempts (failover) — a bad dealer doesn't pin us
             _conn?.Set(attempt == 0 ? ConnectionStatus.Connecting : ConnectionStatus.Reconnecting);
             try
             {
-                var token = await _accessToken(ct).ConfigureAwait(false);
+                var token = forceToken && _forceRefreshToken is { } force
+                    ? await force(ct).ConfigureAwait(false)
+                    : await _accessToken(ct).ConfigureAwait(false);
+                forceToken = false;
                 using var ws = new ClientWebSocket();
                 _ws = ws;
-                await ws.ConnectAsync(new Uri($"wss://{host}/?access_token={Uri.EscapeDataString(token)}"), ct).ConfigureAwait(false);
+                try
+                {
+                    await ws.ConnectAsync(new Uri($"wss://{host}/?access_token={Uri.EscapeDataString(token)}"), ct).ConfigureAwait(false);
+                }
+                catch (Exception) when (!ct.IsCancellationRequested)
+                {
+                    // The wss handshake itself failed — indistinguishable from a rejected (expired) token at this layer, and
+                    // the plain provider only re-mints near expiry. Force a refresh for the NEXT attempt (once per failure).
+                    forceToken = _forceRefreshToken is not null;
+                    throw;
+                }
                 attempt = 0;   // a clean connect resets the backoff ladder + host rotation
                 System.Threading.Volatile.Write(ref _lastRecvTick, Environment.TickCount64);
                 _conn?.Set(ConnectionStatus.Online);

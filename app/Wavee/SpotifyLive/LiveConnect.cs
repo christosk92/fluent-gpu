@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Wavee.Backend;
 using Wavee.Core;
+using Wavee.SpotifyLive.Audio;
 
 namespace Wavee.SpotifyLive;
 
@@ -26,14 +27,17 @@ public sealed class LiveConnect : IDisposable
     readonly DeviceStatePublisher _publisher;
     readonly ClusterIngest _ingest;
     readonly ConnectCommandRouter _commands;
-    readonly SilentAudioHost _host;
+    readonly IAudioHost _host;
     readonly SpotifyServerClock _clock;   // server-clock skew estimator → corrects remote-position aging
     readonly ApConnection? _apChannel;   // owned: the adopted login socket
+    readonly AudioPlaybackStack? _audio; // optional local-audio stack (null = silent/stub resolver)
 
     public LiveConnect(ITransport transport, string deviceId, ApConnection? apChannel,
-        IContextResolver? contexts = null, Action<string>? log = null)
+        IContextResolver? contexts = null, Action<string>? log = null,
+        AudioPlaybackStack? audio = null)
     {
         _apChannel = apChannel;
+        _audio = audio;
 
         // Server-clock estimator: probes GET /melody/v1/time over the authenticated spclient pipeline; its corrected
         // "server now" feeds the projection's remote-position aging (the offset-dependent transit term).
@@ -50,18 +54,18 @@ public sealed class LiveConnect : IDisposable
             (reason, snap, mid, isActive) => builder.BuildPutState(reason, snap, mid, isActive),
             onCluster: _ingest.OnAnnounceResponse, log: log);
 
-        _host = new SilentAudioHost();
-        // Control-plane milestone: a duration-only track resolver (no CDN/key) drives the silent host — the resolved
-        // context's hydrated DurationMs feeds the synthetic clock. The real CDN+key LiveTrackResolver lands with the audio
-        // host (it would otherwise hit the not-yet-wired audio-key pipeline); _apChannel stays owned for that day.
-        var resolver = new StubTrackResolver();
+        _host = audio is not null ? audio.Host : new SilentAudioHost();
+        var resolver = audio?.TrackResolver ?? (ITrackResolver)new StubTrackResolver();
+        // Instant-start: when the local-audio stack is present, resolve head+key in parallel and start on the clear head.
+        var fast = audio is not null ? new FastTrackPlayback(audio.TrackResolver, audio.HeadClient, log) : null;
         var outbound = new LiveOutboundControl(transport, deviceId, () => _connect.CurrentConnectionId);
         // Play-history telemetry (Recently Played) + the PutState publisher both fan off the controller's event log.
         var telemetry = new TelemetryProjection(new GaboTelemetry(log), () => Projection.ContextUri);
         Controller = new PlaybackController(_host, resolver, Projection,
             contexts ?? EmptyContextResolver.Instance,
             deviceId, outbound, new IPlaybackProjection[] { telemetry, _publisher }, log,
-            SpotifyClientIdentity.XpuiSnapshotVersion);   // play_origin.feature_version
+            SpotifyClientIdentity.XpuiSnapshotVersion,   // play_origin.feature_version
+            fast: fast);
 
         _commands = new ConnectCommandRouter(transport, cmd => Controller.HandleRemoteCommand(cmd), log);
         Devices.TransferHandler = (id, c) => Controller.TransferToAsync(id, c);
@@ -81,7 +85,7 @@ public sealed class LiveConnect : IDisposable
 
     public void Dispose()
     {
-        try { _publisher.PublishInactive(); } catch { }   // best-effort clean is_active=false hand-off on logout
+        try { Controller.DeactivateIfActiveOwner(); } catch { }   // best-effort clean is_active=false hand-off on logout
         _commands.Dispose();
         _publisher.Dispose();
         _connect.Dispose();
@@ -91,5 +95,6 @@ public sealed class LiveConnect : IDisposable
         _apChannel?.Dispose();
         Projection.Dispose();
         try { _host.DisposeAsync().AsTask().GetAwaiter().GetResult(); } catch { }
+        try { _audio?.DisposeAsync().AsTask().GetAwaiter().GetResult(); } catch { }
     }
 }

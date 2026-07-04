@@ -162,22 +162,75 @@ public sealed class LiveSpotifySession : ISpotifySession
 /// <summary>Stable lyrics facade (docs/lyrics-aggregator-reranker-plan.md §11): the UI binds <c>svc.Lyrics</c> once; on
 /// live login the composition root swaps the fake provider for the real <c>AggregatingLyricsProvider</c> via SetInner,
 /// without rebuilding the app tree. Mirrors <see cref="SwitchablePlayer"/>.</summary>
-public sealed class SwitchableLyrics : ILyricsProvider
+public sealed class SwitchableLyrics : IUpgradingLyricsProvider
 {
     readonly object _gate = new();
     readonly Dictionary<string, LyricsDocument> _cache = new();
     readonly Dictionary<string, Task<LyricsDocument?>> _inflight = new();
+    readonly SimpleEvent<LyricsDocument> _upgrades = new();
     ILyricsProvider _inner;
-    public SwitchableLyrics(ILyricsProvider inner) => _inner = inner;
+    IDisposable? _upgradeSub;
+    public SwitchableLyrics(ILyricsProvider inner) { _inner = inner; WireUpgrades(inner); }
+    public IObservable<LyricsDocument> LyricsUpgraded => _upgrades;
     public void SetInner(ILyricsProvider inner)
     {
         lock (_gate)
         {
+            _upgradeSub?.Dispose();
             _inner = inner;
             _cache.Clear();
             _inflight.Clear();
+            WireUpgrades(inner);
         }
     }
+
+    void WireUpgrades(ILyricsProvider provider)
+    {
+        _upgradeSub = provider is IUpgradingLyricsProvider up
+            ? up.LyricsUpgraded.Subscribe(Observers.From<LyricsDocument>(doc => OnInnerUpgrade(provider, doc)))
+            : null;
+    }
+
+    void OnInnerUpgrade(ILyricsProvider provider, LyricsDocument doc)
+    {
+        bool forward;
+        lock (_gate)
+        {
+            if (!ReferenceEquals(_inner, provider)) return;
+            if (_cache.TryGetValue(doc.TrackId, out var current) && !IsRicher(doc, current)) return;
+            _cache[doc.TrackId] = doc;
+            forward = true;
+        }
+        if (forward) _upgrades.OnNext(doc);
+    }
+
+    static bool IsRicher(LyricsDocument next, LyricsDocument current)
+    {
+        int nr = Richness(next), cr = Richness(current);
+        if (nr != cr) return nr > cr;
+        if (nr < 3) return false;
+        return SyllableCount(next) > SyllableCount(current);
+    }
+
+    static int Richness(LyricsDocument doc)
+    {
+        if (doc.Lines.Any(l => l.IsWordByWord && l.Syllables.Count > 0)) return 3;
+        return doc.Sync switch
+        {
+            LyricsSyncKind.Syllable => 3,
+            LyricsSyncKind.Line => 2,
+            LyricsSyncKind.Unsynced => 1,
+            _ => 0,
+        };
+    }
+
+    static int SyllableCount(LyricsDocument doc)
+    {
+        int n = 0;
+        foreach (var l in doc.Lines) n += l.Syllables.Count;
+        return n;
+    }
+
     public Task<LyricsDocument?> GetLyricsAsync(string trackId, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(trackId))
@@ -214,7 +267,10 @@ public sealed class SwitchableLyrics : ILyricsProvider
                 if (ReferenceEquals(_inner, provider))
                 {
                     if (doc is not null)
-                        _cache[trackId] = doc;
+                    {
+                        if (!_cache.TryGetValue(trackId, out var current) || IsRicher(doc, current))
+                            _cache[trackId] = doc;
+                    }
                     _inflight.Remove(trackId);
                 }
             }

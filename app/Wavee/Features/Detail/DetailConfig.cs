@@ -72,7 +72,9 @@ public sealed record DetailModel(
     string? Label = null, string? Copyright = null, string? ReleaseDate = null, IReadOnlyList<Artist>? AlbumArtists = null,
     IReadOnlyList<Album>? OtherVersions = null,   // alternate editions of this album (deluxe/remaster/…)
     string? CourtesyLine = null, string? ReleaseDatePrecision = null, int DiscCount = 1,
-    string? ShareUrl = null, bool IsPreRelease = false, DateTimeOffset? PreReleaseEnd = null)
+    string? ShareUrl = null, bool IsPreRelease = false, DateTimeOffset? PreReleaseEnd = null,
+    // Playlist-only read model: resolved collaborators plus a lookup used by Added-by cells. Tracks keep the raw wire id.
+    IReadOnlyList<Owner>? Collaborators = null, IReadOnlyDictionary<string, Owner>? UserProfilesById = null)
 {
     /// <summary>Shared-element (connected-animation) key for the cover art — set by <c>DetailPage</c> from the route
     /// ("album:"+uri / "pl:"+uri) so the cover flies to/from the like-tagged Home card. Null = no Hero.</summary>

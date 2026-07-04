@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PublishAot>true</PublishAot>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Wavee.AudioHost</RootNamespace>
+    <!-- NU1701: FlacBox ships as a .NET Framework package but is pure IL (works on net10); AOT-verified at publish. -->
+    <NoWarn>$(NoWarn);NU1701</NoWarn>
+  </PropertyGroup>
+
+  <!-- Ogg/Vorbis via WaveeMusic's optimized vendored NVorbis fork (the NuGet NVorbis has decoding bugs). FLAC via FlacBox. -->
+  <ItemGroup>
+    <ProjectReference Include="..\vendor\NVorbis\NVorbis\NVorbis.csproj" />
+    <PackageReference Include="FlacBox" Version="1.0.0" />
+  </ItemGroup>
+
+  <!-- Zero assembly references — shared contract + crypto source linked from Wavee/Backend/Audio. -->
+  <ItemGroup>
+    <Compile Include="..\Wavee\Backend\Audio\Contracts\**\*.cs" Link="Contracts\%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="..\Wavee\Backend\Audio\SpotifyAesCtr.cs" Link="SpotifyAesCtr.cs" />
+    <Compile Include="..\Wavee\Backend\Audio\SpotifyAudioStream.cs" Link="SpotifyAudioStream.cs" />
+    <Compile Include="..\Wavee\Backend\Audio\AudioOutcomes.cs" Link="AudioOutcomes.cs" />
+    <Compile Include="..\Wavee\Backend\Audio\RuntimeManifest.cs" Link="RuntimeManifest.cs" />
+    <Compile Include="..\Wavee\Backend\Audio\SpotifyRuntimeIdentity.cs" Link="SpotifyRuntimeIdentity.cs" />
+  </ItemGroup>
+
+</Project>

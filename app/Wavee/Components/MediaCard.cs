@@ -22,6 +22,16 @@ public static class MediaCard
     internal const float FabInset = 8f;
     const float Pad      = WaveeSpace.S;
 
+    static ColorF AccentCardFill(ColorF? accent) =>
+        accent is { } a
+            ? ColorF.Lerp(Tok.FillCardSecondary, a, Tok.Theme == ThemeKind.Dark ? 0.35f : 0.22f)
+            : Tok.FillCardSecondary;
+
+    static ColorF AccentCardHoverFill(ColorF? accent) =>
+        accent is { } a
+            ? ColorF.Lerp(Tok.FillCardDefault, a, Tok.Theme == ThemeKind.Dark ? 0.40f : 0.28f)
+            : Tok.FillCardDefault;
+
     static Element ArtworkOrLiked(Image? cover, string uri, float width, float height, float radius, string? morphKey = null, int decodePx = 0) =>
         cover is null && LikedSongsArtwork.IsLikedUri(uri) && MathF.Abs(width - height) < 0.5f
             ? LikedSongsArtwork.Cover(width, radius, morphKey)
@@ -95,7 +105,8 @@ public static class MediaCard
     // and the labels truncate to the engine-measured slot width (the proven NavCardContent pattern) — so it drops into a
     // responsive grid whose track width isn't known at template time.
     public static Element GridCard(Image? cover, string title, string subtitle, string uri,
-                                   Action onClick, Action onPlay, bool circular = false, Action? onNavigate = null)
+                                   Action onClick, Action onPlay, bool circular = false, Action? onNavigate = null,
+                                   ColorF? accent = null)
     {
         float r = circular ? 9999f : WaveeRadius.Card;
         var coverStack = new BoxEl
@@ -112,7 +123,7 @@ public static class MediaCard
             Direction = 1, Gap = Pad, Grow = 1f, ClipToBounds = true,
             Padding = new Edges4(Pad, Pad, Pad, WaveeSpace.M),
             Corners = CornerRadius4.All(WaveeRadius.Card),
-            Fill = Tok.FillCardSecondary, HoverFill = Tok.FillCardDefault,
+            Fill = AccentCardFill(accent), HoverFill = AccentCardHoverFill(accent),
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             HoverScale = 1.02f, PressScale = 0.99f, OnClick = onClick,
             Children =
@@ -165,12 +176,12 @@ public static class MediaCard
     }
 
     // ── Wide "jump back in" tile: cover + title (fills, ellipsised) + trailing now-playing/play overlay ───
-    public static Element QuickPick(Image? cover, string title, string uri, Action onClick, Action onPlay)
+    public static Element QuickPick(Image? cover, string title, string uri, Action onClick, Action onPlay, ColorF? accent = null)
     {
         return new BoxEl
         {
             Direction = 0, Height = QuickH, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-            Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary, HoverFill = Tok.FillCardDefault,
+            Corners = CornerRadius4.All(WaveeRadius.Card), Fill = AccentCardFill(accent), HoverFill = AccentCardHoverFill(accent),
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, ClipToBounds = true, OnClick = onClick,
             Children =
             [

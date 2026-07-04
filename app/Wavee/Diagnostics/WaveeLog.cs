@@ -42,7 +42,9 @@ public sealed class WaveeLog : IWaveeLog
         }
         string line = entry.Format();
         _echo?.Invoke(line);
-        if (level >= WaveeLogLevel.Error && _crashLogPath is { } path) TryAppend(path, entry, line);
+        // Persist Error+ (the crash trail) AND the full "audio" pipeline trace (Info+) — the audio path is otherwise
+        // invisible in a windowed/AOT build (no console), so its staged trace goes to the file to be tailable/diagnosable.
+        if ((level >= WaveeLogLevel.Error || category == "audio") && _crashLogPath is { } path) TryAppend(path, entry, line);
     }
 
     /// <summary>Snapshot of recent entries, oldest → newest (for the Diagnostics page).</summary>

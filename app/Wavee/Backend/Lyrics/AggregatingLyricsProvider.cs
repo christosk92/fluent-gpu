@@ -12,7 +12,7 @@ namespace Wavee.Backend.Lyrics;
 /// best <see cref="LyricsDocument"/> (docs/lyrics-aggregator-reranker-plan.md §7). NOT first-hit: a later word-synced
 /// candidate can still beat an earlier line-synced one. A per-source miss/timeout/throw degrades to null for that source
 /// and never fails the aggregate. Winners are cached by track id; the decision is logged for explainability.</summary>
-public sealed class AggregatingLyricsProvider : ILyricsProvider
+public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
 {
     readonly IReadOnlyList<ILyricCandidateSource> _sources;
     readonly Func<string, CancellationToken, Task<LyricsRequest?>> _resolve;
@@ -20,6 +20,7 @@ public sealed class AggregatingLyricsProvider : ILyricsProvider
     readonly string _referenceSourceId;
     readonly Action<string>? _log;
     readonly Dictionary<string, LyricsDocument> _cache = new();
+    readonly SimpleEvent<LyricsDocument> _upgrades = new();
     readonly object _gate = new();
     // Bound the winner cache: a long session touches thousands of distinct tracks and each LyricsDocument is tens of KB
     // (word-synced). A miss re-fetches (self-healing), so an LRU cap is safe. Touched/evicted under _gate; MRU at the end.
@@ -27,6 +28,7 @@ public sealed class AggregatingLyricsProvider : ILyricsProvider
     readonly List<string> _lru = new();
     void TouchLru(string id) { _lru.Remove(id); _lru.Add(id); }
     void EvictLru() { while (_lru.Count > CacheCap) { var oldest = _lru[0]; _lru.RemoveAt(0); _cache.Remove(oldest); } }
+    public IObservable<LyricsDocument> LyricsUpgraded => _upgrades;
 
     public AggregatingLyricsProvider(
         IEnumerable<ILyricCandidateSource> sources,
@@ -41,10 +43,6 @@ public sealed class AggregatingLyricsProvider : ILyricsProvider
         _referenceSourceId = referenceSourceId;
         _log = log;
     }
-
-    // After the FIRST candidate lands, wait at most this long for a better one before returning — so a slow CJK provider
-    // can't stall the panel for seconds once we already have something usable. A GOLD candidate ends the wait instantly.
-    const int GraceMs = 2000;
 
     readonly record struct Probed(LyricsCandidate? Cand, LyricsOutcome Outcome, long Ms, string Detail);
 
@@ -74,9 +72,10 @@ public sealed class AggregatingLyricsProvider : ILyricsProvider
         var probe = new LyricsProbe();
         LyricsProbe.Current.Value = probe;
 
-        // Fan out in parallel (each source bounded by its own timeout), but bound how long we WAIT: return the instant a
-        // gold candidate lands, and otherwise stop GraceMs after the first hit instead of blocking on the slow stragglers.
-        using var srcCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        // Fan out in parallel. The UI waits only for the short first-hit grace window; slower sources keep running in the
+        // background and can publish a richer replacement without delaying the initial lyric.
+        long startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        var srcCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var started = _sources.Select(s => (Source: s, Task: FetchOne(s, req, probe, srcCts.Token))).ToList();
         var collected = new Dictionary<string, Probed>(StringComparer.Ordinal);
 
@@ -98,13 +97,13 @@ public sealed class AggregatingLyricsProvider : ILyricsProvider
             pending.RemoveAt(idx);
             var pr = await entry.Task.ConfigureAwait(false);   // FetchOne never throws
             collected[entry.Source.Id] = pr;
-
-            if (grace is null && pr.Cand is not null) grace = Task.Delay(GraceMs);   // first real hit → start the grace clock
+            if (grace is null && pr.Cand is not null)
+                grace = Task.Delay(Math.Clamp(_opt.FirstHitGraceMs, 0, int.MaxValue));
             if (IsGold(pr.Cand)) goldCollected = true;
             if (goldCollected && (collected.ContainsKey(_referenceSourceId) || !pending.Any(p => p.Source.Id == _referenceSourceId)))
                 break;   // gold is unbeatable, but keep the Spotify reference when it is already nearly here
         }
-        srcCts.Cancel();   // abort any in-flight stragglers — their results are no longer needed
+        bool continueInBackground = pending.Count > 0;
 
         var candidates = collected.Values.Where(p => p.Cand is not null).Select(p => p.Cand!).ToList();
         var reference = candidates.FirstOrDefault(c => c.ProviderId == _referenceSourceId)?.Document;
@@ -124,7 +123,8 @@ public sealed class AggregatingLyricsProvider : ILyricsProvider
                     dec?.Score ?? 0d, dec is not null && s.Id == winnerId, dec?.Reason ?? ""));
             else
                 traces.Add(new LyricsSourceTrace(s.Id, LyricsOutcome.Skipped, 0L,
-                    "skipped — a faster match returned first", LyricsSyncKind.None, 0, 0d, false, ""));
+                    continueInBackground ? "background still checking richer sources" : "skipped — a faster match returned first",
+                    LyricsSyncKind.None, 0, 0d, false, ""));
         }
 
         int hits = candidates.Count;
@@ -144,7 +144,159 @@ public sealed class AggregatingLyricsProvider : ILyricsProvider
 
         var winner = ranked.Winner;
         if (winner is not null) lock (_gate) { _cache[trackId] = winner; TouchLru(trackId); EvictLru(); }
+        if (continueInBackground && winner is not null && Richness(winner) < 3)
+            _ = ContinueForUpgradeAsync(trackId, req, srcCts, pending, collected, winner, startedAt);
+        else
+        {
+            srcCts.Cancel();
+            srcCts.Dispose();
+        }
         return winner;
+    }
+
+    async Task ContinueForUpgradeAsync(
+        string trackId,
+        LyricsRequest req,
+        CancellationTokenSource srcCts,
+        List<(ILyricCandidateSource Source, Task<Probed> Task)> pending,
+        Dictionary<string, Probed> collected,
+        LyricsDocument initialWinner,
+        long startedAt)
+    {
+        try
+        {
+            long elapsed = (long)System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds;
+            long remaining = _opt.TotalTimeoutMs - elapsed;
+            if (remaining <= 0) return;
+
+            Task budget = Task.Delay((int)Math.Min(int.MaxValue, remaining), srcCts.Token);
+            while (pending.Count > 0)
+            {
+                var waiters = new List<Task>(pending.Count + 1);
+                foreach (var p in pending) waiters.Add(p.Task);
+                waiters.Add(budget);
+
+                var done = await Task.WhenAny(waiters).ConfigureAwait(false);
+                if (ReferenceEquals(done, budget)) break;
+
+                int idx = pending.FindIndex(p => ReferenceEquals(p.Task, done));
+                if (idx < 0) continue;
+                var entry = pending[idx];
+                pending.RemoveAt(idx);
+                var pr = await entry.Task.ConfigureAwait(false);
+                collected[entry.Source.Id] = pr;
+
+                if (IsGold(pr.Cand) &&
+                    (collected.ContainsKey(_referenceSourceId) || !pending.Any(p => p.Source.Id == _referenceSourceId)))
+                    break;
+            }
+
+            var candidates = collected.Values.Where(p => p.Cand is not null).Select(p => p.Cand!).ToList();
+            var reference = candidates.FirstOrDefault(c => c.ProviderId == _referenceSourceId)?.Document;
+            RankedLyrics ranked = candidates.Count > 0
+                ? LyricsReranker.Rank(candidates, reference)
+                : new RankedLyrics(null, null, Array.Empty<LyricsDecision>());
+
+            PublishReport(trackId, req, collected, ranked, candidates, "background complete");
+            LogDecision(trackId, ranked, candidates);
+
+            var winner = ranked.Winner;
+            if (winner is null || !IsRicher(winner, initialWinner)) return;
+
+            bool promoted = false;
+            lock (_gate)
+            {
+                if (!_cache.TryGetValue(trackId, out var current) || IsRicher(winner, current))
+                {
+                    _cache[trackId] = winner;
+                    TouchLru(trackId);
+                    EvictLru();
+                    promoted = true;
+                }
+            }
+
+            if (promoted) _upgrades.OnNext(winner);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception e)
+        {
+            _log?.Invoke($"background lyrics upgrade failed for {trackId}: {e.GetType().Name}");
+        }
+        finally
+        {
+            srcCts.Cancel();
+            srcCts.Dispose();
+        }
+    }
+
+    void PublishReport(
+        string trackId,
+        LyricsRequest req,
+        IReadOnlyDictionary<string, Probed> collected,
+        RankedLyrics ranked,
+        IReadOnlyList<LyricsCandidate> candidates,
+        string suffix)
+    {
+        string? winnerId = ranked.Best?.ProviderId;
+        var traces = new List<LyricsSourceTrace>(_sources.Count);
+        foreach (var s in _sources)
+        {
+            var dec = ranked.All.FirstOrDefault(d => d.ProviderId == s.Id);
+            if (collected.TryGetValue(s.Id, out var pr))
+                traces.Add(new LyricsSourceTrace(s.Id, pr.Outcome, pr.Ms, pr.Detail,
+                    pr.Cand?.Sync ?? LyricsSyncKind.None, pr.Cand?.LineCount ?? 0,
+                    dec?.Score ?? 0d, dec is not null && s.Id == winnerId, dec?.Reason ?? ""));
+            else
+                traces.Add(new LyricsSourceTrace(s.Id, LyricsOutcome.Skipped, 0L,
+                    suffix.Length > 0 ? suffix : "skipped — a faster match returned first",
+                    LyricsSyncKind.None, 0, 0d, false, ""));
+        }
+
+        int hits = candidates.Count;
+        int ran = collected.Count;
+        string summary = hits == 0
+            ? $"0/{ran} sources returned lyrics — no match anywhere"
+            : ranked.Best is { } sb
+                ? $"{hits}/{ran} returned; winner={sb.ProviderId} ({sb.Sync}, score {sb.Score:F2}, offset {sb.AppliedOffsetMs}ms)"
+                : $"{hits}/{ran} returned";
+        if (suffix.Length > 0) summary += $" — {suffix}";
+        LyricsDiagnostics.Publish(new LyricsSearchReport(
+            trackId, req.Title, req.ArtistsJoined, req.Album, req.DurationMs, req.Isrc,
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), summary, traces));
+    }
+
+    void LogDecision(string trackId, RankedLyrics ranked, IReadOnlyList<LyricsCandidate> candidates)
+    {
+        if (ranked.Best is { } b)
+            _log?.Invoke($"track={trackId} winner={b.ProviderId} sync={b.Sync} score={b.Score:F3} text={b.TextAgreement:F2} " +
+                $"timing={b.TimingScore:F2} offset={b.AppliedOffsetMs}ms candidates=[{string.Join(",", candidates.Select(c => c.ProviderId))}] ({b.Reason})");
+    }
+
+    static bool IsRicher(LyricsDocument next, LyricsDocument current)
+    {
+        int nr = Richness(next), cr = Richness(current);
+        if (nr != cr) return nr > cr;
+        if (nr < 3) return false;
+        return SyllableCount(next) > SyllableCount(current);
+    }
+
+    static int Richness(LyricsDocument doc)
+    {
+        if (doc.Lines.Any(l => l.IsWordByWord && l.Syllables.Count > 0)) return 3;
+        return doc.Sync switch
+        {
+            LyricsSyncKind.Syllable => 3,
+            LyricsSyncKind.Line => 2,
+            LyricsSyncKind.Unsynced => 1,
+            _ => 0,
+        };
+    }
+
+    static int SyllableCount(LyricsDocument doc)
+    {
+        int n = 0;
+        foreach (var l in doc.Lines) n += l.Syllables.Count;
+        return n;
     }
 
     async Task<Probed> FetchOne(ILyricCandidateSource source, LyricsRequest req, LyricsProbe probe, CancellationToken ct)

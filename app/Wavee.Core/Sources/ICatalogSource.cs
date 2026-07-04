@@ -30,6 +30,21 @@ public interface ICatalogSource : ISource
     /// <summary>Stream a context's tracks in pages (skeleton-then-stream). Yields nothing for a context it doesn't own.</summary>
     IAsyncEnumerable<TrackPage> StreamTracksAsync(string contextUri, CancellationToken ct = default);
 
+    /// <summary>Page an artist's discography facet. Default impl serves from the overview slice — correct for any
+    /// non-paging source (fake/export/local): the in-memory TopAlbums filtered by kind, total = the filtered count. A
+    /// probe (<c>limit &lt;= 0</c>) returns <c>(empty, total)</c> so it never materializes the whole list as a bogus page.
+    /// The live source (StoreLibrarySource) overrides this to page the real facet.</summary>
+    async Task<DiscographyPage> GetDiscographyAsync(string artistUri, DiscographyKind kind, int offset, int limit, CancellationToken ct = default)
+    {
+        var artist = await GetArtistAsync(artistUri, ct).ConfigureAwait(false);
+        var all = artist?.TopAlbums ?? System.Array.Empty<Album>();
+        var filtered = new List<Album>();
+        foreach (var a in all) if (AggregateCatalog.KindMatches(a.Kind, kind)) filtered.Add(a);
+        var items = new List<Album>();
+        for (int i = offset; i < filtered.Count && items.Count < limit; i++) items.Add(filtered[i]);   // limit <= 0 → empty window
+        return new DiscographyPage(items, filtered.Count);
+    }
+
     // ── collection contributions (merged by the aggregate; EMPTY when this source has none) ──
     Task<IReadOnlyList<LibraryItem>> GetLibraryAsync(CancellationToken ct = default);
     Task<IReadOnlyList<PlaylistSummary>> GetPlaylistsAsync(CancellationToken ct = default);

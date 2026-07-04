@@ -74,3 +74,55 @@ public sealed class SimpleSubject<T> : IObservable<T>
         }
     }
 }
+
+/// <summary>A minimal non-replaying observable for event streams. Unlike <see cref="SimpleSubject{T}"/>, new subscribers
+/// do not receive the last value; this is for notifications where replaying stale events would be incorrect.</summary>
+public sealed class SimpleEvent<T> : IObservable<T>
+{
+    readonly object _gate = new();
+    IObserver<T>[] _observers = Array.Empty<IObserver<T>>();
+
+    public IDisposable Subscribe(IObserver<T> observer)
+    {
+        ArgumentNullException.ThrowIfNull(observer);
+        lock (_gate)
+        {
+            var next = new IObserver<T>[_observers.Length + 1];
+            Array.Copy(_observers, next, _observers.Length);
+            next[_observers.Length] = observer;
+            _observers = next;
+        }
+        return new Subscription(this, observer);
+    }
+
+    public void OnNext(T value)
+    {
+        IObserver<T>[] snapshot;
+        lock (_gate) snapshot = _observers;
+        foreach (var o in snapshot) o.OnNext(value);
+    }
+
+    void Remove(IObserver<T> observer)
+    {
+        lock (_gate)
+        {
+            int i = Array.IndexOf(_observers, observer);
+            if (i < 0) return;
+            if (_observers.Length == 1) { _observers = Array.Empty<IObserver<T>>(); return; }
+            var next = new IObserver<T>[_observers.Length - 1];
+            Array.Copy(_observers, 0, next, 0, i);
+            Array.Copy(_observers, i + 1, next, i, _observers.Length - i - 1);
+            _observers = next;
+        }
+    }
+
+    sealed class Subscription(SimpleEvent<T> parent, IObserver<T> observer) : IDisposable
+    {
+        SimpleEvent<T>? _parent = parent;
+        public void Dispose()
+        {
+            _parent?.Remove(observer);
+            _parent = null;
+        }
+    }
+}

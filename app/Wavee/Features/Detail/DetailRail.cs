@@ -26,7 +26,7 @@ static class DetailRail
 
     public static float CoverEdge(float railW) => MathF.Max(80f, railW - SidePadL - SidePadR);
 
-    static Element HeroArtwork(DetailModel m, float size) =>
+    internal static Element HeroArtwork(DetailModel m, float size) =>
         LikedSongsArtwork.IsLikedUri(m.ContextUri) && m.Cover is null
             ? LikedSongsArtwork.Cover(size, WaveeRadius.Card, m.MorphKey)
             : Surfaces.Artwork(m.Cover, m.Title.GetHashCode() & 0x7fffffff, size, size, WaveeRadius.Card, m.MorphKey, decodePx: HeroCoverDecodePx);
@@ -58,7 +58,7 @@ static class DetailRail
         }
         else if (cfg.Badges == BadgeStyle.OwnerRow && m.OwnerName is { Length: > 0 })
         {
-            kids.Add(OwnerRow(m.OwnerName, cover, h));
+            kids.Add(PlaylistOwnerBlock(m, cover));
         }
 
         // Hero title — a heavy run that AUTO-FITS to the cover width in ≤2 LINES, from titleSize down to 18px. The shell
@@ -133,7 +133,7 @@ static class DetailRail
     // cluster + the context actions (copy-to-playlist / add-to-queue) stack full-width below. Center-aligned so the cover
     // and the text block balance (only a small symmetric gap, never a big wedge under the cover). The title wraps to
     // ≤3 lines (no truncation). The list's own command bar follows below (in the track list chrome). Drops the pills + description.
-    public static Element BuildHeader(DetailModel m, DetailConfig cfg, DetailHandlers h)
+    public static Element BuildHeader(DetailModel m, DetailConfig cfg, DetailHandlers h, bool includeReleasePanel = true)
     {
         const float coverSz = 140f;
         var info = new List<Element>(4);
@@ -147,7 +147,7 @@ static class DetailRail
         }
         else if (cfg.Badges == BadgeStyle.OwnerRow && m.OwnerName is { Length: > 0 })
         {
-            info.Add(OwnerRow(m.OwnerName, 600f, h));
+            info.Add(PlaylistOwnerBlock(m, 600f));
         }
 
         // Title cross-stretches to the info column's (Grow) width → wraps to it; ≤3 lines avoids truncation.
@@ -175,7 +175,7 @@ static class DetailRail
         var headerKids = new List<Element>(4) { coverRow, PlayRow(h, m) };
         if (cfg.Content == DetailContent.Tracks)
             headerKids.Add(ContextActions(m, cfg, h));
-        if (cfg.Badges == BadgeStyle.TypeYear && AlbumTrailing.HasReleasePanel(m))
+        if (includeReleasePanel && cfg.Badges == BadgeStyle.TypeYear && AlbumTrailing.HasReleasePanel(m))
             headerKids.Add(AlbumTrailing.ReleasePanel(m, h, outerPadding: false));
 
         return new BoxEl
@@ -290,17 +290,20 @@ static class DetailRail
         };
     }
 
-    static Element OwnerRow(string owner, float cover, DetailHandlers h) => new BoxEl
+    static Element PlaylistOwnerBlock(DetailModel m, float cover)
+        => ShowCollaborators(m)
+            ? Embed.Comp(() => new CollaboratorFacePile(m, cover))
+            : OwnerRow(m.OwnerName ?? "", m.OwnerImage, cover);
+
+    static bool ShowCollaborators(DetailModel m)
+        => m.Collaborators is { Count: > 0 } members && (m.Capabilities.IsCollaborative || members.Count >= 2);
+
+    static Element OwnerRow(string owner, Image? avatar, float cover) => new BoxEl
     {
         Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
         Children =
         [
-            new BoxEl
-            {
-                Width = 24f, Height = 24f, Corners = CornerRadius4.All(12f), Fill = Tok.FillSubtleSecondary,
-                AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                Children = [Icon(Icons.Home, 12f, Tok.TextSecondary)],
-            },
+            PersonPicture.Create("", 24f, displayName: owner, imageSourcePath: avatar?.Url),
             WaveeType.TrackTitle(owner) with { MaxWidth = cover - 32f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
         ],
     };

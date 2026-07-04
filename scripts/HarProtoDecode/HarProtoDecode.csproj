@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>HarProtoDecode</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" Version="3.29.3" />
+    <PackageReference Include="Grpc.Tools" Version="2.69.0" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <Protobuf Include="..\..\app\Wavee\SpotifyLive\Protos\extended_metadata.proto" GrpcServices="None" ProtoRoot="..\..\app\Wavee\SpotifyLive\Protos" />
+    <Protobuf Include="..\..\app\Wavee\SpotifyLive\Protos\extension_kind.proto" GrpcServices="None" ProtoRoot="..\..\app\Wavee\SpotifyLive\Protos" />
+    <Protobuf Include="..\..\app\Wavee\SpotifyLive\Protos\entity_extension_data.proto" GrpcServices="None" ProtoRoot="..\..\app\Wavee\SpotifyLive\Protos" />
+  </ItemGroup>
+</Project>

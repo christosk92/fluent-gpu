@@ -109,3 +109,11 @@ public interface ILyricsProvider
 {
     Task<LyricsDocument?> GetLyricsAsync(string trackId, CancellationToken ct = default);
 }
+
+/// <summary>Optional extension for providers that can return a fast usable lyric first, then publish a richer winner
+/// when slower sources complete. Consumers must still call <see cref="ILyricsProvider.GetLyricsAsync"/> for the initial
+/// document; this stream is only for same-track replacements with better timing/detail.</summary>
+public interface IUpgradingLyricsProvider : ILyricsProvider
+{
+    IObservable<LyricsDocument> LyricsUpgraded { get; }
+}

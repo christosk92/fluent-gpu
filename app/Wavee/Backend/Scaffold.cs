@@ -22,7 +22,7 @@ public sealed class BackendScaffold
         Store = new InMemoryStore();
         Session = new SessionContextHost(new SessionContext("me", "US", "premium", "en", Tier.Premium, false));
         Transport = new StubTransport();
-        Mutations = new MutationEngine(Store, new IMutationStrategy[] { new SetReplayStrategy() });
+        Mutations = new MutationEngine(Store, new IMutationStrategy[] { new SetReplayStrategy(), new RootlistFollowStrategy(Store) });
         Audio = new StubAudioEngine();
         Playback = new PlaybackReducer(Audio);
     }

@@ -148,7 +148,8 @@ static class Program
         // and the in-app surfaces mount with the right tokens; the store is reused by the app so there's one instance.
         var settings = AppDataSettings.ForUnpackaged("Wavee", "Wavee");
         int themeMode = settings.Get(WaveeSettings.ThemeMode);
-        Theme.Dark = themeMode switch { 1 => false, 2 => true, _ => !FluentApp.SystemUsesLightTheme() };
+        var themeKind = themeMode switch { 1 => ThemeKind.Light, 2 => ThemeKind.Dark, _ => FluentApp.SystemUsesLightTheme() ? ThemeKind.Light : ThemeKind.Dark };
+        Tok.Use(WaveeTheme.ResolvePalette(settings.Get(WaveeSettings.PaletteId)), themeKind);
 
         // ── Localization: load the bundled culture tables (assets/loc/*.json, copied next to the exe) before the first
         // frame, so every Loc.Get(Strings.*) resolves. en-US is the base + terminal fallback; more cultures drop in later.

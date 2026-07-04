@@ -175,6 +175,9 @@ public sealed partial class RenderContext
     public ImageCache? Images;                  // host-injected; backs UseImage / PrefetchImage
     public SceneStore? Scene;                   // reconciler-injected; for measuring nodes (AbsoluteRect) + overlay positioning
     public Action<NodeHandle>? ArmScroll;       // host-injected (→ ScrollIntegrator.Arm): arm a viewport so phase 7 eases Offset→Target (smooth programmatic scroll)
+    /// <summary>Host-injected peek: true while ANY viewport is in user scroll (wheel/fling/drag) or inside the post-scroll
+    /// hold window. Apps use this to defer heavy per-frame work (e.g. lyrics glow/wipe) so main-content scroll stays smooth.</summary>
+    public Func<bool>? PeekMainScrollBusy;
     public NodeHandle HostNode;                 // this component's rendered child (animation hooks target it)
     public NodeHandle AnchorNode;               // this component's anchor in the scene (context resolution walks up from here)
     public Func<NodeHandle, object, Signal<object?>?>? ResolveContextSignal;   // (anchor, channel) → nearest provider signal

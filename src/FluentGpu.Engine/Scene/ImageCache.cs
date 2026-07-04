@@ -114,7 +114,10 @@ public sealed class ImageCache
         public int Attempts;               // fetch attempts the decoder made (>1 ⇒ transient retries occurred)
         public float TextureMs = float.NaN;   // clock (ms) when the FIRST texture (blurhash or full-res) appeared → fade origin
         public ImageTransition Transition;     // the placeholder→image reveal (duration + easing); set at request
+        public float LastRestartMs = float.NegativeInfinity;   // backoff gate for visible/transient-failure retries
     }
+
+    const float RestartBackoffMs = 2000f;   // min gap between visible retries on the same handle (avoids hammering a dead URL)
 
     private readonly Dictionary<SourceKey, int> _byKey = new();
     private readonly Dictionary<int, Entry> _byId = new();
@@ -214,9 +217,7 @@ public sealed class ImageCache
             hit.LastUsed = _clock++;
             // Evicted entries keep their key as a tombstone so a retained ImageEl node can re-pin the same handle and
             // recover without needing its original URL. Capacity rejection is likewise retryable after all owners release.
-            if (hit.State == ImageState.None ||
-                (hit.State == ImageState.Failed && hit.Failure == ImageFailureKind.Canceled) ||
-                (hit.State == ImageState.Failed && hit.Failure == ImageFailureKind.GpuResourceExhausted && hit.Refs == 0))
+            if (ShouldRestart(hit, priority))
                 RestartDecode(id, hit, priority);
             // A visible node arriving over a prefetch entry promotes the in-flight decode to the front of the queue.
             if (priority < ImagePriority.Prefetch) _decoder.Prioritize(id, priority);
@@ -267,6 +268,8 @@ public sealed class ImageCache
     public ImageFailureKind FailureOf(ImageHandle h) => _byId.TryGetValue(h.Id, out var e) ? e.Failure : ImageFailureKind.None;
     /// <summary>How many fetch attempts the decoder made (≥1 once resolved; &gt;1 means transient retries happened).</summary>
     public int AttemptsOf(ImageHandle h) => _byId.TryGetValue(h.Id, out var e) ? e.Attempts : 0;
+    /// <summary>The source URL bound to a handle (null when unknown).</summary>
+    public string? SourceOf(ImageHandle h) => _byId.TryGetValue(h.Id, out var e) ? e.Key.Source : null;
 
     /// <summary>Cancel an in-flight decode (row recycled / unmounted) — frees worker + network effort under fast scroll.</summary>
     public void Cancel(ImageHandle h) => _decoder.Cancel(h.Id);
@@ -320,10 +323,27 @@ public sealed class ImageCache
         if (!_byId.TryGetValue(h.Id, out var e)) return;
         e.Refs++;
         e.LastUsed = _clock++;
-        if (e.State == ImageState.None) RestartDecode(h.Id, e, ImagePriority.Visible);
+        if (ShouldRestart(e, ImagePriority.Visible)) RestartDecode(h.Id, e, ImagePriority.Visible);
         else if (e.State == ImageState.Pending) _decoder.Prioritize(h.Id, ImagePriority.Visible);
     }
     public void Unpin(ImageHandle h) { if (_byId.TryGetValue(h.Id, out var e) && e.Refs > 0) e.Refs--; }
+
+    /// <summary>Whether a cache entry should (re)start decoding at <paramref name="priority"/>.</summary>
+    static bool ShouldRestart(Entry e, ImagePriority priority)
+    {
+        if (e.State == ImageState.None) return true;
+        if (e.State == ImageState.Failed)
+        {
+            if (e.Failure == ImageFailureKind.Canceled) return true;
+            if (e.Failure == ImageFailureKind.GpuResourceExhausted && e.Refs == 0) return true;
+            if (IsTransientFailure(e.Failure) && (e.Refs > 0 || priority == ImagePriority.Visible))
+                return true;   // backoff applied in RestartDecode
+        }
+        return false;
+    }
+
+    static bool IsTransientFailure(ImageFailureKind k)
+        => k is ImageFailureKind.Network or ImageFailureKind.Timeout or ImageFailureKind.ServerError;
     public int RefsOf(ImageHandle h) => _byId.TryGetValue(h.Id, out var e) ? e.Refs : 0;
 
     /// <summary>Device-lost recovery (threading-render-seam.md §9): the backend's image textures are gone (the store was
@@ -344,6 +364,10 @@ public sealed class ImageCache
     private void RestartDecode(int id, Entry e, ImagePriority priority)
     {
         if (e.State == ImageState.Pending) { _decoder.Prioritize(id, priority); return; }
+        if (e.State == ImageState.Failed && IsTransientFailure(e.Failure)
+            && _clockMs - e.LastRestartMs < RestartBackoffMs)
+            return;
+        e.LastRestartMs = _clockMs;
         e.State = ImageState.Pending;
         e.Failure = ImageFailureKind.None;
         e.Attempts = 0;
@@ -439,6 +463,7 @@ public sealed class ImageCache
             if (wasActiveDeadline) RecomputeCrossfadeDeadline();
         }
         if (e.State == ImageState.Pending) _pendingCount--;   // leaving Pending (Ready/Failed) — mirror the former scan
+        bool restartVisibleCancel = !ok && failure == ImageFailureKind.Canceled && e.Refs > 0;
         e.State = ok ? ImageState.Ready : ImageState.Failed;
         e.Failure = ok ? ImageFailureKind.None : failure;
         e.Attempts = attempts;
@@ -454,7 +479,15 @@ public sealed class ImageCache
         Diag.Set("media", "failed", _totalFailed);
         Diag.Set("media", "retried", _totalRetried);
         Diag.Set("media", "pending", PendingCount);
-        ImageStatusChanged?.Invoke(id, e.State, e.Failure, attempts);
+        if (restartVisibleCancel)
+        {
+            RestartDecode(id, e, ImagePriority.Visible);
+            Diag.Set("media", "pending", PendingCount);
+        }
+        else
+        {
+            ImageStatusChanged?.Invoke(id, e.State, e.Failure, attempts);
+        }
     }
 
     private void EvictToBudget()

@@ -22,6 +22,10 @@ public readonly record struct StoreChange(string Uri, bool IsBulk = false, Colle
 /// <summary>One rootlist row in the queryable spine: a playlist uri or a start/end-group marker (Kind 0=item, 1=start, 2=end).</summary>
 public readonly record struct RootlistEntry(int Position, int Kind, string Uri, string? GroupName, int Depth);
 
+/// <summary>One library-set member with its server add timestamp (unix ms; 0 = unknown) — the Liked-songs/collections
+/// default order (added-date descending) reads this; <see cref="IStore.SavedUris"/> stays the unordered fast path.</summary>
+public readonly record struct SavedItem(string Uri, long AddedAtMs);
+
 public interface IStore
 {
     // entities (queryable)
@@ -43,15 +47,21 @@ public interface IStore
     // keyed by the SAME entity uri as the Track, so it lives in its own side table rather than the entity store.
     void UpsertVideoAssociation(VideoAssociation a);
     VideoAssociation? GetVideoAssociation(string uri);
-    // library sets (collections) + per-item sync state
+    // library sets (collections) + per-item sync state (+ the server add timestamp; 0 = unknown → preserve existing)
     void SetSaved(string setId, string uri, bool saved, SyncState sync);
+    void SetSaved(string setId, string uri, bool saved, SyncState sync, long addedAtMs);
     bool IsSaved(string setId, string uri);
     IReadOnlyList<string> SavedUris(string setId);
+    IReadOnlyList<SavedItem> SavedItems(string setId);
     // ordered playlist membership + the rootlist (the queryable lists the catalog joins onto the shared entities at read)
     void SetMembership(string playlistUri, IReadOnlyList<PlaylistMember> rows, byte[]? baseRev);
     IReadOnlyList<PlaylistMember> Membership(string playlistUri);
     byte[]? PlaylistRevision(string playlistUri);
     void SetRootlist(IReadOnlyList<RootlistEntry> entries);
+    /// <summary>Set the rootlist AND its opaque revision. The 1-arg overload preserves the stored revision (header
+    /// hydration must not wipe it); this overload sets it (null clears). See §2.6.</summary>
+    void SetRootlist(IReadOnlyList<RootlistEntry> entries, byte[]? rev);
+    byte[]? RootlistRevision();
     IReadOnlyList<RootlistEntry> Rootlist();
     // reactivity
     long Version(string uri);
@@ -136,6 +146,10 @@ static class StoreEntityMerge
             Pinned = incoming.Pinned ?? current.Pinned,
             Extras = incoming.Extras ?? current.Extras,
             Palette = incoming.Palette ?? current.Palette,   // a thin write (no palette) must not drop a full-overview palette
+            // Per-facet discography totals: a thin write (0 = unknown) must not drop a full-overview's real total.
+            AlbumsTotal = incoming.AlbumsTotal > 0 ? incoming.AlbumsTotal : current.AlbumsTotal,
+            SinglesTotal = incoming.SinglesTotal > 0 ? incoming.SinglesTotal : current.SinglesTotal,
+            CompilationsTotal = incoming.CompilationsTotal > 0 ? incoming.CompilationsTotal : current.CompilationsTotal,
             // Keep the newer freshness stamp: a full-overview write carries UtcNow; a thin write carries default → keeps current.
             FetchedAt = incoming.FetchedAt > current.FetchedAt ? incoming.FetchedAt : current.FetchedAt,
         };
@@ -177,10 +191,11 @@ public sealed class InMemoryStore : IStore
     readonly Dictionary<string, Episode> _episodes = new();
     readonly Dictionary<string, VideoAssociation> _videoAssoc = new();
     readonly Dictionary<string, long> _versions = new();
-    readonly Dictionary<(string set, string uri), SyncState> _saved = new();
+    readonly Dictionary<(string set, string uri), (SyncState Sync, long AddedAt)> _saved = new();
     readonly Dictionary<string, HashSet<string>> _savedBySet = new();   // set → uris, so SavedUris is O(set), not O(all-saved)
     readonly Dictionary<string, (IReadOnlyList<PlaylistMember> Rows, byte[]? Rev)> _membership = new();
     IReadOnlyList<RootlistEntry> _rootlist = Array.Empty<RootlistEntry>();
+    byte[]? _rootlistRev;
     readonly SimpleSubject<StoreChange> _changes = new();
 
     public IObservable<StoreChange> Changes => _changes;
@@ -279,23 +294,45 @@ public sealed class InMemoryStore : IStore
     public void UpsertVideoAssociation(VideoAssociation a) { lock (_gate) _videoAssoc[a.Uri] = a; }
     public VideoAssociation? GetVideoAssociation(string uri) { lock (_gate) return _videoAssoc.TryGetValue(uri, out var a) ? a : null; }
 
-    public void SetSaved(string setId, string uri, bool saved, SyncState sync)
+    public void SetSaved(string setId, string uri, bool saved, SyncState sync) => SetSavedCore(setId, uri, saved, sync, 0);
+    public void SetSaved(string setId, string uri, bool saved, SyncState sync, long addedAtMs) => SetSavedCore(setId, uri, saved, sync, addedAtMs);
+
+    /// <summary>The SetSaved core with no-op elision (§7.4): returns whether the write actually changed the store. A save
+    /// that repeats the SAME (set,uri,SyncState) — or an unsave of an already-absent (set,uri) — writes nothing and does
+    /// NOT Bump/emit, turning every idempotent echo/delta-overlap into literal silence. A same-key write with a DIFFERENT
+    /// SyncState (Pending→Confirmed) still writes + bumps. <paramref name="addedAtMs"/> 0 preserves the existing add
+    /// timestamp; a non-zero refinement of an otherwise-identical row updates the timestamp silently (metadata, not a
+    /// state change). CachedStore calls this so it can skip the cold dual-write on a pure no-op too. The change decision
+    /// is made under _gate; the Bump (emit) fires outside it (the cardinal rule).</summary>
+    internal bool SetSavedCore(string setId, string uri, bool saved, SyncState sync, long addedAtMs)
     {
+        bool changed;
         lock (_gate)
         {
+            bool present = _saved.TryGetValue((setId, uri), out var cur);
             if (saved)
             {
-                _saved[(setId, uri)] = sync;
-                if (!_savedBySet.TryGetValue(setId, out var set)) _savedBySet[setId] = set = new HashSet<string>(StringComparer.Ordinal);
-                set.Add(uri);
+                changed = !present || cur.Sync != sync;   // new, or a state transition (e.g. Pending→Confirmed)
+                long at = addedAtMs != 0 ? addedAtMs : (present ? cur.AddedAt : 0);
+                if (changed || (present && at != cur.AddedAt))
+                {
+                    _saved[(setId, uri)] = (sync, at);
+                    if (!_savedBySet.TryGetValue(setId, out var set)) _savedBySet[setId] = set = new HashSet<string>(StringComparer.Ordinal);
+                    set.Add(uri);
+                }
             }
             else
             {
-                _saved.Remove((setId, uri));
-                if (_savedBySet.TryGetValue(setId, out var set)) set.Remove(uri);
+                changed = present;                    // no-op when already absent
+                if (changed)
+                {
+                    _saved.Remove((setId, uri));
+                    if (_savedBySet.TryGetValue(setId, out var set)) set.Remove(uri);
+                }
             }
         }
-        Bump(uri, KindForSet(setId));
+        if (changed) Bump(uri, KindForSet(setId));
+        return changed;
     }
 
     public bool IsSaved(string setId, string uri)
@@ -306,6 +343,18 @@ public sealed class InMemoryStore : IStore
     public IReadOnlyList<string> SavedUris(string setId)
     {
         lock (_gate) return _savedBySet.TryGetValue(setId, out var set) ? new List<string>(set) : new List<string>();
+    }
+
+    public IReadOnlyList<SavedItem> SavedItems(string setId)
+    {
+        lock (_gate)
+        {
+            if (!_savedBySet.TryGetValue(setId, out var set)) return Array.Empty<SavedItem>();
+            var list = new List<SavedItem>(set.Count);
+            foreach (var uri in set)
+                list.Add(new SavedItem(uri, _saved.TryGetValue((setId, uri), out var v) ? v.AddedAt : 0));
+            return list;
+        }
     }
 
     public void SetMembership(string playlistUri, IReadOnlyList<PlaylistMember> rows, byte[]? baseRev)
@@ -329,11 +378,21 @@ public sealed class InMemoryStore : IStore
         lock (_gate) return _membership.TryGetValue(playlistUri, out var m) ? m.Rev : null;
     }
 
+    // 1-arg: PRESERVE the stored revision (header hydration re-writes the rootlist rows without touching the rev).
     public void SetRootlist(IReadOnlyList<RootlistEntry> entries)
     {
         lock (_gate) _rootlist = entries;
         Bump("rootlist");
     }
+
+    // 2-arg: set the rootlist AND its revision (null clears).
+    public void SetRootlist(IReadOnlyList<RootlistEntry> entries, byte[]? rev)
+    {
+        lock (_gate) { _rootlist = entries; _rootlistRev = rev; }
+        Bump("rootlist");
+    }
+
+    public byte[]? RootlistRevision() { lock (_gate) return _rootlistRev; }
 
     public IReadOnlyList<RootlistEntry> Rootlist()
     {

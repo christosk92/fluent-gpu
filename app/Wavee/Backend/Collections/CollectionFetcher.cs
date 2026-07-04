@@ -26,10 +26,12 @@ public sealed class CollectionFetcher
     readonly Func<string, string?> _getRevision;
     readonly Action<string, string?> _setRevision;
     readonly Func<IReadOnlyList<string>, CancellationToken, Task> _hydrate;
+    // §7.2 pending-op shield: (setId, uri) → true when a local intent is in flight, so mark-and-sweep must NOT remove it.
+    readonly Func<string, string, bool>? _hasPending;
 
     public CollectionFetcher(IHttpExchange http, Func<string> baseUrl, Func<string> username, IStore store,
         Func<string, string?> getRevision, Action<string, string?> setRevision,
-        Func<IReadOnlyList<string>, CancellationToken, Task> hydrate)
+        Func<IReadOnlyList<string>, CancellationToken, Task> hydrate, Func<string, string, bool>? hasPending = null)
     {
         _http = http;
         _baseUrl = baseUrl;
@@ -38,13 +40,20 @@ public sealed class CollectionFetcher
         _getRevision = getRevision;
         _setRevision = setRevision;
         _hydrate = hydrate;
+        _hasPending = hasPending;
     }
 
     public async Task FetchSetAsync(string setId, CancellationToken ct = default)
     {
-        string wireSet = WireSet(setId);
-        string? prefix = UriPrefix(setId);   // sets that share the "collection" wire set are split client-side by URI prefix
+        string wireSet = CollectionSets.WireSet(setId);
+        string? prefix = CollectionSets.UriPrefix(setId);   // sets that share the "collection" wire set are split client-side by URI prefix
         var token = _getRevision(setId);
+
+        // Legacy-db self-heal: a set synced before added_at was persisted has EVERY member timestamp-less (the old writer
+        // always stored 0), and the delta path would never refresh them (deltas carry only changes). Ignore the token
+        // once and full-page — timestamps land, the condition stops firing. (Live rows always carry a timestamp: server
+        // items ship added_at; optimistic likes stamp local now.)
+        if (!string.IsNullOrEmpty(token) && AllTimestampless(setId)) token = null;
 
         if (!string.IsNullOrEmpty(token))
         {
@@ -62,6 +71,7 @@ public sealed class CollectionFetcher
 
         string? pageToken = null;
         string? newRev = null;
+        var snapshot = new HashSet<string>(StringComparer.Ordinal);   // the full snapshot's live uris (for mark-and-sweep)
         using (_store.BeginBulk())   // coalesce a multi-page snapshot into one change signal
         {
             do
@@ -69,10 +79,23 @@ public sealed class CollectionFetcher
                 var page = await PageAsync(wireSet, pageToken, ct).ConfigureAwait(false);
                 var d = FilterByPrefix(CollectionWireMapper.ParsePage(setId, page), prefix);
                 CollectionDeltaApplier.Apply(_store, d);
+                for (int i = 0; i < d.Items.Count; i++) if (!d.Items[i].Removed) snapshot.Add(d.Items[i].Uri);
                 newRev = d.NewRevision ?? newRev;
                 await HydrateAsync(d, ct).ConfigureAwait(false);
                 pageToken = string.IsNullOrEmpty(page.NextPageToken) ? null : page.NextPageToken;
             } while (pageToken is not null);
+
+            // Mark-and-sweep (§5): only reached on a COMPLETED paging loop (an exception mid-loop propagates above, before
+            // this line AND before the token advance below — so a partial snapshot never mass-deletes). Remove members the
+            // server dropped (absent from the full snapshot), skipping any (setId, uri) shielded by a pending local intent.
+            var existing = _store.SavedUris(setId);
+            for (int i = 0; i < existing.Count; i++)
+            {
+                var uri = existing[i];
+                if (snapshot.Contains(uri)) continue;
+                if (_hasPending is not null && _hasPending(setId, uri)) continue;
+                _store.SetSaved(setId, uri, false, SyncState.Confirmed);
+            }
         }
         _setRevision(setId, newRev);
     }
@@ -100,6 +123,14 @@ public sealed class CollectionFetcher
         return resp;
     }
 
+    bool AllTimestampless(string setId)
+    {
+        var items = _store.SavedItems(setId);
+        if (items.Count == 0) return false;
+        for (int i = 0; i < items.Count; i++) if (items[i].AddedAtMs != 0) return false;
+        return true;
+    }
+
     async Task HydrateAsync(CollectionDelta d, CancellationToken ct)
     {
         var uris = new List<string>(d.Items.Count);
@@ -110,28 +141,6 @@ public sealed class CollectionFetcher
         }
         if (uris.Count > 0) await _hydrate(uris, ct).ConfigureAwait(false);
     }
-
-    // logical UI set_id → the wire collection set name (the only place the mapping lives). Confirmed against the reference
-    // (Wavee SpotifyLibraryService): the real wire sets are "collection" (tracks AND albums, mixed), "artist", "show", and
-    // "listenlater" (saved episodes) — all singular; there is no "albums"/"artists"/"shows"/"episodes" set. Sending those
-    // names is the other half of the /paging 400 (InvalidArgument on the set string).
-    static string WireSet(string setId) => setId switch
-    {
-        "liked" => "collection",
-        "albums" => "collection",   // no "albums" wire set — albums ride inside "collection"; split out by URI prefix below
-        "artists" => "artist",
-        "shows" => "show",
-        "episodes" => "listenlater",
-        _ => setId,
-    };
-
-    // Sets that share the "collection" wire set are disambiguated client-side by entity-URI prefix; null = keep everything.
-    static string? UriPrefix(string setId) => setId switch
-    {
-        "liked" => "spotify:track:",
-        "albums" => "spotify:album:",
-        _ => null,
-    };
 
     // Keep only the items whose entity URI matches the set's prefix (the "collection"-shared sets); identity otherwise. The
     // revision/sync-token is per-prefix unaffected, so liked and albums each advance their own token over the shared wire set.

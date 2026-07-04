@@ -51,7 +51,11 @@ sealed class NowPlayingView : Component
         bool canPrev = _b.CanSkipPrev.Value;
         var lib = UseContext(LibraryBridge.Slot);
         bool liked = track is not null && (lib?.IsSaved(track.Uri) ?? false);
-        var (showLyrics, setShowLyrics) = UseState(Diag.EnvFlag("WAVEE_LYRICS_FULLSCREEN"));   // fullscreen lyrics mode (replaces the hero)
+        // Seed fullscreen-lyrics from the one-shot flag: opened via the player-bar lyrics button when the rail didn't fit
+        // (see PlayerBar / PlaybackBridge.ExpandedWithLyrics). Read at mount, then cleared below so a later normal reopen
+        // seeds hero (false).
+        var (showLyrics, setShowLyrics) = UseState(Diag.EnvFlag("WAVEE_LYRICS_FULLSCREEN") || _b.ExpandedWithLyrics.Peek());   // fullscreen lyrics mode (replaces the hero)
+        UseEffect(() => { if (_b.ExpandedWithLyrics.Peek()) _b.ExpandedWithLyrics.Value = false; }, "");   // one-shot: clear once consumed at mount
 
         ColorF accent = palette is { } p0 ? WaveePalette.Accent(p0) : Tok.AccentDefault;
         ColorF bg = palette is { } p1 ? WaveePalette.BackgroundDark(p1) : WaveePalette.BackgroundDark(WaveePalette.Neutral);
@@ -155,7 +159,7 @@ sealed class NowPlayingView : Component
             Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Gap = 16f, Width = MathF.Max(artSize, 420f),
             Children =
             [
-                Embed.Comp(() => new DevicesButton(_b, accent, 36f, 16f)),
+                Embed.Comp(() => new DevicesButton(_b, 36f, 16f, DevicePickerScope.NowPlaying)),
                 new TextEl(Icons.Volume) { Size = 15f, FontFamily = Theme.IconFont, Color = Tok.TextSecondary },
                 Slider.Bind(_b.Volume, v => { _ = _b.Player.SetVolumeAsync(v); }, 160f, 16f),
             ],
@@ -178,20 +182,24 @@ sealed class NowPlayingView : Component
         };
 
         Element body = showQueueRail
-            ? new BoxEl { Grow = 1f, Direction = 0, Children = [centerCol, QueueRail(accent, track)] }
+            ? new BoxEl { Grow = 1f, Direction = 0, Children = [centerCol, QueueRail(track, lib)] }
             : centerCol;
 
         return Shell(bg, [topBar, body], CoverBackdrop(track, bg, palette, vp.Width, vp.Height));
     }
 
     // The "Up next" rail (wide windows): now-playing + the live queue, each row playing that track on click.
-    Element QueueRail(ColorF accent, Track current)
+    readonly record struct QueueRailItem(string? Header, Track? Track);
+    static readonly ColumnSet QueueCols = new(Album: false, By: false, Date: false, Video: false, Plays: false, Heart: false, Thumb: false);
+    const float QueueItemExtent = 60f;
+
+    Element QueueRail(Track current, LibraryBridge? lib)
     {
         var queue = _b.Queue.Value;
-        var rows = new List<Element>(queue.Count + 2)
+        var items = new List<QueueRailItem>(queue.Count + 3)
         {
-            new TextEl(Loc.Get(Strings.Player.NowPlaying).ToUpperInvariant()) { Size = 11f, Weight = 700, Color = Tok.TextSecondary, Margin = new Edges4(4f, 2f, 0f, 8f) },
-            QueueRow(current, accent, isNow: true),
+            new(Loc.Get(Strings.Player.NowPlaying).ToUpperInvariant(), null),
+            new(null, current),
         };
         bool headerDone = false;
         foreach (var e in queue)
@@ -199,22 +207,67 @@ sealed class NowPlayingView : Component
             if (e.Bucket == QueueBucket.NowPlaying) continue;
             if (!headerDone)
             {
-                rows.Add(new TextEl(Loc.Get(Strings.Player.Queue).ToUpperInvariant()) { Size = 11f, Weight = 700, Color = Tok.TextSecondary, Margin = new Edges4(4f, 16f, 0f, 8f) });
+                items.Add(new QueueRailItem(Loc.Get(Strings.Player.Queue).ToUpperInvariant(), null));
                 headerDone = true;
             }
-            rows.Add(QueueRow(e.Track, accent, isNow: false));
+            items.Add(new QueueRailItem(null, e.Track));
         }
 
-        var list = new BoxEl { Direction = 1, Gap = 2f, Padding = new Edges4(8f, 0f, 8f, 16f), Children = rows.ToArray() };
+        var list = ItemsView.CreateBound(
+            items.Count,
+            scope => Embed.Comp(() => new QueueRailSlot(this, scope, items, lib)),
+            RepeatLayout.Stack(QueueItemExtent),
+            selectionMode: ItemsSelectionMode.Single,
+            isItemInvokedEnabled: true,
+            itemInvoked: i =>
+            {
+                if ((uint)i >= (uint)items.Count || items[i].Track is not { } t) return;
+                TrackRow.Invoke(_b, t, () => _b.Player.PlayTrackAsync(t.Uri));
+            },
+            itemText: i => (uint)i < (uint)items.Count ? items[i].Track?.Title ?? items[i].Header ?? "" : "",
+            isItemEnabled: i => (uint)i < (uint)items.Count && items[i].Track is not null,
+            grow: 1f);
         return new BoxEl
         {
             Width = 360f, Shrink = 0f, Direction = 1, Padding = new Edges4(12f, 16f, 8f, 8f),
             Children =
             [
                 new TextEl(Loc.Get(Strings.Player.Queue)) { Size = 16f, Weight = 700, Color = Tok.TextPrimary, Margin = new Edges4(4f, 0f, 0f, 8f) },
-                new BoxEl { Grow = 1f, MinHeight = 0f, Children = [ScrollView(list)] },
+                new BoxEl { Grow = 1f, MinHeight = 0f, Children = [list] },
             ],
         };
+    }
+
+    sealed class QueueRailSlot : Component
+    {
+        readonly NowPlayingView _o;
+        readonly RowScope _scope;
+        readonly IReadOnlyList<QueueRailItem> _items;
+        readonly LibraryBridge? _lib;
+        public QueueRailSlot(NowPlayingView o, RowScope scope, IReadOnlyList<QueueRailItem> items, LibraryBridge? lib)
+        { _o = o; _scope = scope; _items = items; _lib = lib; }
+
+        public override Element Render()
+        {
+            int i = _scope.Index.Value;
+            if ((uint)i >= (uint)_items.Count) return new BoxEl();
+            var item = _items[i];
+            if (item.Header is { Length: > 0 } header)
+                return new TextEl(header) { Size = 11f, Weight = 700, Color = Tok.TextSecondary, Margin = new Edges4(8f, i == 0 ? 2f : 16f, 0f, 8f) };
+            if (item.Track is not { } t) return new BoxEl();
+
+            var st = TrackRow.StateOf(_o._b, _lib, t);
+            var content = TrackRow.ArtCard(
+                t, st, QueueCols, go: null,
+                onPlay: () => TrackRow.Invoke(_o._b, t, () => _o._b.Player.PlayTrackAsync(t.Uri)),
+                onLike: null,
+                art: 40f,
+                showArtists: true,
+                explicitBadge: false,
+                showDuration: false,
+                kind: TrackRow.ArtCardKind.Rail);
+            return SelectorVisualsBound.AccentPill(_scope, content);
+        }
     }
 
     Element QueueRow(Track t, ColorF accent, bool isNow)
@@ -243,9 +296,7 @@ sealed class NowPlayingView : Component
 
     void TogglePlay()
     {
-        bool p = _b.IsPlaying.Peek();
-        _b.IsPlaying.Value = !p;
-        if (p) _ = _b.Player.PauseAsync(); else _ = _b.Player.ResumeAsync();
+        TrackRow.TogglePlayPause(_b);
     }
 
     // Full-bleed BELOW the title bar: the top 48px stays transparent + pass-through so the window caption (min/max/close +

@@ -11,8 +11,9 @@ namespace FluentGpu.Render;
 /// the layer is a MISS. Rebasing is exact-under-translation because op <c>Rect</c>/<c>Bounds</c> are node-local
 /// (origin 0,0 — SceneRecorder) and ALL absolute position lives in <c>Transform.Dx/Dy</c> (or a <c>ClipCmd</c> rect
 /// origin); rounding to the same integer grid the composite snaps to collapses the sub-unit float wobble a raw
-/// <c>fl(P+X)-X</c> rebase would otherwise leak. Scale/rotation (<c>M11..M22</c>) and every content field fold verbatim
-/// — they are translation-invariant, and scale/size are legitimate CONTENT (size) misses, not a cacheable dimension.
+/// <c>fl(P+X)-X</c> rebase would otherwise leak. σ buckets at 0.5 steps and scale/rotation (<c>M11..M22</c>) at 1 %
+/// steps in the KEY ONLY (applied radius on a MISS stays exact; settle re-mint is pixel-exact). Glyph text/color and
+/// other content fields fold verbatim.
 ///
 /// The rebase runs in the recorder's LOGICAL (DIP) space (DeviceRect/Transform are DIP; the compositor multiplies by the
 /// frame DPI scale only at composite time), so rounding here gates hit/miss + settle-remint granularity at ~1 DIP — it
@@ -26,6 +27,10 @@ public static class BlurPinKey
 {
     private const ulong Prime = 1099511628211UL;              // FNV-1a 64-bit prime
     private const ulong Basis = 14695981039346656037UL;       // FNV-1a 64-bit offset basis
+    private const float SigmaBucket = 0.5f;                 // σ key bucket (identity only — applied σ stays exact)
+    private const float ScaleBucket = 0.01f;                // scale-matrix key bucket (identity only)
+
+    private static float QuantizeScale(float m) => RoundGrid(m / ScaleBucket) * ScaleBucket;
 
     /// <summary>Compute the position-independent pin key for the self-blur subtree starting at <paramref name="start"/>
     /// (the first op AFTER the <see cref="PushLayerCmd"/>) up to its matching <see cref="DrawOp.PopLayer"/>. Returns
@@ -80,9 +85,10 @@ public static class BlurPinKey
     private static float RoundGrid(float x) => MathF.Floor(x + 0.5f + (1f / 512f));
 
     // Rebase an op's absolute device transform to the layer origin + round to the integer grid the composite snaps to.
-    // M11/M12/M21/M22 (scale/rotation) fold verbatim — they are translation-invariant and are legitimate size misses.
-    private static Affine2D Reb(in Affine2D t, float ox, float oy) =>
-        t with { Dx = RoundGrid(t.Dx - ox), Dy = RoundGrid(t.Dy - oy) };
+    // M11/M12/M21/M22 bucket in the key only — applied scale on a MISS stays exact.
+    private static Affine2D Reb(in Affine2D t, float ox, float oy) => new Affine2D(
+        QuantizeScale(t.M11), QuantizeScale(t.M12), QuantizeScale(t.M21), QuantizeScale(t.M22),
+        RoundGrid(t.Dx - ox), RoundGrid(t.Dy - oy));
 
     // A ClipCmd carries device-space rect ORIGINS (position); rebase both rects' X/Y, keep W/H + corner radius verbatim.
     private static ClipCmd RebClip(in ClipCmd c, float ox, float oy) => c with
@@ -93,7 +99,7 @@ public static class BlurPinKey
 
     private static void FoldSeed(ref ulong h, in PushLayerCmd L)
     {
-        Fold4(ref h, BitConverter.SingleToUInt32Bits(L.BlurSigma));
+        Fold4(ref h, (uint)(int)RoundGrid(L.BlurSigma / SigmaBucket));
         Fold4(ref h, (uint)(int)RoundGrid(L.DeviceRect.W));
         Fold4(ref h, (uint)(int)RoundGrid(L.DeviceRect.H));
     }

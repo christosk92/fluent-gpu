@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
@@ -77,14 +76,19 @@ sealed class WaveeSidebar : Component
 
     public override Element Render()
     {
-        var svc = UseContext(Services.Slot);
         var store = UseContext(LibraryStore.Slot);
         _lib = UseContext(LibraryBridge.Slot);
-        int plVer = _lib?.PlaylistsVersion.Value ?? 0;   // subscribe → refetch the playlist list when one is created / added-to
         store?.EnsureStats();
+        store?.EnsurePlaylists();
         // Cached + off-page-fresh: the Your-Library counts (Liked etc.) update live when you like a song on another page.
         var stats = store?.Stats ?? Loadable<LibraryStats>.Ready(new LibraryStats(0, 0, 0, 0));
-        var playlists = UseAsyncResource(async ct => (await svc!.Library.GetPlaylistsAsync(ct)).ToArray(), Array.Empty<PlaylistSummary>(), plVer.ToString());
+        // Playlists via the root LibraryStore cell (§4.3, kills R3 + R4): it refreshes IN PLACE (SetReady, never re-Pending)
+        // on inbound rootlist/collection deltas AND on user-created wavee:playlist:* — its PlaylistsChanged subscription is
+        // the SAME UserPlaylistSource that feeds LibraryBridge.PlaylistsVersion, and GetPlaylistsAsync already federates
+        // both sources. So a follow/unfollow animates the one keyed row instead of re-keying the whole list into a skeleton
+        // flash. The skeleton shows ONLY while the cell is genuinely Pending (first load); after the first SetReady it stays
+        // Ready forever (Refresh never flips it back), so no delta ever flashes it.
+        var playlists = store?.Playlists ?? Loadable<IReadOnlyList<PlaylistSummary>>.Ready(Array.Empty<PlaylistSummary>());
 
         bool compact = _compact.Value;        // subscribe (width)
         string sel = _route.Value.Name;       // subscribe (selection pill)
@@ -134,7 +138,7 @@ sealed class WaveeSidebar : Component
     }
 
     // Decide where the overlay pill should be (and whether it shows) from data only — the actual Y is MEASURED later.
-    PillState ComputePillState(string sel, bool pinnedOpen, bool libOpen, bool plOpen, Loadable<PlaylistSummary[]> playlists)
+    PillState ComputePillState(string sel, bool pinnedOpen, bool libOpen, bool plOpen, Loadable<IReadOnlyList<PlaylistSummary>> playlists)
     {
         bool isLib = sel is "albums" or "artists" or "liked" or "podcasts" or "local";
         bool isPl = sel.StartsWith("pl:", StringComparison.Ordinal);
@@ -142,7 +146,7 @@ sealed class WaveeSidebar : Component
         int plCount = 0; bool plLoaded = false;
         if ((LoadState)playlists.State.Value == LoadState.Ready && playlists.Value.Value is { } arr)
         {
-            plCount = arr.Length;
+            plCount = arr.Count;
             if (isPl) foreach (var p in arr) if ("pl:" + p.Uri == sel) { plLoaded = true; break; }
         }
 
@@ -154,7 +158,7 @@ sealed class WaveeSidebar : Component
     }
 
     // ── expanded (300) ──────────────────────────────────────────────────────────────────────────
-    Element ExpandedBody(Loadable<LibraryStats> stats, Loadable<PlaylistSummary[]> playlists, string sel) => new BoxEl
+    Element ExpandedBody(Loadable<LibraryStats> stats, Loadable<IReadOnlyList<PlaylistSummary>> playlists, string sel) => new BoxEl
     {
         // Grow=1f fills the pane's WIDTH: bodyWrapped is a ROW (a bare BoxEl defaults to Direction=0), so this column is
         // on its horizontal MAIN axis and would otherwise hug to the rows' natural width and left-align — leaving dead
@@ -178,9 +182,16 @@ sealed class WaveeSidebar : Component
                 ],
             }),
             Section(Loc.Get(Strings.Sidebar.Playlists), _plOpen, Skel.Region(
-                playlists, _ => PlaylistSkeletonRow(), count: 5,
-                content: arr => Flow.For(() => arr.Length, i => PlaylistRow(arr[i], sel, i), keyOf: i => arr[i].Uri),
-                onEmpty: () => EmptyState.Default(), onFailed: () => ErrorState.Build(playlists.Error)),
+                playlists,
+                shimmerSource: () => new BoxEl
+                {
+                    Direction = 1, Gap = SkeletonStyle.Default.RowGap,
+                    Children = [PlaylistSkeletonRow(), PlaylistSkeletonRow(), PlaylistSkeletonRow(), PlaylistSkeletonRow(), PlaylistSkeletonRow()],
+                },
+                content: arr => Flow.For(() => arr.Count, i => PlaylistRow(arr[i], sel, i), keyOf: i => arr[i].Uri),
+                reveal: SkelReveal.StaggerRows,
+                onFailed: () => ErrorState.Build(playlists.Error),
+                isEmpty: arr => arr is null || arr.Count == 0, onEmpty: () => EmptyState.Default()),
                 action: Embed.Comp(() => new SidebarCreateButton(CreatePlaylist, CreateFolder))),
         ],
     };
@@ -339,10 +350,10 @@ sealed class WaveeSidebar : Component
     };
 
     // ── compact rail (56) — centered library icons + create + playlist art (Spotify-style) ────────
-    Element CompactBody(string sel, Loadable<PlaylistSummary[]> playlists)
+    Element CompactBody(string sel, Loadable<IReadOnlyList<PlaylistSummary>> playlists)
     {
         var st = (LoadState)playlists.State.Value;     // subscribe → the rail fills in when playlists resolve
-        PlaylistSummary[] arr = st == LoadState.Ready && playlists.Value.Value is { } a ? a : Array.Empty<PlaylistSummary>();
+        IReadOnlyList<PlaylistSummary> arr = st == LoadState.Ready && playlists.Value.Value is { } a ? a : Array.Empty<PlaylistSummary>();
 
         var kids = new List<Element>
         {

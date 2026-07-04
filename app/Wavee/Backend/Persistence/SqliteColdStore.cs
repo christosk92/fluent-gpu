@@ -31,7 +31,7 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
     SqliteCommand? _entityCmd, _savedUpCmd, _savedDelCmd, _revCmd, _videoCmd;
     SqliteParameter _eu = null!, _ek = null!, _ep = null!;
     SqliteParameter _vu = null!, _vp = null!;
-    SqliteParameter _sa = null!, _ss = null!, _su = null!, _sy = null!;
+    SqliteParameter _sa = null!, _ss = null!, _su = null!, _sy = null!, _st = null!;
     SqliteParameter _da = null!, _ds = null!, _du = null!;
     SqliteParameter _ra = null!, _rs = null!, _rr = null!, _rt = null!;
 
@@ -139,11 +139,11 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
         lock (_connLock)
         {
             using var c = _conn.CreateCommand();
-            c.CommandText = "SELECT set_id, item_uri, sync FROM collection_items WHERE account=$a;";
+            c.CommandText = "SELECT set_id, item_uri, sync, added_at FROM collection_items WHERE account=$a;";
             c.Parameters.AddWithValue("$a", _account);
             using var r = c.ExecuteReader();
             while (r.Read())
-                list.Add(new ColdSaved(r.GetString(0), r.GetString(1), (SyncState)r.GetInt32(2)));
+                list.Add(new ColdSaved(r.GetString(0), r.GetString(1), (SyncState)r.GetInt32(2), r.GetInt64(3)));
         }
         return list;
     }
@@ -157,6 +157,34 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
             c.Parameters.AddWithValue("$a", _account);
             c.Parameters.AddWithValue("$s", setId);
             return c.ExecuteScalar() as string;   // null for no-row OR a NULL revision column
+        }
+    }
+
+    // The rootlist revision lives in the shared meta(key,value) table as hex text under 'rootlist_rev' (no revision column
+    // on the rootlist table). Synchronous, like ReplaceRootlist — a rootlist sync is a coarse op, not a hot per-item write.
+    public byte[]? GetRootlistRevision()
+    {
+        lock (_connLock)
+        {
+            using var c = _conn.CreateCommand();
+            c.CommandText = "SELECT value FROM meta WHERE key='rootlist_rev';";
+            return c.ExecuteScalar() is string s && s.Length > 0 ? Convert.FromHexString(s) : null;
+        }
+    }
+
+    public void SetRootlistRevision(byte[]? rev)
+    {
+        lock (_connLock)
+        {
+            using var c = _conn.CreateCommand();
+            if (rev is null || rev.Length == 0)
+                c.CommandText = "DELETE FROM meta WHERE key='rootlist_rev';";
+            else
+            {
+                c.CommandText = "INSERT INTO meta(key,value) VALUES('rootlist_rev',$v) ON CONFLICT(key) DO UPDATE SET value=excluded.value;";
+                c.Parameters.AddWithValue("$v", Convert.ToHexString(rev));
+            }
+            c.ExecuteNonQuery();
         }
     }
 
@@ -280,7 +308,7 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
 
     public void UpsertEntity(string uri, EntityKind kind, byte[] payload) => _queue.Writer.TryWrite(WriteOp.Entity(uri, (int)kind, payload));
     public void UpsertVideoAssociation(string uri, byte[] payload) => _queue.Writer.TryWrite(WriteOp.VideoAssoc(uri, payload));
-    public void UpsertSaved(string setId, string uri, bool saved, SyncState sync) => _queue.Writer.TryWrite(WriteOp.Saved(setId, uri, saved, (int)sync));
+    public void UpsertSaved(string setId, string uri, bool saved, SyncState sync, long addedAtMs = 0) => _queue.Writer.TryWrite(WriteOp.Saved(setId, uri, saved, (int)sync, addedAtMs));
     public void SetCollectionRevision(string setId, string? revision, long syncedAt) => _queue.Writer.TryWrite(WriteOp.Revision(setId, revision, syncedAt));
 
     public void Flush()
@@ -317,12 +345,16 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
         _vp = _videoCmd.Parameters.Add("$p", SqliteType.Blob);
 
         _savedUpCmd = _conn.CreateCommand();
-        _savedUpCmd.CommandText = "INSERT INTO collection_items(account,set_id,item_uri,added_at,position,sync) VALUES($a,$s,$u,0,NULL,$y) " +
-                                  "ON CONFLICT(account,set_id,item_uri) DO UPDATE SET sync=excluded.sync;";
+        // added_at: a non-zero incoming timestamp wins; 0 preserves whatever is stored (the optimistic/fold writers don't
+        // know the server timestamp — the delta/paging apply does).
+        _savedUpCmd.CommandText = "INSERT INTO collection_items(account,set_id,item_uri,added_at,position,sync) VALUES($a,$s,$u,$t,NULL,$y) " +
+                                  "ON CONFLICT(account,set_id,item_uri) DO UPDATE SET sync=excluded.sync, " +
+                                  "added_at=CASE WHEN excluded.added_at!=0 THEN excluded.added_at ELSE collection_items.added_at END;";
         _sa = _savedUpCmd.Parameters.Add("$a", SqliteType.Text);
         _ss = _savedUpCmd.Parameters.Add("$s", SqliteType.Text);
         _su = _savedUpCmd.Parameters.Add("$u", SqliteType.Text);
         _sy = _savedUpCmd.Parameters.Add("$y", SqliteType.Integer);
+        _st = _savedUpCmd.Parameters.Add("$t", SqliteType.Integer);
 
         _savedDelCmd = _conn.CreateCommand();
         _savedDelCmd.CommandText = "DELETE FROM collection_items WHERE account=$a AND set_id=$s AND item_uri=$u;";
@@ -356,7 +388,7 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
                 {
                     case OpKind.Entity: _eu.Value = op.A; _ek.Value = op.Kind; _ep.Value = op.Payload!; _entityCmd.ExecuteNonQuery(); break;
                     case OpKind.VideoAssoc: _vu.Value = op.A; _vp.Value = op.Payload!; _videoCmd.ExecuteNonQuery(); break;
-                    case OpKind.SavedSet: _sa.Value = _account; _ss.Value = op.A; _su.Value = op.B!; _sy.Value = op.Kind; _savedUpCmd.ExecuteNonQuery(); break;
+                    case OpKind.SavedSet: _sa.Value = _account; _ss.Value = op.A; _su.Value = op.B!; _sy.Value = op.Kind; _st.Value = op.L; _savedUpCmd.ExecuteNonQuery(); break;
                     case OpKind.SavedRemove: _da.Value = _account; _ds.Value = op.A; _du.Value = op.B!; _savedDelCmd.ExecuteNonQuery(); break;
                     case OpKind.Revision: _ra.Value = _account; _rs.Value = op.A; _rr.Value = (object?)op.B ?? DBNull.Value; _rt.Value = op.L; _revCmd.ExecuteNonQuery(); break;
                     case OpKind.Flush: break;
@@ -476,7 +508,7 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
 
         public static WriteOp Entity(string uri, int kind, byte[] payload) => new(OpKind.Entity, uri, null, kind, 0, payload, null);
         public static WriteOp VideoAssoc(string uri, byte[] payload) => new(OpKind.VideoAssoc, uri, null, 0, 0, payload, null);
-        public static WriteOp Saved(string set, string uri, bool saved, int sync) => new(saved ? OpKind.SavedSet : OpKind.SavedRemove, set, uri, sync, 0, null, null);
+        public static WriteOp Saved(string set, string uri, bool saved, int sync, long addedAtMs = 0) => new(saved ? OpKind.SavedSet : OpKind.SavedRemove, set, uri, sync, addedAtMs, null, null);
         public static WriteOp Revision(string setId, string? revision, long syncedAt) => new(OpKind.Revision, setId, revision, 0, syncedAt, null, null);
         public static WriteOp FlushMarker(TaskCompletionSource done) => new(OpKind.Flush, "", null, 0, 0, null, done);
     }

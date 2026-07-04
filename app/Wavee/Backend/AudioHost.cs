@@ -11,16 +11,32 @@ namespace Wavee.Backend;
 // position clock + Ended. DEFERRED behind it (a separate design): AES-128-CTR decrypt → PCM, Ogg/Vorbis decode, mixer/DSP,
 // WASAPI output, and the PlayPlay/x86_64 native key-derivation fallback. The default impl in this scope is SilentAudioHost.
 
-public enum AudioFormat { OggVorbis96, OggVorbis160, OggVorbis320 }
+public enum AudioFormat { OggVorbis96, OggVorbis160, OggVorbis320, Flac, Flac24 }
 
-/// <summary>Pure POD crossing the seam (and, later, a pipe to an out-of-process host). Carries exactly the in-scope
-/// resolution outputs. An EMPTY <see cref="Key"/> means "the host derives it" (the deferred PlayPlay/native path) — per
-/// the locked decision the persistent-AP fetch is the key path, so empty is an error/interim, not the strategy.</summary>
+/// <summary>Pure POD crossing the seam. An EMPTY <see cref="Key"/> means the host must derive it (PlayPlay path).</summary>
 public readonly record struct AudioStreamHandle(
     string TrackUri, string FileIdHex, string CdnUrl,
-    ReadOnlyMemory<byte> Key, AudioFormat Format, long DurationMs, float NormalizationGainDb);
+    ReadOnlyMemory<byte> Key, AudioFormat Format, long DurationMs, float NormalizationGainDb,
+    string[]? CdnUrls = null, int HeadBoundary = 0);
 
-public enum AudioHostSignalKind { PositionTick, Ended, Buffering, Playing, Paused, Error }
+/// <summary>Instant-start payload: clear head bytes cross the seam before the key exists.</summary>
+public readonly record struct AudioFastStart(
+    string TrackUri, string FileIdHex, AudioFormat Format, long DurationMs, float NormalizationGainDb,
+    ReadOnlyMemory<byte> HeadBytes);
+
+/// <summary>The output of a fast-first resolve: the clear head is ready NOW (play immediately); the encrypted body
+/// (key + CDN) is still resolving in <see cref="Body"/> and is supplied to the host when it lands.</summary>
+public readonly record struct FastStartPlan(AudioFastStart Start, System.Threading.Tasks.Task<AudioStreamHandle> Body);
+
+/// <summary>Fast-first resolver seam: return the head (instant-start) while the key + CDN resolve in parallel. When set on
+/// the controller it supersedes the plain <see cref="ITrackResolver"/> path for local play. Implemented live by
+/// FastTrackPlayback (SpotifyLive); the controller stays portable via this Backend interface.</summary>
+public interface IFastTrackResolver
+{
+    System.Threading.Tasks.Task<FastStartPlan> ResolveFastAsync(Track track, CancellationToken ct = default);
+}
+
+public enum AudioHostSignalKind { PositionTick, Ended, Buffering, Prebuffering, Playing, Paused, Error }
 
 /// <summary>The boxing-free, coalesced report channel from the host. <see cref="AudioHostSignalKind.PositionTick"/> (~1 Hz
 /// while playing) is the Driven wake; <see cref="AudioHostSignalKind.Ended"/> drives auto-advance.</summary>
@@ -31,6 +47,8 @@ public readonly record struct AudioHostSignal(AudioHostSignalKind Kind, long Pos
 public interface IAudioHost : IAsyncDisposable
 {
     void Load(in AudioStreamHandle stream);
+    void LoadFastStart(in AudioFastStart start);
+    void SupplyBody(in AudioStreamHandle body);
     void Play();
     void Pause();
     void Stop();
@@ -68,7 +86,19 @@ public sealed class SilentAudioHost : IAudioHost
     {
         lock (_gate) { _anchorPos = 0; _anchorWall = _now(); _durationMs = s.DurationMs; _playing = false; _buffering = true; }
         _signals.OnNext(new AudioHostSignal(AudioHostSignalKind.Buffering, 0));
-        lock (_gate) _buffering = false;   // silent host is "ready" immediately
+        lock (_gate) _buffering = false;
+    }
+
+    public void LoadFastStart(in AudioFastStart s)
+    {
+        lock (_gate) { _anchorPos = 0; _anchorWall = _now(); _durationMs = s.DurationMs; _playing = false; _buffering = false; }
+        _signals.OnNext(new AudioHostSignal(AudioHostSignalKind.Prebuffering, 0));
+    }
+
+    public void SupplyBody(in AudioStreamHandle body)
+    {
+        _signals.OnNext(new AudioHostSignal(AudioHostSignalKind.Buffering, 0));
+        lock (_gate) _buffering = false;
     }
 
     public void Play()
