@@ -222,7 +222,7 @@ sealed class NowPlayingView : Component
             itemInvoked: i =>
             {
                 if ((uint)i >= (uint)items.Count || items[i].Track is not { } t) return;
-                TrackRow.Invoke(_b, t, () => _b.Player.PlayTrackAsync(t.Uri));
+                TrackRow.Invoke(_b, t, () => _b.Player.PlayTrackAsync(t));
             },
             itemText: i => (uint)i < (uint)items.Count ? items[i].Track?.Title ?? items[i].Header ?? "" : "",
             isItemEnabled: i => (uint)i < (uint)items.Count && items[i].Track is not null,
@@ -259,7 +259,7 @@ sealed class NowPlayingView : Component
             var st = TrackRow.StateOf(_o._b, _lib, t);
             var content = TrackRow.ArtCard(
                 t, st, QueueCols, go: null,
-                onPlay: () => TrackRow.Invoke(_o._b, t, () => _o._b.Player.PlayTrackAsync(t.Uri)),
+                onPlay: () => TrackRow.Invoke(_o._b, t, () => _o._b.Player.PlayTrackAsync(t)),
                 onLike: null,
                 art: 40f,
                 showArtists: true,
@@ -277,7 +277,7 @@ sealed class NowPlayingView : Component
             Direction = 0, AlignItems = FlexAlign.Center, Gap = 10f, Padding = new Edges4(8f, 6f, 8f, 6f),
             Corners = CornerRadius4.All(6f), Fill = ColorF.Transparent, HoverFill = Tok.FillSubtleSecondary,
             Cursor = CursorId.Hand, Role = AutomationRole.Button, Focusable = true,
-            OnClick = isNow ? null : () => { _ = _b.Player.PlayTrackAsync(t.Uri); },
+            OnClick = isNow ? null : () => { _ = _b.Player.PlayTrackAsync(t); },
             Children =
             [
                 new BoxEl { Width = 40f, Height = 40f, Children = [Surfaces.Artwork(t.Image, SeedOf(t), 40f, 40f, 4f)] },

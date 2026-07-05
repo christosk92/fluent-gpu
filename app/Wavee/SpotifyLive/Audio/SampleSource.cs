@@ -3,7 +3,7 @@ using System.IO;
 using FlacBox;
 using NVorbis;
 
-namespace Wavee.AudioHost.Audio;
+namespace Wavee.SpotifyLive.Audio;
 
 /// <summary>Uniform pull decoder: interleaved float32 + seek. Vorbis (WaveeMusic's vendored NVorbis) and FLAC (FlacBox)
 /// both satisfy it, so the engine's decode loop is codec-agnostic.</summary>

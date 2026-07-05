@@ -22,7 +22,8 @@ public enum ProvisioningOutcome
 {
     Ready,
     NeverAttempted,
-    ManifestUnavailable,
+    RuntimeUnavailable,
+    NoSupportedPack,
     PackDownloadFailed,
     HashMismatch,
     SignatureInvalid,
@@ -36,7 +37,12 @@ public readonly record struct AudioKeyResult(ReadOnlyMemory<byte> Key, AudioKeyF
     public static AudioKeyResult Fail(AudioKeyFailureReason reason, string? detail = null) => new(default, reason, detail);
 }
 
-public readonly record struct PlayPlayDeriveResult(ReadOnlyMemory<byte> Key, AudioKeyFailureReason Reason, string? Detail = null)
+public readonly record struct PlayPlayDeriveResult(
+    ReadOnlyMemory<byte> Key,
+    AudioKeyFailureReason Reason,
+    string? Detail = null,
+    ReadOnlyMemory<byte> DerivedSlab = default,
+    ReadOnlyMemory<byte> NativeCdnSeed = default)
 {
     public bool Ok => Reason == AudioKeyFailureReason.None && Key.Length == 16;
 }
@@ -60,7 +66,7 @@ public static class AudioFailureText
     public static string ToUserMessage(this AudioKeyFailureReason r) => r switch
     {
         AudioKeyFailureReason.NeverProvisioned or AudioKeyFailureReason.ProvisioningUnavailable
-            => "Playback support is still setting up — try again in a moment.",
+            => "Local playback needs a one-time setup to play tracks on this device.",
         AudioKeyFailureReason.License403 => "Spotify declined this track for your account.",
         AudioKeyFailureReason.RotationDrift => "Playback needs an update to keep working.",
         AudioKeyFailureReason.ArchUnsupported => "This track can't be played on this device.",
@@ -74,7 +80,8 @@ public static class AudioFailureText
 
     public static string ToUserMessage(this ProvisioningOutcome o) => o switch
     {
-        ProvisioningOutcome.ManifestUnavailable => "Couldn't reach the playback-support service.",
+        ProvisioningOutcome.RuntimeUnavailable => "Couldn't find a supported local Spotify.dll.",
+        ProvisioningOutcome.NoSupportedPack => "Playback support isn't available for your Spotify version yet.",
         ProvisioningOutcome.PackDownloadFailed => "Couldn't download playback support.",
         ProvisioningOutcome.HashMismatch or ProvisioningOutcome.SignatureInvalid => "Playback support failed verification.",
         ProvisioningOutcome.ArchUnsupported => "Playback support isn't available for this device.",

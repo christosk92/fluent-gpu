@@ -23,8 +23,8 @@ static class DetailQueueActions
         if (player is null) return 0;
         int n = Count(tracks, max);
         if (n <= 0) return 0;
-        if (!RemoteActive(player)) { _ = player.EnqueueAsync(tracks[0].Uri); return 0; }   // trigger the "choose a device" toast once; no "added" toast
-        for (int i = 0; i < n; i++) _ = player.EnqueueAsync(tracks[i].Uri);
+        if (!RemoteActive(player)) { _ = player.EnqueueAsync(tracks[0]); return 0; }   // trigger the "choose a device" toast once; no "added" toast
+        for (int i = 0; i < n; i++) _ = player.EnqueueAsync(tracks[i]);
         return n;
     }
 

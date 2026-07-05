@@ -7,10 +7,15 @@
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!-- CA1416: source-includes the cross-platform Backend, whose portability is guarded by TerraFX-freedom, not this
          analyzer. xUnit1051: the v3 "pass TestContext.Current.CancellationToken" nag is noise for these deterministic,
          non-cancellable unit tests. -->
     <NoWarn>$(NoWarn);CA1416;xUnit1051</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="Exists('..\Wavee.PlayPlay\Wavee.PlayPlay.csproj')">
+    <DefineConstants>$(DefineConstants);WAVEE_PLAYPLAY_LOCAL</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
@@ -53,6 +58,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Wavee.Core\Wavee.Core.csproj" />
+    <Compile Include="..\Wavee\Diagnostics\*.cs" />
     <Compile Include="..\Wavee\Backend\**\*.cs" />
     <!-- The REAL production VirtualCollection<T> (portable, Signals-only), source-included so DiscographyPaginationTests
          can exercise its provisional-seed reconciliation directly. Its lone dependency (FluentGpu.Signals.Signal<T>) is
@@ -72,12 +78,15 @@
     <Compile Include="..\Wavee\SpotifyLive\Audio\AudioRuntimeStatusService.cs" />
     <Compile Include="..\Wavee\SpotifyLive\Audio\AudioKeyResolver.cs" />
     <Compile Include="..\Wavee\SpotifyLive\Audio\PlayPlayLicenseClient.cs" />
-    <Compile Include="..\Wavee\SpotifyLive\Audio\AudioRuntimeProvisioner.cs" />
-    <Compile Include="..\Wavee\SpotifyLive\Audio\IpcPipeTransport.cs" />
-    <Compile Include="..\Wavee\SpotifyLive\Audio\IpcChannel.cs" />
-    <Compile Include="..\Wavee\SpotifyLive\Audio\AudioProcessManager.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\Audio\AudioFormatProbe.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\Audio\Runtime\*.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\Audio\PlayPlayRuntimeProvisioner.cs" />
     <!-- the track resolver (extended-metadata file discovery + Ogg/FLAC selection) — LiveTrackResolverTests drive it -->
     <Compile Include="..\Wavee\SpotifyLive\LiveTrackResolver.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('..\Wavee.PlayPlay\Wavee.PlayPlay.csproj')">
+    <Compile Include="..\Wavee.PlayPlay\*.cs" Link="Wavee.PlayPlay\%(Filename)%(Extension)" />
   </ItemGroup>
 
 </Project>

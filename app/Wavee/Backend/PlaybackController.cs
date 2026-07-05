@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -115,6 +116,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     readonly IDisposable _projSub;
     readonly SemaphoreSlim _lock = new(1, 1);
     readonly object _ownershipGate = new();
+    static readonly TimeSpan FastStartBodySupplyGrace = TimeSpan.FromMilliseconds(250);
     string _lastActive = "";
     double _lastVolume = -1;
     bool _ownsActivePlayback;
@@ -174,12 +176,55 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
 
     // Instant-start body supply: await the (parallel) key+CDN resolve and hand it to the host; a body failure surfaces
     // as a typed playback error (the head already started, so this is the "couldn't continue" case).
-    async Task SupplyBodyWhenReadyAsync(Task<AudioStreamHandle> body)
+    async Task SupplyBodyWhenReadyAsync(Task<AudioStreamHandle> body, string expectedTrackUri, long loadStartedTicks, int clearHeadBytes)
     {
-        try { var h = await body.ConfigureAwait(false); _host.SupplyBody(h); }
-        catch (OperationCanceledException) { }
-        catch (Exception ex) { ReportPlaybackError(ex); }
+        try
+        {
+            var h = await body.ConfigureAwait(false);
+            if (clearHeadBytes > 0)
+            {
+                var elapsed = ElapsedSince(loadStartedTicks);
+                if (elapsed < FastStartBodySupplyGrace)
+                {
+                    var remaining = FastStartBodySupplyGrace - elapsed;
+                    _log?.Invoke($"fast-start body ready early track={expectedTrackUri} file={h.FileIdHex}; deferring supply {remaining.TotalMilliseconds:0}ms so clear-head decode can queue first PCM");
+                    await Task.Delay(remaining).ConfigureAwait(false);
+                }
+            }
+
+            var current = _queue.Current?.Uri ?? "";
+            if (string.Equals(current, expectedTrackUri, StringComparison.Ordinal))
+            {
+                _log?.Invoke($"fast-start body ready track={expectedTrackUri} file={h.FileIdHex}; supplying to audio host");
+                _host.SupplyBody(h);
+            }
+            else
+            {
+                _log?.Invoke($"fast-start body ignored as stale expected={expectedTrackUri} current={current} bodyTrack={h.TrackUri} file={h.FileIdHex}");
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            _log?.Invoke($"fast-start body task canceled expected={expectedTrackUri}");
+        }
+        catch (Exception ex)
+        {
+            var current = _queue.Current?.Uri ?? "";
+            if (string.Equals(current, expectedTrackUri, StringComparison.Ordinal))
+            {
+                _log?.Invoke($"fast-start body failed for active track={expectedTrackUri}; stopping audio host to unblock head stream: {ex.GetType().Name}: {ex.Message}");
+                _host.Stop();
+            }
+            else
+            {
+                _log?.Invoke($"fast-start body failed for stale track expected={expectedTrackUri} current={current}: {ex.GetType().Name}: {ex.Message}");
+            }
+            ReportPlaybackError(ex);
+        }
     }
+
+    static TimeSpan ElapsedSince(long startTicks) =>
+        startTicks == 0 ? TimeSpan.Zero : TimeSpan.FromSeconds((Stopwatch.GetTimestamp() - startTicks) / (double)Stopwatch.Frequency);
 
     /// <summary>Re-attempt the current track after a surfaced playback error (the toast/player-bar "Retry" action).</summary>
     public async Task RetryCurrentAsync(CancellationToken ct = default)
@@ -276,10 +321,22 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         await ExecutePlayAsync(new PlayRequest(contextUri, start, refs, selected.Uri, selected.Uid), ct).ConfigureAwait(false);
     }
 
-    public Task PlayTrackAsync(string trackUri, CancellationToken ct = default)
+    public async Task PlayTrackAsync(string trackUri, CancellationToken ct = default)
     {
-        if (!RouteLocal()) return ExecutePlayAsync(PlayRequest.Default(trackUri, 0), ct);
-        return LocalPlayTracksAsync(trackUri, new[] { new QueuedTrack(SyntheticTrack(trackUri), "") }, 0, ct);
+        if (!RouteLocal())
+        {
+            await ExecutePlayAsync(PlayRequest.Default(trackUri, 0), ct).ConfigureAwait(false);
+            return;
+        }
+
+        var track = await HydrateOneAsync(trackUri, ct).ConfigureAwait(false);
+        await LocalPlayTracksAsync(trackUri, new[] { track }, 0, ct).ConfigureAwait(false);
+    }
+
+    public Task PlayTrackAsync(Track track, CancellationToken ct = default)
+    {
+        if (!RouteLocal()) return ExecutePlayAsync(PlayRequest.Default(track.Uri, 0), ct);
+        return LocalPlayTracksAsync(track.Uri, new[] { new QueuedTrack(track, "") }, 0, ct);
     }
 
     public Task PauseAsync(CancellationToken ct = default)
@@ -338,16 +395,29 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     public async Task EnqueueAsync(string trackUri, CancellationToken ct = default)
     {
         if (!RouteLocal()) { await ForwardAddToQueueAsync(trackUri, ct).ConfigureAwait(false); return; }
+        var queued = await HydrateOneAsync(trackUri, ct).ConfigureAwait(false);
+        await EnqueueLocalAsync(queued, ct).ConfigureAwait(false);
+    }
+
+    public async Task EnqueueAsync(Track track, CancellationToken ct = default)
+    {
+        if (!RouteLocal()) { await ForwardAddToQueueAsync(track.Uri, ct).ConfigureAwait(false); return; }
+        await EnqueueLocalAsync(new QueuedTrack(track, ""), ct).ConfigureAwait(false);
+    }
+
+    async Task EnqueueLocalAsync(QueuedTrack queued, CancellationToken ct)
+    {
         await _lock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             if (_queue.Current is null)   // add-to-queue while idle → start playing it (rule §3)
             {
                 if (RejectLocalPlay()) return;   // can't start local playback → toast + abort (don't seed a phantom local queue)
-                _queue.SetContext(trackUri, new[] { SyntheticTrack(trackUri) }, 0);
+                _queue.SetContext(queued.Track.Uri, new[] { queued }, 0);
                 await LoadAndPlayCurrentAsync(EvKind.Started, ct).ConfigureAwait(false);
             }
-            else { _queue.EnqueueUser(SyntheticTrack(trackUri)); PushQueueAndPublish(); }
+            else { _queue.EnqueueUser(queued.Track); PushQueueAndPublish(); }
+            WarmFastTrack(queued.Track, "enqueue");
         }
         finally { _lock.Release(); }
     }
@@ -364,7 +434,12 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             if (RejectLocalPlay()) return;   // local play-next would seed a local queue that can never play → toast + abort
             var hydrated = await _contexts.HydrateAsync(refs, ct).ConfigureAwait(false);
             await _lock.WaitAsync(ct).ConfigureAwait(false);
-            try { for (int i = hydrated.Count - 1; i >= 0; i--) _queue.EnqueueNext(hydrated[i]); PushQueueAndPublish(); }
+            try
+            {
+                for (int i = hydrated.Count - 1; i >= 0; i--) _queue.EnqueueNext(hydrated[i]);
+                if (hydrated.Count > 0) WarmFastTrack(hydrated[0].Track, "play-next");
+                PushQueueAndPublish();
+            }
             finally { _lock.Release(); }
             return;
         }
@@ -548,8 +623,24 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     async Task LocalPlayTracksAsync(string contextUri, IReadOnlyList<QueuedTrack> tracks, int startIndex, CancellationToken ct)
     {
         await _lock.WaitAsync(ct).ConfigureAwait(false);
-        try { _queue.SetContext(contextUri, tracks, startIndex); await LoadAndPlayCurrentAsync(EvKind.Started, ct).ConfigureAwait(false); }
+        try
+        {
+            _queue.SetContext(contextUri, tracks, startIndex);
+            await LoadAndPlayCurrentAsync(EvKind.Started, ct).ConfigureAwait(false);
+        }
         finally { _lock.Release(); }
+    }
+
+    async Task<QueuedTrack> HydrateOneAsync(string uri, CancellationToken ct)
+    {
+        try
+        {
+            var hydrated = await _contexts.HydrateAsync(new[] { new QueuedRef(uri, "") }, ct).ConfigureAwait(false);
+            if (hydrated.Count > 0) return hydrated[0];
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { _log?.Invoke("track hydrate failed; falling back to uri placeholder: " + ex.Message); }
+        return new QueuedTrack(SyntheticTrack(uri), "");
     }
 
     async Task LocalResumeAsync(CancellationToken ct = default)
@@ -627,11 +718,13 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             try { plan = await _fast.ResolveFastAsync(cur, ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex) { ReportPlaybackError(ex); return; }
+            var loadStartedTicks = Stopwatch.GetTimestamp();
             _host.LoadFastStart(plan.Start);
             _host.Play();
             PushQueue();
+            WarmUpcomingFastTrack("after-start");
             Emit(new PlaybackEvent(kind, cur, 0));
-            _ = SupplyBodyWhenReadyAsync(plan.Body);
+            _ = SupplyBodyWhenReadyAsync(plan.Body, cur.Uri, loadStartedTicks, plan.Start.HeadBytes.Length);
             return;
         }
 
@@ -642,6 +735,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         _host.Load(handle);
         _host.Play();
         PushQueue();                                              // queue first, so the published snapshot carries it
+        WarmUpcomingFastTrack("after-start");
         Emit(new PlaybackEvent(kind, cur, 0));
     }
 
@@ -660,6 +754,19 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     // Surface QueueCore's snapshot to the projection so IPlaybackState.Queue (+ the PutState next-up) reflect our local
     // queue while WE are the active device. Called after every local queue mutation.
     void PushQueue() => _projection.SetLocalQueue(_queue.Snapshot());
+
+    void WarmUpcomingFastTrack(string reason)
+    {
+        if (_queue.PeekNext() is { } next)
+            WarmFastTrack(next, reason);
+    }
+
+    void WarmFastTrack(Track track, string reason)
+    {
+        if (_fast is not IFastTrackWarmer warmer) return;
+        try { warmer.Warm(track, reason); }
+        catch (Exception ex) { _log?.Invoke($"fast-warm dispatch failed {track.Uri}: {ex.Message}"); }
+    }
 
     // Push the local shuffle/repeat to the projection (so PutState carries them while we're active).
     void PushOptions() => _projection.SetLocalOptions(_queue.Shuffle, _queue.Repeat);

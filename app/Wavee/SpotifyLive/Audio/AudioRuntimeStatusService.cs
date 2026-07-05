@@ -29,9 +29,9 @@ public sealed class AudioRuntimeStatusService
         Changed?.Invoke();
     }
 
-    public void SetProvisioning(ProvisioningOutcome outcome)
+    public void SetProvisioning(ProvisioningOutcome outcome, string? detail = null)
     {
-        lock (_gate) { _prov = outcome; }
+        lock (_gate) { _prov = outcome; _detail = detail ?? _detail; }
         Changed?.Invoke();
     }
 }

@@ -80,6 +80,7 @@ public sealed class SwitchablePlayer : IPlaybackPlayer
     public Task PlayAsync(string contextUri, int startIndex = 0, CancellationToken ct = default) => Cur.PlayAsync(contextUri, startIndex, ct);
     public Task PlayOrderedAsync(string contextUri, IReadOnlyList<PlaybackContextTrack> tracks, int startIndex = 0, CancellationToken ct = default) => Cur.PlayOrderedAsync(contextUri, tracks, startIndex, ct);
     public Task PlayTrackAsync(string trackUri, CancellationToken ct = default) => Cur.PlayTrackAsync(trackUri, ct);
+    public Task PlayTrackAsync(Track track, CancellationToken ct = default) => Cur.PlayTrackAsync(track, ct);
     public Task PauseAsync(CancellationToken ct = default) => Cur.PauseAsync(ct);
     public Task ResumeAsync(CancellationToken ct = default) => Cur.ResumeAsync(ct);
     public Task NextAsync(CancellationToken ct = default) => Cur.NextAsync(ct);
@@ -91,6 +92,7 @@ public sealed class SwitchablePlayer : IPlaybackPlayer
     public Task MoveQueueAsync(string entryId, int toIndex, CancellationToken ct = default) => Cur.MoveQueueAsync(entryId, toIndex, ct);
     public Task RemoveFromQueueAsync(string entryId, CancellationToken ct = default) => Cur.RemoveFromQueueAsync(entryId, ct);
     public Task EnqueueAsync(string trackUri, CancellationToken ct = default) => Cur.EnqueueAsync(trackUri, ct);
+    public Task EnqueueAsync(Track track, CancellationToken ct = default) => Cur.EnqueueAsync(track, ct);
     public Task PlayNextAsync(IReadOnlyList<PlaybackContextTrack> tracks, CancellationToken ct = default) => Cur.PlayNextAsync(tracks, ct);
 }
 

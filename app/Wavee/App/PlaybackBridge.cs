@@ -2,6 +2,7 @@ using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
 using Wavee.Backend;
+using Wavee.Backend.Audio;
 using Wavee.Core;
 
 namespace Wavee;
@@ -79,9 +80,14 @@ public sealed class PlaybackBridge
     public Signal<bool> PreferVideo { get; } = new(false);
 
     /// <summary>Monotonic "open the device picker" request. The critical "playback unsupported" toast's <em>Choose device</em>
-    /// action bumps it; the player-bar / now-playing <c>DevicesButton</c> watch it and open their flyout. Signals-first so the
-    /// toast (a plain static service) can drive the picker without a direct component reference.</summary>
+    /// action bumps it; the player-bar / now-playing <c>DevicesButton</c> watch it and open their flyout.</summary>
     public Signal<int> DevicePickerRequest { get; } = new(0);
+
+    /// <summary>Monotonic "open playback runtime setup" request — banner/toast CTAs bump it; ProfileMenu Settings watches it.</summary>
+    public Signal<int> OpenPlaybackRuntimeSetup { get; } = new(0);
+
+    /// <summary>Local PlayPlay runtime provisioning status (banner + setup modal).</summary>
+    public Signal<PlaybackRuntimeStatus> RuntimeStatus { get; } = new(PlaybackRuntimeStatus.NotApplicable);
 
     // ── intents (UI → Core) ─────────────────────────────────────────────────────────────────────────────────────────
     public IPlaybackPlayer Player => _player;
@@ -155,6 +161,14 @@ public sealed class PlaybackBridge
     {
         if (_post is not { } post) return;
         post(() => Error.Value = null);
+    }
+
+    /// <summary>Push runtime provisioning status onto the UI thread (no-op before <see cref="Activate"/>).</summary>
+    public void UpdateRuntimeStatus(PlaybackRuntimeStatus status, Action<Action>? postOverride = null)
+    {
+        var post = postOverride ?? _post;
+        if (post is null) { RuntimeStatus.Value = status; return; }
+        post(() => RuntimeStatus.Value = status);
     }
 
     /// <summary>Attach the persistent store so the bridge can reflect async per-track enrichment (music video). Wired by

@@ -11,7 +11,7 @@ namespace Wavee.Tests.Audio;
 public class AudioKeyResolverTests
 {
     static AudioKeyResolver Make(FakeApKeySource ap, FakeDeriver? der, FakeLicense? lic, Func<RuntimeAsset?> runtime, AudioRuntimeStatusService status)
-        => new(ap, der, runtime, lic, status, A.Ctx);
+        => new(ap, () => der, runtime, lic, status, A.Ctx);
 
     [Fact]
     public async Task ApSuccess_ReturnsApKey_WithoutPlayPlay()
@@ -41,6 +41,20 @@ public class AudioKeyResolverTests
         Assert.Equal(A.Key16(7), key.ToArray());
         Assert.Equal(1, lic.Calls);
         Assert.Equal(1, der.Calls);
+    }
+
+    [Fact]
+    public async Task PlayPlayFallback_PassesAuxiliaryField_ToDeriver()
+    {
+        var ap = new FakeApKeySource { Throw = new IOException("ap refused") };
+        var aux = new byte[] { 0x52, 0xe5, 0xc8, 0x2e };
+        var lic = new FakeLicense { Obf = new byte[16], Aux = aux };
+        var der = new FakeDeriver { Key = A.Key16(7) };
+        var r = Make(ap, der, lic, A.Asset, new AudioRuntimeStatusService());
+
+        await r.GetKeyAsync(A.File20(), A.Gid16());
+
+        Assert.Equal(aux, der.LastAux);
     }
 
     [Fact]
@@ -100,10 +114,31 @@ public class AudioKeyResolverTests
         await Assert.ThrowsAsync<AudioPlaybackException>(() => r.GetKeyAsync(A.File20(), A.Gid16()));
         Assert.Equal(1, lic.Calls);
 
-        // Second immediate attempt: the per-file latch is engaged → PlayPlay is skipped, AP-only → ApPermanent.
+        // Second immediate attempt: the per-file latch is engaged → PlayPlay is skipped and the LAST real reason surfaces
+        // (License403), not a generic code. (AP is also disabled session-wide after its first failure.)
         var ex2 = await Assert.ThrowsAsync<AudioPlaybackException>(() => r.GetKeyAsync(A.File20(), A.Gid16()));
         Assert.Equal(1, lic.Calls);   // NOT consulted again
-        Assert.Equal(AudioKeyFailureReason.ApPermanent, ex2.Reason);
+        Assert.Equal(AudioKeyFailureReason.License403, ex2.Reason);
+    }
+
+    [Fact]
+    public async Task ApDisabledForSession_AfterFirstFailure_SkipsApOnLaterTracks()
+    {
+        var ap = new FakeApKeySource { Throw = new IOException("audio key error (code 1)") };
+        var lic = new FakeLicense { Obf = new byte[16] };
+        var der = new FakeDeriver { Key = A.Key16(7) };
+        var r = Make(ap, der, lic, A.Asset, new AudioRuntimeStatusService());
+
+        // Track 1: AP is tried once (fails) → PlayPlay.
+        var k1 = await r.GetKeyAsync(A.Bytes(1, 20), A.Bytes(1, 16));
+        Assert.Equal(A.Key16(7), k1.ToArray());
+        Assert.Equal(1, ap.Calls);
+
+        // Track 2 (different file): AP is latched off for the session → NOT re-probed; straight to PlayPlay.
+        var k2 = await r.GetKeyAsync(A.Bytes(2, 20), A.Bytes(2, 16));
+        Assert.Equal(A.Key16(7), k2.ToArray());
+        Assert.Equal(1, ap.Calls);    // AP not consulted again this session
+        Assert.Equal(2, der.Calls);   // PlayPlay derived for both tracks
     }
 
     [Fact]

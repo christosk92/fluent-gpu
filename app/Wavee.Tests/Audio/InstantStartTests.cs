@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using Wavee.Backend;
 using Wavee.Backend.Audio;
@@ -49,6 +50,57 @@ public class InstantStartTests
         Assert.False(host.LoadFastStartCalled);
         Assert.Equal(AudioKeyFailureReason.RotationDrift, err?.Reason);
         Assert.Equal(AudioKeyFailureReason.RotationDrift.ToUserMessage(), err?.UserMessage);
+        controller.Dispose();
+    }
+
+    [Fact]
+    public async Task BodyFailureAfterHeadStart_StopsHost_SurfacesError_AndLogsContext()
+    {
+        var host = new RecordingAudioHost();
+        var proj = new NowPlayingProjection("dev");
+        var bodyTcs = new TaskCompletionSource<AudioStreamHandle>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var start = new AudioFastStart("spotify:track:x", "fid", AudioFormat.OggVorbis320, 1000, 0f, new byte[10]);
+        var fast = new FakeFastResolver(new FastStartPlan(start, bodyTcs.Task));
+        var logs = new List<string>();
+        var controller = new PlaybackController(host, new StubTrackResolver(), proj, EmptyContextResolver.Instance, "dev", log: logs.Add, fast: fast);
+        PlaybackErrorInfo? err = null;
+        var errorSignaled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        controller.OnPlaybackError = e => { err = e; errorSignaled.TrySetResult(); };
+
+        await controller.PlayTrackAsync("spotify:track:x");
+        bodyTcs.SetException(new AudioPlaybackException(AudioKeyFailureReason.Network, "cdn down"));
+
+        await host.StopSignaled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await errorSignaled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(host.StopCalled);
+        Assert.Equal(AudioKeyFailureReason.Network, err?.Reason);
+        Assert.Contains(logs, l => l.Contains("fast-start body failed for active track=spotify:track:x", StringComparison.Ordinal));
+        Assert.Contains(logs, l => l.Contains("stopping audio host to unblock head stream", StringComparison.Ordinal));
+        controller.Dispose();
+    }
+
+    [Fact]
+    public async Task BodyAlreadyReady_IsSuppliedAfterShortHeadGrace()
+    {
+        var host = new RecordingAudioHost();
+        var proj = new NowPlayingProjection("dev");
+        var start = new AudioFastStart("spotify:track:x", "fid", AudioFormat.OggVorbis320, 1000, 0f, new byte[10]);
+        var body = Task.FromResult(new AudioStreamHandle("spotify:track:x", "fid", "https://cdn", new byte[16],
+            AudioFormat.OggVorbis320, 1000, 0f, new[] { "https://cdn" }, 10));
+        var fast = new FakeFastResolver(new FastStartPlan(start, body));
+        var logs = new List<string>();
+        var controller = new PlaybackController(host, new StubTrackResolver(), proj, EmptyContextResolver.Instance, "dev", log: logs.Add, fast: fast);
+
+        await controller.PlayTrackAsync("spotify:track:x");
+
+        Assert.True(host.LoadFastStartCalled);
+        Assert.True(host.PlayCalled);
+        Assert.False(host.SupplyBodyCalled);
+        Assert.Contains(logs, l => l.Contains("deferring supply", StringComparison.Ordinal));
+
+        await host.SupplyBodySignaled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(host.SupplyBodyCalled);
         controller.Dispose();
     }
 }

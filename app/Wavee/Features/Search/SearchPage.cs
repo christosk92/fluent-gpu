@@ -123,33 +123,34 @@ sealed class SearchPage : Component
     {
         void Play(string uri) => _ = svc.Player.PlayAsync(uri, 0);
         void PlayTrack(string uri) => _ = svc.Player.PlayTrackAsync(uri);
+        void PlayKnownTrack(Track track) => _ = svc.Player.PlayTrackAsync(track);
 
-        if (chip == 4) return TopHitList(r, h => h.Kind == SearchHitKind.Audiobook, "No audiobook results", go, Play, PlayTrack);
-        if (chip == 5) return TopHitList(r, h => h.Kind is SearchHitKind.Podcast or SearchHitKind.Episode, "No podcast results", go, Play, PlayTrack);
+        if (chip == 4) return TopHitList(r, h => h.Kind == SearchHitKind.Audiobook, "No audiobook results", go, Play, PlayTrack, PlayKnownTrack);
+        if (chip == 5) return TopHitList(r, h => h.Kind is SearchHitKind.Podcast or SearchHitKind.Episode, "No podcast results", go, Play, PlayTrack, PlayKnownTrack);
 
         if (chip != 0 && r.Tracks.Count + r.Artists.Count + r.Albums.Count + r.Playlists.Count == 0)
             return Centered(Icons.Search, Loc.Get(Strings.Search.NoResults), Strings.Search.NoResultsSub(q));
 
         return chip switch
         {
-            1 => SongsList(r.Tracks, PlayTrack, go, int.MaxValue),
+            1 => SongsList(r.Tracks, PlayKnownTrack, go, int.MaxValue),
             2 => FlatList(r.Albums.Select(a => ResultRow(a.Cover, a.Id.GetHashCode(), a.Name, a.Artists.Count > 0 ? a.Artists[0].Name : "", Loc.Get(Strings.Search.TypeAlbum), false, () => go("album:" + a.Uri, a.Name)))),
             3 => FlatList(r.Playlists.Select(p => ResultRow(p.Cover, p.Id.GetHashCode(), p.Name, p.OwnerName, Loc.Get(Strings.Search.TypePlaylist), false, () => go("pl:" + p.Uri, p.Name)))),
             6 => FlatList(r.Artists.Select(a => ResultRow(a.Image, a.Id.GetHashCode(), a.Name, Loc.Get(Strings.Search.TypeArtist), Loc.Get(Strings.Search.TypeArtist), true, () => go("artist:" + a.Uri, a.Name)))),
-            _ => AllView(r, go, Play, PlayTrack),
+            _ => AllView(r, go, Play, PlayTrack, PlayKnownTrack),
         };
     }
 
-    Element AllView(SearchResults r, Action<string, string?> go, Action<string> play, Action<string> playTrack)
-        => Ctx.Provide(SearchAllList.Props, new SearchAllList.Model(r, go, playTrack, play),
+    Element AllView(SearchResults r, Action<string, string?> go, Action<string> play, Action<string> playTrack, Action<Track> playKnownTrack)
+        => Ctx.Provide(SearchAllList.Props, new SearchAllList.Model(r, go, playTrack, play, playKnownTrack),
             Embed.Comp(() => new SearchAllList()));
 
     Element TopHitList(SearchResults r, Func<SearchTopHit, bool> include, string emptyTitle,
-                       Action<string, string?> go, Action<string> play, Action<string> playTrack)
-        => Ctx.Provide(SearchAllList.Props, new SearchAllList.Model(r, go, playTrack, play, include, emptyTitle),
+                       Action<string, string?> go, Action<string> play, Action<string> playTrack, Action<Track> playKnownTrack)
+        => Ctx.Provide(SearchAllList.Props, new SearchAllList.Model(r, go, playTrack, play, playKnownTrack, include, emptyTitle),
             Embed.Comp(() => new SearchAllList()));
 
-    static Element SongsList(IReadOnlyList<Track> tracks, Action<string> playTrack, Action<string, string?> go, int max)
+    static Element SongsList(IReadOnlyList<Track> tracks, Action<Track> playTrack, Action<string, string?> go, int max)
         => Ctx.Provide(SearchSongs.Props, new SearchSongs.Model(tracks, playTrack, go, max),
             Embed.Comp(() => new SearchSongs()) with { SkeletonProxy = () => SearchSongs.SkeletonShape(tracks, max) });
 
@@ -263,7 +264,7 @@ sealed class SearchPage : Component
     };
 
     // ── songs (the All-view right column) — the SAME shared track cell as the detail/library lists, capped to 4 rows. ──
-    static Element SongsSection(IReadOnlyList<Track> tracks, Action<string> playTrack, Action<string, string?> go) => new BoxEl
+    static Element SongsSection(IReadOnlyList<Track> tracks, Action<Track> playTrack, Action<string, string?> go) => new BoxEl
     {
         Direction = 1, Gap = WaveeSpace.S,
         Children = [WaveeType.RailHeader(Loc.Get(Strings.Search.Songs)), SongsList(tracks, playTrack, go, 4)],
@@ -295,7 +296,7 @@ sealed class SearchPage : Component
 // single-click-to-play, since search lists are short. Columns: [#↔play, ♥, art, title+artist, duration].
 sealed class SearchSongs : Component
 {
-    internal sealed record Model(IReadOnlyList<Track> Tracks, Action<string> PlayTrack, Action<string, string?> Go, int Max);
+    internal sealed record Model(IReadOnlyList<Track> Tracks, Action<Track> PlayTrack, Action<string, string?> Go, int Max);
     internal static readonly Context<Model?> Props = new(null);
 
     static readonly ColumnSet Cols = new(Album: false, By: false, Date: false, Video: false, Plays: false, Heart: true, Thumb: true);
@@ -323,7 +324,7 @@ sealed class SearchSongs : Component
             {
                 if ((uint)i >= (uint)n) return;
                 var t = tracks[i];
-                TrackRow.Invoke(bridge, t, () => model.PlayTrack(t.Uri));
+                TrackRow.Invoke(bridge, t, () => model.PlayTrack(t));
             },
             itemText: i => (uint)i < (uint)n ? tracks[i].Title : "",
             grow: 0f);
@@ -356,7 +357,7 @@ sealed class SearchSongs : Component
                 MinWidth = 0f,
             };
             return TrackRow.Grid(t, i, st, Cols, Columns, RowContentH, title, showTrackArtist: true, _model.Go,
-                onPlay: () => TrackRow.Invoke(_bridge, t, () => _model.PlayTrack(t.Uri)),
+                onPlay: () => TrackRow.Invoke(_bridge, t, () => _model.PlayTrack(t)),
                 onLike: t.Uri.Length > 0 ? () => _lib?.ToggleSaved(t.Uri) : null);
         }
     }
@@ -385,6 +386,7 @@ sealed class SearchAllList : Component
         Action<string, string?> Go,
         Action<string> PlayTrack,
         Action<string> PlayContext,
+        Action<Track> PlayKnownTrack,
         Func<SearchTopHit, bool>? Filter = null,
         string? EmptyTitle = null);
     internal static readonly Context<Model?> Props = new(null);
@@ -491,7 +493,7 @@ sealed class SearchAllList : Component
 
     static Element TrackRowFb(Track t, LibraryBridge? lib, Model model) => MediaCard.Row(
         t.Image, t.Title, (t.HasVideo ? "Music video" : "Song") + " • " + Names(t.Artists), t.Uri, false,
-        () => model.PlayTrack(t.Uri), () => model.PlayTrack(t.Uri), typeChip: "Song",
+        () => model.PlayKnownTrack(t), () => model.PlayKnownTrack(t), typeChip: "Song",
         trailing: SaveButton(t.Uri.Length > 0 && (lib?.IsSaved(t.Uri) ?? false), () => { if (t.Uri.Length > 0) lib?.ToggleSaved(t.Uri); }));
 
     static Element ArtistRow(Artist a, LibraryBridge? lib, Model model, bool large) => MediaCard.Row(

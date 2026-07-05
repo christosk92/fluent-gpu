@@ -406,7 +406,21 @@ sealed class WaveeShell : Component
             Padding = new Edges4(0f, 0f, 0f, WaveeSize.PlayerBarH + 12f),
             Children = [ new BoxEl { MaxWidth = 560f, Children = [ Embed.Comp(() => new ToastHost()) ] } ],
         };
-        var shellWithNowPlaying = Ui.ZStack(tinted, nowPlayingLayer, toastLayer) with { Grow = 1f };
+        // The local-playback setup banner FLOATS over the content (top-centre, just below the toolbar) instead of
+        // inserting into the chrome column — a persistent offer must never reflow the page. Same pass-through positioner
+        // pattern as the toast layer; the wrapper adds the overlay elevation the InfoBar itself doesn't carry. Sits
+        // BELOW the toast layer so transient toasts stack above it.
+        var runtimeBannerLayer = new BoxEl
+        {
+            Grow = 1f, HitTestPassThrough = true,
+            Direction = 1, Justify = FlexJustify.Start, AlignItems = FlexAlign.Center,
+            Padding = new Edges4(0f, 48f + 48f + 8f, 0f, 0f),   // clear the TitleBar (48) + ShellToolbar (48) rows
+            Children =
+            [
+                new BoxEl { MaxWidth = 560f, Children = [ Embed.Comp(() => new PlaybackRuntimeChrome(_settings)) ] },
+            ],
+        };
+        var shellWithNowPlaying = Ui.ZStack(tinted, nowPlayingLayer, runtimeBannerLayer, toastLayer) with { Grow = 1f };
 
         return Ctx.Provide(ShellUi.Slot, _shellUi,
                Ctx.Provide(ShellTint.Slot, _shellTint,

@@ -115,7 +115,13 @@ sealed class PlayerBar : ReactiveComponent
             var prev = layout.Peek();
             if (next.Equals(prev)) return;
             if (DiagEnabled)
-                Console.Error.WriteLine($"[WAVEE_PLAYERBAR_DIAG] layout-band {prev.Band}->{next.Band} viewportW={viewport.Peek().Width:0.0}");
+                WaveeLog.Instance.Event(WaveeLogLevel.Debug, "ui", "playerbar.layout_band", "Player bar layout band changed",
+                    fields:
+                    [
+                        WaveeLogField.Of("from", prev.Band),
+                        WaveeLogField.Of("to", next.Band),
+                        WaveeLogField.Of("viewportW", viewport.Peek().Width),
+                    ]);
             layout.Value = next;
         });
 
@@ -171,7 +177,12 @@ sealed class PlayerBarContent : Component
         var titleHover = UseSignal(false);           // hover the now-playing text → BOTH lines scroll together (synced); idle = static + edge fade
         var L = _layout.Value;                       // coarse breakpoint signal; does NOT change for every resize pixel
         if (DiagEnabled)
-            Console.Error.WriteLine($"[WAVEE_PLAYERBAR_DIAG] render #{++s_renderCount} band={L.Band}");
+            WaveeLog.Instance.Event(WaveeLogLevel.Debug, "ui", "playerbar.render", "Player bar rendered",
+                fields:
+                [
+                    WaveeLogField.Of("render", ++s_renderCount),
+                    WaveeLogField.Of("band", L.Band),
+                ]);
 
         if (b is null)
             return new BoxEl { Height = WaveeSize.PlayerBarH, Fill = WaveeColors.PlayerBar };
@@ -490,12 +501,14 @@ sealed class PlayerBarContent : Component
                        : track is null ? PlayerState.NoTrack
                        : loading ? PlayerState.Loading
                        : PlayerState.Active;
+        // A placeholder track seeds Title=Uri before metadata resolves; never surface the raw URI to the user.
+        string title = track is { } t && !string.IsNullOrEmpty(t.Title) && t.Title != t.Uri ? t.Title : "";
         return st switch
         {
             PlayerState.NoTrack => (Loc.Get(Strings.Player.NothingPlaying), Tok.TextSecondary),
-            PlayerState.Loading => (track?.Title ?? Loc.Get(Strings.Player.Loading), Tok.TextPrimary),
+            PlayerState.Loading => (title.Length > 0 ? title : Loc.Get(Strings.Player.Loading), Tok.TextPrimary),
             PlayerState.Error   => (err ?? Loc.Get(Strings.Player.CannotPlay), Critical),
-            _                   => (track?.Title ?? "", Tok.TextPrimary),
+            _                   => (title, Tok.TextPrimary),
         };
     }
 
@@ -742,6 +755,14 @@ sealed class PlayerBarContent : Component
     }
 }
 
+/// <summary>Cross-surface player-bar preference epoch: the Settings page bumps it after writing
+/// <see cref="WaveeSettings.PlayerBarShowRemaining"/> so a mounted <see cref="TimeText"/> re-seeds without a remount.</summary>
+static class PlayerBarPrefs
+{
+    public static readonly Signal<int> Epoch = new(0);
+    public static void Bump() => Epoch.Value = Epoch.Peek() + 1;
+}
+
 /// <summary>A single time label (elapsed, or "-remaining"). Its OWN component so it re-renders at ~1 Hz on the position
 /// tick WITHOUT re-rendering the whole bar (the seek bar beside it is compositor-only).</summary>
 sealed class TimeText : Component
@@ -753,6 +774,9 @@ sealed class TimeText : Component
     {
         var svc = UseContext(Services.Slot);
         var (showRemaining, setShowRemaining) = UseState(svc?.Settings.Get(WaveeSettings.PlayerBarShowRemaining) ?? true);
+        // The Settings page bumps the prefs epoch after writing the setting → re-seed the mounted label live.
+        int prefsEpoch = PlayerBarPrefs.Epoch.Value;
+        UseEffect(() => setShowRemaining(svc?.Settings.Get(WaveeSettings.PlayerBarShowRemaining) ?? true), prefsEpoch);
         long pos = _b.PositionMs.Value;          // subscribe → 1 Hz tick
         long dur = _b.DurationMs.Value;
         bool rightDuration = _remaining;
@@ -970,7 +994,7 @@ sealed class QueueButton : Component
                     if (entry.Bucket == QueueBucket.NowPlaying)
                         items.Add(MenuFlyoutItem.Toggle(label, true, () => { }, Icons.Queue, enabled: false));
                     else
-                        items.Add(new MenuFlyoutItem(label, null, true, () => { _ = _b.Player.PlayTrackAsync(entry.Track.Uri); }));
+                        items.Add(new MenuFlyoutItem(label, null, true, () => { _ = _b.Player.PlayTrackAsync(entry.Track); }));
                 }
             }
             handle.Value = svc.Open(

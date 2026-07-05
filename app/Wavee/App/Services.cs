@@ -52,6 +52,8 @@ public sealed class Services
     /// Set via <see cref="AttachLive"/> BEFORE <see cref="GoLive"/> so a logout in the go-live window still tears down the
     /// live transport + dealer cleanly (not a no-op).</summary>
     public Wavee.SpotifyLive.LiveSessionHost? LiveHost { get; private set; }
+    /// <summary>PlayPlay runtime provisioner (live session only) — drives the setup modal and banner.</summary>
+    public Wavee.SpotifyLive.Audio.PlayPlayRuntimeProvisioner? PlayPlayProvisioner { get; internal set; }
     /// <summary>The persisted-credential store backing the live session — cleared on logout so the next launch can't
     /// silently re-login.</summary>
     public Wavee.Backend.Persistence.ICredentialStore? CredStore { get; private set; }
@@ -265,6 +267,7 @@ public sealed class Services
         RealSync = null;
         LiveHost = null;
         CredStore = null;
+        PlayPlayProvisioner = null;
         Log.Info("app", "session torn down → offline (playback remote-only stub + empty device roster restored)");
     }
 

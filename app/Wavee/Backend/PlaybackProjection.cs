@@ -94,9 +94,11 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     long _lastLocalCmdWall = long.MinValue;
     int _inFlightSeq;
 
-    public NowPlayingProjection(string ourDeviceId, Func<long>? clock = null, Func<long>? serverNowUnixMs = null)
+    public NowPlayingProjection(string ourDeviceId, Func<long>? clock = null, Func<long>? serverNowUnixMs = null,
+        double initialVolume01 = 0.7)
     {
         _ourDeviceId = ourDeviceId;
+        _volume = Math.Clamp(initialVolume01, 0, 1);   // the announce + local host reconcile follow this (remember-volume seed)
         _now = clock ?? (() => Environment.TickCount64);
         // Estimated server-clock "now" in Unix ms, used only to age remote snapshots at fold. Default returns 0 (the
         // "unsynced" sentinel) so the offset-dependent network term stays off until a server clock is wired in.
@@ -246,7 +248,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
                 // Keep the cluster's title (+ duration/position state); fill artist + album + art from the resolved track.
                 _track = cur with
                 {
-                    Title = string.IsNullOrEmpty(cur.Title) ? e.Title : cur.Title,
+                    Title = TitleMissing(cur.Title, cur.Uri) ? e.Title : cur.Title,
                     Artists = e.Artists.Count > 0 ? e.Artists : cur.Artists,
                     Album = e.Album,
                     Image = ImageSource.ChooseBetter(e.Image, cur.Image),
@@ -286,6 +288,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         }
         FireChanges();
         RestartTicker();
+        MaybeEnrichCurrent();
     }
 
     public void OnHostSignal(in AudioHostSignal s)
@@ -340,7 +343,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         bool incomingHasArtist = incoming.Artists.Count > 0 && !string.IsNullOrEmpty(incoming.Artists[0].Name);
         return incoming with
         {
-            Title = string.IsNullOrEmpty(incoming.Title) ? current.Title : incoming.Title,
+            Title = TitleMissing(incoming.Title, incoming.Uri) ? current.Title : incoming.Title,
             Artists = incomingHasArtist ? incoming.Artists : current.Artists,
             Album = MergeAlbumRef(current.Album, incoming.Album),
             DurationMs = incoming.DurationMs > 0 ? incoming.DurationMs : current.DurationMs,
@@ -348,6 +351,10 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
             Isrc = incoming.Isrc ?? current.Isrc,   // a thin cluster heartbeat must not blank the resolved ISRC
         };
     }
+
+    // A title is "missing" if it's blank OR is just the track URI echoed back — the synthetic/context placeholders
+    // seed Title=Uri before real metadata resolves, and that placeholder must never win over a resolved name.
+    static bool TitleMissing(string? title, string uri) => string.IsNullOrEmpty(title) || title == uri;
 
     static AlbumRef MergeAlbumRef(AlbumRef current, AlbumRef incoming) => new(
         string.IsNullOrEmpty(incoming.Id) ? current.Id : incoming.Id,

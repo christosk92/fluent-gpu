@@ -22,7 +22,7 @@ public sealed class LiveConnect : IDisposable
     public NowPlayingProjection Projection { get; }
     public LiveConnectDevices Devices { get; }
     public PlaybackController Controller { get; }
-
+    public AudioPlaybackStack? Audio => _audio;
     readonly ConnectService _connect;
     readonly DeviceStatePublisher _publisher;
     readonly ClusterIngest _ingest;
@@ -34,7 +34,7 @@ public sealed class LiveConnect : IDisposable
 
     public LiveConnect(ITransport transport, string deviceId, ApConnection? apChannel,
         IContextResolver? contexts = null, Action<string>? log = null,
-        AudioPlaybackStack? audio = null)
+        AudioPlaybackStack? audio = null, double initialVolume01 = 0.7)
     {
         _apChannel = apChannel;
         _audio = audio;
@@ -42,7 +42,7 @@ public sealed class LiveConnect : IDisposable
         // Server-clock estimator: probes GET /melody/v1/time over the authenticated spclient pipeline; its corrected
         // "server now" feeds the projection's remote-position aging (the offset-dependent transit term).
         _clock = new SpotifyServerClock(ct => FetchServerTimeMs(transport, ct), log);
-        Projection = new NowPlayingProjection(deviceId, serverNowUnixMs: _clock.ServerNowUnixMs);
+        Projection = new NowPlayingProjection(deviceId, serverNowUnixMs: _clock.ServerNowUnixMs, initialVolume01: initialVolume01);
         Devices = new LiveConnectDevices();
         _ingest = new ClusterIngest(transport, Projection, Devices, deviceId, log, _clock.ObservePassive);
 

@@ -24,6 +24,7 @@ static class ShellNav
             "podcasts" => (Loc.Get(Strings.Nav.Podcasts), Mdl.RadioTower),
             "local"    => (Loc.Get(Strings.Nav.LocalFiles), Icons.Folder),
             "history"  => (Loc.Get(Strings.Nav.History.Title), Icons.Clock),
+            "settings" => ("Settings", Icons.Settings),
             _          => (Loc.Get(Strings.Nav.YourLibrary), Icons.MusicNote),
         };
     }

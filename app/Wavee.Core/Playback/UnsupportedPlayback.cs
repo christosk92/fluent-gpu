@@ -51,8 +51,10 @@ public sealed class UnsupportedPlaybackPlayer : IPlaybackPlayer, IPlaybackState
     public Task PlayAsync(string contextUri, int startIndex = 0, CancellationToken ct = default) => Reject();
     public Task PlayOrderedAsync(string contextUri, IReadOnlyList<PlaybackContextTrack> tracks, int startIndex = 0, CancellationToken ct = default) => Reject();
     public Task PlayTrackAsync(string trackUri, CancellationToken ct = default) => Reject();
+    public Task PlayTrackAsync(Track track, CancellationToken ct = default) => Reject();
     public Task ResumeAsync(CancellationToken ct = default) => Reject();
     public Task EnqueueAsync(string trackUri, CancellationToken ct = default) => Reject();
+    public Task EnqueueAsync(Track track, CancellationToken ct = default) => Reject();
     public Task PlayNextAsync(IReadOnlyList<PlaybackContextTrack> tracks, CancellationToken ct = default) => Reject();
 
     public Task PauseAsync(CancellationToken ct = default) => Done;

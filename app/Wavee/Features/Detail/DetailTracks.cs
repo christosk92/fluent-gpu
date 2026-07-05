@@ -1058,7 +1058,7 @@ sealed class SelectionBar : Component
                 new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Children = thumbs.ToArray() },
                 new TextEl(Strings.Detail.SelectedCount(count)) { Size = 13f, Weight = 600, Color = Tok.TextPrimary },
                 Divider(),
-                ActionBtn(Icons.Play, Loc.Get(Strings.Detail.Play), () => { var s = Sel(); if (svc is not null && s.Count > 0) { _ = svc.Player.PlayTrackAsync(s[0].Uri); for (int i = 1; i < s.Count; i++) _ = svc.Player.EnqueueAsync(s[i].Uri); _sel.DeselectAll(); } }),
+                ActionBtn(Icons.Play, Loc.Get(Strings.Detail.Play), () => { var s = Sel(); if (svc is not null && s.Count > 0) { _ = svc.Player.PlayTrackAsync(s[0]); for (int i = 1; i < s.Count; i++) _ = svc.Player.EnqueueAsync(s[i]); _sel.DeselectAll(); } }),
                 ActionBtn(Icons.Next, Loc.Get(Strings.Detail.PlayNext), () =>
                 {
                     var s = Sel();

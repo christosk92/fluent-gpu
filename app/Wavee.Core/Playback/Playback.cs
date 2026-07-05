@@ -12,6 +12,7 @@ public interface IPlaybackPlayer
     Task PlayAsync(string contextUri, int startIndex = 0, CancellationToken ct = default);
     Task PlayOrderedAsync(string contextUri, IReadOnlyList<PlaybackContextTrack> tracks, int startIndex = 0, CancellationToken ct = default);
     Task PlayTrackAsync(string trackUri, CancellationToken ct = default);
+    Task PlayTrackAsync(Track track, CancellationToken ct = default);
     Task PauseAsync(CancellationToken ct = default);
     Task ResumeAsync(CancellationToken ct = default);
     Task NextAsync(CancellationToken ct = default);
@@ -24,6 +25,8 @@ public interface IPlaybackPlayer
     Task RemoveFromQueueAsync(string entryId, CancellationToken ct = default);
     /// <summary>Append a track to the user-queue (the "Add to queue" affordance).</summary>
     Task EnqueueAsync(string trackUri, CancellationToken ct = default);
+    /// <summary>Append a known track to the user-queue without discarding already-rendered metadata.</summary>
+    Task EnqueueAsync(Track track, CancellationToken ct = default);
     /// <summary>Insert tracks at the FRONT of the user-queue ("play next" — before already-queued items).</summary>
     Task PlayNextAsync(IReadOnlyList<PlaybackContextTrack> tracks, CancellationToken ct = default);
     IPlaybackState State { get; }

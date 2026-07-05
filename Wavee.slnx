@@ -10,6 +10,6 @@
   <Folder Name="/app/">
     <Project Path="app/Wavee/Wavee.csproj" />
     <Project Path="app/Wavee.Core/Wavee.Core.csproj" />
-    <Project Path="app/Wavee.AudioHost/Wavee.AudioHost.csproj" />
+    <Project Path="app/Wavee.Tests/Wavee.Tests.csproj" />
   </Folder>
 </Solution>

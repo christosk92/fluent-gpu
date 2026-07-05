@@ -30,6 +30,7 @@ sealed class ProfileMenu : Component
         var services = UseContext(Services.Slot);
         var overlay = UseContext(Overlay.Service);
         var requestTheme = UseContext(ThemeControl.Request);
+        var go = UseContext(HistoryStore.NavCtx);
         var anchor = UseRef<NodeHandle>(default);
         var handle = UseRef<OverlayHandle?>(null);
 
@@ -70,7 +71,7 @@ sealed class ProfileMenu : Component
                 () => anchor.Value,
                 () => MenuContent(name, premium, avatar, email,
                     onAccount: () => { Close(); LoginView.OpenUrl("https://www.spotify.com/account"); },
-                    onSettings: () => Close(),
+                    onSettings: () => { Close(); go("settings", null); },
                     onPalette: SetPalette,
                     onLogout: () => { Close(); ConfirmLogout(); }),
                 FlyoutPlacement.BottomEdgeAlignedRight,

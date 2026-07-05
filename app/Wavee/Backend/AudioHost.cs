@@ -8,16 +8,21 @@ namespace Wavee.Backend;
 // ── The AUDIO-HOST seam (the deferral boundary) ──────────────────────────────────────────────────────────────────────
 // Everything UP TO this seam is in scope: Connect control plane, state projection, track resolution, audio-key fetch,
 // storage-resolve. The seam receives a fully-resolved AudioStreamHandle (CDN + key + format) and reports a coalesced
-// position clock + Ended. DEFERRED behind it (a separate design): AES-128-CTR decrypt → PCM, Ogg/Vorbis decode, mixer/DSP,
-// WASAPI output, and the PlayPlay/x86_64 native key-derivation fallback. The default impl in this scope is SilentAudioHost.
+// position clock + Ended. Implementations handle AES/native CDN decrypt, PCM decode, mixer/DSP, WASAPI output, and
+// optional PlayPlay key derivation. The default impl in this scope is SilentAudioHost.
 
 public enum AudioFormat { OggVorbis96, OggVorbis160, OggVorbis320, Flac, Flac24 }
+
+/// <summary>The user-facing streaming-quality preference (persisted as <c>playback.quality</c>) — the Spotify tier
+/// ladder. The resolver aims at the chosen rung and falls back to the nearest available file (lower first), never to
+/// silence. <see cref="Lossless"/> is reserved: the picker shows it disabled ("Coming soon") and nothing selects it yet.</summary>
+public enum AudioQualityPreference { Normal96 = 0, High160 = 1, VeryHigh320 = 2, Lossless = 3 }
 
 /// <summary>Pure POD crossing the seam. An EMPTY <see cref="Key"/> means the host must derive it (PlayPlay path).</summary>
 public readonly record struct AudioStreamHandle(
     string TrackUri, string FileIdHex, string CdnUrl,
     ReadOnlyMemory<byte> Key, AudioFormat Format, long DurationMs, float NormalizationGainDb,
-    string[]? CdnUrls = null, int HeadBoundary = 0);
+    string[]? CdnUrls = null, int HeadBoundary = 0, ReadOnlyMemory<byte> NativeCdnSeed = default);
 
 /// <summary>Instant-start payload: clear head bytes cross the seam before the key exists.</summary>
 public readonly record struct AudioFastStart(
@@ -34,6 +39,11 @@ public readonly record struct FastStartPlan(AudioFastStart Start, System.Threadi
 public interface IFastTrackResolver
 {
     System.Threading.Tasks.Task<FastStartPlan> ResolveFastAsync(Track track, CancellationToken ct = default);
+}
+
+public interface IFastTrackWarmer
+{
+    void Warm(Track track, string reason = "");
 }
 
 public enum AudioHostSignalKind { PositionTick, Ended, Buffering, Prebuffering, Playing, Paused, Error }
@@ -58,6 +68,12 @@ public interface IAudioHost : IAsyncDisposable
     bool IsPlaying { get; }
     bool IsBuffering { get; }
     IObservable<AudioHostSignal> Signals { get; }     // the clock + Ended report
+}
+
+public interface IAudioDspControl
+{
+    void SetEqualizer(bool enabled, ReadOnlySpan<float> gainsDb, float preampDb = 0f);
+    void SetCrossfade(bool enabled, int durationMs);
 }
 
 /// <summary>The default in-scope host: a SILENT renderer that reports synthetic position/Ended with zero decrypt/decode/

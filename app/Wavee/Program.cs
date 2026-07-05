@@ -35,9 +35,20 @@ static class Program
 
         // ── Observability ───────────────────────────────────────────────────────────────────────────────────────────
         string logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Wavee", "logs");
-        WaveeLog.Instance.Configure(crashLogPath: Path.Combine(logDir, "wavee.log"), echo: DebugEcho());
+        string logPath = Path.Combine(logDir, "wavee.log");
+        WaveeLog.Instance.Configure(crashLogPath: logPath, echo: DebugEcho(),
+#if DEBUG
+            minLevel: WaveeLogLevel.Debug, fileMinLevel: WaveeLogLevel.Debug);
+#else
+            minLevel: WaveeLogLevel.Info, fileMinLevel: WaveeLogLevel.Info);
+#endif
         Diag.Sink = WaveeLog.DiagSink;                 // fold engine diagnostics (FG_DIAG) into the app log stream
-        WaveeLog.Instance.Info("app", "Wavee starting");
+        WaveeLog.Instance.Info("app", "startup", "Wavee starting",
+            WaveeLogField.Of("pid", Environment.ProcessId),
+            WaveeLogField.Of("args", args.Length),
+            WaveeLogField.Of("log", logPath),
+            WaveeLogField.Of("framework", System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription),
+            WaveeLogField.Of("os", System.Runtime.InteropServices.RuntimeInformation.OSDescription));
 
         // ── Global crash net (the two process-level handlers; the UI-thread one lives in the engine loop) ─────────────
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
@@ -134,6 +145,29 @@ static class Program
             Environment.Exit(code);
         }
 
+        if (Array.IndexOf(args, "--playplay-runtime-status") >= 0)
+        {
+            int code = Wavee.SpotifyLive.PlayPlayRuntimeProbe.RunStatus(args, Console.Error.WriteLine);
+            Environment.Exit(code);
+        }
+
+        int regIdx = Array.IndexOf(args, "--playplay-runtime-register");
+        if (regIdx >= 0)
+        {
+            string dir = regIdx + 1 < args.Length && !args[regIdx + 1].StartsWith("--") ? args[regIdx + 1] : "";
+            if (dir.Length == 0) { Console.Error.WriteLine("usage: --playplay-runtime-register <dir>"); Environment.Exit(2); }
+            int code = Wavee.SpotifyLive.PlayPlayRuntimeProbe.RunRegister(dir, Console.Error.WriteLine);
+            Environment.Exit(code);
+        }
+
+#if WAVEE_PLAYPLAY_LOCAL
+        if (Array.IndexOf(args, "--playplay-runtime-check") >= 0)
+        {
+            int code = Wavee.SpotifyLive.PlayPlayRuntimeProbe.RunCheck(args, Console.Error.WriteLine);
+            Environment.Exit(code);
+        }
+#endif
+
         // LIVE Connect session bring-up demo: login -> dealer + AP channel -> swap the live playback backend into a REAL
         // Services (svc.GoLive) and log the now-playing the UI bridge sees through the switchable. Usage: --connect-live
         if (Array.IndexOf(args, "--connect-live") >= 0)
@@ -209,7 +243,7 @@ static class Program
     static Action<string>? DebugEcho()
     {
 #if DEBUG
-        return Console.Error.WriteLine;
+        return Console.Out.WriteLine;
 #else
         return null;
 #endif

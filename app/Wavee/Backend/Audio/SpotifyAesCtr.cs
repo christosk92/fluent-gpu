@@ -5,7 +5,7 @@ using System.Security.Cryptography;
 namespace Wavee.Backend.Audio;
 
 /// <summary>AES-128-CTR primitives for Spotify audio. Public IV; keystream = AES-ECB(IV + blockIndex) XOR ciphertext.
-/// Pure, unit-testable — linked into Wavee.AudioHost for decrypt streams.</summary>
+/// Pure, unit-testable, and shared by the in-process decrypt streams.</summary>
 public static class SpotifyAesCtr
 {
     public static ReadOnlySpan<byte> PublicIv =>

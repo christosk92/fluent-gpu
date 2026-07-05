@@ -9,6 +9,9 @@ namespace Wavee.SpotifyLive.Audio;
 /// with a fake, and so the resolver + tests can be source-included without pulling in the protobuf license client.</summary>
 public interface ILicenseClient
 {
+    Task<PlayPlayLicenseResult> FetchLicenseAsync(
+        string fileIdHex, PlayPlayConfig config, CancellationToken ct);
+
     Task<(ReadOnlyMemory<byte> Key, AudioKeyFailureReason Reason)> FetchObfuscatedKeyAsync(
         string fileIdHex, PlayPlayConfig config, CancellationToken ct);
 }

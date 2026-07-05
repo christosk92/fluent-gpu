@@ -10,7 +10,11 @@
          intentional. The portable Backend/ subtree's cross-platform discipline is enforced by TerraFX-freedom (the
          VerticalSlice guard), not by this analyzer — and Wavee.Tests, which builds Backend/ cross-platform, likewise
          suppresses CA1416. The macOS/Linux credential paths (KeyringProtector) stay guarded by OperatingSystem checks. -->
-    <NoWarn>$(NoWarn);CA1416</NoWarn>
+    <NoWarn>$(NoWarn);CA1416;NU1701</NoWarn>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- The app version (Settings → About reads InformationalVersion via assembly metadata). -->
+    <Version>0.1.0</Version>
+    <InformationalVersion>0.1.0-dev</InformationalVersion>
   </PropertyGroup>
 
   <!-- Composition root: the Windows backend (D3D12 / Win32 / DirectWrite / WIC) wired into the
@@ -21,43 +25,22 @@
     <ProjectReference Include="..\..\src\FluentGpu.Windows\FluentGpu.Windows.csproj" />
     <ProjectReference Include="..\..\src\FluentGpu.WindowsApi\FluentGpu.WindowsApi.csproj" />
     <ProjectReference Include="..\Wavee.Core\Wavee.Core.csproj" />
-    <!-- NB: Wavee.AudioHost is NOT a ProjectReference — it is a win-x64 sidecar and must not inherit the app's RID (esp. on
-         a win-arm64 publish) or its restore. It is built in its own isolated MSBuild invocation (BuildAudioHostX64) and
-         copied beside the app (CopyAudioHost*). -->
+    <ProjectReference Include="..\vendor\NVorbis\NVorbis\NVorbis.csproj" />
   </ItemGroup>
 
-  <!-- Copy the x64 audio host (exe + managed dll + deps/runtimeconfig + NVorbis) beside the main exe, so the
-       AudioProcessManager File.Exists guard finds a RUNNABLE child (the apphost alone can't start). On both build (→ OutDir)
-       and publish (→ PublishDir) — the host stays win-x64 regardless of the app's RID. -->
-  <!-- Build the x64 sidecar in an ISOLATED MSBuild invocation: no RuntimeIdentifier/SelfContained/PublishAot flow in from
-       the app (so a win-arm64 publish of the app still yields a win-x64 host), and it restores against its own pinned RID.
-       Runs before the app build so the copy targets find a fresh, runnable host closure. -->
-  <Target Name="BuildAudioHostX64" BeforeTargets="Build">
-    <MSBuild Projects="$(MSBuildProjectDirectory)\..\Wavee.AudioHost\Wavee.AudioHost.csproj"
-             Targets="Restore" Properties="Configuration=$(Configuration);RuntimeIdentifier=win-x64;SelfContained=false;PublishAot=false" />
-    <MSBuild Projects="$(MSBuildProjectDirectory)\..\Wavee.AudioHost\Wavee.AudioHost.csproj"
-             Targets="Build" Properties="Configuration=$(Configuration);RuntimeIdentifier=win-x64;SelfContained=false;PublishAot=false" />
-  </Target>
+  <PropertyGroup Condition="Exists('..\Wavee.PlayPlay\Wavee.PlayPlay.csproj')">
+    <DefineConstants>$(DefineConstants);WAVEE_PLAYPLAY_LOCAL</DefineConstants>
+  </PropertyGroup>
 
-  <Target Name="CopyAudioHostBuild" AfterTargets="Build">
-    <ItemGroup>   <!-- globbed at EXECUTION time (after BuildAudioHostX64), not project-evaluation time -->
-      <_AudioHostOut Include="$(MSBuildProjectDirectory)\..\Wavee.AudioHost\bin\$(Configuration)\net10.0\win-x64\**\*.*" />
-    </ItemGroup>
-    <Copy SourceFiles="@(_AudioHostOut)" DestinationFolder="$(OutDir)%(RecursiveDir)" SkipUnchangedFiles="true"
-          Condition="'@(_AudioHostOut)' != ''" />
-  </Target>
-  <Target Name="CopyAudioHostPublish" AfterTargets="Publish">
-    <ItemGroup>
-      <_AudioHostOut Include="$(MSBuildProjectDirectory)\..\Wavee.AudioHost\bin\$(Configuration)\net10.0\win-x64\**\*.*" />
-    </ItemGroup>
-    <Copy SourceFiles="@(_AudioHostOut)" DestinationFolder="$(PublishDir)%(RecursiveDir)" SkipUnchangedFiles="true"
-          Condition="'@(_AudioHostOut)' != ''" />
-  </Target>
+  <ItemGroup Condition="Exists('..\Wavee.PlayPlay\Wavee.PlayPlay.csproj')">
+    <Compile Include="..\Wavee.PlayPlay\*.cs" Link="Wavee.PlayPlay\%(Filename)%(Extension)" />
+  </ItemGroup>
 
   <!-- Real Spotify wire protocol (handshake + login). Vendored .proto compiled via Grpc.Tools → the Wavee.Protocol
        namespace. Used ONLY by app/Wavee/SpotifyLive (the live-network layer); the unit-tested Backend stays protobuf-free. -->
   <ItemGroup>
     <PackageReference Include="Google.Protobuf" Version="3.35.0" />
+    <PackageReference Include="FlacBox" Version="1.0.0" />
     <!-- DPAPI (Windows) — the OPTIONAL at-rest protector swapped behind the portable ICredentialProtector seam. -->
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.0" />
     <!-- §2.7 — pure-managed (AOT-safe) zstd decode for the Content-Encoding: zstd /changes + /diff playlist-v2 responses. -->

@@ -53,6 +53,7 @@ sealed class WaveeApp : Component
         var loginSession = UseRef<System.Threading.CancellationTokenSource?>(null);
         var wasAuthed = UseRef(false);   // have we EVER authenticated this run? (fake demo: logout → takeover, but no initial-launch flash)
         var governorTimer = UseRef<System.Threading.Timer?>(null);   // rooted here so the periodic MemoryGovernor poll isn't GC-collected (the app root never unmounts)
+        var volumeSaveTimer = UseRef<System.Threading.Timer?>(null); // remember-volume: debounced persist of the slider value
 
         // ── Simultaneous live login (device code + browser race) ─────────────────────────────────────────────────────
         // The takeover runs BOTH methods at once: RestartCode polls the device code (the two-pane's QR + pairing code), and
@@ -69,13 +70,14 @@ sealed class WaveeApp : Component
             {
                 try
                 {
-                    var host = await Wavee.SpotifyLive.LiveSessionHost.StartAsync(_services, m => _services.Log.Info("connect", m), cts.Token, bridge.Progress(post), interactive: true, useBrowser: false).ConfigureAwait(false);
+                    var host = await Wavee.SpotifyLive.LiveSessionHost.StartAsync(_services, m => _services.Log.Info("connect", m), cts.Token, bridge.Progress(post), uiPost: post, interactive: true, useBrowser: false).ConfigureAwait(false);
                     if (host is not null) { post(() => { if (loginSession.Value == cts) loginSession.Value = null; }); cts.Cancel(); }   // success → stop the browser sibling
                 }
                 catch (OperationCanceledException) { }   // superseded by a newer attempt
                 catch (Exception ex)
                 {
-                    _services.Log.Info("connect", "code login failed: " + ex.Message);
+                    _services.Log.Event(WaveeLogLevel.Warning, "connect", "login.code.failed",
+                        "Code login failed", ex: ex, fields: [WaveeLogField.Of("phase", bridge.Login.Peek().Phase.ToString())]);
                     post(() => { if (loginSession.Value == cts) bridge.Login.Value = new LoginSnapshot(LoginPhase.Failed, Error: "Something went wrong signing in."); });
                 }
             });
@@ -90,7 +92,7 @@ sealed class WaveeApp : Component
             {
                 try
                 {
-                    var host = await Wavee.SpotifyLive.LiveSessionHost.StartAsync(_services, m => _services.Log.Info("connect", m), cts.Token, bridge.Progress(post), interactive: true, useBrowser: true, quietPhases: true).ConfigureAwait(false);
+                    var host = await Wavee.SpotifyLive.LiveSessionHost.StartAsync(_services, m => _services.Log.Info("connect", m), cts.Token, bridge.Progress(post), uiPost: post, interactive: true, useBrowser: true, quietPhases: true).ConfigureAwait(false);
                     if (host is not null) { post(() => { if (loginSession.Value == cts) loginSession.Value = null; }); cts.Cancel(); }
                 }
                 catch { }   // a browser failure is silent — the device-code two-pane keeps going
@@ -111,9 +113,24 @@ sealed class WaveeApp : Component
 
         Context.UseEffect(() =>
         {
+            // Remember-volume: seed the slider before the first frame the user sees; the live session seeds the device
+            // announce/local host from the same setting (LiveSessionHost). Saved back below, debounced.
+            if (_services.Settings.Get(WaveeSettings.RememberVolume))
+                bridge.Volume.Value = Math.Clamp(_services.Settings.Get(WaveeSettings.SavedVolume), 0f, 1f);
+
             bridge.Activate(post);
             libBridge.Activate(post);
             store.Activate(post);
+
+            // Persist volume changes (local intents AND remote echoes both land on bridge.Volume) with a coarse poll —
+            // Peek is a plain field read, and the registry write happens only when the value actually moved.
+            volumeSaveTimer.Value ??= new System.Threading.Timer(_ =>
+            {
+                if (!_services.Settings.Get(WaveeSettings.RememberVolume)) return;
+                float v = bridge.Volume.Peek();
+                if (Math.Abs(v - _services.Settings.Get(WaveeSettings.SavedVolume)) > 0.004f)
+                    _services.Settings.Set(WaveeSettings.SavedVolume, v);
+            }, null, dueTime: 2_000, period: 2_000);
 
             // Drive the MemoryGovernor from a periodic OS-memory-pressure poll. The Timer fires on a background thread but
             // marshals Trim to the UI thread (post) so the UI-thread-affine detail caches shed safely. At rest (no pressure)

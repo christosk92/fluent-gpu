@@ -3,8 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Runtime.InteropServices;
 using System.Threading;
-using System.Threading.Channels;
 using System.Threading.Tasks;
 using Wavee.Backend;
 using Wavee.Backend.Audio;
@@ -24,17 +24,31 @@ static class A
 
     public static SessionContext Ctx() => new("acct", "US", "premium", "en", Tier.Premium, false);
 
-    public static RuntimeManifestPack Pack(string sha256Hex, string? url = "https://cdn/pack.bin", string arch = "X64", string? comp = null) => new()
-    {
-        Id = "test", SpotifyVersion = "1.2.88.483", AppVersion = "128800483", RequestVersion = 5, Arch = arch,
-        Url = url, Compression = comp, Sha256Hex = sha256Hex,
-        PlayPlayTokenHex = Convert.ToHexString(new byte[16]), VmInitValueHex = Convert.ToHexString(new byte[16]),
-        AnalysisBaseHex = "180000000", VmRuntimeInitVaHex = "180001000", VmObjectTransformVaHex = "180002000",
-        RuntimeContextVaHex = "180003000", FillRandomBytesVaHex = "180004000", TriggerRipVaHex = "180005000",
-        TriggerRipRegOffset = 0x88,
-    };
+    public static PlayPlayConfig Config(byte[]? playPlayToken = null, string version = "1.2.93.667", Architecture arch = Architecture.X64) => new(
+        Version: version,
+        Arch: arch,
+        Sha256: new byte[32],
+        PlayPlayToken: playPlayToken ?? new byte[16],
+        VmInitValue: new byte[16],
+        AnalysisBase: 0x180000000,
+        VmRuntimeInitVa: 0x180001000,
+        VmObjectTransformVa: 0x180002000,
+        RuntimeContextVa: 0x180003000,
+        RuntimeContextSecondaryVa: 0x180003100,
+        InitVtableLabs: Array.Empty<ulong>(),
+        TransformFourthArgTemplateVa: 0,
+        TransformFourthArgBuildVa: 0,
+        FillRandomBytesVa: 0x180004000,
+        AesKey: new AesKeyExtraction.OutputBufferSlice(0, 16),
+        VmObjectSize: 144,
+        RtContextSize: 16,
+        DerivedKeySize: 32,
+        ObfuscatedKeySize: 16,
+        InitValueSize: 16,
+        ContentIdSize: 16,
+        KeySize: 16);
 
-    public static RuntimeAsset Asset() => new("C:\\fake\\Spotify.dll", Pack(Convert.ToHexString(new byte[32])).ToConfig(), "test");
+    public static RuntimeAsset Asset() => new("C:\\fake\\Spotify.dll", Config(), "test");
 }
 
 sealed class FakeApKeySource : IAudioKeySource
@@ -56,11 +70,22 @@ sealed class FakeLicense : ILicenseClient
 {
     public int Calls;
     public byte[]? Obf;
+    public byte[]? Aux;
+    public byte[]? Request { get; set; }
+    public byte[]? Raw { get; set; }
     public AudioKeyFailureReason Reason = AudioKeyFailureReason.None;
-    public Task<(ReadOnlyMemory<byte> Key, AudioKeyFailureReason Reason)> FetchObfuscatedKeyAsync(string fileIdHex, PlayPlayConfig config, CancellationToken ct)
+
+    public async Task<(ReadOnlyMemory<byte> Key, AudioKeyFailureReason Reason)> FetchObfuscatedKeyAsync(string fileIdHex, PlayPlayConfig config, CancellationToken ct)
+    {
+        var result = await FetchLicenseAsync(fileIdHex, config, ct).ConfigureAwait(false);
+        return (result.Key, result.Reason);
+    }
+
+    public Task<PlayPlayLicenseResult> FetchLicenseAsync(string fileIdHex, PlayPlayConfig config, CancellationToken ct)
     {
         Interlocked.Increment(ref Calls);
-        return Task.FromResult(((ReadOnlyMemory<byte>)(Obf ?? Array.Empty<byte>()), Reason));
+        return Task.FromResult(new PlayPlayLicenseResult(Obf ?? Array.Empty<byte>(), Aux ?? Array.Empty<byte>(), Reason, "",
+            Raw ?? Array.Empty<byte>(), Request ?? Array.Empty<byte>()));
     }
 }
 
@@ -68,19 +93,34 @@ sealed class FakeDeriver : IPlayPlayKeyDeriver
 {
     public int Calls;
     public byte[]? Key;
+    public byte[]? LastAux;
+    public byte[]? LastLicenseRaw;
+    public byte[]? LastLicenseRequest;
     public AudioKeyFailureReason Reason = AudioKeyFailureReason.None;
     public Task<PlayPlayDeriveResult> DeriveAsync(ReadOnlyMemory<byte> obfuscatedKey, ReadOnlyMemory<byte> contentId,
         PlayPlayConfig config, string spotifyDllPath, string correlationId, CancellationToken ct = default)
+        => DeriveAsync(obfuscatedKey, contentId, config, spotifyDllPath, correlationId, default, ct);
+
+    public Task<PlayPlayDeriveResult> DeriveAsync(ReadOnlyMemory<byte> obfuscatedKey, ReadOnlyMemory<byte> contentId,
+        PlayPlayConfig config, string spotifyDllPath, string correlationId, ReadOnlyMemory<byte> playPlayAux, CancellationToken ct = default)
+        => DeriveAsync(obfuscatedKey, contentId, config, spotifyDllPath, correlationId, playPlayAux, default, default, ct);
+
+    public Task<PlayPlayDeriveResult> DeriveAsync(ReadOnlyMemory<byte> obfuscatedKey, ReadOnlyMemory<byte> contentId,
+        PlayPlayConfig config, string spotifyDllPath, string correlationId, ReadOnlyMemory<byte> playPlayAux, ReadOnlyMemory<byte> licenseRaw, ReadOnlyMemory<byte> licenseRequest, CancellationToken ct = default)
     {
         Interlocked.Increment(ref Calls);
+        LastAux = playPlayAux.ToArray();
+        LastLicenseRaw = licenseRaw.ToArray();
+        LastLicenseRequest = licenseRequest.ToArray();
         return Task.FromResult(new PlayPlayDeriveResult(Key ?? default, Reason));
     }
 }
 
 sealed class RecordingAudioHost : IAudioHost
 {
-    public bool LoadFastStartCalled, PlayCalled, SupplyBodyCalled;
+    public bool LoadFastStartCalled, PlayCalled, SupplyBodyCalled, StopCalled;
     public readonly TaskCompletionSource SupplyBodySignaled = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public readonly TaskCompletionSource StopSignaled = new(TaskCreationOptions.RunContinuationsAsynchronously);
     readonly Wavee.Core.SimpleSubject<AudioHostSignal> _sig = new();
 
     public void Load(in AudioStreamHandle s) { }
@@ -88,7 +128,7 @@ sealed class RecordingAudioHost : IAudioHost
     public void SupplyBody(in AudioStreamHandle b) { SupplyBodyCalled = true; SupplyBodySignaled.TrySetResult(); }
     public void Play() => PlayCalled = true;
     public void Pause() { }
-    public void Stop() { }
+    public void Stop() { StopCalled = true; PlayCalled = false; StopSignaled.TrySetResult(); }
     public void Seek(long ms) { }
     public void SetVolume(double v) { }
     public long PositionMs => 0;
@@ -137,29 +177,4 @@ sealed class FakeHttpMessageHandler : HttpMessageHandler
         var resp = new HttpResponseMessage(status) { Content = new ByteArrayContent(body) };
         return Task.FromResult(resp);
     }
-}
-
-/// <summary>In-memory <see cref="IIpcChannel"/> — controllable replies/notifications/death for demux+recycle tests.</summary>
-sealed class FakeChannel : IIpcChannel
-{
-    readonly Channel<(string, long, System.Text.Json.JsonElement?)> _in = System.Threading.Channels.Channel.CreateUnbounded<(string, long, System.Text.Json.JsonElement?)>();
-    public readonly List<(string Type, long Id)> Sent = new();
-    public Func<(string Type, long Id), (string, long, System.Text.Json.JsonElement?)?>? AutoReply;
-    public bool ThrowOnRead;
-
-    public Task SendAsync<T>(string type, long id, T payload, CancellationToken ct)
-    {
-        lock (Sent) Sent.Add((type, id));
-        if (AutoReply?.Invoke((type, id)) is { } frame) _in.Writer.TryWrite(frame);
-        return Task.CompletedTask;
-    }
-
-    public async Task<(string Type, long Id, System.Text.Json.JsonElement? Payload)> ReadAsync(CancellationToken ct)
-    {
-        if (ThrowOnRead) { await Task.Yield(); throw new IOException("pipe dead"); }
-        return await _in.Reader.ReadAsync(ct).ConfigureAwait(false);
-    }
-
-    public void Push(string type, long id) => _in.Writer.TryWrite((type, id, null));
-    public void Dispose() => _in.Writer.TryComplete();
 }

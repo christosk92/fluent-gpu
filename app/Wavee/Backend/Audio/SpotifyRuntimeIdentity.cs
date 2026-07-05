@@ -14,19 +14,47 @@ public sealed record SpotifyRuntimeIdentity(string AppVersion, string ClientVers
     public static readonly byte[] DefaultPlayPlayToken = Convert.FromHexString(DefaultPlayPlayTokenHex);
 
     public static string AppPlatform =>
-        RuntimeInformation.OSArchitecture == Architecture.Arm64 ? "Win32_ARM64" : "Win32_x86_64";
+        Environment.GetEnvironmentVariable("WAVEE_PLAYPLAY_APP_PLATFORM") is { Length: > 0 } platform
+            ? platform.Trim()
+            : SpotifyRuntimeIdentityHost.RuntimeAppPlatform
+              ?? (RuntimeInformation.OSArchitecture == Architecture.Arm64 ? "Win32_ARM64" : "Win32_x86_64");
 
     public static SpotifyRuntimeIdentity Default { get; } = new(
         DefaultAppVersion, DefaultClientVersion, DefaultPlayPlayRequestVersion);
 
+    public static SpotifyRuntimeIdentity FromSpotifyVersion(string spotifyVersion, int requestVersion) => new(
+        AppVersionFromSpotifyVersion(spotifyVersion),
+        spotifyVersion.Contains(".g", StringComparison.Ordinal) ? spotifyVersion : spotifyVersion + ".gunknown",
+        requestVersion);
+
     /// <summary>spclient / middleware User-Agent.</summary>
-    public string UserAgent => $"Spotify/{AppVersion} {AppPlatform}/{OsDescriptor()}";
+    public string UserAgent =>
+        Environment.GetEnvironmentVariable("WAVEE_PLAYPLAY_USER_AGENT") is { Length: > 0 } userAgent
+            ? userAgent.Trim()
+            : $"Spotify/{AppVersion} {AppPlatform}/{OsDescriptor()}";
 
     /// <summary>clienttoken.spotify.com uses a shorter OS stub: <c>…/0 (PC laptop)</c>.</summary>
-    public string ClientTokenUserAgent => $"Spotify/{AppVersion} {AppPlatform}/0 (PC laptop)";
+    public string ClientTokenUserAgent =>
+        Environment.GetEnvironmentVariable("WAVEE_PLAYPLAY_CLIENT_TOKEN_USER_AGENT") is { Length: > 0 } userAgent
+            ? userAgent.Trim()
+            : $"Spotify/{AppVersion} {AppPlatform}/0 (PC laptop)";
 
     public string DesktopSemver => ClientVersion.Split('.')[0] + "." + ClientVersion.Split('.')[1] + "." +
                                    ClientVersion.Split('.')[2] + "." + ClientVersion.Split('.')[3].Split('g')[0];
+
+    static string AppVersionFromSpotifyVersion(string spotifyVersion)
+    {
+        var semver = spotifyVersion.Split('g')[0].TrimEnd('.');
+        var parts = semver.Split('.');
+        if (parts.Length < 4
+            || !int.TryParse(parts[0], out var major)
+            || !int.TryParse(parts[1], out var minor)
+            || !int.TryParse(parts[2], out var patch)
+            || !int.TryParse(parts[3], out var build))
+            return DefaultAppVersion;
+
+        return $"{major}{minor}{patch:00}{build:00000}";
+    }
 
     static string OsDescriptor()
     {
@@ -46,6 +74,44 @@ public sealed record SpotifyRuntimeIdentity(string AppVersion, string ClientVers
 public static class SpotifyRuntimeIdentityHost
 {
     static volatile SpotifyRuntimeIdentity _current = SpotifyRuntimeIdentity.Default;
-    public static SpotifyRuntimeIdentity Current => _current;
+    static volatile int _runtimeArchitecture = -1;
+    public static SpotifyRuntimeIdentity Current => ApplyEnvironmentOverrides(_current);
+    internal static string? RuntimeAppPlatform => (Architecture)_runtimeArchitecture switch
+    {
+        Architecture.Arm64 => "Win32_ARM64",
+        Architecture.X64 => "Win32_x86_64",
+        _ => null,
+    };
+
     public static void Apply(SpotifyRuntimeIdentity identity) => _current = identity;
+    public static void ApplyRuntimeArchitecture(Architecture architecture) => _runtimeArchitecture = (int)architecture;
+
+    public static void ApplyFromManifest(PlayPlayRuntimeManifest manifest)
+    {
+        var client = manifest.ClientVersion ?? manifest.SpotifyVersion;
+        if (!client.Contains(".g", StringComparison.Ordinal))
+            client += ".gunknown";
+        Apply(new SpotifyRuntimeIdentity(manifest.AppVersion, client, manifest.PlayPlayRequestVersion));
+        if (PlayPlayRuntimeManifest.TryParseArch(manifest.Arch, out var arch))
+            ApplyRuntimeArchitecture(arch);
+    }
+
+    static SpotifyRuntimeIdentity ApplyEnvironmentOverrides(SpotifyRuntimeIdentity identity)
+    {
+        var appVersion = Environment.GetEnvironmentVariable("WAVEE_PLAYPLAY_APP_VERSION");
+        var clientVersion = Environment.GetEnvironmentVariable("WAVEE_PLAYPLAY_CLIENT_VERSION");
+        var requestVersion = Environment.GetEnvironmentVariable("WAVEE_PLAYPLAY_REQUEST_VERSION");
+
+        if (string.IsNullOrWhiteSpace(appVersion)
+            && string.IsNullOrWhiteSpace(clientVersion)
+            && string.IsNullOrWhiteSpace(requestVersion))
+            return identity;
+
+        return identity with
+        {
+            AppVersion = string.IsNullOrWhiteSpace(appVersion) ? identity.AppVersion : appVersion.Trim(),
+            ClientVersion = string.IsNullOrWhiteSpace(clientVersion) ? identity.ClientVersion : clientVersion.Trim(),
+            PlayPlayRequestVersion = int.TryParse(requestVersion, out var v) ? v : identity.PlayPlayRequestVersion,
+        };
+    }
 }

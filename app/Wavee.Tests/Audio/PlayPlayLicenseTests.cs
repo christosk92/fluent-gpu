@@ -18,7 +18,7 @@ public class PlayPlayLicenseTests
     [Fact]
     public void BuildRequestBody_TimestampIsUnixSeconds_NotMilliseconds()
     {
-        var cfg = A.Pack(Convert.ToHexString(new byte[32])).ToConfig();
+        var cfg = A.Config();
         const long ts = 1_783_178_797L;
         var body = PlayPlayLicenseClient.BuildRequestBody(cfg, ts);
         var parsed = PlayPlayLicenseRequest.Parser.ParseFrom(body);
@@ -29,12 +29,22 @@ public class PlayPlayLicenseTests
     }
 
     [Fact]
-    public void BuildRequestBody_UsesHardcodedPlayPlayToken()
+    public void BuildRequestBody_UsesConfiguredPlayPlayToken()
     {
-        var cfg = A.Pack(Convert.ToHexString(new byte[32])).ToConfig();
-        Assert.NotEqual(SpotifyRuntimeIdentity.DefaultPlayPlayToken, cfg.PlayPlayToken);
+        var token = Convert.FromHexString("00112233445566778899AABBCCDDEEFF");
+        var cfg = A.Config(playPlayToken: token);
+
         var parsed = PlayPlayLicenseRequest.Parser.ParseFrom(PlayPlayLicenseClient.BuildRequestBody(cfg));
-        Assert.Equal(SpotifyRuntimeIdentity.DefaultPlayPlayToken, parsed.Token.ToByteArray());
+        Assert.Equal(cfg.PlayPlayToken, parsed.Token.ToByteArray());
+        Assert.NotEqual(SpotifyRuntimeIdentity.DefaultPlayPlayToken, parsed.Token.ToByteArray());
+    }
+
+    [Theory]
+    [InlineData("1.2.88.483", "128800483")]
+    [InlineData("1.2.93.667", "129300667")]
+    public void SpotifyIdentity_DerivesPaddedDesktopAppVersion(string semver, string expected)
+    {
+        Assert.Equal(expected, SpotifyRuntimeIdentity.FromSpotifyVersion(semver, requestVersion: 5).AppVersion);
     }
 
     [Fact]

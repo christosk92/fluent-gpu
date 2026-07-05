@@ -94,6 +94,37 @@ public class ConnectControllerTests
     }
 
     [Fact]
+    public async Task PlayTrack_WithKnownTrack_PublishesMetadataImmediately()
+    {
+        using var c = Make(out var host, out var proj, out var outbound, ctx: EmptyContextResolver.Instance);
+        var track = new Track("known", "spotify:track:known", "Known Title",
+            [new ArtistRef("artist", "spotify:artist:artist", "Known Artist")],
+            new AlbumRef("album", "spotify:album:album", "Known Album"), 123000, false,
+            new Image("https://i.scdn.co/image/known", 300, 300));
+
+        await c.PlayTrackAsync(track);
+
+        Assert.Contains("load:spotify:track:known", host.Calls);
+        Assert.Equal("Known Title", proj.CurrentTrack?.Title);
+        Assert.Equal("Known Artist", proj.CurrentTrack?.Artists[0].Name);
+        Assert.Equal("Known Album", proj.CurrentTrack?.Album.Name);
+        Assert.Equal("https://i.scdn.co/image/known", proj.CurrentTrack?.Image?.Url);
+        Assert.Empty(outbound.Sent);
+    }
+
+    [Fact]
+    public async Task PlayTrack_UriOnly_HydratesBeforePublishing_NotSyntheticUriTitle()
+    {
+        using var c = Make(out var host, out var proj, out _, ctx: Ctx("spotify:track:ignored"));
+
+        await c.PlayTrackAsync("spotify:track:clicked");
+
+        Assert.Contains("load:spotify:track:clicked", host.Calls);
+        Assert.Equal("T:spotify:track:clicked", proj.CurrentTrack?.Title);
+        Assert.NotEqual("spotify:track:clicked", proj.CurrentTrack?.Title);
+    }
+
+    [Fact]
     public async Task NoActiveDevice_Pause_RoutesLocal_NotForward()
     {
         using var c = Make(out var host, out _, out var outbound);

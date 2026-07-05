@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.Marshalling;
 
-namespace Wavee.AudioHost.Audio;
+namespace Wavee.SpotifyLive.Audio;
 
 /// <summary>Minimal WASAPI shared-mode renderer. Source-gen COM (AOT-clean) + AUTOCONVERTPCM so the audio engine
 /// resamples our float32 source format to the device mix format — no manual resampler. Blocking push API.</summary>
@@ -35,41 +35,54 @@ internal sealed unsafe partial class WasapiRenderer : IDisposable
 
     public void Init(int sampleRate, int channels, int bufferMs = 300)
     {
-        _sampleRate = sampleRate;
-        _channels = channels;
-
-        Check(CoInitializeEx(IntPtr.Zero, 0), "CoInitializeEx");
-        Guid clsid = CLSID_MMDeviceEnumerator, iid = IID_IMMDeviceEnumerator;
-        Check(CoCreateInstance(ref clsid, IntPtr.Zero, CLSCTX_ALL, ref iid, out IntPtr pEnum), "CoCreateInstance(MMDeviceEnumerator)");
-        var enumerator = (IMMDeviceEnumerator)ComWrappers.GetOrCreateObjectForComInstance(pEnum, CreateObjectFlags.None);
-        Marshal.Release(pEnum);
-
-        Check(enumerator.GetDefaultAudioEndpoint(0 /*eRender*/, 0 /*eConsole*/, out IMMDevice device), "GetDefaultAudioEndpoint");
-
-        Guid iidClient = IID_IAudioClient;
-        Check(device.Activate(ref iidClient, CLSCTX_ALL, IntPtr.Zero, out IntPtr pClient), "IMMDevice.Activate(IAudioClient)");
-        _client = (IAudioClient)ComWrappers.GetOrCreateObjectForComInstance(pClient, CreateObjectFlags.None);
-        Marshal.Release(pClient);
-
-        var fmt = new WAVEFORMATEX
+        lock (_lock)
         {
-            wFormatTag = WAVE_FORMAT_IEEE_FLOAT,
-            nChannels = (ushort)channels,
-            nSamplesPerSec = (uint)sampleRate,
-            wBitsPerSample = 32,
-            nBlockAlign = (ushort)(channels * 4),
-            nAvgBytesPerSec = (uint)(sampleRate * channels * 4),
-            cbSize = 0,
-        };
-        long bufDuration = bufferMs * 10_000L; // 100ns units
-        uint flags = AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
-        Check(_client.Initialize(AUDCLNT_SHAREMODE_SHARED, flags, bufDuration, 0, (IntPtr)(&fmt), IntPtr.Zero), "IAudioClient.Initialize");
-        Check(_client.GetBufferSize(out _bufferFrames), "GetBufferSize");
+            try { _client?.Stop(); } catch { }
+            _started = false;
+            _render = null;
+            _client = null;
+            _bufferFrames = 0;
+            _releasedFrames = 0;
+            _sampleRate = sampleRate;
+            _channels = channels;
 
-        Guid iidRender = IID_IAudioRenderClient;
-        Check(_client.GetService(ref iidRender, out IntPtr pRender), "GetService(IAudioRenderClient)");
-        _render = (IAudioRenderClient)ComWrappers.GetOrCreateObjectForComInstance(pRender, CreateObjectFlags.None);
-        Marshal.Release(pRender);
+            Check(CoInitializeEx(IntPtr.Zero, 0), "CoInitializeEx");
+            Guid clsid = CLSID_MMDeviceEnumerator, iid = IID_IMMDeviceEnumerator;
+            Check(CoCreateInstance(ref clsid, IntPtr.Zero, CLSCTX_ALL, ref iid, out IntPtr pEnum), "CoCreateInstance(MMDeviceEnumerator)");
+            var enumerator = (IMMDeviceEnumerator)ComWrappers.GetOrCreateObjectForComInstance(pEnum, CreateObjectFlags.None);
+            Marshal.Release(pEnum);
+
+            Check(enumerator.GetDefaultAudioEndpoint(0 /*eRender*/, 0 /*eConsole*/, out IMMDevice device), "GetDefaultAudioEndpoint");
+
+            Guid iidClient = IID_IAudioClient;
+            Check(device.Activate(ref iidClient, CLSCTX_ALL, IntPtr.Zero, out IntPtr pClient), "IMMDevice.Activate(IAudioClient)");
+            var client = (IAudioClient)ComWrappers.GetOrCreateObjectForComInstance(pClient, CreateObjectFlags.None);
+            Marshal.Release(pClient);
+
+            var fmt = new WAVEFORMATEX
+            {
+                wFormatTag = WAVE_FORMAT_IEEE_FLOAT,
+                nChannels = (ushort)channels,
+                nSamplesPerSec = (uint)sampleRate,
+                wBitsPerSample = 32,
+                nBlockAlign = (ushort)(channels * 4),
+                nAvgBytesPerSec = (uint)(sampleRate * channels * 4),
+                cbSize = 0,
+            };
+            long bufDuration = bufferMs * 10_000L; // 100ns units
+            uint flags = AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+            Check(client.Initialize(AUDCLNT_SHAREMODE_SHARED, flags, bufDuration, 0, (IntPtr)(&fmt), IntPtr.Zero), "IAudioClient.Initialize");
+            Check(client.GetBufferSize(out var bufferFrames), "GetBufferSize");
+
+            Guid iidRender = IID_IAudioRenderClient;
+            Check(client.GetService(ref iidRender, out IntPtr pRender), "GetService(IAudioRenderClient)");
+            var render = (IAudioRenderClient)ComWrappers.GetOrCreateObjectForComInstance(pRender, CreateObjectFlags.None);
+            Marshal.Release(pRender);
+
+            _client = client;
+            _render = render;
+            _bufferFrames = bufferFrames;
+        }
     }
 
     public void Start()
@@ -160,9 +173,14 @@ internal sealed unsafe partial class WasapiRenderer : IDisposable
 
     public void Dispose()
     {
-        try { _client?.Stop(); } catch { }
-        _render = null;
-        _client = null;
+        lock (_lock)
+        {
+            try { _client?.Stop(); } catch { }
+            _started = false;
+            _render = null;
+            _client = null;
+            _releasedFrames = 0;
+        }
     }
 
     static void Check(int hr, string what)

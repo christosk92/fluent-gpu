@@ -34,43 +34,6 @@ public class SpotifyAesCtrTests
     }
 }
 
-public class RuntimeManifestTests
-{
-    [Fact]
-    public void ToConfig_ParsesHexFields()
-    {
-        var pack = new RuntimeManifestPack
-        {
-            Id = "test",
-            SpotifyVersion = "1.2.88.483",
-            AppVersion = "128800483",
-            Sha256Hex = Convert.ToHexString(new byte[32]),
-            PlayPlayTokenHex = Convert.ToHexString(new byte[16]),
-            VmInitValueHex = Convert.ToHexString(new byte[16]),
-            AnalysisBaseHex = "180000000",
-            VmRuntimeInitVaHex = "180001000",
-            VmObjectTransformVaHex = "180002000",
-            RuntimeContextVaHex = "180003000",
-            FillRandomBytesVaHex = "180004000",
-            TriggerRipVaHex = "180005000",
-            TriggerRipRegOffset = 0x88,
-        };
-        var cfg = pack.ToConfig();
-        Assert.Equal("1.2.88.483", cfg.Version);
-        Assert.Equal(32, cfg.Sha256.Length);
-        Assert.IsType<AesKeyExtraction.TriggerRipBreakpoint>(cfg.AesKey);
-    }
-
-    [Fact]
-    public void ToIdentity_UsesAppVersionField()
-    {
-        var pack = new RuntimeManifestPack { AppVersion = "128800483", SpotifyVersion = "1.2.88.483", RequestVersion = 5 };
-        var id = pack.ToIdentity();
-        Assert.Equal("128800483", id.AppVersion);
-        Assert.Equal(5, id.PlayPlayRequestVersion);
-    }
-}
-
 public class SpotifyRuntimeIdentityTests
 {
     [Fact]
