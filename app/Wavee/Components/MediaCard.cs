@@ -32,10 +32,22 @@ public static class MediaCard
             ? ColorF.Lerp(Tok.FillCardDefault, a, Tok.Theme == ThemeKind.Dark ? 0.40f : 0.28f)
             : Tok.FillCardDefault;
 
-    static Element ArtworkOrLiked(Image? cover, string uri, float width, float height, float radius, string? morphKey = null, int decodePx = 0) =>
-        cover is null && LikedSongsArtwork.IsLikedUri(uri) && MathF.Abs(width - height) < 0.5f
+    static Element ArtworkOrLiked(Image? cover, string uri, float width, float height, float radius, string? morphKey = null, int decodePx = 0, Element? diagnostics = null)
+    {
+        var art = cover is null && LikedSongsArtwork.IsLikedUri(uri) && MathF.Abs(width - height) < 0.5f
             ? LikedSongsArtwork.Cover(width, radius, morphKey)
             : Surfaces.Artwork(cover, Seed(uri), width, height, radius, morphKey, decodePx);
+        return diagnostics is null
+            ? art
+            : new BoxEl
+            {
+                Width = width,
+                Height = height,
+                ZStack = true,
+                ClipToBounds = true,
+                Children = [ art, diagnostics ],
+            };
+    }
 
     // ── Shelf card: square (album/playlist) or circular (artist) cover, sized to fill `cardW`. ───────────
     public static Element Shelf(Image? cover, string title, string subtitle, string uri,
@@ -176,7 +188,7 @@ public static class MediaCard
     }
 
     // ── Wide "jump back in" tile: cover + title (fills, ellipsised) + trailing now-playing/play overlay ───
-    public static Element QuickPick(Image? cover, string title, string uri, Action onClick, Action onPlay, ColorF? accent = null)
+    public static Element QuickPick(Image? cover, string title, string uri, Action onClick, Action onPlay, ColorF? accent = null, Element? diagnostics = null)
     {
         return new BoxEl
         {
@@ -187,7 +199,7 @@ public static class MediaCard
             [
                 // Surfaces.Artwork = a neutral shimmer/placeholder tile + the real art on top (graceful when the cover
                 // is missing or on an auth-gated host that fails to fetch).
-                ArtworkOrLiked(cover, uri, QuickW, QuickH, 0f),
+                ArtworkOrLiked(cover, uri, QuickW, QuickH, 0f, diagnostics: diagnostics),
                 // Grow + Basis=0: take the remaining width (never the title's intrinsic width) → ellipsis, no overflow.
                 WaveeType.TrackTitle(title) with { Grow = 1f, Basis = 0f, Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis },
                 new BoxEl

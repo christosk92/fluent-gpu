@@ -41,6 +41,9 @@ public sealed class CachedStore : IStore, IDisposable
     }
 
     public int ResidentMembershipCount { get { lock (_lruGate) return _resident.Count; } }
+    public long ResidentMembershipBytes { get { lock (_lruGate) return _residentBytes; } }
+    public long MaxResidentBytes => _maxResidentBytes;
+    public int MaxResidentPlaylists => _maxResidentPlaylists;
 
     void TouchResident(string playlistUri, int itemCount)
     {

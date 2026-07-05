@@ -89,7 +89,13 @@ sealed class SeekBar : Component
         bool playing = b.IsPlaying.Value;
         long posTick = b.PositionMs.Value;   // subscribe → re-anchor the interpolation each ~1 Hz tick
         if (DiagEnabled)
-            Console.Error.WriteLine($"[WAVEE_PLAYERBAR_DIAG] seek-render #{++s_renderCount} enabled={enabled} playing={playing}");
+            WaveeLog.Instance.Event(WaveeLogLevel.Debug, "ui", "seekbar.render", "Seek bar rendered",
+                fields:
+                [
+                    WaveeLogField.Of("render", ++s_renderCount),
+                    WaveeLogField.Of("enabled", enabled),
+                    WaveeLogField.Of("playing", playing),
+                ]);
 
         // Anchor the smooth-playhead interpolation: snapshot wall + position whenever PositionMs changes, then refresh
         // the resting display (covers the paused/seek-while-paused case — the ticker isn't mounted then).
@@ -220,7 +226,12 @@ sealed class SeekBar : Component
     {
         if (!SetWidth(bounds.W)) return;
         if (DiagEnabled)
-            Console.Error.WriteLine($"[WAVEE_PLAYERBAR_DIAG] seek-bounds #{++s_boundsCount} w={bounds.W:0.0}");
+            WaveeLog.Instance.Event(WaveeLogLevel.Debug, "ui", "seekbar.bounds", "Seek bar bounds changed",
+                fields:
+                [
+                    WaveeLogField.Of("count", ++s_boundsCount),
+                    WaveeLogField.Of("width", bounds.W),
+                ]);
         Recompute();
     }
 

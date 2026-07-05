@@ -48,6 +48,41 @@ public sealed class ContentDialog : Component
     /// Primary/Secondary for the commands, None for the close button, Escape, or a programmatic close.</summary>
     public Action<ContentDialogResult>? Closed;
 
+    /// <summary>WinUI <c>ContentControl.Content</c> — an arbitrary body rendered in place of <see cref="Message"/> when
+    /// set (the title still shows above it). If its natural height exceeds the card, it scrolls inside a vertical viewer
+    /// (the WinUI ContentScrollViewer) so long bodies (e.g. a version list) scroll within the fixed card.</summary>
+    public Element? Content;
+
+    /// <summary>Fixed card width override (WinUI has no direct knob, but rich content wants more than the 320 default).
+    /// Null keeps the built-in sizing. Clamped to the WinUI Min/Max (320…548).</summary>
+    public float? DialogWidth;
+
+    /// <summary>WinUI <c>IsPrimaryButtonEnabled</c> / <c>IsSecondaryButtonEnabled</c>. A disabled command renders via the
+    /// Button disabled state, ignores clicks, and is skipped by the Enter default-button routing.</summary>
+    public bool IsPrimaryButtonEnabled = true;
+    public bool IsSecondaryButtonEnabled = true;
+
+    /// <summary>Cancelable command clicks (WinUI <c>ContentDialogButtonClickEventArgs.Cancel</c>): setting
+    /// <see cref="ContentDialogButtonClickArgs.Cancel"/> keeps the dialog OPEN — this is what lets one dialog advance
+    /// through phases (Offer → Downloading → Ready) instead of closing on the first click. Runs BEFORE the matching
+    /// simple <see cref="PrimaryClick"/>/<see cref="SecondaryClick"/>/<see cref="CloseClick"/> (which fire only if the
+    /// dialog actually closes).</summary>
+    public Action<ContentDialogButtonClickArgs>? PrimaryButtonClick;
+    public Action<ContentDialogButtonClickArgs>? SecondaryButtonClick;
+    public Action<ContentDialogButtonClickArgs>? CloseButtonClick;
+
+    /// <summary>A custom command row that REPLACES the built-in Primary/Secondary/Close buttons inside the command
+    /// space (after the separator, same padding/fill). Pass an <c>Embed.Comp(...)</c> so the row re-renders reactively —
+    /// this is how a phased dialog (Offer → Downloading → Ready) swaps its actions without re-opening. When set, the
+    /// built-in button texts are ignored.</summary>
+    public Element? Footer;
+
+    /// <summary>WinUI <c>Opened</c> — raised once when the dialog is shown.</summary>
+    public Action? Opened;
+    /// <summary>WinUI <c>Closing</c> — raised before any dismissal (button, Escape, programmatic); set
+    /// <see cref="ContentDialogClosingArgs.Cancel"/> to veto (e.g. block Escape/close mid-download).</summary>
+    public Action<ContentDialogClosingArgs>? Closing;
+
     // Template parts (see TemplateParts). Each const's doc lists the props the control OWNS (re-asserted after any
     // modifier — a Parts customization cannot win those).
     /// <summary>The dialog card (WinUI BackgroundElement): fill, border, corners, shadow, min/max sizes… Owned:
@@ -95,165 +130,13 @@ public sealed class ContentDialog : Component
     {
         var svc = UseContext(Overlay.Service);
         var opened = UseRef<OverlayHandle?>(null);
-        var result = UseRef(ContentDialogResult.None);
         var autoOpened = UseRef(false);
-
-        bool primaryShown = PrimaryText.Length > 0;
-        bool secondaryShown = SecondaryText.Length > 0;
-        bool closeShown = CloseText.Length > 0;
-
-        Element BuildCard()
-        {
-            DefaultBtn def = DefaultButton;
-            bool primaryAccent = def == DefaultBtn.Primary && primaryShown;
-            bool secondaryAccent = def == DefaultBtn.Secondary && secondaryShown;
-            bool closeAccent = def == DefaultBtn.Close && closeShown;
-
-            void CloseWith(ContentDialogResult r, Action? click)
-            {
-                result.Value = r;
-                click?.Invoke();
-                opened.Value?.Close();
-            }
-
-            void RunPrimary() => CloseWith(ContentDialogResult.Primary, PrimaryClick);
-            void RunSecondary() => CloseWith(ContentDialogResult.Secondary, SecondaryClick);
-            void RunClose() => CloseWith(ContentDialogResult.None, CloseClick);
-
-            BoxEl CommandButton(string text, bool accent, Action onClick)
-            {
-                var b = accent ? Button.Accent(text, onClick) : Button.Standard(text, onClick);
-                return b with
-                {
-                    MinWidth = ButtonMinW,
-                    Height = ButtonH,
-                    MinHeight = ButtonH,
-                    Grow = 1f,
-                    Justify = FlexJustify.Center,
-                    // The DEFAULT (accent) button ranks FIRST in tab order so the focus trap's initial focus lands on
-                    // it — WinUI focuses the default button when the dialog opens (ContentDialog_Partial SetInitialFocus).
-                    TabIndex = accent ? 1 : 2,
-                };
-            }
-
-            // Enter activates the default button from ANYWHERE in the dialog (WinUI ContentDialog::ProcessEnterKey —
-            // Enter routes to the DefaultButton unless a focused control handled it). Escape is the overlay preview.
-            void OnCardKey(KeyEventArgs e)
-            {
-                if (e.KeyCode != Keys.Enter) return;
-                if (primaryAccent) { RunPrimary(); e.Handled = true; }
-                else if (secondaryAccent) { RunSecondary(); e.Handled = true; }
-                else if (closeAccent) { RunClose(); e.Handled = true; }
-            }
-            // One delegate instance, so the Chain re-assert collapses when a [PartPlate] modifier leaves it in place.
-            Action<KeyEventArgs> onCardKey = OnCardKey;
-
-            var buttons = new List<BoxEl>(3);
-            if (primaryShown) buttons.Add(CommandButton(PrimaryText, primaryAccent, RunPrimary));
-            if (secondaryShown) buttons.Add(CommandButton(SecondaryText, secondaryAccent, RunSecondary));
-            if (closeShown) buttons.Add(CommandButton(CloseText, closeAccent, RunClose));
-            float cardW = buttons.Count >= 3 ? 480f : MinW;
-
-            Element[] commandChildren;
-            if (buttons.Count == 1)
-            {
-                // WinUI single-button states move the visible button into the right star column; the unused left star
-                // column remains, separated by ContentDialogButtonSpacing (8).
-                commandChildren = [new BoxEl { Grow = 1f, HitTestVisible = false }, buttons[0]];
-            }
-            else
-            {
-                commandChildren = new Element[buttons.Count];
-                for (int i = 0; i < buttons.Count; i++)
-                    commandChildren[i] = buttons[i];
-            }
-
-            var contentRegion = new BoxEl
-            {
-                Direction = 1,
-                Padding = Edges4.All(Pad),
-                Fill = Tok.FillLayerAlt,   // ContentDialogTopOverlay = LayerFillColorAltBrush
-                Children =
-                [
-                    Parts.Apply(PartTitle, new TextEl(Title)
-                    {
-                        Size = TitleSize,
-                        Weight = 600,      // FontWeight="SemiBold" on the Title presenter (ContentDialog_themeresources.xaml:238)
-                        Color = Tok.TextPrimary,
-                        Wrap = TextWrap.Wrap,
-                        MaxLines = 2,
-                        Trim = TextTrim.WordEllipsis,
-                        Margin = new Edges4(0, 0, 0, ContentGap),   // ContentDialogTitleMargin 0,0,0,12
-                    }),
-                    new TextEl(Message) { Size = ContentSize, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap },
-                ],
-            };
-            contentRegion = Parts.Apply(PartContent, contentRegion) with { Children = contentRegion.Children };   // structure = title + message
-
-            var cardChildren = new List<Element>(3) { contentRegion };
-            if (buttons.Count > 0)
-            {
-                // ContentScrollViewer's inner grid carries ContentDialogSeparatorThickness=0,0,0,1 and
-                // ContentDialogSeparatorBorderBrush=CardStrokeColorDefault. Model it as the bottom separator between
-                // the top overlay and the command row.
-                cardChildren.Add(new BoxEl { Height = 1f, Fill = Tok.StrokeCardDefault });
-                var commandRow = new BoxEl
-                {
-                    Direction = 0,
-                    Gap = BtnGap,
-                    Justify = FlexJustify.Start,
-                    AlignItems = FlexAlign.Stretch,
-                    Padding = Edges4.All(Pad),
-                    Fill = Tok.FillSolidBase,   // the command space fills (CommandSpace Background = ContentDialogBackground)
-                    Children = commandChildren,
-                };
-                // Restyle via [PartCommandRow]; the buttons (handlers + TabIndex focus ranking) always win.
-                cardChildren.Add(Parts.Apply(PartCommandRow, commandRow) with { Children = commandChildren });
-            }
-
-            var plate = new BoxEl
-            {
-                Direction = 1,
-                Width = cardW,
-                MinWidth = MinW,
-                MaxWidth = MaxW,
-                MinHeight = MinH,
-                MaxHeight = MaxH,
-                Corners = Radii.OverlayAll,
-                Fill = Tok.FillSolidBase,
-                BorderColor = Tok.StrokeSurfaceDefault,
-                BorderWidth = 1f,
-                Shadow = Elevation.Dialog,
-                ClipToBounds = true,
-                OnKeyDown = onCardKey,   // Enter → default button (bubbles from any focused child inside the trap)
-                Children = cardChildren.ToArray(),
-            };
-            if (Parts is { } pp)
-            {
-                var m = pp.Apply(PartPlate, plate);
-                plate = m with
-                {
-                    Children = plate.Children,
-                    OnKeyDown = TemplateParts.Chain(onCardKey, m.OnKeyDown),   // Enter routing first, then any modifier handler
-                };
-            }
-            return plate;
-        }
 
         void Open()
         {
             if (opened.Value is { IsOpen: true }) return;
-            result.Value = ContentDialogResult.None;
-            var handle = svc.Open(
-                () => NodeHandle.Null,
-                BuildCard,
-                FlyoutPlacement.BottomCenter,
-                // Modal: no light dismiss, survives window deactivation; FocusTrap pushes a REAL dispatcher focus
-                // scope (Tab cycles inside; initial focus = first tab stop = the default button).
-                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.Modal, Chrome: PopupChrome.Modal));
+            var handle = OpenOn(svc);
             handle.ClosedAction = () => opened.Value = null;
-            // Escape and programmatic closes report None; button closes pre-set the result before Close().
-            handle.ClosedWithCauseAction = _ => Closed?.Invoke(result.Value);
             opened.Value = handle;
         }
 
@@ -270,4 +153,240 @@ public sealed class ContentDialog : Component
             Children = [Button.Accent(TriggerLabel, Open)],
         };
     }
+
+    /// <summary>Open the dialog directly through <paramref name="overlay"/> (no trigger button) — WinUI
+    /// <c>ShowAsync</c> for banner/menu-launched dialogs. Configure the instance in <paramref name="configure"/>
+    /// (Title, Content, buttons, callbacks). The result surfaces via <see cref="Closed"/>; the returned handle can be
+    /// closed programmatically.</summary>
+    public static OverlayHandle Show(IOverlayService overlay, Action<ContentDialog> configure)
+    {
+        var dialog = new ContentDialog();
+        configure(dialog);
+        return dialog.OpenOn(overlay);
+    }
+
+    /// <summary>Shared opener for both the declarative trigger path and <see cref="Show"/>: wires the modal chrome, the
+    /// Closing veto, and the Closed result. The card content re-renders reactively (it's a Component subtree), so the
+    /// phase-driven setup body updates without re-opening.</summary>
+    OverlayHandle OpenOn(IOverlayService overlay)
+    {
+        // Boxed so BuildCardCore's close callback (invoked on click) sees the latest result, and getHandle sees the
+        // handle even though it's assigned after Open() returns.
+        var result = new ContentDialogResult[] { ContentDialogResult.None };
+        OverlayHandle? handle = null;
+        handle = overlay.Open(
+            () => NodeHandle.Null,
+            () => BuildCardCore(() => handle, r => result[0] = r),
+            FlyoutPlacement.BottomCenter,
+            // Modal: no light dismiss, survives window deactivation; FocusTrap pushes a REAL dispatcher focus scope
+            // (Tab cycles inside; initial focus = first tab stop = the default button).
+            new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.Modal, Chrome: PopupChrome.Modal));
+        // Veto hook (Escape / light-dismiss / programmatic) — lets Closing.Cancel block dismissal mid-download.
+        handle.ClosingAction = VetoClosing;
+        // Escape and programmatic closes report None; button closes pre-set the result before Close().
+        handle.ClosedWithCauseAction = _ => Closed?.Invoke(result[0]);
+        Opened?.Invoke();
+        return handle;
+    }
+
+    bool VetoClosing(OverlayCloseCause cause)
+    {
+        if (Closing is null) return true;
+        var args = new ContentDialogClosingArgs(cause);
+        Closing(args);
+        return !args.Cancel;
+    }
+
+    Element BuildCardCore(Func<OverlayHandle?> getHandle, Action<ContentDialogResult> setResult)
+    {
+        bool primaryShown = PrimaryText.Length > 0;
+        bool secondaryShown = SecondaryText.Length > 0;
+        bool closeShown = CloseText.Length > 0;
+
+        DefaultBtn def = DefaultButton;
+        bool primaryAccent = def == DefaultBtn.Primary && primaryShown;
+        bool secondaryAccent = def == DefaultBtn.Secondary && secondaryShown;
+        bool closeAccent = def == DefaultBtn.Close && closeShown;
+
+        void CloseWith(ContentDialogResult r, Action? click)
+        {
+            setResult(r);
+            click?.Invoke();
+            getHandle()?.Close();
+        }
+
+        // Run a cancelable click handler; returns true if it vetoed the close (dialog stays open to advance phases).
+        static bool Canceled(Action<ContentDialogButtonClickArgs>? handler)
+        {
+            if (handler is null) return false;
+            var a = new ContentDialogButtonClickArgs();
+            handler(a);
+            return a.Cancel;
+        }
+
+        void RunPrimary()
+        {
+            if (!IsPrimaryButtonEnabled) return;
+            if (Canceled(PrimaryButtonClick)) return;
+            CloseWith(ContentDialogResult.Primary, PrimaryClick);
+        }
+        void RunSecondary()
+        {
+            if (!IsSecondaryButtonEnabled) return;
+            if (Canceled(SecondaryButtonClick)) return;
+            CloseWith(ContentDialogResult.Secondary, SecondaryClick);
+        }
+        void RunClose()
+        {
+            if (Canceled(CloseButtonClick)) return;
+            CloseWith(ContentDialogResult.None, CloseClick);
+        }
+
+        BoxEl CommandButton(string text, bool accent, bool enabled, Action onClick)
+        {
+            var b = accent ? Button.Accent(text, onClick, isEnabled: enabled) : Button.Standard(text, onClick, isEnabled: enabled);
+            return b with
+            {
+                MinWidth = ButtonMinW,
+                Height = ButtonH,
+                MinHeight = ButtonH,
+                Grow = 1f,
+                Justify = FlexJustify.Center,
+                // The DEFAULT (accent) button ranks FIRST in tab order so the focus trap's initial focus lands on
+                // it — WinUI focuses the default button when the dialog opens (ContentDialog_Partial SetInitialFocus).
+                TabIndex = accent ? 1 : 2,
+            };
+        }
+
+        // Enter activates the default button from ANYWHERE in the dialog (WinUI ContentDialog::ProcessEnterKey —
+        // Enter routes to the DefaultButton unless a focused control handled it). Escape is the overlay preview.
+        void OnCardKey(KeyEventArgs e)
+        {
+            if (e.KeyCode != Keys.Enter) return;
+            if (primaryAccent && IsPrimaryButtonEnabled) { RunPrimary(); e.Handled = true; }
+            else if (secondaryAccent && IsSecondaryButtonEnabled) { RunSecondary(); e.Handled = true; }
+            else if (closeAccent) { RunClose(); e.Handled = true; }
+        }
+        // One delegate instance, so the Chain re-assert collapses when a [PartPlate] modifier leaves it in place.
+        Action<KeyEventArgs> onCardKey = OnCardKey;
+
+        var buttons = new List<BoxEl>(3);
+        if (Footer is null)
+        {
+            if (primaryShown) buttons.Add(CommandButton(PrimaryText, primaryAccent, IsPrimaryButtonEnabled, RunPrimary));
+            if (secondaryShown) buttons.Add(CommandButton(SecondaryText, secondaryAccent, IsSecondaryButtonEnabled, RunSecondary));
+            if (closeShown) buttons.Add(CommandButton(CloseText, closeAccent, true, RunClose));
+        }
+        float cardW = Math.Clamp(DialogWidth ?? (buttons.Count >= 3 ? 480f : MinW), MinW, MaxW);
+
+        Element[] commandChildren;
+        if (buttons.Count == 1)
+        {
+            // WinUI single-button states move the visible button into the right star column; the unused left star
+            // column remains, separated by ContentDialogButtonSpacing (8).
+            commandChildren = [new BoxEl { Grow = 1f, HitTestVisible = false }, buttons[0]];
+        }
+        else
+        {
+            commandChildren = new Element[buttons.Count];
+            for (int i = 0; i < buttons.Count; i++)
+                commandChildren[i] = buttons[i];
+        }
+
+        // WinUI ContentControl.Content replaces the Message TextEl; long bodies scroll inside the fixed card
+        // (the WinUI ContentScrollViewer) instead of overflowing MaxHeight.
+        Element contentBody = Content is not null
+            ? new ScrollEl { Content = Content, ContentSized = true, MaxHeight = MaxH - 200f }
+            : new TextEl(Message) { Size = ContentSize, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap };
+
+        var contentRegion = new BoxEl
+        {
+            Direction = 1,
+            Padding = Edges4.All(Pad),
+            Fill = Tok.FillLayerAlt,   // ContentDialogTopOverlay = LayerFillColorAltBrush
+            Children =
+            [
+                Parts.Apply(PartTitle, new TextEl(Title)
+                {
+                    Size = TitleSize,
+                    Weight = 600,      // FontWeight="SemiBold" on the Title presenter (ContentDialog_themeresources.xaml:238)
+                    Color = Tok.TextPrimary,
+                    Wrap = TextWrap.Wrap,
+                    MaxLines = 2,
+                    Trim = TextTrim.WordEllipsis,
+                    Margin = new Edges4(0, 0, 0, ContentGap),   // ContentDialogTitleMargin 0,0,0,12
+                }),
+                contentBody,
+            ],
+        };
+        contentRegion = Parts.Apply(PartContent, contentRegion) with { Children = contentRegion.Children };   // structure = title + content
+
+        var cardChildren = new List<Element>(3) { contentRegion };
+        if (buttons.Count > 0 || Footer is not null)
+        {
+            // ContentScrollViewer's inner grid carries ContentDialogSeparatorThickness=0,0,0,1 and
+            // ContentDialogSeparatorBorderBrush=CardStrokeColorDefault. Model it as the bottom separator between
+            // the top overlay and the command row.
+            cardChildren.Add(new BoxEl { Height = 1f, Fill = Tok.StrokeCardDefault });
+            // A Footer replaces the built-in buttons inside the command space (same chrome), letting a reactive
+            // component swap the actions per phase without re-opening the dialog.
+            Element[] commandKids = Footer is not null ? [Footer] : commandChildren;
+            var commandRow = new BoxEl
+            {
+                Direction = 0,
+                Gap = BtnGap,
+                Justify = FlexJustify.Start,
+                AlignItems = FlexAlign.Stretch,
+                Padding = Edges4.All(Pad),
+                Fill = Tok.FillSolidBase,   // the command space fills (CommandSpace Background = ContentDialogBackground)
+                Children = commandKids,
+            };
+            // Restyle via [PartCommandRow]; the buttons (handlers + TabIndex focus ranking) always win.
+            cardChildren.Add(Parts.Apply(PartCommandRow, commandRow) with { Children = commandKids });
+        }
+
+        var plate = new BoxEl
+        {
+            Direction = 1,
+            Width = cardW,
+            MinWidth = MinW,
+            MaxWidth = MaxW,
+            MinHeight = MinH,
+            MaxHeight = MaxH,
+            Corners = Radii.OverlayAll,
+            Fill = Tok.FillSolidBase,
+            BorderColor = Tok.StrokeSurfaceDefault,
+            BorderWidth = 1f,
+            Shadow = Elevation.Dialog,
+            ClipToBounds = true,
+            OnKeyDown = onCardKey,   // Enter → default button (bubbles from any focused child inside the trap)
+            Children = cardChildren.ToArray(),
+        };
+        if (Parts is { } pp)
+        {
+            var m = pp.Apply(PartPlate, plate);
+            plate = m with
+            {
+                Children = plate.Children,
+                OnKeyDown = TemplateParts.Chain(onCardKey, m.OnKeyDown),   // Enter routing first, then any modifier handler
+            };
+        }
+        return plate;
+    }
+}
+
+/// <summary>WinUI <c>ContentDialogButtonClickEventArgs</c>: set <see cref="Cancel"/> in a
+/// Primary/Secondary/CloseButtonClick handler to keep the dialog open.</summary>
+public sealed class ContentDialogButtonClickArgs
+{
+    public bool Cancel;
+}
+
+/// <summary>WinUI <c>ContentDialogClosingEventArgs</c>: set <see cref="Cancel"/> to veto the dismissal.
+/// <see cref="Cause"/> is why the close was attempted (button/programmatic, Escape, or light-dismiss).</summary>
+public sealed class ContentDialogClosingArgs
+{
+    public ContentDialogClosingArgs(OverlayCloseCause cause) => Cause = cause;
+    public OverlayCloseCause Cause { get; }
+    public bool Cancel;
 }
