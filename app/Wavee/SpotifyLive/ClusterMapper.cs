@@ -74,7 +74,8 @@ public static class ClusterMapper
         string artistUri = !string.IsNullOrEmpty(t.ArtistUri) ? t.ArtistUri : Get("artist_uri");
         string albumUri = !string.IsNullOrEmpty(t.AlbumUri) ? t.AlbumUri : Get("album_uri");
         return new RemoteTrack(t.Uri, Get("title"), Get("artist_name"), artistUri, Get("album_title"), albumUri,
-            img.Length == 0 ? null : img, dur, t.Uid, t.Provider);
+            img.Length == 0 ? null : img, dur, t.Uid, t.Provider,
+            m.Count == 0 ? null : new Dictionary<string, string>(m, StringComparer.Ordinal));
     }
 
     static DeviceKind MapKind(P.DeviceType type, bool isUs)

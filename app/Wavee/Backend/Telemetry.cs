@@ -4,7 +4,7 @@ namespace Wavee.Backend;
 
 // ── Stage I — play-history telemetry (the Recently Played / play-count signal) ────────────────────────────────────────
 // A projection over the playback event log that reports each track-play to a sink. The proto-free seam + accumulation live
-// here (unit-tested); the live sink (SpotifyLive/GaboTelemetry) turns a report into the gabo-receiver-service wire events.
+// here (unit-tested); the live sink (SpotifyLive/Gabo/RawCoreStreamProjection + GaboBatcher) posts gabo-receiver events.
 // Per the decision to include telemetry in v1: this is the play-START signal (the core "this track was played" event);
 // the richer gabo envelopes (played-duration segments, content-integrity, audio-session) layer on top in the live sink.
 

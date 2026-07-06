@@ -2,6 +2,20 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Out-of-scope paths — do NOT read, search, edit, or summarize
+
+Scope is the **FluentGpu engine** (`src/`, `design/`, `docs/`) and app UI. The paths below are out of
+scope and belong to a separate workspace. Unless the user names a specific file below **and** confirms
+it for this session, do not read, grep, edit, or summarize:
+
+- `app/.native/**`, `app/Wavee.PlayPlay/**`, `private-runtimes/**`
+- `app/tmp_*`, `scripts/pyghidra*`
+- `app/docs/wavee-playplay*.md`, `app/docs/playplay-*.md`, `app/docs/spotiload-offline-path.md`
+- `**/playplay-runtime.json`
+
+These are also denied to Claude Code's file tools in `.claude/settings.json`. If a request would
+require them, ask the user to move it to the dedicated workspace.
+
 ## What this repository is
 
 `fluent-gpu` is a from-scratch, near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10 — the Reactor/React programming model (immutable `Element` records + `Component` + hooks + a keyed reconciler) over a signals-first reactive core and a custom Direct3D 12 + DirectWrite + DirectComposition renderer, behind a swappable PAL/RHI/Text seam (macOS-ready).

@@ -987,6 +987,7 @@ sealed class QueueButton : Component
                 foreach (var e in queue)
                 {
                     var entry = e;
+                    if (entry.Bucket == QueueBucket.History) continue;
                     if (entry.Bucket != QueueBucket.NowPlaying && entry.Bucket != last)
                         items.Add(new MenuFlyoutItem(entry.Bucket == QueueBucket.UserQueue ? "Next in queue" : "Next up", null, false, () => { }));
                     last = entry.Bucket;

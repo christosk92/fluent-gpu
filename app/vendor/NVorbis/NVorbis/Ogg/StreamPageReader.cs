@@ -16,6 +16,9 @@ namespace NVorbis.Ogg
         private readonly IPageData _reader;
         private readonly List<long> _pageOffsets = new List<long>();
         private readonly List<long> _pageGranulePositions = new List<long>();
+        // Byte offset (positive, resync sign stripped) → index in _pageOffsets. Lets seek paths
+        // reuse an existing index for a page instead of appending a duplicate entry.
+        private readonly Dictionary<long, int> _pageOffsetToIndex = new Dictionary<long, int>();
         private readonly List<int> _seekCheckpointPageIndices = new List<int>();
         private readonly List<long> _seekCheckpointGranulePositions = new List<long>();
         private readonly List<long> _seekCheckpointOffsets = new List<long>();
@@ -75,60 +78,62 @@ namespace NVorbis.Ogg
             // than the current _maxGranulePos.
             if (_probingMode) return;
 
-            // verify we haven't read all pages
-            if (!HasAllPages)
+            // NOTE: this is deliberately NOT gated on HasAllPages. With bisected seeks the index is
+            // SPARSE — "the final page has been seen" (HasAllPages, which validates MaxGranulePosition)
+            // does not mean "every page is indexed". Gating here made any page ingestion after the first
+            // read of the EOS page impossible: post-EOS seeks into never-indexed regions couldn't
+            // materialize their landing page, and playback advancing past the indexed tail ended early —
+            // both surfacing as "playback/seek stops at the furthest-downloaded position".
+
+            // if the page's granule position is 0 or less it doesn't have any sample
+            if (_reader.GranulePosition != -1)
             {
-                // verify the new page's flags
-
-                // if the page's granule position is 0 or less it doesn't have any sample
-                if (_reader.GranulePosition != -1)
+                if (_firstDataPageIndex == null && _reader.GranulePosition > 0)
                 {
-                    if (_firstDataPageIndex == null && _reader.GranulePosition > 0)
-                    {
-                        _firstDataPageIndex = _pageOffsets.Count;
-                    }
-                    // Defensive: never regress _maxGranulePos. The stored value can be
-                    // ahead of the current page's granule because a prior probe / forward
-                    // jump landed further into the file. That's expected — just skip the
-                    // update for this page (don't throw and don't move backward).
-                    if (_reader.GranulePosition > _maxGranulePos)
-                    {
-                        _maxGranulePos = _reader.GranulePosition;
-                    }
+                    _firstDataPageIndex = _pageOffsets.Count;
                 }
-                // granule position == -1, so this page doesn't complete any packets
-                // we don't really care if it's a continuation itself, only that it is continued and has a single packet
-                else if (_firstDataPageIndex.HasValue && (!_reader.IsContinued || _reader.PacketCount != 1))
+                // Defensive: never regress _maxGranulePos. The stored value can be
+                // ahead of the current page's granule because a prior probe / forward
+                // jump landed further into the file. That's expected — just skip the
+                // update for this page (don't throw and don't move backward).
+                if (_reader.GranulePosition > _maxGranulePos)
                 {
-                    throw new System.IO.InvalidDataException("Granule Position was -1 but page does not have exactly 1 continued packet.");
+                    _maxGranulePos = _reader.GranulePosition;
                 }
-
-                if ((_reader.PageFlags & PageFlags.EndOfStream) != 0)
-                {
-                    HasAllPages = true;
-                }
-
-                if (_reader.IsResync.Value || (_lastSeqNbr != 0 && _lastSeqNbr + 1 != _reader.SequenceNumber))
-                {
-                    // as a practical matter, if the sequence numbers are "wrong", our logical stream is now out of sync
-                    // so whether the page header sync was lost or we just got an out of order page / sequence jump, we're counting it as a resync
-                    _pageOffsets.Add(-_reader.PageOffset);
-                }
-                else
-                {
-                    _pageOffsets.Add(_reader.PageOffset);
-                }
-
-                // Cache granule position for fast seeking
-                _pageGranulePositions.Add(_reader.GranulePosition);
-
-                // Maintain a sparse checkpoint index so forward seek can jump using
-                // verified (already-read) byte/granule anchors.
-                var pageIndex = _pageOffsets.Count - 1;
-                TryAddSeekCheckpoint(pageIndex, _reader.GranulePosition, _reader.PageOffset);
-
-                _lastSeqNbr = _reader.SequenceNumber;
             }
+            // granule position == -1, so this page doesn't complete any packets
+            // we don't really care if it's a continuation itself, only that it is continued and has a single packet
+            else if (_firstDataPageIndex.HasValue && (!_reader.IsContinued || _reader.PacketCount != 1))
+            {
+                throw new System.IO.InvalidDataException("Granule Position was -1 but page does not have exactly 1 continued packet.");
+            }
+
+            if ((_reader.PageFlags & PageFlags.EndOfStream) != 0)
+            {
+                HasAllPages = true;
+            }
+
+            if (_reader.IsResync.Value || (_lastSeqNbr != 0 && _lastSeqNbr + 1 != _reader.SequenceNumber))
+            {
+                // as a practical matter, if the sequence numbers are "wrong", our logical stream is now out of sync
+                // so whether the page header sync was lost or we just got an out of order page / sequence jump, we're counting it as a resync
+                _pageOffsets.Add(-_reader.PageOffset);
+            }
+            else
+            {
+                _pageOffsets.Add(_reader.PageOffset);
+            }
+
+            // Cache granule position for fast seeking
+            _pageGranulePositions.Add(_reader.GranulePosition);
+
+            // Maintain a sparse checkpoint index so forward seek can jump using
+            // verified (already-read) byte/granule anchors.
+            var pageIndex = _pageOffsets.Count - 1;
+            _pageOffsetToIndex.TryAdd(_reader.PageOffset, pageIndex);
+            TryAddSeekCheckpoint(pageIndex, _reader.GranulePosition, _reader.PageOffset);
+
+            _lastSeqNbr = _reader.SequenceNumber;
         }
 
         public Memory<byte>[] GetPagePackets(int pageIndex)
@@ -166,13 +171,19 @@ namespace NVorbis.Ogg
             var traceEnabled = NVorbisDiagnostics.IsEnabled;
             var traceStart = traceEnabled ? System.Diagnostics.Stopwatch.GetTimestamp() : 0L;
 
-            // if we're being asked for the first granule, just grab the very first data page
+            // if we're being asked for the first granule, resolve the FILE-first data page. Don't trust
+            // _firstDataPageIndex here: it latches onto the first-ADDED data page, which after a bisected
+            // forward seek is a far page — a restart ("seek to 0", the prev-button path) would land there.
             int pageIndex = -1;
             string branch = "?";
             if (granulePos == 0)
             {
                 branch = "first";
-                pageIndex = FindFirstDataPage();
+                pageIndex = FindPageInIndexedOrGap(0);
+                if (pageIndex == -1)
+                {
+                    pageIndex = FindFirstDataPage();
+                }
             }
             else
             {
@@ -183,10 +194,10 @@ namespace NVorbis.Ogg
                     // most likely, we can look at previous pages for the appropriate one...
                     if (granulePos < pageGP)
                     {
-                        branch = "bisection";
+                        branch = "bracket";
                         if (traceEnabled)
-                            NVorbisDiagnostics.Log($"[seek-trace] SPR.FindPage bisection target={granulePos} low_pageGP=? high_pageIdx={lastPageIndex} high_pageGP={pageGP}");
-                        pageIndex = FindPageBisection(granulePos, FindFirstDataPage(), lastPageIndex, pageGP);
+                            NVorbisDiagnostics.Log($"[seek-trace] SPR.FindPage bracket target={granulePos} high_pageIdx={lastPageIndex} high_pageGP={pageGP}");
+                        pageIndex = FindPageInIndexedOrGap(granulePos);
                     }
                     // forward seek: try byte-position bisection first (libvorbisfile-style ~5–10
                     // hops vs sequential's O(N) page walk). Falls through to FindPageForward when
@@ -232,7 +243,8 @@ namespace NVorbis.Ogg
         {
             while (!_firstDataPageIndex.HasValue)
             {
-                if (!GetPageRaw(_pageOffsets.Count, out _))
+                // read forward until a data page gets indexed (GetPageRaw would index PAST the list end)
+                if (!GetNextPageGranulePos(out _))
                 {
                     return -1;
                 }
@@ -447,11 +459,10 @@ namespace NVorbis.Ogg
                 }
                 else
                 {
-                    // Exact granule hit — but the page isn't in _pageOffsets yet (probe
-                    // suppressed the add). Materialize it via the regular path and use
-                    // the resulting index.
-                    resolvedPageIndex = MaterializePageAt(probePageOffset);
-                    if (resolvedPageIndex >= 0) resolvedPageIndex += 1; // FindPage convention
+                    // Exact granule hit — per the FindPage convention the target sample is the
+                    // FIRST sample of the next file page; walk to it (index-arithmetic "+1" is
+                    // wrong on a sparse index — the next INDEX is not the next FILE page).
+                    resolvedPageIndex = WalkToPageContaining(probePageOffset, targetGranulePos);
                     break;
                 }
 
@@ -475,23 +486,17 @@ namespace NVorbis.Ogg
                 if (lowOffset == originalLowOffset)
                 {
                     // Bisection made no progress (e.g., target was within MinBisectGap).
-                    // Don't re-materialize the original page (that would duplicate it
-                    // in _pageOffsets); just sequential-walk from the original index.
+                    // Sequential-walk from the original index (contiguous region — safe).
                     resolvedPageIndex = FindPageForward(currentPageIndex, currentGranulePos, targetGranulePos);
                 }
                 else
                 {
-                    // Converged to a new low-anchor byte position. Materialize that page
-                    // (so _pageOffsets has a real index for it) then walk forward
-                    // sequentially — typically 1–3 page reads against cached bytes.
-                    var anchorIdx = MaterializePageAt(lowOffset);
-                    if (anchorIdx < 0)
-                    {
-                        // Couldn't add the low anchor — fall back to the original
-                        // sequential walk from the original starting page.
-                        return -1;
-                    }
-                    resolvedPageIndex = FindPageForward(anchorIdx, lowGP, targetGranulePos);
+                    // Converged to a new low-anchor byte position: finish with a FILE-order walk
+                    // to the containing page (typically 1–3 header reads against cached bytes).
+                    // Index-order walking from a materialized anchor is unsafe — on a sparse index
+                    // the next INDEX is not the next FILE page.
+                    resolvedPageIndex = WalkToPageContaining(lowOffset, targetGranulePos);
+                    if (resolvedPageIndex < 0) return -1;
                 }
             }
 
@@ -552,6 +557,7 @@ namespace NVorbis.Ogg
 
                 _reader.SeekForNextPage(probeByteOffset);
                 _probingMode = true;
+                _reader.ProbeMode = true;   // a probe scanning past the last page must not latch EOS / tear down stream readers
                 try
                 {
                     if (!_reader.ReadNextPage()) return false;
@@ -559,6 +565,7 @@ namespace NVorbis.Ogg
                 finally
                 {
                     _probingMode = false;
+                    _reader.ProbeMode = false;
                 }
 
                 pageOffset = _reader.PageOffset;
@@ -685,8 +692,11 @@ namespace NVorbis.Ogg
 
         private bool GetNextPageGranulePos(out long granulePos)
         {
+            // Not gated on HasAllPages: the index is sparse, so "the EOS page was seen once" must not
+            // block reading pages the seek paths skipped over. Termination comes from ReadNextPage
+            // returning false at the actual end of the file.
             var pageCount = _pageOffsets.Count;
-            while (pageCount == _pageOffsets.Count && !HasAllPages)
+            while (pageCount == _pageOffsets.Count)
             {
                 _reader.Lock();
                 try
@@ -694,7 +704,7 @@ namespace NVorbis.Ogg
                     if (!_reader.ReadNextPage())
                     {
                         HasAllPages = true;
-                        continue;
+                        break;
                     }
 
                     if (pageCount < _pageOffsets.Count)
@@ -712,78 +722,132 @@ namespace NVorbis.Ogg
             return false;
         }
 
-        private int FindPageBisection(long granulePos, int low, int high, long highGranulePos)
+        // Largest legal Ogg page (27-byte header + 255 lacing values + 255*255 data) plus slack.
+        // Two indexed pages further apart than this in the FILE cannot be adjacent — there are
+        // unindexed pages between them.
+        private const long MaxOggPageBytes = 27 + 255 + 255 * 255 + 32;
+
+        // Backward/mid-file seek resolution over the (possibly granule-sparse) page index.
+        // _pageOffsets is APPEND-ONLY: forward-seek materialization appends far pages, and playback
+        // after a backward landing appends from wherever decoding resumed — so the list is neither
+        // granule- nor offset-monotonic, and it can carry large BYTE GAPS. The old FindPageBisection
+        // assumed a dense monotonic index; a seek into a gap therefore resolved to the first indexed
+        // page PAST the gap — the previous seek's landing point — i.e. every seek "landed at the
+        // furthest-downloaded position". Instead:
+        //   1. scan the cached (offset, granule) pairs for the tightest bracket around the target;
+        //   2. if the bracketing pages are byte-adjacent the upper page contains the target — done
+        //      (this is the fast path for every seek within contiguously played content);
+        //   3. otherwise byte-bisect inside the gap with side-effect-free probes, then walk forward
+        //      in FILE order to the first page whose granule passes the target and materialize it.
+        private int FindPageInIndexedOrGap(long granulePos)
         {
-            var traceEnabled = NVorbisDiagnostics.IsEnabled;
-            var hop = 0;
-            var ioHops = 0;
-            var cachedHops = 0;
-            // we can treat low as always being before the first sample; later work will correct that if needed
-            var lowGranulePos = 0L;
-            int dist;
-            while ((dist = high - low) > 0)
+            // 1) tightest bracket: bestLow = greatest-offset indexed page with gp <= target (header
+            //    pages, gp == 0, are valid low anchors), bestHigh = least-offset indexed page with
+            //    gp > target. Linear scan over the WHOLE index on purpose — the list is unordered by
+            //    construction (and _firstDataPageIndex latches onto the first-ADDED data page, which
+            //    after a bisected seek is a far page, so it is NOT a usable file-position anchor).
+            //    N is trivial next to the probe I/O a seek does anyway.
+            int highIdx = -1;
+            long lowOff = -1, lowGP = 0, highOff = long.MaxValue, highGP = -1;
+            for (var i = 0; i < _pageGranulePositions.Count; i++)
             {
-                hop++;
-                // try to find the right page by assumming they are all about the same size
-                var index = low + (int)(dist * ((granulePos - lowGranulePos) / (double)(highGranulePos - lowGranulePos)));
-
-                // Use cached granule position if available (O(1) lookup instead of reading from stream)
-                long idxGranulePos;
-                bool cached;
-                long readStart = 0;
-                if (index < _pageGranulePositions.Count)
+                var gp = _pageGranulePositions[i];
+                if (gp < 0) continue;   // completes no packet — carries no granule anchor
+                var off = _pageOffsets[i];
+                if (off < 0) off = -off;
+                if (gp <= granulePos)
                 {
-                    cached = true;
-                    cachedHops++;
-                    idxGranulePos = _pageGranulePositions[index];
+                    if (off > lowOff) { lowOff = off; lowGP = gp; }
                 }
-                else
+                else if (off < highOff)
                 {
-                    cached = false;
-                    ioHops++;
-                    if (traceEnabled) readStart = System.Diagnostics.Stopwatch.GetTimestamp();
-                    if (!GetPageRaw(index, out idxGranulePos))
-                    {
-                        if (traceEnabled)
-                            NVorbisDiagnostics.Log($"[seek-trace] SPR.bisect hop={hop} pageIdx={index} GetPageRaw returned false");
-                        return -1;
-                    }
-                    if (traceEnabled)
-                    {
-                        var ms = (System.Diagnostics.Stopwatch.GetTimestamp() - readStart) * 1000d
-                                 / System.Diagnostics.Stopwatch.Frequency;
-                        NVorbisDiagnostics.Log($"[seek-trace] SPR.bisect hop={hop} pageIdx={index} cached=false read_elapsed={ms:F1}ms");
-                    }
-                }
-                if (traceEnabled && cached)
-                {
-                    NVorbisDiagnostics.Log($"[seek-trace] SPR.bisect hop={hop} pageIdx={index} cached=true");
-                }
-
-                // figure out where to go from here
-                if (idxGranulePos > granulePos)
-                {
-                    // we read a page after our target (could be the right one, but we don't know yet)
-                    high = index;
-                    highGranulePos = idxGranulePos;
-                }
-                else if (idxGranulePos < granulePos)
-                {
-                    // we read a page before our target
-                    low = index + 1;
-                    lowGranulePos = idxGranulePos + 1;
-                }
-                else
-                {
-                    // direct hit
-                    if (traceEnabled)
-                        NVorbisDiagnostics.Log($"[seek-trace] SPR.bisect END hops={hop} ioHops={ioHops} cachedHops={cachedHops} (direct hit)");
-                    return index + 1;
+                    highOff = off; highGP = gp; highIdx = i;
                 }
             }
-            if (traceEnabled)
-                NVorbisDiagnostics.Log($"[seek-trace] SPR.bisect END hops={hop} ioHops={ioHops} cachedHops={cachedHops}");
-            return low;
+            if (highIdx < 0) return -1;   // no indexed page past the target — the caller falls back
+
+            if (lowOff < 0)
+            {
+                // nothing at or below the target indexed yet — anchor at the file start
+                lowOff = 0;
+                lowGP = 0;
+            }
+
+            // 2) adjacent (or inconsistent — trust the verified upper page) → the upper page holds the target
+            if (lowOff >= highOff || highOff - lowOff <= MaxOggPageBytes) return highIdx;
+
+            // 3) real gap — resolve inside it
+            if (NVorbisDiagnostics.IsEnabled)
+                NVorbisDiagnostics.Log($"[seek-trace] SPR.bracket gap target={granulePos} low=[{lowOff},gp={lowGP}] high=[{highOff},gp={highGP}] gapBytes={highOff - lowOff}");
+            return FindPageInByteRange(lowOff, lowGP, highOff, highGP, granulePos);
+        }
+
+        // Interpolated byte bisection between two verified page anchors bracketing the target
+        // granule, using side-effect-free probes; finishes with a file-order walk to the exact page.
+        private int FindPageInByteRange(long lowOffset, long lowGP, long highOffset, long highGP, long targetGP)
+        {
+            const int MaxHops = 24;
+            const long MinBisectGap = 32 * 1024;
+
+            var hops = 0;
+            var lastProbe = -1L;
+            while (highOffset - lowOffset > MinBisectGap && hops < MaxHops)
+            {
+                hops++;
+                var span = highGP - lowGP;
+                var frac = span > 0 ? (targetGP - lowGP) / (double)span : 0.5;
+                if (frac < 0.05) frac = 0.05;
+                else if (frac > 0.95) frac = 0.95;
+                var probe = lowOffset + (long)((highOffset - lowOffset) * frac);
+                if (probe <= lowOffset) probe = lowOffset + 1;
+                if (probe >= highOffset) probe = highOffset - 1;
+                if (probe == lastProbe) break;
+                lastProbe = probe;
+
+                var found = ProbeForwardPage(probe, out var pageOff, out var pageGP);
+                // pages that complete no packet (gp == -1) carry no anchor — scan on a little
+                var guard = 0;
+                while (!found && pageOff >= 0 && pageOff < highOffset && guard++ < 8)
+                {
+                    found = ProbeForwardPage(pageOff + 1, out pageOff, out pageGP);
+                }
+                if (NVorbisDiagnostics.IsEnabled)
+                    NVorbisDiagnostics.Log($"[seek-trace] SPR.range-bisect hop={hops} probe={probe} pageOff={pageOff} pageGP={pageGP} bracket=[{lowOffset},{highOffset})");
+                if (!found || pageOff >= highOffset)
+                {
+                    // no usable page starts strictly inside (probe, highOffset): the boundary page
+                    // begins at or before the probe — shrink from the top by byte position
+                    highOffset = probe;
+                    continue;
+                }
+                if (pageGP > targetGP) { highOffset = pageOff; highGP = pageGP; }
+                else if (pageOff > lowOffset) { lowOffset = pageOff; lowGP = pageGP; }
+                else break;
+            }
+
+            return WalkToPageContaining(lowOffset, targetGP);
+        }
+
+        // File-order walk from just past the page at lowPageOffset to the first page whose granule
+        // passes the target (the page CONTAINING the target sample, honoring the "+1 on exact hit"
+        // FindPage convention), then hands back a real index for it.
+        private int WalkToPageContaining(long lowPageOffset, long targetGP)
+        {
+            var from = lowPageOffset + 1;
+            for (var i = 0; i < 1 << 20; i++)
+            {
+                var found = ProbeForwardPage(from, out var pageOff, out var pageGP);
+                if (pageOff < 0) return -1;   // no further pages in the file
+                if (found && pageGP > targetGP) return MaterializeOrLookup(pageOff);
+                from = pageOff + 1;
+            }
+            return -1;
+        }
+
+        private int MaterializeOrLookup(long pageOffset)
+        {
+            if (_pageOffsetToIndex.TryGetValue(pageOffset, out var idx)) return idx;
+            return MaterializePageAt(pageOffset);
         }
 
         private bool GetPageRaw(int pageIndex, out long pageGranulePos)
@@ -827,7 +891,10 @@ namespace NVorbis.Ogg
             _reader.Lock();
             try
             {
-                while (pageIndex >= _pageOffsets.Count && !HasAllPages)
+                // Not gated on HasAllPages (sparse index — see GetNextPageGranulePos): sequential
+                // continuation past the indexed tail must keep reading file-order pages even after
+                // the EOS page has been seen once by a seek.
+                while (pageIndex >= _pageOffsets.Count)
                 {
                     if (_reader.ReadNextPage())
                     {

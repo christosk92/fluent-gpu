@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
+using Google.Protobuf;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Wavee.Backend;
 using Wavee.Backend.Metadata;
 using Wavee.Core;
+using Wavee.Protocol.Playback;
 
 namespace Wavee.SpotifyLive;
 
@@ -50,13 +52,14 @@ public sealed class LiveContextResolver : IContextResolver
         // 2) Resolve via the unified context-resolve endpoint, eager-loading a bounded number of pages.
         var refs = new List<QueuedRef>();
         string? sorting = null, nextPage = null;
+        ContextJson.Result jsonInfo = default;
         var resp = await _transport.Request(Channel.Spclient, ResolvePath(spec), default, ct).ConfigureAwait(false);
         if (!resp.Ok || resp.Body is null || resp.Body.Length == 0)
         {
             _log?.Invoke($"context-resolve failed ({resp.Status}): {spec.Uri}");
             return ResolvedContext.Empty;
         }
-        ContextJson.Parse(resp.Body, refs, ref sorting, ref nextPage);
+        ContextJson.Parse(resp.Body, refs, ref sorting, ref nextPage, out jsonInfo);
 
         int pages = 1;
         while (!string.IsNullOrEmpty(nextPage) && pages < MaxEagerPages && !ContextResolve.IsInfinite(spec.Uri))
@@ -73,18 +76,126 @@ public sealed class LiveContextResolver : IContextResolver
 
         var tracks = await HydrateAsync(refs, ct).ConfigureAwait(false);
         int start = ContextResolve.FindStartIndex(tracks, spec.SkipToTrackUri, spec.SkipToTrackUid, spec.SkipToIndex);
-        return new ResolvedContext(tracks, start, sorting, nextPage, ContextResolve.IsInfinite(spec.Uri));
+        return new ResolvedContext(tracks, start, sorting, nextPage, ContextResolve.IsInfinite(spec.Uri),
+            jsonInfo.Metadata, string.IsNullOrEmpty(jsonInfo.ContextUri) ? null : jsonInfo.ContextUri);
     }
 
-    public async Task<IReadOnlyList<QueuedTrack>> LoadMoreAsync(string nextPageUrl, CancellationToken ct = default)
+    public async Task<ContextPage> LoadMoreAsync(string nextPageUrl, CancellationToken ct = default)
     {
-        if (string.IsNullOrEmpty(nextPageUrl)) return Array.Empty<QueuedTrack>();
+        if (string.IsNullOrEmpty(nextPageUrl)) return ContextPage.Empty;
         var resp = await _transport.Request(PageChannel(nextPageUrl), PageRoute(nextPageUrl), default, ct).ConfigureAwait(false);
-        if (!resp.Ok || resp.Body is null || resp.Body.Length == 0) return Array.Empty<QueuedTrack>();
+        if (!resp.Ok || resp.Body is null || resp.Body.Length == 0) return ContextPage.Empty;
         var refs = new List<QueuedRef>();
         string? _s = null, _n = null;
         ContextJson.Parse(resp.Body, refs, ref _s, ref _n);
-        return refs.Count == 0 ? Array.Empty<QueuedTrack>() : await HydrateAsync(refs, ct).ConfigureAwait(false);
+        if (refs.Count == 0) return new ContextPage(Array.Empty<QueuedTrack>(), _n);
+        return new ContextPage(await HydrateAsync(refs, ct).ConfigureAwait(false), _n);
+    }
+
+    public async Task<ResolvedContext> ResolveAutoplayAsync(string contextUri, IReadOnlyList<string> recentTrackUris,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(contextUri)) return ResolvedContext.Empty;
+        try
+        {
+            return contextUri.StartsWith("spotify:track:", StringComparison.Ordinal)
+                ? await ResolveRadioApolloAsync(contextUri, recentTrackUris, ct).ConfigureAwait(false)
+                : await ResolveContextAutoplayAsync(contextUri, recentTrackUris, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _log?.Invoke("autoplay resolve failed for " + contextUri + ": " + ex.Message);
+            return ResolvedContext.Empty;
+        }
+    }
+
+    public async Task<ResolvedContext> ResolveAutopodcastAsync(string contextUri, IReadOnlyList<string> recentEpisodeUris,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(contextUri)) return ResolvedContext.Empty;
+        var request = new AutoplayContextRequest { ContextUri = contextUri, IsVideo = false };
+        for (int i = 0; i < recentEpisodeUris.Count; i++)
+            if (!string.IsNullOrEmpty(recentEpisodeUris[i])) request.RecentTrackUri.Add(recentEpisodeUris[i]);
+
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Content-Type"] = "application/x-protobuf",
+            ["Accept"] = "application/json",
+        };
+        var resp = await _transport.Request(Channel.Spclient, "/context-resolve/v1/autopodcast",
+            request.ToByteArray(), ct, "POST", headers).ConfigureAwait(false);
+        if (!resp.Ok || resp.Body is null || resp.Body.Length == 0)
+        {
+            _log?.Invoke($"autopodcast failed ({resp.Status}): {contextUri}");
+            return ResolvedContext.Empty;
+        }
+
+        var refs = new List<QueuedRef>();
+        string? sorting = null, nextPage = null;
+        ContextJson.Parse(resp.Body, refs, ref sorting, ref nextPage, out var info);
+        if (refs.Count == 0) return ResolvedContext.Empty;
+        var tracks = Tag(await HydrateAsync(refs, ct).ConfigureAwait(false), "autoplay");
+        return new ResolvedContext(tracks, 0, sorting, nextPage, true, info.Metadata, info.ContextUri ?? contextUri);
+    }
+
+    async Task<ResolvedContext> ResolveContextAutoplayAsync(string contextUri, IReadOnlyList<string> recentTrackUris, CancellationToken ct)
+    {
+        var request = new AutoplayContextRequest { ContextUri = contextUri, IsVideo = false };
+        for (int i = 0; i < recentTrackUris.Count; i++)
+            if (!string.IsNullOrEmpty(recentTrackUris[i])) request.RecentTrackUri.Add(recentTrackUris[i]);
+
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Content-Type"] = "application/x-protobuf",
+            ["Accept"] = "application/json",
+        };
+        var resp = await _transport.Request(Channel.Spclient, "/context-resolve/v1/autoplay",
+            request.ToByteArray(), ct, "POST", headers).ConfigureAwait(false);
+        if (!resp.Ok || resp.Body is null || resp.Body.Length == 0)
+        {
+            _log?.Invoke($"autoplay endpoint failed ({resp.Status}): {contextUri}");
+            return ResolvedContext.Empty;
+        }
+
+        var refs = new List<QueuedRef>();
+        string? sorting = null, nextPage = null;
+        ContextJson.Parse(resp.Body, refs, ref sorting, ref nextPage, out var info);
+        if (refs.Count == 0) return ResolvedContext.Empty;
+        var tracks = Tag(await HydrateAsync(refs, ct).ConfigureAwait(false), "autoplay");
+        var stationUri = string.IsNullOrEmpty(info.ContextUri) ? contextUri : info.ContextUri;
+        return new ResolvedContext(tracks, 0, sorting, nextPage, true, info.Metadata, stationUri);
+    }
+
+    async Task<ResolvedContext> ResolveRadioApolloAsync(string seedTrackUri, IReadOnlyList<string> recentTrackUris, CancellationToken ct)
+    {
+        string seedId = StripTrackPrefix(seedTrackUri);
+        var prev = new List<string>(recentTrackUris.Count);
+        for (int i = 0; i < recentTrackUris.Count; i++)
+        {
+            var id = StripTrackPrefix(recentTrackUris[i]);
+            if (!string.IsNullOrEmpty(id)) prev.Add(Uri.EscapeDataString(id));
+        }
+
+        int salt = Random.Shared.Next(100_000, 1_000_000);
+        var route = "/radio-apollo/v3/tracks/spotify:station:track:" + seedId
+            + "?salt=" + salt.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            + "&autoplay=true&count=50&isVideo=false"
+            + "&prev_tracks=" + string.Join(',', prev)
+            + "&pageNum=2&minimal=true";
+        var resp = await _transport.Request(Channel.Spclient, route, default, ct).ConfigureAwait(false);
+        if (!resp.Ok || resp.Body is null || resp.Body.Length == 0)
+        {
+            _log?.Invoke($"radio-apollo failed ({resp.Status}): {seedTrackUri}");
+            return ResolvedContext.Empty;
+        }
+
+        var refs = new List<QueuedRef>();
+        string? sorting = null, nextPage = null;
+        ContextJson.Parse(resp.Body, refs, ref sorting, ref nextPage);
+        if (refs.Count == 0) return ResolvedContext.Empty;
+        var tracks = Tag(await HydrateAsync(refs, ct).ConfigureAwait(false), "autoplay");
+        return new ResolvedContext(tracks, 0, null, nextPage, true, null, "spotify:station:track:" + seedId);
     }
 
     // Pull display + duration metadata for the resolved order (cache-aware, batched, gzipped). The expensive work lives
@@ -101,7 +212,8 @@ public sealed class LiveContextResolver : IContextResolver
         for (int i = 0; i < refs.Count; i++)
         {
             var uri = refs[i].Uri;
-            tracks[i] = new QueuedTrack(_store.GetTrack(uri) ?? Placeholder(uri), refs[i].Uid);
+            string provider = string.IsNullOrEmpty(refs[i].Provider) ? "context" : refs[i].Provider;
+            tracks[i] = new QueuedTrack(_store.GetTrack(uri) ?? Placeholder(uri), refs[i].Uid, provider, refs[i].Metadata, RowKindOf(uri));
         }
         return tracks;
     }
@@ -114,6 +226,24 @@ public sealed class LiveContextResolver : IContextResolver
     }
 
     // GET /context-resolve/v1/{escaped uri}. A collection's sort/filter rides on context.url's query string — forward it.
+    static IReadOnlyList<QueuedTrack> Tag(IReadOnlyList<QueuedTrack> tracks, string provider)
+    {
+        if (tracks.Count == 0) return tracks;
+        var tagged = new QueuedTrack[tracks.Count];
+        for (int i = 0; i < tracks.Count; i++) tagged[i] = tracks[i] with { Provider = provider };
+        return tagged;
+    }
+
+    static string StripTrackPrefix(string uri) =>
+        uri.StartsWith("spotify:track:", StringComparison.Ordinal) ? uri["spotify:track:".Length..] : uri;
+
+    static QueueRowKind RowKindOf(string uri)
+    {
+        if (uri == "spotify:delimiter") return QueueRowKind.Delimiter;
+        if (uri.StartsWith("spotify:meta:page:", StringComparison.Ordinal)) return QueueRowKind.PageMarker;
+        return QueueRowKind.Playable;
+    }
+
     static string ResolvePath(ContextSpec spec)
     {
         var path = "/context-resolve/v1/" + Uri.EscapeDataString(spec.Uri);

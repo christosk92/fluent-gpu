@@ -96,7 +96,18 @@ namespace NVorbis.Ogg
 
             if (!NormalizePacketIndex(ref pageIndex, ref packetIndex))
             {
-                throw new ArgumentOutOfRangeException(nameof(granulePos));
+                // The pre-roll walked the packet index back across a resync/discontinuity boundary
+                // (after a bisected seek, the INDEX-previous page is not the FILE predecessor, so
+                // merging is impossible). Losing the pre-roll beats aborting the seek: clamp to the
+                // resolved page's first whole packet — one lapped window decodes slightly off,
+                // versus the whole seek throwing and the player staying at the old position.
+                if (pageIndex < 0 || !_reader.GetPage(pageIndex, out _, out _, out var isClampContinuation, out _, out _, out _))
+                {
+                    throw new ArgumentOutOfRangeException(nameof(granulePos));
+                }
+                if (NVorbisDiagnostics.IsEnabled)
+                    NVorbisDiagnostics.Log($"[seek-trace] PP.SeekTo pre-roll clamp pageIdx={pageIndex} (no mergeable predecessor)");
+                packetIndex = isClampContinuation ? 1 : 0;
             }
 
             _lastPacket = null;
@@ -186,60 +197,66 @@ namespace NVorbis.Ogg
             return (gps, endGP);
         }
 
-        private int FindPacket(int pageIndex, long[] gps, long endGP, long lastPageGranulePos, int lastPagePacketLength, ref long granulePos)
+        private int FindPacket(int pageIndex, long[] gps, long endGP, long lastPageGranulePos, int lastPagePacketLength, ref long granulePos, bool skipContinuityCheck)
         {
-            var isResyncBoundary = false;
-            if (pageIndex > 0)
+            // skipContinuityCheck: the landing page is resync-marked (bisected seek) — it has no known
+            // FILE predecessor, so predecessor-continuity comparisons are meaningless; go straight to
+            // the packet pick below.
+            if (!skipContinuityCheck)
             {
-                if (_reader.GetPage(pageIndex, out _, out var currentIsResync, out _, out _, out _, out _)
-                    && currentIsResync)
+                var isResyncBoundary = false;
+                if (pageIndex > 0)
                 {
-                    isResyncBoundary = true;
+                    if (_reader.GetPage(pageIndex, out _, out var currentIsResync, out _, out _, out _, out _)
+                        && currentIsResync)
+                    {
+                        isResyncBoundary = true;
+                    }
+                    else if (_reader.GetPage(pageIndex - 1, out _, out var previousIsResync, out _, out _, out _, out _)
+                             && previousIsResync)
+                    {
+                        isResyncBoundary = true;
+                    }
                 }
-                else if (_reader.GetPage(pageIndex - 1, out _, out var previousIsResync, out _, out _, out _, out _)
-                         && previousIsResync)
-                {
-                    isResyncBoundary = true;
-                }
-            }
 
-            // next check for a bugged vorbis encoder...
-            if (endGP != lastPageGranulePos)
-            {
-                var diff = endGP - lastPageGranulePos;
-                if (GetIsVorbisBugDiff(diff))
+                // next check for a bugged vorbis encoder...
+                if (endGP != lastPageGranulePos)
                 {
-                    if (diff > 0)
+                    var diff = endGP - lastPageGranulePos;
+                    if (GetIsVorbisBugDiff(diff))
                     {
-                        // the last packet in the last page is a long block that was mis-counted by libvorbis
-                        // if the requested granulePos is <= endGP, it's in that packet
-                        // otherwise, the normal logic should be fine
-                        // NOTE that this bug does not appear to happen on a continued packet, which makes this safe
-                        if (granulePos <= endGP)
+                        if (diff > 0)
                         {
-                            granulePos = endGP - lastPagePacketLength;
-                            return -1;
+                            // the last packet in the last page is a long block that was mis-counted by libvorbis
+                            // if the requested granulePos is <= endGP, it's in that packet
+                            // otherwise, the normal logic should be fine
+                            // NOTE that this bug does not appear to happen on a continued packet, which makes this safe
+                            if (granulePos <= endGP)
+                            {
+                                granulePos = endGP - lastPagePacketLength;
+                                return -1;
+                            }
+                        }
+                        else
+                        {
+                            // our pageGranulePos is wrong, so adjust everything and let the normal logic apply
+                            for (var i = 0; i < gps.Length; i++)
+                            {
+                                gps[i] -= diff;
+                            }
                         }
                     }
-                    else
+                    // if we're not on the first page, there's a problem...
+                    // technically there could still be a problem on the first page, but we're ignoring it
+                    else if (pageIndex > _reader.FirstDataPageIndex)
                     {
-                        // our pageGranulePos is wrong, so adjust everything and let the normal logic apply
-                        for (var i = 0; i < gps.Length; i++)
+                        // Sparse forward jumps can introduce an intentional resync boundary.
+                        // At that boundary we don't have strict predecessor continuity, so we
+                        // treat this mismatch as non-fatal and continue with local page packet math.
+                        if (!isResyncBoundary)
                         {
-                            gps[i] -= diff;
+                            throw new System.IO.InvalidDataException($"GranulePos mismatch: Page {pageIndex}, expected {lastPageGranulePos}, calculated {endGP}");
                         }
-                    }
-                }
-                // if we're not on the first page, there's a problem...
-                // technically there could still be a problem on the first page, but we're ignoring it
-                else if (pageIndex > _reader.FirstDataPageIndex)
-                {
-                    // Sparse forward jumps can introduce an intentional resync boundary.
-                    // At that boundary we don't have strict predecessor continuity, so we
-                    // treat this mismatch as non-fatal and continue with local page packet math.
-                    if (!isResyncBoundary)
-                    {
-                        throw new System.IO.InvalidDataException($"GranulePos mismatch: Page {pageIndex}, expected {lastPageGranulePos}, calculated {endGP}");
                     }
                 }
             }
@@ -269,14 +286,32 @@ namespace NVorbis.Ogg
             // pageIndex is _probably_ the correct page (bugs in libogg mean long->short over page boundary isn't always correct).
             // We check for this by looking for a difference in the previous page's granulePos vs. the calculated value
 
-            // first we look at the page info to see how it is set up
-            var (lastPageGranulePos, lastPagePacketLength, firstRealPacket) = GetPreviousPageInfo(pageIndex, getPacketGranuleCount);
+            // A resync-marked landing page (every bisected/materialized seek target) has no known FILE
+            // predecessor — its INDEX-previous page is unrelated, so reading it is 1–2 wasted (possibly
+            // far, on a ranged-CDN stream) fetches, and its granule/continuation info is meaningless
+            // for the checks below. Derive what we need from the landing page itself instead.
+            long lastPageGranulePos = 0;
+            int lastPagePacketLength = 0;
+            int firstRealPacket;
+            var skipContinuityCheck = false;
+            if (pageIndex > 0
+                && _reader.GetPage(pageIndex, out _, out var landingIsResync, out var landingIsContinuation, out _, out _, out _)
+                && landingIsResync)
+            {
+                skipContinuityCheck = true;
+                firstRealPacket = landingIsContinuation ? 1 : 0;
+            }
+            else
+            {
+                // first we look at the page info to see how it is set up
+                (lastPageGranulePos, lastPagePacketLength, firstRealPacket) = GetPreviousPageInfo(pageIndex, getPacketGranuleCount);
+            }
 
             // now get the info on the target page
             var (gps, endGP) = GetTargetPageInfo(pageIndex, firstRealPacket, lastPagePacketLength, getPacketGranuleCount);
 
             // finally figure out which packet in our known info we need to use
-            var packetIndex = FindPacket(pageIndex, gps, endGP, lastPageGranulePos, lastPagePacketLength, ref granulePos);
+            var packetIndex = FindPacket(pageIndex, gps, endGP, lastPageGranulePos, lastPagePacketLength, ref granulePos, skipContinuityCheck);
 
             // then apply the preRoll (but only if we're not seeking into the first packet, which is its own preRoll)
             if (endGP > 0 || packetIndex > 1)

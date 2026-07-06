@@ -412,6 +412,14 @@ sealed class SettingsPage : Component
                             if (settings is null) return;
                             settings.Set(WaveeSettings.RememberVolume, !settings.Get(WaveeSettings.RememberVolume));
                             Bump();
+                        })),
+                    RowDivider(),
+                    SettingRow("Autoplay", "Continue with similar songs when the current context ends",
+                        ToggleSwitch.Create(settings?.Get(WaveeSettings.AutoplayEnabled) ?? true, () =>
+                        {
+                            if (settings is null) return;
+                            settings.Set(WaveeSettings.AutoplayEnabled, !settings.Get(WaveeSettings.AutoplayEnabled));
+                            Bump();
                         }))),
                 DspCard(svc),
                 Card(

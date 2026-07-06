@@ -136,12 +136,12 @@ namespace NVorbis.Ogg
             {
                 spr.AddPage();
 
-                // if we've read the last page, remove from our list so cleanup can happen.
-                // this is safe because the instance still has access to us for reading.
-                if ((PageFlags & PageFlags.EndOfStream) == PageFlags.EndOfStream)
-                {
-                    _streamReaders.Remove(StreamSerial);
-                }
+                // Upstream NVorbis removed the stream reader here once the EOS page was read (a
+                // multi-stream memory optimization). With random-access seeking that's wrong: ANY
+                // later read for this stream (a seek materializing a skipped page, playback
+                // continuing past the indexed tail) would spin up a duplicate reader/decoder and
+                // orphan the active one — playback then ends at the indexed boundary. Readers now
+                // live until the container is disposed.
             }
             else
             {
@@ -204,7 +204,8 @@ namespace NVorbis.Ogg
             {
                 kvp.Value.SetEndOfStream();
             }
-            _streamReaders.Clear();
+            // Deliberately NOT cleared: reaching the file end during one read (or a seek walk) must
+            // not orphan the readers — later seeks still route pages to them (see AddPage above).
         }
 
 

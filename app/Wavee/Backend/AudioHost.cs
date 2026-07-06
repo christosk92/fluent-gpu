@@ -11,7 +11,12 @@ namespace Wavee.Backend;
 // position clock + Ended. Implementations handle AES/native CDN decrypt, PCM decode, mixer/DSP, WASAPI output, and
 // optional PlayPlay key derivation. The default impl in this scope is SilentAudioHost.
 
-public enum AudioFormat { OggVorbis96, OggVorbis160, OggVorbis320, Flac, Flac24 }
+public enum AudioFormat { OggVorbis96, OggVorbis160, OggVorbis320, Flac, Flac24, Mp3 }
+
+/// <summary>How the host fetches/decrypts a body: the Spotify encrypted CDN path (AES-CTR / native PlayPlay) vs an
+/// external plain-HTTP source (RSS/podcast, no decrypt). Explicit so we never overload an empty <c>Key</c> as a
+/// discriminator (empty Key still means "derive the PlayPlay key" on the Spotify path).</summary>
+public enum AudioSourceKind { SpotifyEncrypted = 0, ExternalPlain = 1 }
 
 /// <summary>The user-facing streaming-quality preference (persisted as <c>playback.quality</c>) — the Spotify tier
 /// ladder. The resolver aims at the chosen rung and falls back to the nearest available file (lower first), never to
@@ -22,7 +27,8 @@ public enum AudioQualityPreference { Normal96 = 0, High160 = 1, VeryHigh320 = 2,
 public readonly record struct AudioStreamHandle(
     string TrackUri, string FileIdHex, string CdnUrl,
     ReadOnlyMemory<byte> Key, AudioFormat Format, long DurationMs, float NormalizationGainDb,
-    string[]? CdnUrls = null, int HeadBoundary = 0, ReadOnlyMemory<byte> NativeCdnSeed = default);
+    string[]? CdnUrls = null, int HeadBoundary = 0, ReadOnlyMemory<byte> NativeCdnSeed = default,
+    AudioSourceKind SourceKind = AudioSourceKind.SpotifyEncrypted);
 
 /// <summary>Instant-start payload: clear head bytes cross the seam before the key exists.</summary>
 public readonly record struct AudioFastStart(

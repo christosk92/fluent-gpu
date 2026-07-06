@@ -188,6 +188,9 @@ public static class OutboundEnvelope
         w.WriteString("uri", e.Uri);
         w.WriteString("uid", e.Uid ?? "");                       // always written, may be ""
         w.WriteStartObject("metadata");
+        if (e.Metadata is { Count: > 0 })
+            foreach (var (k, v) in e.Metadata)
+                if (!string.IsNullOrEmpty(k)) w.WriteString(k, v ?? "");
         if (e.IsQueued) w.WriteString("is_queued", "true");      // STRING "true" — NOT a boolean (matches the capture)
         w.WriteEndObject();
         w.WriteString("provider", e.IsQueued ? "queue" : "context");

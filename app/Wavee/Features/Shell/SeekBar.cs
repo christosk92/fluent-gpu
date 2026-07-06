@@ -83,7 +83,7 @@ sealed class SeekBar : Component
         // return), so a ctor-frozen flag would stick at its first-mount value (false, before the track resolves) forever.
         // Reading the signals here re-renders the bar on the enabling transition, which re-installs the interaction
         // handlers (OnClick/OnPointerDown/OnDrag run on every reconcile). Mirrors PlayerBar's `active`.
-        bool enabled = b.CurrentTrack.Value != null && b.Error.Value == null && !b.IsLoading.Value;
+        bool enabled = b.CurrentTrack.Value != null && b.Error.Value == null && !b.IsLoading.Value && b.CanSeek.Value;
 
         // Subscribe to the LOW-frequency signals that change the bar's STRUCTURE (mount/unmount the ticker) only.
         bool playing = b.IsPlaying.Value;
@@ -270,7 +270,7 @@ sealed class SeekBar : Component
 
     // Defensive re-derive for the pointer handlers (Peek — no render subscription). Handlers are only WIRED when enabled,
     // but this guards a stale fire during the disabling transition. Mirrors the Render derivation.
-    bool Enabled() => _b.CurrentTrack.Peek() != null && _b.Error.Peek() == null && !_b.IsLoading.Peek();
+    bool Enabled() => _b.CurrentTrack.Peek() != null && _b.Error.Peek() == null && !_b.IsLoading.Peek() && _b.CanSeek.Peek();
 
     void OnDown(Point2 local)
     {
@@ -291,10 +291,12 @@ sealed class SeekBar : Component
 
     void OnCommit()
     {
-        if (!Enabled()) return;
+        // Always release the scrub gate — bailing out with _scrubbing still true would freeze
+        // _displayFrac at the abandoned finger position until the next successful commit.
+        long dur;
+        if (!Enabled() || (dur = _b.DurationMs.Peek()) <= 0) { OnCanceled(); return; }
         float f = _scrubFrac.Peek();
-        long dur = _b.DurationMs.Peek();
-        long targetMs = (long)(f * dur);
+        long targetMs = Math.Clamp((long)(f * dur), 0, dur);
         _b.PositionFrac.Value = f;                         // optimistic: paint the new position immediately
         _b.PositionMs.Value = targetMs;                    // keep time labels + interpolation anchor in the same place
         _tickWallMs = Environment.TickCount64;

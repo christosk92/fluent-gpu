@@ -1,24 +1,24 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Threading.Tasks;
 using Wavee.Core;
 
 namespace Wavee.Backend;
 
-// ── Parity: the outbound half of the projection — the SINGLE PutState writer ─────────────────────────────────────────
-// When WE play locally, the cloud must see us as the active player (otherwise other devices/controllers don't show our
-// playback and a phone can't "transfer from" us). This publishes our player_state to /connect-state/v1/devices/{id} on
-// local playback changes: is_active=true + the current track/context/position/options/queue, with stable session/playback
-// ids + has_been_playing_for_ms (the Recently-Played-relevant fields). Proto-building is delegated (SpotifyLive), so the
-// publish discipline (when, dedup, ids, reason) stays proto-free + unit-testable. WaveeMusic does this inside its god-class;
-// here it's one focused IPlaybackProjection that also owns the NewConnection announce — one writer, one message_id sequence.
-
 public enum PutStateReasonKind { NewConnection, PlayerStateChanged, VolumeChanged, BecameInactive }
 
-/// <summary>Proto-free snapshot of OUR local playback, handed to the builder to populate the player_state.</summary>
+public readonly record struct SnapshotTrack(
+    string Uri, string Uid, string Provider, string Title, string AlbumTitle,
+    string ArtistUri, string ArtistName, string AlbumUri, string ImageUrl,
+    bool HasVideo, int ViewIndex, IReadOnlyDictionary<string, string> Metadata);
+
 public readonly record struct LocalPlaybackSnapshot(
-    string TrackUri, string TrackUid, string? ContextUri, long PositionMs, long DurationMs,
-    bool IsPlaying, bool IsPaused, bool Shuffle, RepeatMode Repeat, IReadOnlyList<string> NextUris,
+    SnapshotTrack Track, string? ContextUri, long PositionMs, long DurationMs,
+    bool IsPlaying, bool IsPaused, bool Shuffle, RepeatMode Repeat,
+    IReadOnlyList<SnapshotTrack> PrevTracks, IReadOnlyList<SnapshotTrack> NextTracks,
+    IReadOnlyDictionary<string, string> ContextMetadata, int ContextIndex,
+    string InteractionId, string PageInstanceId, string QueueRevision,
     string SessionId, string PlaybackId, long HasBeenPlayingForMs, long StartedPlayingAtMs, double Volume01 = 0.0);
 
 public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
@@ -36,8 +36,13 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
     uint _messageId;
     string _sessionId = "";
     string _playbackId = "";
+    string _interactionId = "";
+    string _pageInstanceId = "";
+    string _queueRevision = "";
+    ulong _queueRevisionCounter = (ulong)Random.Shared.NextInt64(1, long.MaxValue);
     string? _sessionContextUri;
     long _startedPlayingAtMs;
+    bool _transportPaused;
     string _lastPublishKey = "";
 
     public DeviceStatePublisher(
@@ -57,8 +62,6 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
         _connSub = connectionId.Subscribe(Observers.From<string?>(OnConnectionId));
     }
 
-    /// <summary>On a new connection id → the device announce (NewConnection). is_active reflects whether we're already
-    /// playing locally (e.g. after a reconnect mid-playback).</summary>
     void OnConnectionId(string? id)
     {
         if (string.IsNullOrEmpty(id)) return;
@@ -67,20 +70,37 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
 
     public void OnEvent(in PlaybackEvent e)
     {
+        if (e.Kind is EvKind.Paused)
+            lock (_gate) _transportPaused = true;
+        else if (e.Kind is EvKind.Started or EvKind.Resumed or EvKind.TrackChanged or EvKind.Ended or EvKind.BecameInactive)
+            lock (_gate) _transportPaused = false;
+
         if (e.Kind is EvKind.Started or EvKind.TrackChanged)
         {
             lock (_gate)
             {
                 var ctx = _state.ContextUri;
-                if (ctx != _sessionContextUri) { _sessionId = NewId(); _sessionContextUri = ctx; }   // new context → new session
-                _playbackId = NewId();                                                                // each track → new playback id
+                if (e.Kind == EvKind.Started || ctx != _sessionContextUri)
+                {
+                    _sessionId = e.Ids?.SessionId ?? NewId();
+                    _sessionContextUri = ctx;
+                    _interactionId = e.Ids?.InteractionId ?? NewDashedUuid();
+                    _pageInstanceId = e.Ids?.PageInstanceId ?? NewDashedUuid();
+                }
+                _playbackId = e.Ids?.PlaybackIdHex ?? NewId();
                 if (_startedPlayingAtMs == 0) _startedPlayingAtMs = _now();
+                BumpQueueRevision();
             }
+        }
+        else if (e.Kind is EvKind.QueueChanged or EvKind.OptionsChanged)
+        {
+            lock (_gate) BumpQueueRevision();
         }
         else if (e.Kind is EvKind.Ended or EvKind.BecameInactive)
         {
             lock (_gate) _startedPlayingAtMs = 0;
         }
+
         bool isActive = _state.CurrentTrack is not null && e.Kind is not (EvKind.Ended or EvKind.BecameInactive);
         var reason = e.Kind switch
         {
@@ -91,8 +111,6 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
         _ = PublishAsync(reason, isActive);
     }
 
-    /// <summary>Publish a final is_active=false (BecameInactive) — called on logout/dispose so a controller sees a clean
-    /// hand-off rather than a stale active device. Best-effort (the transport may already be tearing down).</summary>
     public void PublishInactive() => _ = PublishAsync(PutStateReasonKind.BecameInactive, false);
 
     bool IsLocallyPlaying() => _state.CurrentTrack is not null && _state.IsPlaying;
@@ -100,58 +118,141 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
     async Task PublishAsync(PutStateReasonKind reason, bool isActive)
     {
         var connId = _connectionId();
-        if (string.IsNullOrEmpty(connId)) return;   // can't PUT before the dealer connection id arrives
+        if (string.IsNullOrEmpty(connId)) return;
 
         var snap = BuildSnapshot();
         uint mid;
         lock (_gate)
         {
-            // Dedup repeat publishes with identical salient fields (avoid PutState spam on no-op events). The key spans
-            // every field a controller renders, so a real change (pause/seek/shuffle/repeat/volume/queue/track) always
-            // gets through but a duplicate of the same state collapses.
-            string key = reason + "|" + isActive + "|" + (snap?.TrackUri ?? "") + "|" + (snap?.TrackUid ?? "")
-                + "|" + (snap?.IsPlaying ?? false) + "|" + (snap?.Shuffle ?? false) + "|" + (snap?.Repeat ?? RepeatMode.Off)
+            string key = reason + "|" + isActive + "|" + (snap?.Track.Uri ?? "") + "|" + (snap?.Track.Uid ?? "")
+                + "|" + (snap?.IsPlaying ?? false) + "|" + (snap?.IsPaused ?? false) + "|" + (snap?.Shuffle ?? false) + "|" + (snap?.Repeat ?? RepeatMode.Off)
                 + "|" + ((snap?.PositionMs ?? 0) / 1000) + "|" + (int)Math.Round((snap?.Volume01 ?? 0) * 100) + "|" + NextSig(snap);
             if (reason == PutStateReasonKind.PlayerStateChanged && key == _lastPublishKey) return;
             _lastPublishKey = key;
             mid = ++_messageId;
         }
+
         try
         {
             var bytes = _build(reason, snap, mid, isActive);
             var resp = await _transport.Publish(_deviceId, connId!, bytes).ConfigureAwait(false);
-            _log?.Invoke(resp.Ok ? $"put-state ({reason}, active={isActive}, track={snap?.TrackUri ?? "-"})"
-                                 : $"put-state failed ({resp.Status})");
-            if (resp.Ok && resp.Body.Length > 0) _onCluster?.Invoke(resp.Body);
+            if (resp.Ok)
+            {
+                _log?.Invoke($"put-state ({reason}, active={isActive}, track={snap?.Track.Uri ?? "-"})");
+                if (resp.Body.Length > 0) _onCluster?.Invoke(resp.Body);
+            }
+            else
+            {
+                _log?.Invoke($"put-state failed ({resp.Status})");
+                WaveeLog.Instance.Warn("connect", "put-state.rejected", "connect-state PUT rejected by server",
+                    WaveeLogField.Of("status", resp.Status),
+                    WaveeLogField.Of("reason", reason.ToString()),
+                    WaveeLogField.Of("track", snap?.Track.Uri ?? "-"));
+            }
         }
-        catch (Exception ex) { _log?.Invoke("put-state error: " + ex.Message); }
+        catch (Exception ex)
+        {
+            // Structured + full exception (type + stack) so a future null/serialization fault in the builder is
+            // diagnosable at a glance — the bare ex.Message alone made the Restrictions NRE cryptic.
+            _log?.Invoke("put-state error: " + ex.Message);
+            WaveeLog.Instance.Error("connect", "put-state.error", "connect-state PUT threw while building/publishing", ex,
+                WaveeLogField.Of("reason", reason.ToString()),
+                WaveeLogField.Of("active", isActive),
+                WaveeLogField.Of("track", snap?.Track.Uri ?? "-"));
+        }
     }
 
     LocalPlaybackSnapshot? BuildSnapshot()
     {
         var t = _state.CurrentTrack;
         if (t is null) return null;
-        var next = new List<string>();
+
+        var prev = new List<SnapshotTrack>();
+        var next = new List<SnapshotTrack>();
         string trackUid = "";
+        bool nowAutoplay = false;
+        QueueEntry? nowEntry = null;
+        int contextIndex = 0;
+
         foreach (var qe in _state.Queue)
         {
-            if (qe.Bucket == QueueBucket.NowPlaying) trackUid = qe.Uid;          // our current track's context uid
-            else next.Add(qe.Track.Uri);                                        // user queue + context next-up → next_tracks (in order)
+            if (qe.Bucket == QueueBucket.NowPlaying)
+            {
+                trackUid = qe.Uid;
+                nowAutoplay = qe.IsAutoplay;
+                nowEntry = qe;
+            }
+            else if (qe.Bucket == QueueBucket.History)
+            {
+                string provider = ProviderOf(qe);
+                int viewIndex = IsContextProvider(provider) ? contextIndex++ : -1;
+                prev.Add(ToSnapshotTrack(qe, provider, viewIndex));
+            }
         }
-        long started, hasBeen; string sid, pid;
+
+        int currentIndex = contextIndex;
+        int nextContextIndex = currentIndex + 1;
+        foreach (var qe in _state.Queue)
+        {
+            if (qe.Bucket is QueueBucket.NowPlaying or QueueBucket.History) continue;
+            string provider = ProviderOf(qe);
+            int viewIndex = IsContextProvider(provider) ? nextContextIndex++ : -1;
+            next.Add(ToSnapshotTrack(qe, provider, viewIndex));
+        }
+
+        var currentSource = nowEntry ?? new QueueEntry("now", t, QueueBucket.NowPlaying, nowAutoplay, trackUid);
+        var current = ToSnapshotTrack(currentSource, ProviderOf(currentSource), currentIndex);
+        IReadOnlyDictionary<string, string> metadata = _state is NowPlayingProjection p
+            ? p.ContextMetadata
+            : new Dictionary<string, string>();
+
+        long started, hasBeen; string sid, pid, iid, page, rev; bool transportPaused;
         lock (_gate)
         {
             started = _startedPlayingAtMs; sid = _sessionId; pid = _playbackId;
+            iid = _interactionId; page = _pageInstanceId; rev = _queueRevision;
+            transportPaused = _transportPaused;
             hasBeen = started > 0 && _state.IsPlaying ? Math.Max(0, _now() - started) : 0;
         }
-        return new LocalPlaybackSnapshot(t.Uri, trackUid, _state.ContextUri, _state.PositionMs, _state.DurationMs,
-            _state.IsPlaying, !_state.IsPlaying, _state.IsShuffle, _state.Repeat, next, sid, pid, hasBeen, started, _state.Volume);
+
+        // Connect wire: paused is a sub-state of playing (transport engaged, audio stopped). Ended/stopped ⇒ both false.
+        bool wirePaused = transportPaused;
+        bool wirePlaying = _state.IsPlaying || wirePaused;
+
+        return new LocalPlaybackSnapshot(current, _state.ContextUri, _state.PositionMs, _state.DurationMs,
+            wirePlaying, wirePaused, _state.IsShuffle, _state.Repeat,
+            prev, next, metadata, contextIndex, iid, page, rev, sid, pid, hasBeen, started, _state.Volume);
     }
 
+    static SnapshotTrack ToSnapshotTrack(QueueEntry entry, string provider, int viewIndex)
+    {
+        var t = entry.Track;
+        var artist = t.Artists.Count > 0 ? t.Artists[0] : new ArtistRef("", "", "");
+        return new SnapshotTrack(t.Uri, entry.Uid, provider, t.Title ?? "", t.Album.Name ?? "",
+            artist.Uri ?? "", artist.Name ?? "", t.Album.Uri ?? "", t.Image?.Url ?? "",
+            t.HasVideo, viewIndex, entry.Metadata ?? new Dictionary<string, string>());
+    }
+
+    static string ProviderOf(QueueEntry entry)
+    {
+        if (!string.IsNullOrEmpty(entry.Provider)) return entry.Provider;
+        if (entry.IsAutoplay) return "autoplay";
+        return entry.Bucket == QueueBucket.UserQueue ? "queue" : "context";
+    }
+
+    static bool IsContextProvider(string provider) => provider is "context" or "autoplay";
+
     static string NextSig(LocalPlaybackSnapshot? snap) =>
-        snap is { } s && s.NextUris.Count > 0 ? s.NextUris.Count + ":" + s.NextUris[0] : "0";
+        snap is { } s && s.NextTracks.Count > 0 ? s.NextTracks.Count + ":" + s.NextTracks[0].Uri : "0";
 
     static string NewId() => Guid.NewGuid().ToString("N");
+    static string NewDashedUuid() => Guid.NewGuid().ToString();
+
+    void BumpQueueRevision()
+    {
+        unchecked { _queueRevisionCounter++; }
+        _queueRevision = _queueRevisionCounter.ToString(CultureInfo.InvariantCulture);
+    }
 
     public void Dispose() => _connSub.Dispose();
 }

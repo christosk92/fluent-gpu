@@ -27,6 +27,16 @@ namespace NVorbis.Contracts.Ogg
         /// </summary>
         int PeekRawAt(long offset, byte[] buffer, int bufferOffset, int count);
 
+        /// <summary>
+        /// While true, reads are side-effect-free seek PROBES: hitting end-of-stream
+        /// during the scan must NOT latch the end-of-streams state (HasAllPages /
+        /// stream-reader teardown). A probe that lands inside the final page scans
+        /// to EOF without finding a page; latching EOS there makes the decoder treat
+        /// the highest INDEXED page as the end of the file — playback then stops at
+        /// the furthest-downloaded position. Set only under Lock().
+        /// </summary>
+        bool ProbeMode { get; set; }
+
         bool ReadNextPage();
 
         bool ReadPageAt(long offset);

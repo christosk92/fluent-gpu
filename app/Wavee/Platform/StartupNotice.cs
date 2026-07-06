@@ -1,0 +1,28 @@
+using System;
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+
+namespace Wavee;
+
+static class StartupNotice
+{
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    [SupportedOSPlatform("windows")]
+    static extern int MessageBoxW(IntPtr hWnd, string text, string caption, uint type);
+
+    const uint MB_OK = 0x0;
+    const uint MB_ICONWARNING = 0x30;
+    const uint MB_ICONERROR = 0x10;
+
+    public static void Warning(string title, string body) => Show(title, body, MB_ICONWARNING);
+
+    public static void Error(string title, string body) => Show(title, body, MB_ICONERROR);
+
+    static void Show(string title, string body, uint icon)
+    {
+        if (OperatingSystem.IsWindows())
+            MessageBoxW(IntPtr.Zero, body, title, MB_OK | icon);
+        else
+            Console.Error.WriteLine(title + ": " + body);
+    }
+}

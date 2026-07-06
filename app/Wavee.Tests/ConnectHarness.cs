@@ -103,20 +103,27 @@ public sealed class FakeContextResolver : IContextResolver
         if (spec.EmbeddedPages is { Count: > 0 } pages)   // a sorted/custom-ordered page sent inline wins over the fixed list
         {
             var arr = new QueuedTrack[pages.Count];
-            for (int i = 0; i < pages.Count; i++) arr[i] = new QueuedTrack(Trk(pages[i].Uri), pages[i].Uid);
+            for (int i = 0; i < pages.Count; i++)
+                arr[i] = new QueuedTrack(Trk(pages[i].Uri), pages[i].Uid, pages[i].Provider, pages[i].Metadata);
             tracks = arr;
         }
         int start = ContextResolve.FindStartIndex(tracks, spec.SkipToTrackUri, spec.SkipToTrackUid, spec.SkipToIndex);
         return Task.FromResult(new ResolvedContext(tracks, start, null, null, false));
     }
 
-    public Task<IReadOnlyList<QueuedTrack>> LoadMoreAsync(string nextPageUrl, CancellationToken ct = default)
-        => Task.FromResult<IReadOnlyList<QueuedTrack>>(Array.Empty<QueuedTrack>());
+    public Task<ContextPage> LoadMoreAsync(string nextPageUrl, CancellationToken ct = default) => Task.FromResult(ContextPage.Empty);
+
+    public Task<ResolvedContext> ResolveAutoplayAsync(string contextUri, IReadOnlyList<string> recentTrackUris, CancellationToken ct = default)
+        => Task.FromResult(ResolvedContext.Empty);
+
+    public Task<ResolvedContext> ResolveAutopodcastAsync(string contextUri, IReadOnlyList<string> recentEpisodeUris, CancellationToken ct = default)
+        => Task.FromResult(ResolvedContext.Empty);
 
     public Task<IReadOnlyList<QueuedTrack>> HydrateAsync(IReadOnlyList<QueuedRef> refs, CancellationToken ct = default)
     {
         var arr = new QueuedTrack[refs.Count];
-        for (int i = 0; i < refs.Count; i++) arr[i] = new QueuedTrack(Trk(refs[i].Uri), refs[i].Uid);
+        for (int i = 0; i < refs.Count; i++)
+            arr[i] = new QueuedTrack(Trk(refs[i].Uri), refs[i].Uid, refs[i].Provider, refs[i].Metadata);
         return Task.FromResult<IReadOnlyList<QueuedTrack>>(arr);
     }
 

@@ -84,11 +84,12 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
         HeadClient = new HeadFileClient(new HttpClientExchange(), session, log);
         Func<string, CancellationToken, Task<ByteString?>> fetchTrackV4 = (uri, ct) => extendedMetadata.GetExtensionAsync(uri, Xm.ExtensionKind.TrackV4, ct);
         Func<string, CancellationToken, Task<ByteString?>> fetchAudioFilesV5 = (uri, ct) => extendedMetadata.GetExtensionAsync(uri, Xm.ExtensionKind.AudioFiles, ct);
+        Func<string, CancellationToken, Task<ByteString?>> fetchEpisodeV4 = (uri, ct) => extendedMetadata.GetExtensionAsync(uri, Xm.ExtensionKind.EpisodeV4, ct);
         Func<string, Xm.ExtensionKind, CancellationToken, Task<ByteString?>> fetchAnyExtension =
             (uri, kind, ct) => extendedMetadata.GetExtensionAsync(uri, kind, ct);
         var formatProbe = AudioFormatProbe.FromEnvironment(transport, http, fetchAnyExtension, log);
         if (formatProbe is not null) log?.Invoke("audio format probe enabled (WAVEE_AUDIO_FORMAT_PROBE=1)");
-        TrackResolver = new LiveTrackResolver(transport, KeyResolver, fetchTrackV4, fetchAudioFilesV5,
+        TrackResolver = new LiveTrackResolver(transport, KeyResolver, fetchTrackV4, fetchAudioFilesV5, fetchEpisodeV4,
             preferLossless: false, log, formatProbe,
             // The persisted streaming-quality preference, read per resolve so a Settings change applies from the next
             // track. Clamped to the Ogg tiers — Lossless is reserved (the picker shows it disabled, "Coming soon").
@@ -271,6 +272,14 @@ public sealed class FastTrackPlayback : IFastTrackResolver, IFastTrackWarmer
         _log?.Invoke($"fast-resolve {track.Uri}: meta start");
         var meta = await _resolver.ResolveMetaAsync(track, ct).ConfigureAwait(false);
         _log?.Invoke($"fast-resolve {track.Uri}: meta ok file={meta.FileIdHex} fmt={meta.Fmt} elapsed={sw.ElapsedMilliseconds}ms");
+
+        if (!string.IsNullOrEmpty(meta.ExternalUrl))
+        {
+            var extBody = await _resolver.ResolveBodyAsync(meta, ct).ConfigureAwait(false);
+            var extStart = new AudioFastStart(track.Uri, meta.FileIdHex, AudioFormat.Mp3, meta.DurMs, 0f, default);
+            _log?.Invoke($"fast-resolve {track.Uri}: external MP3 — no head fetch");
+            return new FastStartPlan(extStart, Task.FromResult(extBody));
+        }
 
         var headSw = Stopwatch.StartNew();
         var headTask = _heads.GetAsync(meta.FileIdHex, ct);

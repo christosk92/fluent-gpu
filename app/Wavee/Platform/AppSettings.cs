@@ -49,6 +49,8 @@ static class WaveeSettings
     public static readonly SettingKey<string> EqualizerGains = new("playback.eq.gains", "0,0,0,0,0,0,0,0,0,0");
     public static readonly SettingKey<bool> CrossfadeEnabled = new("playback.crossfade.enabled", false);
     public static readonly SettingKey<int> CrossfadeMs = new("playback.crossfade.ms", 5000);
+    public static readonly SettingKey<bool> AutoplayEnabled = new("playback.autoplay", true);
+    public static readonly SettingKey<long> GaboGlobalSequence = new("telemetry.gabo.globalSequence", 0L);
 }
 
 // IAppSettings backed by the engine's AppDataStore (HKCU registry, unpackaged). Every access is DEFENSIVE — a storage

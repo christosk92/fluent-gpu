@@ -33,7 +33,7 @@ public class ConnectPublisherTests
             Publisher = new DeviceStatePublisher(Transport, "us", Proj, ConnId, () => CurrentConnId,
                 (reason, snap, mid, active) =>
                 {
-                    var s = reason + "|" + active + "|" + (snap?.TrackUri ?? "-") + "|" + (snap?.SessionId ?? "");
+                    var s = reason + "|" + active + "|" + (snap?.Track.Uri ?? "-") + "|" + (snap?.SessionId ?? "");
                     Built.Add(s);
                     return Encoding.UTF8.GetBytes(s);
                 },

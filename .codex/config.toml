@@ -1,0 +1,34 @@
+# Codex filesystem permissions — fences the model OUT of out-of-scope paths that
+# belong to a separate workspace.
+#
+# NOTE: The deny SYNTAX below is per https://developers.openai.com/codex/permissions
+# (deny > write > read; ":workspace_roots" scope). Whether Codex honors a *repo-local*
+# .codex/config.toml is NOT confirmed by those docs (they describe user/system-level
+# config). Treat this as best-effort defense in depth; the reliable lever is
+# AGENTS.md steering + keeping that work in its own workspace. If repo-local is
+# unsupported on your build, mirror these deny rules into your user-level Codex config.
+
+default_permissions = "fluentgpu"
+
+[permissions.fluentgpu.filesystem.":workspace_roots"]
+"." = "write"
+
+# --- Native / binary artifacts ---
+"app/.native/**" = "deny"
+"app/Wavee.PlayPlay/**" = "deny"
+"private-runtimes/**" = "deny"
+
+# --- Scratch scripts ---
+"app/tmp_*" = "deny"
+"scripts/pyghidra*" = "deny"
+
+# --- Out-of-scope docs ---
+"app/docs/wavee-playplay*.md" = "deny"
+"app/docs/playplay-*.md" = "deny"
+"app/docs/spotiload-offline-path.md" = "deny"
+"**/playplay-runtime.json" = "deny"
+
+# Optional — uncomment to also fence off the C# seams. Left readable so agents can
+# still help with the provisioning UX.
+# "app/Wavee/SpotifyLive/Audio/*PlayPlay*" = "deny"
+# "app/Wavee/SpotifyLive/Protos/playplay.proto" = "deny"

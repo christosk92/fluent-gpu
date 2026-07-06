@@ -16,6 +16,7 @@ internal sealed class AudioPlayEngine : IDisposable
     const int RendererBufferMs = 800;
     const int StartPrebufferMs = 420;
     const int WriteStallWarnMs = 650;
+    const int EndSeekGuardMs = 250;
 
     readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(30) };
     readonly Action<string> _log;
@@ -27,7 +28,7 @@ internal sealed class AudioPlayEngine : IDisposable
     readonly Timer _tick;
 
     ISampleSource? _reader;
-    SpotifyAudioStream? _stream;
+    IAudioReadStream? _stream;   // the decode stream (Spotify encrypted OR plain-HTTP external); disposed by StopDecode
     Thread? _decodeThread;
     CancellationTokenSource? _cts;
 
@@ -61,7 +62,7 @@ internal sealed class AudioPlayEngine : IDisposable
         _fileIdHex = cmd.FileIdHex;
         _format = cmd.Format.ToString();
         _gainLinear = DbToLinear(cmd.NormalizationGainDb);
-        _durationMs = cmd.DurationMs;
+        Volatile.Write(ref _durationMs, cmd.DurationMs);   // read by Seek() from other threads (the clamp)
         _loadStartTicks = Stopwatch.GetTimestamp();
         _rendererPrimed = false;
         _prebuffering = _pendingHead.Length > 0;
@@ -104,6 +105,12 @@ internal sealed class AudioPlayEngine : IDisposable
                 }
             }
 
+            if (IsExternalMp3(cmd))
+            {
+                await StartExternalMp3Async(cmd).ConfigureAwait(false);
+                return;
+            }
+
             var key = cmd.Key.ToArray();
             var nativeSeed = cmd.NativeCdnSeed.ToArray();
             keyBytes = key.Length;
@@ -133,7 +140,7 @@ internal sealed class AudioPlayEngine : IDisposable
                     return;
                 }
 
-                stream = _stream;
+                stream = _stream as SpotifyAudioStream;   // Spotify-only path (external returned above); recover the head-only stream
                 if (stream is null)
                 {
                     stream = SpotifyAudioStream.CreateHeadOnly(_http, _pendingHead, cmd.HeadBoundary, cmd.FileIdHex, _log);
@@ -180,7 +187,7 @@ internal sealed class AudioPlayEngine : IDisposable
                 lock (_gate)
                 {
                     if (_fileIdHex.Length == 0 || string.Equals(_fileIdHex, cmd.FileIdHex, StringComparison.OrdinalIgnoreCase))
-                        stream = _stream;
+                        stream = _stream as SpotifyAudioStream;
                 }
             }
             try { stream?.AbortBody(ex); } catch { }
@@ -188,6 +195,61 @@ internal sealed class AudioPlayEngine : IDisposable
             lock (_gate) active = _fileIdHex;
             _log($"supply body failed file={cmd.FileIdHex} active={active} head={_pendingHead.Length}B mirrors={cdnUrls.Length} key={keyBytes}B nativeSeed={nativeSeedBytes}B startDecode={startDecode}: {ex.GetType().Name}: {ex.Message}");
         }
+    }
+
+    static bool IsExternalMp3(in AudioStreamHandle cmd) =>
+        cmd.SourceKind == AudioSourceKind.ExternalPlain && cmd.Format == AudioFormat.Mp3
+        && cmd.CdnUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase);
+
+    async Task StartExternalMp3Async(AudioStreamHandle cmd)
+    {
+        StopDecode();
+        _fileIdHex = cmd.FileIdHex;
+        _format = "Mp3";
+        _gainLinear = 1f;
+        Volatile.Write(ref _durationMs, cmd.DurationMs);
+        _loadStartTicks = Stopwatch.GetTimestamp();
+        _rendererPrimed = false;
+        _prebuffering = false;
+        _buffering = true;
+        _seekBaseMs = 0;
+        _log($"supply-body external MP3 {cmd.CdnUrl} dur={cmd.DurationMs}ms");
+        RaiseState();
+        var httpStream = await ExternalMp3Stream.OpenAsync(_http, cmd.CdnUrl, _log).ConfigureAwait(false);
+        var kind = PickExternalDecoderKind(httpStream.ContentType) ?? SniffMagicKind(httpStream);
+        if (kind is null)
+        {
+            _log($"external audio {cmd.CdnUrl}: unsupported codec (content-type={httpStream.ContentType ?? "?"}) — no vendored decoder (Vorbis/MP3/FLAC only)");
+            try { httpStream.Dispose(); } catch { }
+            _buffering = false; RaiseState();
+            return;
+        }
+        StartDecodeThread(httpStream, cmd.FileIdHex, kind.Value, skipOffset: 0);   // unified decode path (no head, no decrypt)
+    }
+
+    static DecoderKind? PickExternalDecoderKind(string? contentType)
+    {
+        if (string.IsNullOrEmpty(contentType)) return null;
+        var ct = contentType.ToLowerInvariant();
+        if (ct.Contains("mpeg") || ct.Contains("mp3")) return DecoderKind.Mp3;
+        if (ct.Contains("ogg") || ct.Contains("vorbis")) return DecoderKind.Vorbis;
+        if (ct.Contains("flac")) return DecoderKind.Flac;
+        return null;   // aac / mp4 / x-m4a / unknown → try magic bytes, else fail cleanly (no AAC decoder vendored)
+    }
+
+    DecoderKind? SniffMagicKind(PlainHttpAudioStream stream)
+    {
+        var probe = new byte[16];
+        int n;
+        try { n = stream.Read(probe, 0, probe.Length); }
+        catch (Exception ex) { _log($"external audio magic sniff read failed: {ex.Message}"); return null; }
+        try { stream.Seek(0, SeekOrigin.Begin); } catch { }
+        if (n < 4) return null;
+        if (probe[0] == (byte)'I' && probe[1] == (byte)'D' && probe[2] == (byte)'3') return DecoderKind.Mp3;   // ID3v2
+        if (probe[0] == 0xFF && (probe[1] & 0xE0) == 0xE0) return DecoderKind.Mp3;                              // MPEG frame sync
+        if (probe[0] == (byte)'O' && probe[1] == (byte)'g' && probe[2] == (byte)'g' && probe[3] == (byte)'S') return DecoderKind.Vorbis;
+        if (probe[0] == (byte)'f' && probe[1] == (byte)'L' && probe[2] == (byte)'a' && probe[3] == (byte)'C') return DecoderKind.Flac;
+        return null;
     }
 
     void StartLazyKeyCheck(SpotifyAudioStream stream, string fileIdHex, int keyBytes, int nativeSeedBytes)
@@ -229,14 +291,39 @@ internal sealed class AudioPlayEngine : IDisposable
     }
     public void Pause() { _playing = false; _renderer.Pause(); RaiseState(); }
     public void Stop() { _playing = false; StopDecode(); _seekBaseMs = 0; RaiseState(); }
-    public void Seek(long ms) => Interlocked.Exchange(ref _pendingSeekMs, Math.Max(0, ms));
+    public void Seek(long ms)
+    {
+        // Clamp into the track. A target at/past the end (a stale-duration UI, a race with a track change) would make
+        // the decoder bisect to EOF and fail the seek; landing just shy of the end still finishes the track naturally.
+        var dur = Volatile.Read(ref _durationMs);
+        if (dur > 0 && ms > dur - EndSeekGuardMs) ms = dur - EndSeekGuardMs;
+        Interlocked.Exchange(ref _pendingSeekMs, Math.Max(0, ms));
+    }
     public void SetVolume(double v) => _renderer.SetVolume((float)v);
     public void SetEqualizer(EqualizerSettings settings) => _equalizer.Configure(settings);
 
+    // Spotify entry: compute the 0xa7-header skip + codec from the clear head, then start the shared decode thread.
     void StartDecode(SpotifyAudioStream stream, string fileIdHex, ReadOnlyMemory<byte> head, string format)
     {
+        int skipOffset = DetectSkipOffset(head.Span, format);   // 0 or the 167-byte Spotify header
+        var kind = format is "Flac" or "Flac24" ? DecoderKind.Flac : DecoderKind.Vorbis;
+        StartDecodeThread(stream, fileIdHex, kind, skipOffset);
+    }
+
+    enum DecoderKind { Vorbis, Flac, Mp3 }
+
+    static ISampleSource CreateDecoder(Stream skip, DecoderKind kind) => kind switch
+    {
+        DecoderKind.Flac => new FlacSampleSource(skip),
+        DecoderKind.Mp3 => new Mp3SampleSource(skip),
+        _ => new VorbisSampleSource(skip),
+    };
+
+    // The single decode entry for BOTH sources — Spotify encrypted CDN and plain-HTTP external.
+    void StartDecodeThread(IAudioReadStream stream, string fileIdHex, DecoderKind kind, int skipOffset)
+    {
         var cts = new CancellationTokenSource();
-        var thread = new Thread(() => DecodeThreadMain(stream, fileIdHex, head, format, cts))
+        var thread = new Thread(() => DecodeThreadMain(stream, fileIdHex, kind, skipOffset, cts))
         {
             IsBackground = true,
             Name = "wavee-decode",
@@ -255,20 +342,17 @@ internal sealed class AudioPlayEngine : IDisposable
         thread.Start();
     }
 
-    void DecodeThreadMain(SpotifyAudioStream stream, string fileIdHex, ReadOnlyMemory<byte> head, string format, CancellationTokenSource cts)
+    void DecodeThreadMain(IAudioReadStream stream, string fileIdHex, DecoderKind kind, int skipOffset, CancellationTokenSource cts)
     {
         ISampleSource? reader = null;
         using var audioThread = AudioThreadPriority.TryEnter(_log, fileIdHex);
         try
         {
-            // Spotify prepends a 0xa7 (167-byte) proprietary header before the OggS/fLaC bitstream, but not on every file.
-            // Detect its presence from the clear head; when no head exists, fall back to the standard Spotify header size.
-            int skipOffset = DetectSkipOffset(head.Span, format);
-            var skip = new SkipStream(stream, skipOffset);
-            reader = format is "Flac" or "Flac24"
-                ? new FlacSampleSource(skip)
-                : new VorbisSampleSource(skip);
-            _log($"decode: {format} -> {(reader is FlacSampleSource ? "FLAC" : "Vorbis")} skip={skipOffset}B {reader.SampleRate}Hz {reader.Channels}ch");
+            // Spotify prepends a 0xa7 (167-byte) header before the OggS/fLaC bitstream on some files (skipOffset strips it);
+            // the external MP3 path passes skipOffset 0, so the SkipStream is a harmless passthrough there.
+            var skip = new SkipStream(stream.AsStream(), skipOffset);
+            reader = CreateDecoder(skip, kind);
+            _log($"decode: {kind} -> {reader.SampleRate}Hz {reader.Channels}ch skip={skipOffset}B");
             _renderer.Init(reader.SampleRate, reader.Channels, RendererBufferMs);
             _log($"decode {fileIdHex}: renderer initialized buffer={RendererBufferMs}ms startPrebuffer={StartPrebufferMs}ms");
 
@@ -298,7 +382,7 @@ internal sealed class AudioPlayEngine : IDisposable
         }
     }
 
-    void DecodeLoop(ISampleSource reader, SpotifyAudioStream stream, string fileIdHex, CancellationToken ct)
+    void DecodeLoop(ISampleSource reader, IAudioReadStream stream, string fileIdHex, CancellationToken ct)
     {
         var buf = new float[16384];
         long totalSamples = 0;
@@ -310,6 +394,7 @@ internal sealed class AudioPlayEngine : IDisposable
         int lastGen0 = GC.CollectionCount(0);
         int lastGen1 = GC.CollectionCount(1);
         int lastGen2 = GC.CollectionCount(2);
+        bool loggedSeekWaitingForBody = false;
         try
         {
             while (!ct.IsCancellationRequested)
@@ -317,14 +402,46 @@ internal sealed class AudioPlayEngine : IDisposable
                 long seek = Interlocked.Exchange(ref _pendingSeekMs, -1);
                 if (seek >= 0)
                 {
-                    try { reader.SeekTo(TimeSpan.FromMilliseconds(seek)); } catch (Exception ex) { _log($"seek failed target={seek}ms: {ex.GetType().Name}: {ex.Message}"); }
-                    _renderer.Reset();
-                    _rendererPrimed = false;
-                    rendererStartedAfterBuffer = false;
-                    preStartFrames = 0;
-                    lastWriteTicks = 0;
-                    _seekBaseMs = seek;
-                    _log($"head-check {fileIdHex}: seek applied target={seek}ms; renderer will restart after {StartPrebufferMs}ms PCM is queued");
+                    if (!stream.IsBodyAttached || stream.KnownSize <= 0)
+                    {
+                        Interlocked.CompareExchange(ref _pendingSeekMs, seek, -1);
+                        if (!loggedSeekWaitingForBody)
+                        {
+                            _log($"seek deferred target={seek}ms: waiting for CDN body length bodyAttached={stream.IsBodyAttached} knownSize={stream.KnownSize}B head={stream.ClearHeadLength}B");
+                            loggedSeekWaitingForBody = true;
+                        }
+                    }
+                    else
+                    {
+                        loggedSeekWaitingForBody = false;
+                        bool seekOk;
+                        try
+                        {
+                            using (stream.PauseReadAhead())
+                            {
+                                reader.SeekTo(TimeSpan.FromMilliseconds(seek));
+                            }
+                            stream.ResumeReadAheadAtCurrentOffset();
+                            seekOk = true;
+                        }
+                        catch (Exception ex) { seekOk = false; _log($"seek failed target={seek}ms: {ex.GetType().Name}: {ex.Message}"); }
+                        if (seekOk)
+                        {
+                            _renderer.Reset();
+                            _rendererPrimed = false;
+                            rendererStartedAfterBuffer = false;
+                            preStartFrames = 0;
+                            lastWriteTicks = 0;
+                            _seekBaseMs = seek;
+                            _log($"head-check {fileIdHex}: seek applied target={seek}ms; renderer will restart after {StartPrebufferMs}ms PCM is queued");
+                        }
+                        else
+                        {
+                            // The decoder is still at its old position — applying _seekBaseMs anyway would desync the
+                            // reported position from the audio for the rest of the track. Snap the UI back instead.
+                            RaiseState();
+                        }
+                    }
                 }
 
                 long beforeOffset = stream.CurrentOffset;
@@ -414,7 +531,7 @@ internal sealed class AudioPlayEngine : IDisposable
 
     void StopDecode()
     {
-        CancellationTokenSource? cts; Thread? thread; ISampleSource? reader; SpotifyAudioStream? stream;
+        CancellationTokenSource? cts; Thread? thread; ISampleSource? reader; IAudioReadStream? stream;
         lock (_gate)
         {
             cts = _cts;
@@ -464,7 +581,7 @@ internal sealed class AudioPlayEngine : IDisposable
 
     static long TicksToMs(long ticks) => (long)(ticks * 1000.0 / Stopwatch.Frequency);
 
-    static string DescribeReadSource(SpotifyAudioStream stream, long beforeOffset, long afterOffset)
+    static string DescribeReadSource(IAudioReadStream stream, long beforeOffset, long afterOffset)
     {
         int headLen = stream.ClearHeadLength;
         if (headLen <= 0) return "body/ranged-cdn";

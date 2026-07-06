@@ -75,6 +75,9 @@ namespace NVorbis.Ogg
 
         public long WasteBits { get; private set; }
 
+        /// <summary>See <see cref="IPageReader.ProbeMode"/>: suppresses the EOS latch when a seek probe scans past the last page.</summary>
+        public bool ProbeMode { get; set; }
+
         private bool VerifyPage(byte[] headerBuf, int index, int cnt, out byte[] pageBuf, out int bytesRead)
         {
             var segCnt = headerBuf[index + 26];
@@ -335,7 +338,7 @@ namespace NVorbis.Ogg
                 }
             }
 
-            if (cnt == 0)
+            if (cnt == 0 && !ProbeMode)
             {
                 SetEndOfStreams();
             }

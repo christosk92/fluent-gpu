@@ -17,7 +17,12 @@ namespace Wavee.Backend;
 /// <summary>One track in a resolved/queued context: the domain <see cref="Track"/> plus its provider-assigned context
 /// <c>uid</c> (skip_to-by-uid, the PutState player_state track.uid, outbound page uids). Uid is "" for synthetic /
 /// user-queued items. A struct wrapping the already-heap-allocated Track — no extra per-track allocation.</summary>
-public readonly record struct QueuedTrack(Track Track, string Uid)
+public readonly record struct QueuedTrack(
+    Track Track,
+    string Uid,
+    string Provider = "context",
+    IReadOnlyDictionary<string, string>? Metadata = null,
+    QueueRowKind RowKind = QueueRowKind.Playable)
 {
     public string Uri => Track.Uri;
 }
@@ -36,19 +41,33 @@ public readonly record struct ContextSpec(
 }
 
 /// <summary>A bare (uri, uid) pair as it appears in a command's embedded context page — pre-hydration.</summary>
-public readonly record struct QueuedRef(string Uri, string Uid);
+public readonly record struct QueuedRef(
+    string Uri,
+    string Uid,
+    string Provider = "context",
+    IReadOnlyDictionary<string, string>? Metadata = null);
 
 /// <summary>One entry in an outbound set_queue snapshot. <c>IsQueued</c> ⇒ provider:"queue" + metadata{is_queued:"true"}
 /// (a user-queued row); otherwise provider:"context" + metadata{} (a context-continuation row).</summary>
-public readonly record struct QueueWireEntry(string Uri, string Uid, bool IsQueued);
+public readonly record struct QueueWireEntry(
+    string Uri,
+    string Uid,
+    bool IsQueued,
+    IReadOnlyDictionary<string, string>? Metadata = null);
+
+public readonly record struct ContextPage(IReadOnlyList<QueuedTrack> Tracks, string? NextPageUrl)
+{
+    public static readonly ContextPage Empty = new(Array.Empty<QueuedTrack>(), null);
+}
 
 /// <summary>The resolved context: ordered, metadata-hydrated tracks, where to start, and the paging/sort metadata the
 /// publisher needs. Lean by design — only what the controller + PutState consume.</summary>
 public readonly record struct ResolvedContext(
     IReadOnlyList<QueuedTrack> Tracks, int StartIndex,
-    string? SortingCriteria, string? NextPageUrl, bool IsInfinite)
+    string? SortingCriteria, string? NextPageUrl, bool IsInfinite,
+    IReadOnlyDictionary<string, string>? Metadata = null, string? ContextUri = null)
 {
-    public static readonly ResolvedContext Empty = new(Array.Empty<QueuedTrack>(), 0, null, null, false);
+    public static readonly ResolvedContext Empty = new(Array.Empty<QueuedTrack>(), 0, null, null, false, null, null);
     public int Count => Tracks.Count;
 }
 
@@ -58,7 +77,9 @@ public readonly record struct ResolvedContext(
 public interface IContextResolver
 {
     Task<ResolvedContext> ResolveAsync(ContextSpec spec, CancellationToken ct = default);
-    Task<IReadOnlyList<QueuedTrack>> LoadMoreAsync(string nextPageUrl, CancellationToken ct = default);
+    Task<ContextPage> LoadMoreAsync(string nextPageUrl, CancellationToken ct = default);
+    Task<ResolvedContext> ResolveAutoplayAsync(string contextUri, IReadOnlyList<string> recentTrackUris, CancellationToken ct = default);
+    Task<ResolvedContext> ResolveAutopodcastAsync(string contextUri, IReadOnlyList<string> recentEpisodeUris, CancellationToken ct = default);
     /// <summary>Hydrate loose track refs (add_to_queue / set_queue items) into queued tracks with display + duration metadata.</summary>
     Task<IReadOnlyList<QueuedTrack>> HydrateAsync(IReadOnlyList<QueuedRef> refs, CancellationToken ct = default);
 }
@@ -102,12 +123,19 @@ public sealed class EmptyContextResolver : IContextResolver
 {
     public static readonly EmptyContextResolver Instance = new();
     public Task<ResolvedContext> ResolveAsync(ContextSpec spec, CancellationToken ct = default) => Task.FromResult(ResolvedContext.Empty);
-    public Task<IReadOnlyList<QueuedTrack>> LoadMoreAsync(string nextPageUrl, CancellationToken ct = default)
-        => Task.FromResult<IReadOnlyList<QueuedTrack>>(Array.Empty<QueuedTrack>());
+    public Task<ContextPage> LoadMoreAsync(string nextPageUrl, CancellationToken ct = default) => Task.FromResult(ContextPage.Empty);
+    public Task<ResolvedContext> ResolveAutoplayAsync(string contextUri, IReadOnlyList<string> recentTrackUris, CancellationToken ct = default)
+        => Task.FromResult(ResolvedContext.Empty);
+    public Task<ResolvedContext> ResolveAutopodcastAsync(string contextUri, IReadOnlyList<string> recentEpisodeUris, CancellationToken ct = default)
+        => Task.FromResult(ResolvedContext.Empty);
     public Task<IReadOnlyList<QueuedTrack>> HydrateAsync(IReadOnlyList<QueuedRef> refs, CancellationToken ct = default)
     {
         var arr = new QueuedTrack[refs.Count];
-        for (int i = 0; i < refs.Count; i++) arr[i] = new QueuedTrack(ContextResolve.Synthetic(refs[i].Uri), refs[i].Uid);
+        for (int i = 0; i < refs.Count; i++)
+        {
+            string provider = string.IsNullOrEmpty(refs[i].Provider) ? "context" : refs[i].Provider;
+            arr[i] = new QueuedTrack(ContextResolve.Synthetic(refs[i].Uri), refs[i].Uid, provider, refs[i].Metadata);
+        }
         return Task.FromResult<IReadOnlyList<QueuedTrack>>(arr);
     }
 }

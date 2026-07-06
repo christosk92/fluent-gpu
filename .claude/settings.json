@@ -1,0 +1,27 @@
+{
+  "//": "Shared, checked-in defaults. Fences AI agents OUT of native reverse-engineering / DRM-derivation material so it is never read, searched, or edited by an agent. Personal overrides live in settings.local.json.",
+  "permissions": {
+    "deny": [
+      "Read(./app/.native/**)",
+      "Read(./app/Wavee.PlayPlay/**)",
+      "Read(./private-runtimes/**)",
+      "Read(./app/tmp_ghidra*)",
+      "Read(./app/tmp_refresh_playplay*)",
+      "Read(./app/tmp_*playplay*)",
+      "Read(./scripts/pyghidra*)",
+      "Read(./app/docs/wavee-playplay*.md)",
+      "Read(./app/docs/playplay-*.md)",
+      "Read(./app/docs/spotiload-offline-path.md)",
+      "Read(./**/playplay-runtime.json)",
+
+      "Glob(./app/.native/**)",
+      "Glob(./app/Wavee.PlayPlay/**)",
+      "Glob(./private-runtimes/**)",
+      "Glob(./scripts/pyghidra*)",
+
+      "Grep(./app/.native/**)",
+      "Grep(./app/Wavee.PlayPlay/**)",
+      "Grep(./private-runtimes/**)"
+    ]
+  }
+}
