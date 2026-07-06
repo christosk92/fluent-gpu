@@ -1,13 +1,17 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using Google.Protobuf;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Wavee.Backend;
 using Wavee.Backend.Metadata;
+using Wavee.Backend.Playlists;
+using Wavee.Backend.Spotify;
 using Wavee.Core;
 using Wavee.Protocol.Playback;
+using Pl = Wavee.Protocol.Playlist;
 
 namespace Wavee.SpotifyLive;
 
@@ -49,7 +53,12 @@ public sealed class LiveContextResolver : IContextResolver
             return new ResolvedContext(hydratedEmbedded, s, null, null, ContextResolve.IsInfinite(spec.Uri));
         }
 
-        // 2) Resolve via the unified context-resolve endpoint, eager-loading a bounded number of pages.
+        // 2) An artist play does NOT use context-resolve — it resolves via the playlist-v2 "popular release segments"
+        // list (a zstd SelectedListContent), while the top-level context_uri/feature stay the original spotify:artist:*.
+        if (IsArtistUri(spec.Uri))
+            return await ResolveArtistAsync(spec, ct).ConfigureAwait(false);
+
+        // 3) Resolve via the unified context-resolve endpoint, eager-loading a bounded number of pages.
         var refs = new List<QueuedRef>();
         string? sorting = null, nextPage = null;
         ContextJson.Result jsonInfo = default;
@@ -196,6 +205,54 @@ public sealed class LiveContextResolver : IContextResolver
         if (refs.Count == 0) return ResolvedContext.Empty;
         var tracks = Tag(await HydrateAsync(refs, ct).ConfigureAwait(false), "autoplay");
         return new ResolvedContext(tracks, 0, null, nextPage, true, null, "spotify:station:track:" + seedId);
+    }
+
+    static bool IsArtistUri(string uri) => uri.StartsWith("spotify:artist:", StringComparison.Ordinal);
+
+    // Artist play: GET /playlist/v2/list/popular-release-segments-main-roles/artist_<id> → a zstd SelectedListContent
+    // (playlist4_external.proto), NOT the JSON context-resolve shape. play_origin.feature_identifier stays "artist"
+    // (handled by ConnectStateBuilder.FeatureOf, which keys off the ORIGINAL spec.Uri) — so ContextUri here stays null;
+    // the caller falls back to spec.Uri (resolved.ContextUri ?? spec.Uri), never relabeling to this list uri.
+    async Task<ResolvedContext> ResolveArtistAsync(ContextSpec spec, CancellationToken ct)
+    {
+        string id = spec.Uri["spotify:artist:".Length..];
+        var path = "/playlist/v2/list/popular-release-segments-main-roles/artist_" + id;
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["Accept"] = "application/protobuf" };
+        var resp = await _transport.Request(Channel.Spclient, path, default, ct, headers: headers).ConfigureAwait(false);
+        if (!resp.Ok || resp.Body is null || resp.Body.Length == 0)
+        {
+            _log?.Invoke($"artist context-resolve failed ({resp.Status}): {spec.Uri}");
+            return ResolvedContext.Empty;
+        }
+
+        Pl.SelectedListContent slc;
+        try { slc = Pl.SelectedListContent.Parser.ParseFrom(SpotifyZstd.MaybeDecompressZstd(resp.Body)); }
+        catch (Exception ex)
+        {
+            _log?.Invoke($"artist context-resolve parse failed for {spec.Uri}: {ex.Message}");
+            return ResolvedContext.Empty;
+        }
+
+        var (members, _) = PlaylistWireMapper.ParseContents(slc);
+        if (members.Count == 0) { _log?.Invoke("artist context-resolve: 0 tracks for " + spec.Uri); return ResolvedContext.Empty; }
+
+        var refs = new List<QueuedRef>(members.Count);
+        foreach (var m in members) refs.Add(new QueuedRef(m.ItemUri, m.ItemId));   // uid = hex item_id (§6.1)
+
+        var tracks = await HydrateAsync(refs, ct).ConfigureAwait(false);
+        int start = ContextResolve.FindStartIndex(tracks, spec.SkipToTrackUri, spec.SkipToTrackUid, spec.SkipToIndex);
+
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["format_list_type"] = "popular-release-segments-main-roles",
+            ["reporting.uri"] = spec.Uri,
+            ["total_number_of_tracks"] = (slc.HasLength ? slc.Length : tracks.Count).ToString(CultureInfo.InvariantCulture),
+        };
+        if (slc.Attributes is { } attr)
+            foreach (var fa in attr.FormatAttributes)
+                if (!string.IsNullOrEmpty(fa.Key)) metadata[fa.Key] = fa.Value ?? "";   // e.g. play_count, if the server sends it
+
+        return new ResolvedContext(tracks, start, null, null, false, metadata, null);
     }
 
     // Pull display + duration metadata for the resolved order (cache-aware, batched, gzipped). The expensive work lives
