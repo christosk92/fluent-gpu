@@ -27,6 +27,7 @@ public sealed class LiveTrackResolver : ITrackResolver
     readonly IAudioKeySource _keys;
     readonly Func<string, CancellationToken, Task<ByteString?>> _fetchTrackV4;
     readonly Func<string, CancellationToken, Task<ByteString?>>? _fetchAudioFilesV5;
+    readonly Func<string, CancellationToken, Task<ByteString?>>? _fetchEpisodeV4;
     readonly bool _preferLossless;
     readonly Func<AudioQualityPreference>? _quality;
     readonly AudioFormatProbe? _probe;
@@ -38,6 +39,7 @@ public sealed class LiveTrackResolver : ITrackResolver
         IAudioKeySource keys,
         Func<string, CancellationToken, Task<ByteString?>> fetchTrackV4,
         Func<string, CancellationToken, Task<ByteString?>>? fetchAudioFilesV5 = null,
+        Func<string, CancellationToken, Task<ByteString?>>? fetchEpisodeV4 = null,
         bool preferLossless = false,
         Action<string>? log = null,
         AudioFormatProbe? probe = null,
@@ -47,6 +49,7 @@ public sealed class LiveTrackResolver : ITrackResolver
         _keys = keys;
         _fetchTrackV4 = fetchTrackV4;
         _fetchAudioFilesV5 = fetchAudioFilesV5;
+        _fetchEpisodeV4 = fetchEpisodeV4;
         _preferLossless = preferLossless;
         _quality = quality;
         _probe = probe;
@@ -60,7 +63,7 @@ public sealed class LiveTrackResolver : ITrackResolver
     /// <summary>The fast half: extended-metadata → file select (Ogg or FLAC). No CDN, no key — so the head fetch (which
     /// needs no key) can start the moment this returns, in parallel with the body resolve. Coalesced + cached per track uri
     /// (file IDs are immutable); a failed resolve is dropped so it retries.</summary>
-    public readonly record struct TrackMeta(byte[] FileId, string FileIdHex, byte[] FileGid, AudioFormat Fmt, long DurMs, string TrackUri, float NormalizationGainDb);
+    public readonly record struct TrackMeta(byte[] FileId, string FileIdHex, byte[] FileGid, AudioFormat Fmt, long DurMs, string TrackUri, float NormalizationGainDb, string? ExternalUrl = null);
 
     public Task<TrackMeta> ResolveMetaAsync(Track track, CancellationToken ct = default)
     {
@@ -77,6 +80,9 @@ public sealed class LiveTrackResolver : ITrackResolver
 
     async Task<TrackMeta> FetchMetaAsync(Track track)
     {
+        if (track.Uri.StartsWith("spotify:episode:", StringComparison.Ordinal))
+            return await FetchEpisodeMetaAsync(track).ConfigureAwait(false);
+
         var trackPayload = await _fetchTrackV4(track.Uri, CancellationToken.None).ConfigureAwait(false);
         if (trackPayload is null) throw new AudioPlaybackException(AudioKeyFailureReason.Restricted, "no TRACK_V4 extension for " + track.Uri);
         var t = M.Track.Parser.ParseFrom(trackPayload);
@@ -119,6 +125,59 @@ public sealed class LiveTrackResolver : ITrackResolver
         throw new AudioPlaybackException(AudioKeyFailureReason.Restricted, "no playable file (Ogg or FLAC, incl. alternatives)");
     }
 
+    async Task<TrackMeta> FetchEpisodeMetaAsync(Track track)
+    {
+        if (_fetchEpisodeV4 is not { } fetchEp)
+            throw new AudioPlaybackException(AudioKeyFailureReason.Restricted, "episode resolver not configured");
+        var payload = await fetchEp(track.Uri, CancellationToken.None).ConfigureAwait(false);
+        if (payload is null) throw new AudioPlaybackException(AudioKeyFailureReason.Restricted, "no EPISODE_V4 for " + track.Uri);
+        var ep = M.Episode.Parser.ParseFrom(payload);
+        long dur = ep.HasDuration ? ep.Duration : track.DurationMs;
+
+        if (ep.HasExternalUrl && ep.ExternalUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+        {
+            _log?.Invoke($"resolve {track.Uri}: external MP3 {ep.ExternalUrl}");
+            // Real gid-derived FileIdHex (not the "external" sentinel) so the host's stale-file guard has a stable key.
+            var extGid = ep.Gid.ToByteArray();
+            return new TrackMeta(extGid, Convert.ToHexStringLower(extGid), extGid, AudioFormat.Mp3, dur, track.Uri, 0f, ep.ExternalUrl);
+        }
+
+        var quality = Quality;
+        var pick = SelectEpisodeAudio(ep, quality);
+        if (pick is null)
+            throw new AudioPlaybackException(AudioKeyFailureReason.Restricted, "no playable audio for episode " + track.Uri);
+        var hex = Convert.ToHexStringLower(pick.Value.fileId);
+        _log?.Invoke($"resolve {track.Uri}: episode {pick.Value.fmt} file {hex}");
+        return new TrackMeta(pick.Value.fileId, hex, ep.Gid.ToByteArray(), pick.Value.fmt, dur, track.Uri, 0f);
+    }
+
+    static (byte[] fileId, AudioFormat fmt)? SelectEpisodeAudio(M.Episode episode, AudioQualityPreference quality)
+    {
+        if (episode.Audio.Count == 0) return null;
+        int target = quality switch { AudioQualityPreference.Normal96 => 0, AudioQualityPreference.High160 => 1, _ => 2 };
+        M.AudioFile? best = null;
+        int bestScore = 0;
+        AudioFormat bestFmt = AudioFormat.OggVorbis160;
+        foreach (var f in episode.Audio)
+        {
+            if (f.FileId.Length == 0) continue;
+            (int rung, AudioFormat fmt) = f.Format switch
+            {
+                M.AudioFile.Types.Format.OggVorbis96 => (0, AudioFormat.OggVorbis96),
+                M.AudioFile.Types.Format.OggVorbis160 => (1, AudioFormat.OggVorbis160),
+                M.AudioFile.Types.Format.OggVorbis320 => (2, AudioFormat.OggVorbis320),
+                M.AudioFile.Types.Format.Mp3160 => (1, AudioFormat.Mp3),
+                M.AudioFile.Types.Format.Mp3320 => (2, AudioFormat.Mp3),
+                _ => (-1, AudioFormat.OggVorbis160),
+            };
+            if (rung < 0) continue;
+            int score = rung == target ? 100 : rung < target ? 50 - (target - rung) : 10 - (rung - target);
+            if (score > bestScore) { bestScore = score; best = f; bestFmt = fmt; }
+        }
+        if (best is null) return null;
+        return (best.FileId.ToByteArray(), bestFmt);
+    }
+
     void StartFormatProbe(string uri, M.Track track, Af.AudioFilesExtensionResponse? audioFiles)
     {
         var probe = _probe;
@@ -134,6 +193,10 @@ public sealed class LiveTrackResolver : ITrackResolver
     /// Throws a typed <see cref="AudioPlaybackException"/> on any failure — never a silent empty handle.</summary>
     public async Task<AudioStreamHandle> ResolveBodyAsync(TrackMeta m, CancellationToken ct = default)
     {
+        if (!string.IsNullOrEmpty(m.ExternalUrl))
+            return new AudioStreamHandle(m.TrackUri, m.FileIdHex, m.ExternalUrl, default, AudioFormat.Mp3, m.DurMs, 0f,
+                SourceKind: AudioSourceKind.ExternalPlain);
+
         string cdn = "";
         string[]? cdnUrls = null;
         var sr = await _transport.Request(Channel.Spclient, "/storage-resolve/files/audio/interactive/" + m.FileIdHex, default, ct).ConfigureAwait(false);

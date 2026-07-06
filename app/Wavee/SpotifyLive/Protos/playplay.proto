@@ -29,4 +29,5 @@ message PlayPlayLicenseRequest {
 
 message PlayPlayLicenseResponse {
     optional bytes obfuscated_key = 1;
+    optional bytes aux = 2;
 }

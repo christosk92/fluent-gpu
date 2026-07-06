@@ -147,7 +147,8 @@ public sealed class LiveSessionHost : IAsyncDisposable
         double initialVolume = svc.Settings.Get(WaveeSettings.RememberVolume)
             ? Math.Clamp(svc.Settings.Get(WaveeSettings.SavedVolume), 0f, 1f) : 0.7;
         var connect = new LiveConnect(transport, live.DeviceId, live.ApChannel, contexts, log: log, audio: audio,
-            initialVolume01: initialVolume);
+            initialVolume01: initialVolume, refreshTokens: live.TokenProvider);
+        connect.Controller.AutoplayEnabled = () => svc.Settings.Get(WaveeSettings.AutoplayEnabled);
         transport.Start();
         // Profile (name + avatar) and the account email fetched in PARALLEL before go-live, so CurrentUser is complete on
         // the first render (no refresh hook). Both are best-effort — a failure just omits that field.

@@ -41,6 +41,7 @@
   <ItemGroup>
     <PackageReference Include="Google.Protobuf" Version="3.35.0" />
     <PackageReference Include="FlacBox" Version="1.0.0" />
+    <PackageReference Include="NLayer" Version="1.15.0" />
     <!-- DPAPI (Windows) — the OPTIONAL at-rest protector swapped behind the portable ICredentialProtector seam. -->
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.0" />
     <!-- §2.7 — pure-managed (AOT-safe) zstd decode for the Content-Encoding: zstd /changes + /diff playlist-v2 responses. -->
@@ -87,5 +88,19 @@
     <Folder Include="Features\Search\" />
     <Folder Include="Features\Shell\" />
   </ItemGroup>
+
+  <!-- JIT Debug/Release: NuGet drops e_sqlite3.dll under runtimes/ only; publish colocates it. Copy the arch-matching
+       binary next to Wavee.exe so Rider F5 and the publish preflight share the same layout. -->
+  <Target Name="CopyESqlite3ToAppRoot" AfterTargets="Build" Condition="'$(OS)' == 'Windows_NT'">
+    <PropertyGroup>
+      <_WaveeRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</_WaveeRid>
+      <_WaveeRid Condition="'$(_WaveeRid)' == '' AND '$(PlatformTarget)' == 'x86'">win-x86</_WaveeRid>
+      <_WaveeRid Condition="'$(_WaveeRid)' == '' AND '$(PlatformTarget)' == 'arm64'">win-arm64</_WaveeRid>
+      <_WaveeRid Condition="'$(_WaveeRid)' == ''">win-x64</_WaveeRid>
+      <_ESqliteSrc>$(OutputPath)runtimes\$(_WaveeRid)\native\e_sqlite3.dll</_ESqliteSrc>
+    </PropertyGroup>
+    <Copy SourceFiles="$(_ESqliteSrc)" DestinationFiles="$(OutputPath)e_sqlite3.dll"
+          Condition="Exists('$(_ESqliteSrc)')" SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>

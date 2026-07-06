@@ -37,4 +37,13 @@ public static class HttpCompression
         gz.CopyTo(dst);
         return dst.ToArray();
     }
+
+    public static byte[] BrotliDecompress(ReadOnlySpan<byte> data)
+    {
+        using var src = new MemoryStream(data.ToArray());
+        using var br = new BrotliStream(src, CompressionMode.Decompress);
+        using var dst = new MemoryStream();
+        br.CopyTo(dst);
+        return dst.ToArray();
+    }
 }

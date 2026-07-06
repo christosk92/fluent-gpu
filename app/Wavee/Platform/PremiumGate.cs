@@ -1,7 +1,3 @@
-using System;
-using System.Runtime.InteropServices;
-using System.Runtime.Versioning;
-
 namespace Wavee;
 
 // The premium-only gate's WARNING UI. When Wavee refuses to launch on a Spotify Free account, no window/engine is up yet,
@@ -9,18 +5,6 @@ namespace Wavee;
 // to stderr (a real UI surface comes with the cross-platform shell).
 static class PremiumGate
 {
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    [SupportedOSPlatform("windows")]
-    static extern int MessageBoxW(IntPtr hWnd, string text, string caption, uint type);
-
-    const uint MB_OK = 0x0;
-    const uint MB_ICONWARNING = 0x30;
-
-    public static void ShowWarning()
-    {
-        if (OperatingSystem.IsWindows())
-            MessageBoxW(IntPtr.Zero, Wavee.Backend.SessionGate.WarningBody, Wavee.Backend.SessionGate.WarningTitle, MB_OK | MB_ICONWARNING);
-        else
-            Console.Error.WriteLine(Wavee.Backend.SessionGate.WarningTitle + ": " + Wavee.Backend.SessionGate.WarningBody);
-    }
+    public static void ShowWarning() =>
+        StartupNotice.Warning(Wavee.Backend.SessionGate.WarningTitle, Wavee.Backend.SessionGate.WarningBody);
 }

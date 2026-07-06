@@ -53,11 +53,17 @@
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\storage-resolve.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\audio_files_extension.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\playplay.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\devices.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\media.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\player.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\connect.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
 
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Wavee.Core\Wavee.Core.csproj" />
+    <!-- the vendored Ogg/Vorbis fork — OggContainerSeekTests drive its container-level seek paths directly -->
+    <ProjectReference Include="..\vendor\NVorbis\NVorbis\NVorbis.csproj" />
     <Compile Include="..\Wavee\Diagnostics\*.cs" />
     <Compile Include="..\Wavee\Backend\**\*.cs" />
     <!-- The REAL production VirtualCollection<T> (portable, Signals-only), source-included so DiscographyPaginationTests
@@ -84,6 +90,8 @@
     <Compile Include="..\Wavee\SpotifyLive\Audio\PlayPlayRuntimeProvisioner.cs" />
     <!-- the track resolver (extended-metadata file discovery + Ogg/FLAC selection) — LiveTrackResolverTests drive it -->
     <Compile Include="..\Wavee\SpotifyLive\LiveTrackResolver.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\SpotifyClientIdentity.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\ConnectStateBuilder.cs" />
   </ItemGroup>
 
   <ItemGroup Condition="Exists('..\Wavee.PlayPlay\Wavee.PlayPlay.csproj')">

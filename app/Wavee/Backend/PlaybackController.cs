@@ -25,6 +25,8 @@ public interface ITrackResolver
     Task<AudioStreamHandle> ResolveAsync(Track track, CancellationToken ct = default);
 }
 
+public readonly record struct PlaybackTrackMeta(byte[] MediaId, byte[] FileId, int BitrateKbps, string AudioFormat, long DurationMs);
+
 public sealed class StubTrackResolver : ITrackResolver
 {
     public Task<AudioStreamHandle> ResolveAsync(Track track, CancellationToken ct = default)
@@ -120,6 +122,14 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     string _lastActive = "";
     double _lastVolume = -1;
     bool _ownsActivePlayback;
+    string? _nextPageUrl;
+    bool _contextIsInfinite;
+    string? _autoplayLatchedFor;
+    Task<ResolvedContext>? _continuationFetch;
+    string _commandIdHex = "";
+    PlaybackIds? _currentIds;
+    string? _idsSessionContext;
+    string _reasonStart = "clickrow";
 
     public PlaybackController(IAudioHost host, ITrackResolver resolver, NowPlayingProjection projection,
         IContextResolver contexts,
@@ -147,6 +157,9 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     /// operation aborts. Null (the default — unit tests, and a future real-audio build) leaves local playback enabled.
     /// Remote forwarding is never affected. Wired by the live bootstrap to <c>PlaybackBridge.NotifyLocalPlaybackUnsupported</c>.</summary>
     public Action? OnLocalPlaybackRejected { get; set; }
+    public Func<bool>? AutoplayEnabled { get; set; }
+    public Func<Track, CancellationToken, Task<PlaybackTrackMeta?>>? MetaResolver { get; set; }
+    public Func<string, CancellationToken, Task<long>>? EpisodeResumeMicros { get; set; }
 
     bool RejectLocalPlay()
     {
@@ -361,7 +374,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     }
 
     public Task SeekAsync(long positionMs, CancellationToken ct = default)
-        => RouteLocal() ? Local(() => { _projection.NoteLocalCommand(); _host.Seek(positionMs); EmitState(EvKind.Seeked); })
+        => RouteLocal() ? Local(() => EmitSeeked(positionMs))
                         : Forward("seek_to", ct, ("value", positionMs));
 
     public Task SetVolumeAsync(double volume01, CancellationToken ct = default)
@@ -413,10 +426,10 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             if (_queue.Current is null)   // add-to-queue while idle → start playing it (rule §3)
             {
                 if (RejectLocalPlay()) return;   // can't start local playback → toast + abort (don't seed a phantom local queue)
-                _queue.SetContext(queued.Track.Uri, new[] { queued }, 0);
+                SetQueueContext(queued.Track.Uri, new[] { queued }, 0);
                 await LoadAndPlayCurrentAsync(EvKind.Started, ct).ConfigureAwait(false);
             }
-            else { _queue.EnqueueUser(queued.Track); PushQueueAndPublish(); }
+            else { _queue.EnqueueUser(queued); PushQueueAndPublish(); }
             WarmFastTrack(queued.Track, "enqueue");
         }
         finally { _lock.Release(); }
@@ -452,10 +465,10 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         var clusterPrev = _projection.ClusterPrevTracks;
         var clusterNext = _projection.ClusterNextTracks;
         var prev = new List<QueueWireEntry>(clusterPrev.Count);
-        foreach (var t in clusterPrev) prev.Add(new QueueWireEntry(t.Uri, t.Uid, t.Provider == "queue"));
+        foreach (var t in clusterPrev) prev.Add(new QueueWireEntry(t.Uri, t.Uid, t.Provider == "queue", t.Metadata));
         var next = new List<QueueWireEntry>(refs.Length + clusterNext.Count);
-        foreach (var r in refs)        next.Add(new QueueWireEntry(r.Uri, r.Uid, true));                 // inserted play-next → queue
-        foreach (var t in clusterNext) next.Add(new QueueWireEntry(t.Uri, t.Uid, t.Provider == "queue"));// the device's queue, verbatim
+        foreach (var r in refs)        next.Add(new QueueWireEntry(r.Uri, r.Uid, true, r.Metadata));                 // inserted play-next → queue
+        foreach (var t in clusterNext) next.Add(new QueueWireEntry(t.Uri, t.Uid, t.Provider == "queue", t.Metadata));// the device's queue, verbatim
         var json = OutboundEnvelope.SetQueue(_ourDeviceId, ParseRevision(), prev, next, NewId(), NewId(), Now());
         var r2 = await _outbound.SendAsync(target, json, ct).ConfigureAwait(false);
         if (!r2.Ok) _log?.Invoke($"outbound set_queue → {target}: failed ({r2.Status})");
@@ -505,7 +518,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             case ConnectCmd.Resume: _ = LocalResumeAsync(); break;
             case ConnectCmd.SkipNext: _ = LocalNextAsync(); break;
             case ConnectCmd.SkipPrev: _ = LocalPrevAsync(); break;
-            case ConnectCmd.SeekTo: _host.Seek(cmd.SeekToMs); EmitState(EvKind.Seeked); break;
+            case ConnectCmd.SeekTo: EmitSeeked(cmd.SeekToMs); break;
             case ConnectCmd.SetShufflingContext: _queue.SetShuffle(cmd.BoolArg); PushOptions(); EmitState(EvKind.OptionsChanged); break;
             case ConnectCmd.SetRepeatingContext: _queue.SetRepeat(cmd.BoolArg ? RepeatMode.Context : RepeatMode.Off); PushOptions(); EmitState(EvKind.OptionsChanged); break;
             case ConnectCmd.SetRepeatingTrack: _queue.SetRepeat(cmd.BoolArg ? RepeatMode.Track : RepeatMode.Off); PushOptions(); EmitState(EvKind.OptionsChanged); break;
@@ -543,7 +556,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
                 if (_queue.Current is null)
                 {
                     if (RejectLocalPlay()) return;   // inbound add-to-queue while idle would start local playback → toast + abort
-                    _queue.SetContext(hydrated[0].Uri, hydrated, 0);
+                    SetQueueContext(hydrated[0].Uri, hydrated, 0);
                     await LoadAndPlayCurrentAsync(EvKind.Started, default).ConfigureAwait(false);
                 }
                 else { _queue.EnqueueUser(hydrated[0]); PushQueueAndPublish(); }
@@ -582,7 +595,8 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             {
                 string? curUri = _queue.Current?.Uri;
                 int found = curUri is null ? -1 : IndexOfUri(resolved.Tracks, curUri);
-                _queue.SetContext(spec.Uri, resolved.Tracks, found < 0 ? 0 : found);
+                SetQueueContext(resolved.ContextUri ?? spec.Uri, resolved.Tracks, found < 0 ? 0 : found,
+                    resolved.NextPageUrl, resolved.IsInfinite, resolved.Metadata);
                 PushQueue();
             }
             finally { _lock.Release(); }
@@ -613,19 +627,33 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     }
 
     // ── local execution primitives (shared by the public verbs + inbound handling) ───────────────────────────────────
+    void SetQueueContext(string uri, IReadOnlyList<QueuedTrack> tracks, int startIndex,
+        string? nextPageUrl = null, bool isInfinite = false, IReadOnlyDictionary<string, string>? metadata = null)
+    {
+        _queue.SetContext(uri, tracks, startIndex);
+        _nextPageUrl = string.IsNullOrEmpty(nextPageUrl) ? null : nextPageUrl;
+        _contextIsInfinite = isInfinite || ContextResolve.IsInfinite(uri);
+        _autoplayLatchedFor = null;
+        _continuationFetch = null;
+        _projection.SetLocalContext(uri, metadata);
+        PushOptions();
+    }
+
     async Task LocalPlaySpecAsync(ContextSpec spec, CancellationToken ct)
     {
         var resolved = await _contexts.ResolveAsync(spec, ct).ConfigureAwait(false);
         if (resolved.Count == 0) { _log?.Invoke("play: context resolved to 0 tracks: " + spec.Uri); return; }
-        await LocalPlayTracksAsync(spec.Uri, resolved.Tracks, resolved.StartIndex, ct).ConfigureAwait(false);
+        await LocalPlayTracksAsync(resolved.ContextUri ?? spec.Uri, resolved.Tracks, resolved.StartIndex, ct,
+            resolved.NextPageUrl, resolved.IsInfinite, resolved.Metadata).ConfigureAwait(false);
     }
 
-    async Task LocalPlayTracksAsync(string contextUri, IReadOnlyList<QueuedTrack> tracks, int startIndex, CancellationToken ct)
+    async Task LocalPlayTracksAsync(string contextUri, IReadOnlyList<QueuedTrack> tracks, int startIndex, CancellationToken ct,
+        string? nextPageUrl = null, bool isInfinite = false, IReadOnlyDictionary<string, string>? metadata = null)
     {
         await _lock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            _queue.SetContext(contextUri, tracks, startIndex);
+            SetQueueContext(contextUri, tracks, startIndex, nextPageUrl, isInfinite, metadata);
             await LoadAndPlayCurrentAsync(EvKind.Started, ct).ConfigureAwait(false);
         }
         finally { _lock.Release(); }
@@ -662,7 +690,8 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             _projection.NoteLocalCommand();
             var t = _queue.Next();
             if (t is not null) await LoadAndPlayCurrentAsync(EvKind.TrackChanged, ct).ConfigureAwait(false);
-            else { _host.Stop(); Emit(new PlaybackEvent(EvKind.Ended, null, 0)); }   // end-of-context
+            else if (await TryContinueContextAsync(ct).ConfigureAwait(false)) { }
+            else { _host.Stop(); Emit(BuildEvent(EvKind.Ended, null, 0, reasonEnd: "endplay")); }   // end-of-context
         }
         finally { _lock.Release(); }
     }
@@ -691,17 +720,87 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         var ctxUri = _projection.ContextUri ?? track.Uri;
         var tracks = new List<Track>(1 + _projection.Queue.Count) { track };
         foreach (var qe in _projection.Queue) if (qe.Bucket == QueueBucket.NextUp) tracks.Add(qe.Track);
-        _queue.SetContext(ctxUri, tracks, 0);
+        var queued = new QueuedTrack[tracks.Count];
+        for (int i = 0; i < tracks.Count; i++) queued[i] = new QueuedTrack(tracks[i], "");
+        SetQueueContext(ctxUri, queued, 0);
         AudioStreamHandle handle;
         try { handle = await _resolver.ResolveAsync(track, ct).ConfigureAwait(false); }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex) { ReportPlaybackError(ex); return; }   // no silent drop — surface a typed reason
         _host.Load(handle);
         long pos = _projection.PositionMs;
+        if (track.Uri.StartsWith("spotify:episode:", StringComparison.Ordinal) && EpisodeResumeMicros is { } resumeFn)
+        {
+            try
+            {
+                long micros = await resumeFn(track.Uri, ct).ConfigureAwait(false);
+                if (micros > 0) pos = micros / 1000;
+            }
+            catch (Exception ex) { _log?.Invoke("episode resume lookup failed: " + ex.Message); }
+        }
         if (pos > 0) _host.Seek(pos);
         _host.Play();
         PushQueue();                                              // queue first, so the published snapshot carries it
-        Emit(new PlaybackEvent(EvKind.Started, track, pos));
+        MintCommand("playbtn");
+        _currentIds = MintPlaybackIds(track);
+        Emit(BuildEvent(EvKind.Started, track, pos));
+    }
+
+    async Task MaybeSeekEpisodeResumeAsync(Track track, CancellationToken ct)
+    {
+        if (!track.Uri.StartsWith("spotify:episode:", StringComparison.Ordinal) || EpisodeResumeMicros is not { } fn)
+            return;
+        try
+        {
+            long micros = await fn(track.Uri, ct).ConfigureAwait(false);
+            if (micros > 0) _host.Seek(micros / 1000);
+        }
+        catch (Exception ex) { _log?.Invoke("episode resume lookup failed: " + ex.Message); }
+    }
+
+    void MintCommand(string reasonStart = "clickrow")
+    {
+        _commandIdHex = PlaybackIds.MintCommandId();
+        _reasonStart = reasonStart;
+    }
+
+    PlaybackIds MintPlaybackIds(Track track, byte[]? mediaId = null)
+    {
+        var ctx = _queue.ContextUri;
+        if (ctx != _idsSessionContext)
+        {
+            _idsSessionContext = ctx;
+        }
+        return PlaybackIds.Mint(_commandIdHex, mediaId);
+    }
+
+    PlaybackEvent BuildEvent(EvKind kind, Track? track, long atMs, byte[]? mediaId = null,
+        int bitrateKbps = 0, string audioFormat = "", long durationMs = 0, byte[]? fileId = null, string reasonEnd = "",
+        long seekToMs = -1)
+    {
+        var provider = _queue.CurrentUid.Length > 0 ? "context" : "context";
+        foreach (var qe in _queue.Snapshot())
+        {
+            if (qe.Bucket == QueueBucket.NowPlaying && !string.IsNullOrEmpty(qe.Provider))
+            { provider = qe.Provider; break; }
+        }
+        return new PlaybackEvent(kind, track, atMs, _currentIds, _reasonStart, reasonEnd, ParseContextKind(_queue.ContextUri),
+            mediaId, bitrateKbps, audioFormat, durationMs, fileId, provider, true, seekToMs);
+    }
+
+    void EmitSeeked(long targetMs)
+    {
+        _projection.NoteLocalCommand();
+        long fromMs = _host.PositionMs;
+        _host.Seek(targetMs);
+        Emit(BuildEvent(EvKind.Seeked, _queue.Current, fromMs, seekToMs: targetMs));
+    }
+
+    static string ParseContextKind(string? contextUri)
+    {
+        if (string.IsNullOrEmpty(contextUri)) return "playlist";
+        var parts = contextUri.Split(':');
+        return parts.Length >= 3 ? parts[1] : "playlist";
     }
 
     async Task LoadAndPlayCurrentAsync(EvKind kind, CancellationToken ct)
@@ -709,6 +808,29 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         if (RejectLocalPlay()) return;   // local audio unsupported → toast + abort (covers play / next / prev / enqueue-idle / inbound)
         var cur = _queue.Current;
         if (cur is null) { _host.Stop(); return; }
+
+        byte[]? mediaId = null;
+        byte[]? fileId = null;
+        int bitrateKbps = 160;
+        string audioFormat = "";
+        long durationMs = cur.DurationMs;
+        if (MetaResolver is { } metaFn)
+        {
+            try
+            {
+                if (await metaFn(cur, ct).ConfigureAwait(false) is { } meta)
+                {
+                    mediaId = meta.MediaId;
+                    fileId = meta.FileId;
+                    bitrateKbps = meta.BitrateKbps;
+                    audioFormat = meta.AudioFormat;
+                    durationMs = meta.DurationMs > 0 ? meta.DurationMs : durationMs;
+                }
+            }
+            catch { }
+        }
+        if (string.IsNullOrEmpty(_commandIdHex)) MintCommand(kind == EvKind.TrackChanged ? "trackdone" : "playbtn");
+        _currentIds = MintPlaybackIds(cur, mediaId);
 
         if (_fast is not null)
         {
@@ -721,9 +843,11 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             var loadStartedTicks = Stopwatch.GetTimestamp();
             _host.LoadFastStart(plan.Start);
             _host.Play();
+            await MaybeSeekEpisodeResumeAsync(cur, ct).ConfigureAwait(false);
             PushQueue();
             WarmUpcomingFastTrack("after-start");
-            Emit(new PlaybackEvent(kind, cur, 0));
+            Emit(BuildEvent(kind, cur, 0, mediaId, bitrateKbps, audioFormat, durationMs, fileId));
+            MaybeStartContinuationFetch();
             _ = SupplyBodyWhenReadyAsync(plan.Body, cur.Uri, loadStartedTicks, plan.Start.HeadBytes.Length);
             return;
         }
@@ -734,9 +858,143 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         catch (Exception ex) { ReportPlaybackError(ex); return; }   // no silent drop — surface a typed reason
         _host.Load(handle);
         _host.Play();
+        await MaybeSeekEpisodeResumeAsync(cur, ct).ConfigureAwait(false);
         PushQueue();                                              // queue first, so the published snapshot carries it
         WarmUpcomingFastTrack("after-start");
-        Emit(new PlaybackEvent(kind, cur, 0));
+        Emit(BuildEvent(kind, cur, 0, mediaId, bitrateKbps, audioFormat, durationMs, fileId));
+        MaybeStartContinuationFetch();
+    }
+
+    void MaybeStartContinuationFetch()
+    {
+        if (_queue.Current is null || _queue.RemainingInContext > 5) return;
+        if (_continuationFetch is { } existing && !existing.IsCompleted) return;
+        if (_continuationFetch is { IsCompleted: true }) return;
+        _ = StartContinuationFetch(forceAutoplay: false);
+    }
+
+    Task<ResolvedContext>? StartContinuationFetch(bool forceAutoplay)
+    {
+        var ctx = _queue.ContextUri;
+        if (string.IsNullOrEmpty(ctx)) return null;
+
+        if (!forceAutoplay && !string.IsNullOrEmpty(_nextPageUrl))
+        {
+            var page = _nextPageUrl!;
+            _log?.Invoke("continuation: prefetching next context page " + page);
+            return _continuationFetch = FetchNextPageAsync(page, _contextIsInfinite);
+        }
+
+        if (!CanAutoplay(ctx)) return null;
+        _autoplayLatchedFor = ctx;
+        var recent = _queue.RecentUris(5);
+        _log?.Invoke("continuation: prefetching autoplay for " + ctx);
+        return _continuationFetch = FetchAutoplayAsync(ctx, recent);
+    }
+
+    bool CanAutoplay(string contextUri)
+    {
+        if (_contextIsInfinite || ContextResolve.IsInfinite(contextUri)) return false;
+        if (_autoplayLatchedFor == contextUri) return false;
+        return AutoplayEnabled?.Invoke() ?? true;
+    }
+
+    async Task<ResolvedContext> FetchNextPageAsync(string nextPageUrl, bool isInfinite)
+    {
+        try
+        {
+            var page = await _contexts.LoadMoreAsync(nextPageUrl).ConfigureAwait(false);
+            return new ResolvedContext(page.Tracks, 0, null, page.NextPageUrl, isInfinite);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _log?.Invoke("continuation page fetch failed: " + ex.Message);
+            return ResolvedContext.Empty;
+        }
+    }
+
+    async Task<ResolvedContext> FetchAutoplayAsync(string contextUri, IReadOnlyList<string> recent)
+    {
+        try
+        {
+            var result = await _contexts.ResolveAutoplayAsync(contextUri, recent).ConfigureAwait(false);
+            if (result.Count == 0) _log?.Invoke("autoplay returned no tracks for " + contextUri);
+            return result;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _log?.Invoke("autoplay fetch failed for " + contextUri + ": " + ex.Message);
+            return ResolvedContext.Empty;
+        }
+    }
+
+    bool ApplyContinuation(in ResolvedContext result)
+    {
+        _nextPageUrl = string.IsNullOrEmpty(result.NextPageUrl) ? null : result.NextPageUrl;
+        _contextIsInfinite = _contextIsInfinite || result.IsInfinite;
+        if (result.Count == 0) return false;
+
+        bool autoplay = result.Tracks[0].Provider == "autoplay";
+        if (!string.IsNullOrEmpty(result.ContextUri) && result.ContextUri != _queue.ContextUri)
+        {
+            _queue.RelabelContext(result.ContextUri);
+            _projection.SetLocalContext(result.ContextUri, result.Metadata);
+            autoplay = true;
+        }
+
+        if (!autoplay && _queue.ContextUri is { } ctx && ContextResolve.IsInfinite(ctx)) autoplay = true;
+        _queue.AppendToContext(result.Tracks, autoplay ? "autoplay" : "context");
+        PushQueue();
+        _log?.Invoke("continuation: appended " + result.Count + " tracks"
+            + (autoplay ? " (autoplay)" : "")
+            + (_nextPageUrl is null ? "" : " with next page"));
+        return true;
+    }
+
+    async Task<bool> TryContinueContextAsync(CancellationToken ct)
+    {
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            var fetch = _continuationFetch ?? StartContinuationFetch(forceAutoplay: attempt > 0);
+            if (fetch is null) return false;
+
+            Task completed;
+            try
+            {
+                completed = await Task.WhenAny(fetch, Task.Delay(TimeSpan.FromSeconds(3), ct)).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { throw; }
+            if (completed != fetch)
+            {
+                _log?.Invoke("continuation: fetch exceeded 3s grace timeout");
+                return false;
+            }
+
+            ResolvedContext result;
+            try { result = await fetch.ConfigureAwait(false); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _log?.Invoke("continuation: fetch faulted: " + ex.Message);
+                result = ResolvedContext.Empty;
+            }
+            _continuationFetch = null;
+
+            if (!ApplyContinuation(result))
+            {
+                if (attempt == 0 && string.IsNullOrEmpty(_nextPageUrl)) continue;
+                return false;
+            }
+
+            var next = _queue.Next();
+            if (next is null) return false;
+            await LoadAndPlayCurrentAsync(EvKind.TrackChanged, ct).ConfigureAwait(false);
+            return true;
+        }
+
+        return false;
     }
 
     // Fan the event log out to the now-playing projection + every extra projection (telemetry, the PutState publisher).
@@ -749,7 +1007,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     }
 
     // Emit a state event carrying the current track + position (drives the projection slab + the PutState publish).
-    void EmitState(EvKind kind) => Emit(new PlaybackEvent(kind, _queue.Current, _host.PositionMs));
+    void EmitState(EvKind kind) => Emit(BuildEvent(kind, _queue.Current, _host.PositionMs));
 
     // Surface QueueCore's snapshot to the projection so IPlaybackState.Queue (+ the PutState next-up) reflect our local
     // queue while WE are the active device. Called after every local queue mutation.
@@ -798,6 +1056,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     async Task ExecutePlayAsync(PlayRequest request, CancellationToken ct)
     {
         if (!RouteLocal()) { await ForwardPlayAsync(request, ct).ConfigureAwait(false); return; }
+        MintCommand("playbtn");
         if (request.OrderedTracks is { Count: > 0 })
         {
             var spec = new ContextSpec(request.ContextUri, null, request.OrderedTracks,
@@ -910,7 +1169,8 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
                             string tu = t.TryGetProperty("uri", out var tuv) ? tuv.GetString() ?? "" : "";
                             if (tu.Length == 0) continue;
                             string tid = t.TryGetProperty("uid", out var tidv) ? tidv.GetString() ?? "" : "";
-                            (pages ??= new List<QueuedRef>()).Add(new QueuedRef(tu, tid));
+                            (pages ??= new List<QueuedRef>()).Add(new QueuedRef(tu, tid,
+                                TrackProvider(t, "context"), TrackMetadata(t)));
                         }
                     }
                 }
@@ -949,9 +1209,10 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             if (!doc.RootElement.TryGetProperty("command", out var c)) return null;
             if (c.TryGetProperty("track", out var t) && t.ValueKind == JsonValueKind.Object &&
                 t.TryGetProperty("uri", out var tu) && tu.GetString() is { Length: > 0 } u)
-                return new QueuedRef(u, t.TryGetProperty("uid", out var d) ? d.GetString() ?? "" : "");
+                return new QueuedRef(u, t.TryGetProperty("uid", out var d) ? d.GetString() ?? "" : "",
+                    TrackProvider(t, "queue"), TrackMetadata(t));
             if (c.TryGetProperty("uri", out var flat) && flat.ValueKind == JsonValueKind.String && flat.GetString() is { Length: > 0 } fu)
-                return new QueuedRef(fu, "");
+                return new QueuedRef(fu, "", "queue");
             return null;
         }
         catch { return null; }
@@ -975,11 +1236,29 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
                 if (t.ValueKind != JsonValueKind.Object || !t.TryGetProperty("uri", out var u) || u.GetString() is not { Length: > 0 } uri) continue;
                 if (uri == "spotify:delimiter") continue;                                            // queue/context boundary marker
                 if (t.TryGetProperty("provider", out var p) && p.GetString() == "context") continue; // context continuation, not user queue
-                list.Add(new QueuedRef(uri, t.TryGetProperty("uid", out var d) ? d.GetString() ?? "" : ""));
+                list.Add(new QueuedRef(uri, t.TryGetProperty("uid", out var d) ? d.GetString() ?? "" : "",
+                    TrackProvider(t, "queue"), TrackMetadata(t)));
             }
             return list;
         }
         catch { return Array.Empty<QueuedRef>(); }
+    }
+
+    static string TrackProvider(JsonElement track, string fallback) =>
+        track.TryGetProperty("provider", out var p) && p.ValueKind == JsonValueKind.String
+            ? p.GetString() ?? fallback
+            : fallback;
+
+    static IReadOnlyDictionary<string, string>? TrackMetadata(JsonElement track)
+    {
+        if (!track.TryGetProperty("metadata", out var metadata) || metadata.ValueKind != JsonValueKind.Object) return null;
+        Dictionary<string, string>? result = null;
+        foreach (var p in metadata.EnumerateObject())
+        {
+            if (p.Value.ValueKind != JsonValueKind.String) continue;
+            (result ??= new Dictionary<string, string>(StringComparer.Ordinal))[p.Name] = p.Value.GetString() ?? "";
+        }
+        return result;
     }
 
     static int IndexOfUri(IReadOnlyList<QueuedTrack> tracks, string uri)

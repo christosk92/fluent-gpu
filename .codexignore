@@ -1,0 +1,12 @@
+# Belt-and-suspenders: keep out-of-scope paths out of agent context.
+# (Undocumented for Codex as of 2026-01; harmless if ignored. The load-bearing
+#  guards are .codex/config.toml deny rules + AGENTS.md steering.)
+app/.native/
+app/Wavee.PlayPlay/
+private-runtimes/
+app/tmp_*
+scripts/pyghidra*
+app/docs/wavee-playplay*.md
+app/docs/playplay-*.md
+app/docs/spotiload-offline-path.md
+**/playplay-runtime.json

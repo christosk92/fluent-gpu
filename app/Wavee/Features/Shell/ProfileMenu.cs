@@ -18,8 +18,7 @@ namespace Wavee;
 sealed class ProfileMenu : Component
 {
     static readonly ColorF Gold = ColorF.FromRgba(0xE6, 0xC2, 0x6C);
-    static readonly ColorF GoldFill = ColorF.FromRgba(0xE9, 0xC4, 0x6A, 0x26);
-    static readonly ColorF GoldLine = ColorF.FromRgba(0xE9, 0xC4, 0x6A, 0x55);
+    const float MenuWidth = 304f;
 
     readonly PlaybackBridge _b;
     readonly bool _showName;
@@ -70,12 +69,16 @@ sealed class ProfileMenu : Component
             handle.Value = overlay.Open(
                 () => anchor.Value,
                 () => MenuContent(name, premium, avatar, email,
+                    close: Close,
                     onAccount: () => { Close(); LoginView.OpenUrl("https://www.spotify.com/account"); },
                     onSettings: () => { Close(); go("settings", null); },
                     onPalette: SetPalette,
                     onLogout: () => { Close(); ConfirmLogout(); }),
                 FlyoutPlacement.BottomEdgeAlignedRight,
-                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
+                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss, Chrome: PopupChrome.Popup)
+                {
+                    ConstrainToRootBounds = false,
+                });
             handle.Value.ClosedAction = () => handle.Value = null;
         }
 
@@ -90,131 +93,111 @@ sealed class ProfileMenu : Component
         };
     }
 
-    // The dropdown: an account header (gold-ringed avatar + name + tier badge) over icon menu rows.
+    // The dropdown: a compact account header over stock WinUI menu rows.
     static Element MenuContent(string name, bool premium, string avatar, string? email,
-        Action onAccount, Action onSettings, Action<string> onPalette, Action onLogout) => new BoxEl
-    {
-        Direction = 1, MinWidth = 280f, Padding = new Edges4(0, 6, 0, 6),
-        Children =
-        [
-            new BoxEl
-            {
-                Direction = 0, Gap = 12f, AlignItems = FlexAlign.Center, Padding = new Edges4(16, 12, 16, 14),
-                Children =
-                [
-                    // The premium avatar gets a soft gold ring (matches the concept).
-                    new BoxEl
-                    {
-                        Width = 46f, Height = 46f, Corners = CornerRadius4.All(23f), AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                        BorderWidth = premium ? 2f : 0f, BorderColor = premium ? GoldLine : ColorF.Transparent,
-                        Children = [PersonPicture.Create(avatar, 40f, displayName: name)],
-                    },
-                    new BoxEl
-                    {
-                        Direction = 1, Gap = 5f, Grow = 1f, Basis = 0f,
-                        Children =
-                        [
-                            BodyStrong(name) with { Size = 15f },
-                            TierBadge(premium),
-                            email is { Length: > 0 } ? new TextEl(email) { Size = 12f, Color = Tok.TextTertiary } : (Element)new BoxEl(),
-                        ],
-                    },
-                ],
-            },
-            Divider(),
-            MenuRow(Icons.Contact, Loc.Get(Strings.Auth.Account), onAccount, trailing: Icons.OpenInNewWindow),
-            MenuRow(Icons.Settings, Loc.Get(Strings.Auth.Settings), onSettings),
-            PaletteSwatchRow(onPalette),
-            Divider(),
-            MenuRow(Icons.SignOut, Loc.Get(Strings.Auth.LogOut), onLogout, danger: true),
-        ],
-    };
-
-    static Element PaletteSwatchRow(Action<string> onPalette)
+        Action close, Action onAccount, Action onSettings, Action<string> onPalette, Action onLogout)
     {
         string active = Tok.Palette.Id;
+        var paletteItems = new MenuFlyoutItem[]
+        {
+            MenuFlyoutItem.RadioItem("Warm", active == "warm", () => onPalette("warm")),
+            MenuFlyoutItem.RadioItem("Slate", active == "slate", () => onPalette("slate")),
+            MenuFlyoutItem.RadioItem("Neutral", active == "neutral", () => onPalette("neutral")),
+            MenuFlyoutItem.RadioItem("Accent", active == "accent", () => onPalette("accent")),
+        };
+        var items = new MenuFlyoutItem[]
+        {
+            new(Loc.Get(Strings.Auth.Account), Icons.Contact, Invoke: onAccount),
+            new(Loc.Get(Strings.Auth.Settings), Icons.Settings, Invoke: onSettings),
+            MenuFlyoutItem.Separator,
+            MenuFlyoutItem.SubMenu("Palette", paletteItems, Icons.Brush),
+            MenuFlyoutItem.Separator,
+            new(Loc.Get(Strings.Auth.LogOut), Icons.SignOut, Invoke: onLogout),
+        };
+
         return new BoxEl
         {
-            Direction = 1, Gap = 6f, Padding = new Edges4(14, 4, 14, 4), Margin = new Edges4(6, 0, 6, 0),
+            Direction = 1,
+            MinWidth = MenuWidth,
+            MaxWidth = MenuWidth,
+            Padding = new Edges4(0, 8, 0, 8),
             Children =
             [
-                new TextEl("Palette") { Size = 12f, Weight = 600, Color = Tok.TextTertiary },
-                new BoxEl
-                {
-                    Direction = 0, Gap = 10f, AlignItems = FlexAlign.Center,
-                    Children =
-                    [
-                        PaletteSwatch("warm", "Warm", WaveeColors.PresetSwatch(Tok.WarmPalette), active, onPalette),
-                        PaletteSwatch("slate", "Slate", WaveeColors.PresetSwatch(Tok.SlatePalette), active, onPalette),
-                        PaletteSwatch("neutral", "Neutral", WaveeColors.PresetSwatch(Tok.NeutralPalette), active, onPalette),
-                        PaletteSwatch("accent", "Accent", WaveeColors.PresetSwatch(Tok.AccentTintedPalette), active, onPalette),
-                    ],
-                },
+                AccountHeader(name, premium, avatar, email),
+                HeaderSeparator(),
+                MenuFlyout.Build(items, close, MenuWidth),
             ],
         };
     }
 
-    static Element PaletteSwatch(string id, string label, ColorF fill, string activeId, Action<string> onPalette)
+    static Element HeaderSeparator() => new BoxEl
     {
-        bool on = activeId == id;
-        return new BoxEl
-        {
-            Direction = 1, Gap = 4f, AlignItems = FlexAlign.Center, Width = 52f,
-            Role = AutomationRole.Button, Focusable = true, OnClick = () => onPalette(id),
-            Children =
-            [
-                new BoxEl
-                {
-                    Width = 28f, Height = 28f, Corners = CornerRadius4.All(14f), Fill = fill,
-                    BorderWidth = on ? 2f : 1f,
-                    BorderColor = on ? Tok.AccentDefault : Tok.StrokeControlDefault,
-                },
-                new TextEl(label) { Size = 10f, Color = on ? Tok.TextPrimary : Tok.TextTertiary },
-            ],
-        };
-    }
+        Height = 1f,
+        Margin = new Edges4(8, 4, 8, 4),
+        Fill = Tok.StrokeDividerDefault,
+    };
 
-    static Element Divider() => new BoxEl { Height = 1f, Margin = new Edges4(10, 4, 10, 4), Fill = Tok.StrokeDividerDefault };
-
-    static Element MenuRow(string glyph, string label, Action onClick, bool danger = false, string? trailing = null)
+    static Element AccountHeader(string name, bool premium, string avatar, string? email) => new BoxEl
     {
-        ColorF fg = danger ? Tok.SystemFillCritical : Tok.TextPrimary;
-        ColorF ig = danger ? Tok.SystemFillCritical : Tok.TextSecondary;
-        return new BoxEl
-        {
-            Direction = 0, Height = 40f, AlignItems = FlexAlign.Center, Gap = 13f,
-            Padding = new Edges4(14, 0, 14, 0), Margin = new Edges4(6, 1, 6, 1),
-            Corners = CornerRadius4.All(WaveeRadius.Control),
-            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
-            Role = AutomationRole.MenuItem, Focusable = true, OnClick = onClick,
-            Children =
-            [
-                new TextEl(glyph) { Size = 16f, FontFamily = Theme.IconFont, Color = ig },
-                new TextEl(label) { Size = 14f, Weight = 600, Color = fg, Grow = 1f },
-                trailing is { } t ? new TextEl(t) { Size = 13f, FontFamily = Theme.IconFont, Color = Tok.TextTertiary } : new BoxEl(),
-            ],
-        };
-    }
+        Direction = 0,
+        Gap = 12f,
+        AlignItems = FlexAlign.Center,
+        Padding = new Edges4(14, 10, 14, 10),
+        Children =
+        [
+            PersonPicture.Create(avatar, 40f, displayName: name),
+            new BoxEl
+            {
+                Direction = 1,
+                Gap = 2f,
+                Grow = 1f,
+                Basis = 0f,
+                ClipToBounds = true,
+                Children =
+                [
+                    new TextEl(name)
+                    {
+                        Size = 14f,
+                        Weight = 600,
+                        Color = Tok.TextPrimary,
+                        MaxLines = 1,
+                        Trim = TextTrim.CharacterEllipsis,
+                    },
+                    TierLine(premium),
+                    email is { Length: > 0 }
+                        ? new TextEl(email)
+                        {
+                            Size = 12f,
+                            Color = Tok.TextTertiary,
+                            MaxLines = 1,
+                            Trim = TextTrim.CharacterEllipsis,
+                        }
+                        : new BoxEl(),
+                ],
+            },
+        ],
+    };
 
     static Element TierBadge(bool premium)
     {
         if (!premium)
-            return new BoxEl
-            {
-                AlignSelf = FlexAlign.Start, Padding = new Edges4(9, 2, 10, 3), Corners = CornerRadius4.All(11f),
-                Fill = Tok.FillSubtleSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault,
-                Children = [new TextEl(Loc.Get(Strings.Auth.FreeBadge)) { Size = 11.5f, Weight = 700, Color = Tok.TextSecondary }],
-            };
-        ColorF goldInk = Theme.Dark ? Gold : ColorF.FromRgba(0x8A, 0x63, 0x12);   // warm-Light: a darker amber reads on the pale badge
+            return new TextEl(Loc.Get(Strings.Auth.FreeBadge)) { Size = 12f, Color = Tok.TextSecondary };
+        ColorF goldInk = Theme.Dark ? Gold : ColorF.FromRgba(0x8A, 0x63, 0x12);
+        return new TextEl(Loc.Get(Strings.Auth.PremiumBadge)) { Size = 12f, Color = goldInk };
+    }
+
+    static Element TierLine(bool premium)
+    {
+        ColorF fg = premium ? (Theme.Dark ? Gold : ColorF.FromRgba(0x8A, 0x63, 0x12)) : Tok.TextSecondary;
         return new BoxEl
         {
-            AlignSelf = FlexAlign.Start, Direction = 0, Gap = 5f, AlignItems = FlexAlign.Center,
-            Padding = new Edges4(8, 3, 10, 4), Corners = CornerRadius4.All(11f),
-            Fill = GoldFill, BorderWidth = 1f, BorderColor = GoldLine,
+            Direction = 0,
+            Gap = 5f,
+            AlignItems = FlexAlign.Center,
             Children =
             [
-                new TextEl(Icons.FavoriteStar) { Size = 11f, FontFamily = Theme.IconFont, Color = goldInk },
-                new TextEl(Loc.Get(Strings.Auth.PremiumBadge)) { Size = 11.5f, Weight = 700, Color = goldInk },
+                premium ? Icon(Icons.FavoriteStar, 10f, fg) : new BoxEl { Width = 10f },
+                TierBadge(premium),
             ],
         };
     }

@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Wavee.Backend;
 using Wavee.Core;
 using Wavee.SpotifyLive.Audio;
+using Wavee.SpotifyLive.Gabo;
 
 namespace Wavee.SpotifyLive;
 
@@ -31,10 +32,14 @@ public sealed class LiveConnect : IDisposable
     readonly SpotifyServerClock _clock;   // server-clock skew estimator → corrects remote-position aging
     readonly ApConnection? _apChannel;   // owned: the adopted login socket
     readonly AudioPlaybackStack? _audio; // optional local-audio stack (null = silent/stub resolver)
+    readonly RawCoreStreamProjection? _gabo;
+    readonly ResumePointProjection? _resume;
+    readonly GaboBatcher? _gaboBatcher;
 
     public LiveConnect(ITransport transport, string deviceId, ApConnection? apChannel,
         IContextResolver? contexts = null, Action<string>? log = null,
-        AudioPlaybackStack? audio = null, double initialVolume01 = 0.7)
+        AudioPlaybackStack? audio = null, double initialVolume01 = 0.7,
+        Func<CancellationToken, Task<string>>? refreshTokens = null, IAppSettings? settings = null)
     {
         _apChannel = apChannel;
         _audio = audio;
@@ -46,7 +51,7 @@ public sealed class LiveConnect : IDisposable
         Devices = new LiveConnectDevices();
         _ingest = new ClusterIngest(transport, Projection, Devices, deviceId, log, _clock.ObservePassive);
 
-        var builder = new ConnectStateBuilder(deviceId, "Wavee");
+        var builder = new ConnectStateBuilder(deviceId, "Wavee", isPrivateSession: () => Projection.IsPrivateSession);
         _connect = new ConnectService(transport);   // connection-id capture only
         // The SINGLE PutState writer: NewConnection announce on the connection-id + our local player_state on playback
         // changes (so other devices/controllers see us as the active player). Re-injects the response cluster.
@@ -59,13 +64,38 @@ public sealed class LiveConnect : IDisposable
         // Instant-start: when the local-audio stack is present, resolve head+key in parallel and start on the clear head.
         var fast = audio is not null ? new FastTrackPlayback(audio.TrackResolver, audio.HeadClient, log) : null;
         var outbound = new LiveOutboundControl(transport, deviceId, () => _connect.CurrentConnectionId);
-        // Play-history telemetry (Recently Played) + the PutState publisher both fan off the controller's event log.
-        var telemetry = new TelemetryProjection(new GaboTelemetry(log), () => Projection.ContextUri);
+        var gaboCtx = GaboContextFactory.Create();
+        settings ??= AppDataSettings.ForUnpackaged("Wavee", "Wavee");
+        var gaboSeq = settings.Get(WaveeSettings.GaboGlobalSequence);
+        _gaboBatcher = new GaboBatcher(transport, gaboCtx, initialSequenceNumber: gaboSeq, refreshTokens: refreshTokens,
+            persistSequence: seq => settings.Set(WaveeSettings.GaboGlobalSequence, seq), log: log);
+        _gabo = new RawCoreStreamProjection(_gaboBatcher, () => Projection.ContextUri, () => true, log);
+        var herodotus = new HerodotusClient(transport, log);
+        _resume = new ResumePointProjection(herodotus, () => Projection.IsPrivateSession, log);
         Controller = new PlaybackController(_host, resolver, Projection,
             contexts ?? EmptyContextResolver.Instance,
-            deviceId, outbound, new IPlaybackProjection[] { telemetry, _publisher }, log,
+            deviceId, outbound, new IPlaybackProjection[] { _gabo, _resume, _publisher }, log,
             SpotifyClientIdentity.XpuiSnapshotVersion,   // play_origin.feature_version
             fast: fast);
+        Controller.EpisodeResumeMicros = (uri, ct) => herodotus.TryGetEpisodeResumeMicrosAsync(uri, ct);
+        if (audio?.TrackResolver is LiveTrackResolver ltr)
+        {
+            Controller.MetaResolver = async (track, ct) =>
+            {
+                var m = await ltr.ResolveMetaAsync(track, ct).ConfigureAwait(false);
+                int kbps = m.Fmt switch
+                {
+                    AudioFormat.OggVorbis96 => 96,
+                    AudioFormat.OggVorbis160 => 160,
+                    AudioFormat.OggVorbis320 => 320,
+                    AudioFormat.Flac => 1411,
+                    AudioFormat.Mp3 => 160,
+                    _ => 160,
+                };
+                string fmtLabel = m.Fmt == AudioFormat.Mp3 ? "MP3" : $"Vorbis {kbps} kbps";
+                return new PlaybackTrackMeta(m.FileGid, m.FileId, kbps, fmtLabel, m.DurMs);
+            };
+        }
 
         _commands = new ConnectCommandRouter(transport, cmd => Controller.HandleRemoteCommand(cmd), log);
         Devices.TransferHandler = (id, c) => Controller.TransferToAsync(id, c);
@@ -88,6 +118,9 @@ public sealed class LiveConnect : IDisposable
         try { Controller.DeactivateIfActiveOwner(); } catch { }   // best-effort clean is_active=false hand-off on logout
         _commands.Dispose();
         _publisher.Dispose();
+        _resume?.Dispose();
+        if (_gabo is not null) _ = _gabo.DisposeAsync().AsTask();
+        if (_gaboBatcher is not null) _ = _gaboBatcher.DisposeAsync().AsTask();
         _connect.Dispose();
         _ingest.Dispose();
         Controller.Dispose();

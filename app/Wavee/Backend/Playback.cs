@@ -12,6 +12,7 @@ namespace Wavee.Backend;
 /// an async request the reducer surfaces, never network I/O inside this pure core).</summary>
 public sealed class QueueCore
 {
+    readonly List<QueuedTrack> _history = new();
     readonly List<QueuedTrack> _context = new();      // the PLAY order (shuffled or natural)
     readonly List<QueuedTrack> _original = new();     // the natural order — kept so shuffle can be turned back OFF
     readonly List<QueuedTrack> _userQueue = new();    // q# — drains before the context
@@ -22,6 +23,8 @@ public sealed class QueueCore
     public string? ContextUri { get; private set; }
     public bool Shuffle { get; private set; }
     public RepeatMode Repeat { get; private set; }
+    public int CursorIndex => _cursor;
+    public int RemainingInContext => _cursor < 0 ? 0 : Math.Max(0, _context.Count - _cursor - 1);
     // The public surface stays Track-shaped (so the reducer/scaffold/tests are unchanged); the Spotify context uid rides
     // alongside via CurrentUid + QueueEntry.Uid + the QueuedTrack SetContext/EnqueueUser overloads the Connect path uses.
     public Track? Current => _cur?.Track;
@@ -31,8 +34,9 @@ public sealed class QueueCore
     public void SetContext(string uri, IReadOnlyList<QueuedTrack> tracks, int startIndex)
     {
         _original.Clear();
-        _original.AddRange(tracks);
+        foreach (var t in tracks) _original.Add(WithProvider(t, "context"));
         _userQueue.Clear();
+        _history.Clear();
         ContextUri = uri;
         _context.Clear();
         _context.AddRange(_original);
@@ -44,18 +48,35 @@ public sealed class QueueCore
     /// <summary>uid-less convenience (synthetic single tracks, the scaffold/reducer) — wraps each Track with uid "".</summary>
     public void SetContext(string uri, IEnumerable<Track> tracks, int startIndex) => SetContext(uri, Wrap(tracks), startIndex);
 
-    public void EnqueueUser(QueuedTrack t) => _userQueue.Add(t);
-    public void EnqueueUser(Track t) => _userQueue.Add(new QueuedTrack(t, ""));
+    public void EnqueueUser(QueuedTrack t) => _userQueue.Add(WithProvider(t, "queue"));
+    public void EnqueueUser(Track t) => _userQueue.Add(new QueuedTrack(t, "", "queue"));
 
     /// <summary>Head-insert ahead of the user queue (a "play next" — plays before already-queued items; cursor unmoved).</summary>
-    public void EnqueueNext(QueuedTrack t) => _userQueue.Insert(0, t);
+    public void EnqueueNext(QueuedTrack t) => _userQueue.Insert(0, WithProvider(t, "queue"));
 
     /// <summary>Batch-append to the user queue (add_to_queue of many).</summary>
-    public void EnqueueRange(IEnumerable<QueuedTrack> tracks) { foreach (var t in tracks) _userQueue.Add(t); }
+    public void EnqueueRange(IEnumerable<QueuedTrack> tracks) { foreach (var t in tracks) _userQueue.Add(WithProvider(t, "queue")); }
 
     /// <summary>Replace the user queue wholesale (set_queue's next_tracks). prev_tracks are advisory — our "prev" is the
     /// resident context history (the cursor), so they're ignored.</summary>
-    public void ReplaceNextUp(IReadOnlyList<QueuedTrack> next) { _userQueue.Clear(); _userQueue.AddRange(next); }
+    public void ReplaceNextUp(IReadOnlyList<QueuedTrack> next)
+    {
+        _userQueue.Clear();
+        foreach (var t in next) _userQueue.Add(WithProvider(t, "queue"));
+    }
+
+    public void RelabelContext(string uri) => ContextUri = uri;
+
+    public void AppendToContext(IReadOnlyList<QueuedTrack> tracks, string provider)
+    {
+        if (tracks.Count == 0) return;
+        for (int i = 0; i < tracks.Count; i++)
+        {
+            var t = WithProvider(tracks[i], provider);
+            _original.Add(t);
+            _context.Add(t);
+        }
+    }
 
     /// <summary>Remove an upcoming entry by its Snapshot id: a user-queue item (q#) or an upcoming context track (c#).
     /// Returns false if the id doesn't resolve to a removable upcoming entry.</summary>
@@ -88,9 +109,35 @@ public sealed class QueueCore
     public Track? Next()
     {
         if (Repeat == RepeatMode.Track && _cur is not null) return _cur?.Track;          // repeat-one holds
-        if (_userQueue.Count > 0) { _cur = _userQueue[0]; _userQueue.RemoveAt(0); return _cur?.Track; }  // q# first; cursor unmoved
-        if (_cursor + 1 < _context.Count) { _cursor++; _cur = _context[_cursor]; return _cur?.Track; }
-        if (Repeat == RepeatMode.Context && _context.Count > 0) { _cursor = 0; _cur = _context[0]; return _cur?.Track; }
+        RememberCurrent();
+        if (_userQueue.Count > 0)
+        {
+            while (_userQueue.Count > 0)
+            {
+                var entry = _userQueue[0];
+                _userQueue.RemoveAt(0);
+                _cur = entry;
+                if (entry.RowKind == QueueRowKind.Playable) return entry.Track;
+            }
+            _cur = null;
+            return null;
+        }
+        while (_cursor + 1 < _context.Count)
+        {
+            _cursor++;
+            var entry = _context[_cursor];
+            _cur = entry;
+            if (entry.RowKind == QueueRowKind.Playable) return entry.Track;
+        }
+        if (Repeat == RepeatMode.Context && _context.Count > 0)
+        {
+            for (_cursor = 0; _cursor < _context.Count; _cursor++)
+            {
+                var entry = _context[_cursor];
+                _cur = entry;
+                if (entry.RowKind == QueueRowKind.Playable) return entry.Track;
+            }
+        }
         _cur = null;
         return null;   // EndOfContext — the reducer decides whether to request autoplay
     }
@@ -127,6 +174,27 @@ public sealed class QueueCore
 
     // Fisher–Yates over the NATURAL order, anchoring Current at logical 0 (deterministic LCG — no Random, replayable).
     // Anchor identity is the wrapped Track reference (each context slot holds a distinct Track instance).
+    static QueuedTrack WithProvider(QueuedTrack track, string provider) =>
+        track.Provider == provider ? track : track with { Provider = provider };
+
+    void RememberCurrent()
+    {
+        if (_cur is not { } cur) return;
+        if (_history.Count == 0 || !ReferenceEquals(_history[^1].Track, cur.Track))
+            _history.Add(cur);
+        if (_history.Count > 32) _history.RemoveRange(0, _history.Count - 32);
+    }
+
+    public IReadOnlyList<string> RecentUris(int max)
+    {
+        if (max <= 0) return Array.Empty<string>();
+        var list = new List<string>(max);
+        if (_cur is { } cur && !string.IsNullOrEmpty(cur.Track.Uri)) list.Add(cur.Track.Uri);
+        for (int i = _history.Count - 1; i >= 0 && list.Count < max; i--)
+            if (!string.IsNullOrEmpty(_history[i].Track.Uri)) list.Add(_history[i].Track.Uri);
+        return list;
+    }
+
     void ReshuffleAnchoringCurrent()
     {
         if (_original.Count <= 1 || _cur is not { } cur) return;
@@ -164,11 +232,22 @@ public sealed class QueueCore
     {
         const int NextUpCap = 50;
         var list = new List<QueueEntry>();
-        if (_cur is { } cur) list.Add(new QueueEntry("now", cur.Track, QueueBucket.NowPlaying, false, cur.Uid));
+        if (_cur is { } cur)
+            list.Add(new QueueEntry("now", cur.Track, QueueBucket.NowPlaying, cur.Provider == "autoplay", cur.Uid, cur.Provider, cur.Metadata));
         int i = 0;
-        foreach (var t in _userQueue) list.Add(new QueueEntry($"q{i++}", t.Track, QueueBucket.UserQueue, false, t.Uid));
+        foreach (var t in _userQueue)
+            list.Add(new QueueEntry($"q{i++}", t.Track, QueueBucket.UserQueue, t.Provider == "autoplay", t.Uid, t.Provider, t.Metadata));
         for (int c = _cursor + 1; c < _context.Count && list.Count <= NextUpCap; c++)
-            list.Add(new QueueEntry($"c{c}", _context[c].Track, QueueBucket.NextUp, false, _context[c].Uid));
+        {
+            var t = _context[c];
+            list.Add(new QueueEntry($"c{c}", t.Track, QueueBucket.NextUp, t.Provider == "autoplay", t.Uid, t.Provider, t.Metadata));
+        }
+        int firstHistory = Math.Max(0, _history.Count - 16);
+        for (int h = firstHistory; h < _history.Count; h++)
+        {
+            var t = _history[h];
+            list.Add(new QueueEntry($"h{h}", t.Track, QueueBucket.History, t.Provider == "autoplay", t.Uid, t.Provider, t.Metadata));
+        }
         return list;
     }
 
@@ -209,7 +288,26 @@ public sealed class StubAudioEngine : IAudioEngine
 
 // ── Event log → projections ──────────────────────────────────────────────────────────────────────────────────────────
 public enum EvKind { Started, Paused, Resumed, TrackChanged, Ended, Seeked, OptionsChanged, VolumeChanged, QueueChanged, BecameInactive }
-public readonly record struct PlaybackEvent(EvKind Kind, Track? Track, long AtMs);
+
+public readonly record struct PlaybackEvent(
+    EvKind Kind,
+    Track? Track,
+    long AtMs,
+    PlaybackIds? Ids = null,
+    string ReasonStart = "",
+    string ReasonEnd = "",
+    string SourceStart = "",
+    byte[]? MediaId = null,
+    int SelectedBitrateKbps = 0,
+    string AudioFormatName = "",
+    long DurationMs = 0,
+    byte[]? FileId = null,
+    string Provider = "context",
+    bool IsPremium = true,
+    /// <summary>Seek target in ms when <see cref="Kind"/> is <see cref="EvKind.Seeked"/>; <see cref="AtMs"/> is the
+    /// pre-seek playhead used to close the outgoing segment.</summary>
+    long SeekToMs = -1);
+
 public interface IPlaybackProjection { void OnEvent(in PlaybackEvent e); }
 
 /// <summary>The reducer: intents drive the pure QueueCore + the IAudioEngine, and emit a PlaybackEvent log that

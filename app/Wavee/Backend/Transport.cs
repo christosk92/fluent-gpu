@@ -12,7 +12,7 @@ namespace Wavee.Backend;
 // middleware stack (auth-token · client-token · 401-refresh · 429-backoff · market/locale-stamp). The live impl is
 // SpotifyLive/LiveDealerTransport; StubTransport drives the headless tests.
 
-public enum Channel { ApMercury, Spclient, Pathfinder, ExtendedMetadata, DealerWs, Login5, ClientToken }
+public enum Channel { ApMercury, Spclient, SpclientWg, Pathfinder, ExtendedMetadata, DealerWs, Login5, ClientToken }
 
 public readonly record struct Resp(bool Ok, byte[] Body, int Status);
 

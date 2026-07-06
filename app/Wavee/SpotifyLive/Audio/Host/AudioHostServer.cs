@@ -18,6 +18,7 @@ internal sealed class AudioHostServer : IDisposable
     readonly object _runtimeGate = new();
 
     long _generation;
+    long _pendingPlayGeneration = -1;
     string _trackUri = "";
     string _fileIdHex = "";
     bool _disposed;
@@ -32,7 +33,7 @@ internal sealed class AudioHostServer : IDisposable
         _ipc = ipc;
         _launchToken = launchToken;
         _log = log;
-        _engine = new AudioPlayEngine(log, (_, seed) => CreateCdnDecryptor(seed));
+        _engine = new AudioPlayEngine(LogAndNotify, (_, seed) => CreateCdnDecryptor(seed));
         _engine.State += OnEngineState;
         _engine.TrackFinished += OnTrackFinished;
     }
@@ -61,13 +62,13 @@ internal sealed class AudioHostServer : IDisposable
                         await ReplyOk(id, GenerationFrom(payload), CorrelationFrom(payload)).ConfigureAwait(false);
                         break;
                     case IpcMessageTypes.Play:
-                        if (IsCurrent(payload)) _engine.Play();
+                        HandlePlay(payload);
                         break;
                     case IpcMessageTypes.Pause:
-                        if (IsCurrent(payload)) _engine.Pause();
+                        HandlePause(payload);
                         break;
                     case IpcMessageTypes.Stop:
-                        if (IsCurrent(payload)) _engine.Stop();
+                        HandleStop(payload);
                         break;
                     case IpcMessageTypes.Seek:
                         HandleSeek(payload);
@@ -163,7 +164,11 @@ internal sealed class AudioHostServer : IDisposable
     {
         var cmd = payload?.Deserialize(AudioIpcJsonContext.Default.LoadFastStartCommand)
                   ?? throw new InvalidOperationException("bad load_fast_start payload");
-        if (!AcceptGeneration(cmd.Generation)) return;
+        if (!AcceptGeneration(cmd.Generation))
+        {
+            LogAndNotify($"load-fast-start ignored stale generation={cmd.Generation} active={Interlocked.Read(ref _generation)} file={cmd.FileIdHex}");
+            return;
+        }
 
         if (!Enum.TryParse<AudioFormat>(cmd.Format, out var format))
             throw new InvalidOperationException("unknown audio format " + cmd.Format);
@@ -171,22 +176,37 @@ internal sealed class AudioHostServer : IDisposable
         _trackUri = cmd.TrackUri;
         _fileIdHex = cmd.FileIdHex;
         var head = DecodeBase64(cmd.HeadBytesBase64);
+        LogAndNotify($"load-fast-start received generation={cmd.Generation} track={cmd.TrackUri} file={cmd.FileIdHex} fmt={cmd.Format} head={head.Length}B dur={cmd.DurationMs}ms");
         var start = new AudioFastStart(cmd.TrackUri, cmd.FileIdHex, format, cmd.DurationMs, cmd.NormalizationGainDb, head);
         _engine.LoadFastStart(start);
+        if (Interlocked.CompareExchange(ref _pendingPlayGeneration, -1, cmd.Generation) == cmd.Generation)
+        {
+            LogAndNotify($"applying queued play generation={cmd.Generation} file={cmd.FileIdHex}");
+            _engine.Play();
+        }
     }
 
     void HandleSupplyBody(JsonElement? payload)
     {
         var cmd = payload?.Deserialize(AudioIpcJsonContext.Default.SupplyBodyCommand)
                   ?? throw new InvalidOperationException("bad supply_body payload");
-        if (cmd.Generation != Interlocked.Read(ref _generation)) return;
-        if (_fileIdHex.Length > 0 && !string.Equals(_fileIdHex, cmd.FileIdHex, StringComparison.OrdinalIgnoreCase)) return;
+        if (cmd.Generation != Interlocked.Read(ref _generation))
+        {
+            LogAndNotify($"supply-body ignored stale generation={cmd.Generation} active={Interlocked.Read(ref _generation)} file={cmd.FileIdHex}");
+            return;
+        }
+        if (_fileIdHex.Length > 0 && !string.Equals(_fileIdHex, cmd.FileIdHex, StringComparison.OrdinalIgnoreCase))
+        {
+            LogAndNotify($"supply-body ignored stale file={cmd.FileIdHex} active={_fileIdHex} generation={cmd.Generation}");
+            return;
+        }
 
         if (!Enum.TryParse<AudioFormat>(cmd.Format, out var format))
             throw new InvalidOperationException("unknown audio format " + cmd.Format);
 
         var key = Convert.FromHexString(cmd.AesKeyHex);
         var nativeSeed = DecodeBase64(cmd.NativeCdnSeedBase64);
+        LogAndNotify($"supply-body received generation={cmd.Generation} track={cmd.TrackUri} file={cmd.FileIdHex} fmt={cmd.Format} urls={cmd.CdnUrls.Length} headBoundary={cmd.HeadBoundary}B key={key.Length}B nativeSeed={nativeSeed.Length}B");
         var body = new AudioStreamHandle(
             cmd.TrackUri,
             cmd.FileIdHex,
@@ -197,14 +217,69 @@ internal sealed class AudioHostServer : IDisposable
             cmd.NormalizationGainDb,
             cmd.CdnUrls,
             cmd.HeadBoundary,
-            nativeSeed);
+            nativeSeed,
+            (AudioSourceKind)cmd.SourceKind);
         _engine.SupplyBody(body);
+    }
+
+    void HandlePlay(JsonElement? payload)
+    {
+        var generation = GenerationFrom(payload);
+        var current = Interlocked.Read(ref _generation);
+        if (generation == 0 || generation == current)
+        {
+            LogAndNotify("play received generation=" + generation + " file=" + _fileIdHex);
+            _engine.Play();
+            return;
+        }
+
+        if (generation > current)
+        {
+            Interlocked.Exchange(ref _pendingPlayGeneration, generation);
+            LogAndNotify($"play queued until load generation={generation} current={current}");
+            return;
+        }
+
+        LogAndNotify($"play ignored stale generation={generation} current={current} file={_fileIdHex}");
+    }
+
+    void HandlePause(JsonElement? payload)
+    {
+        var generation = GenerationFrom(payload);
+        var current = Interlocked.Read(ref _generation);
+        if (generation > current)
+        {
+            Interlocked.Exchange(ref _pendingPlayGeneration, -1);
+            LogAndNotify($"pause cleared queued play generation={generation} current={current}");
+            return;
+        }
+        if (generation != 0 && generation != current) return;
+        Interlocked.Exchange(ref _pendingPlayGeneration, -1);
+        LogAndNotify("pause received generation=" + generation + " file=" + _fileIdHex);
+        _engine.Pause();
+    }
+
+    void HandleStop(JsonElement? payload)
+    {
+        var generation = GenerationFrom(payload);
+        var current = Interlocked.Read(ref _generation);
+        if (generation > current)
+        {
+            Interlocked.Exchange(ref _pendingPlayGeneration, -1);
+            LogAndNotify($"stop cleared queued play generation={generation} current={current}");
+            return;
+        }
+        if (generation != 0 && generation != current) return;
+        Interlocked.Exchange(ref _pendingPlayGeneration, -1);
+        LogAndNotify("stop received generation=" + generation + " file=" + _fileIdHex);
+        _engine.Stop();
     }
 
     void HandleSeek(JsonElement? payload)
     {
         var cmd = payload?.Deserialize(AudioIpcJsonContext.Default.SeekCommand);
         if (cmd is null || cmd.Generation != Interlocked.Read(ref _generation)) return;
+        LogAndNotify($"seek received generation={cmd.Generation} position={cmd.PositionMs}ms file={_fileIdHex}");
         _engine.Seek(cmd.PositionMs);
     }
 
@@ -368,6 +443,25 @@ internal sealed class AudioHostServer : IDisposable
     }
 
     Task Notify<T>(string type, T payload) => _ipc.SendAsync(type, 0, payload, CancellationToken.None);
+
+    void LogAndNotify(string message)
+    {
+        _log(message);
+        try
+        {
+            var task = Notify(IpcMessageTypes.Diagnostic, new DiagnosticMessage
+            {
+                Generation = Interlocked.Read(ref _generation),
+                Kind = "engine",
+                Detail = message,
+            });
+            _ = task.ContinueWith(static t => _ = t.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+        catch { }
+    }
 
     static long GenerationFrom(JsonElement? payload)
     {

@@ -176,8 +176,11 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
         }
 
         long generation = Interlocked.Read(ref _generation);
-        _ = RunRemoteAsync(() => _process.SendAsync(IpcMessageTypes.Play, new EmptyPayload { Generation = generation }, CancellationToken.None),
-            () => _fallback.Play());
+        _ = RunRemoteAsync(async () =>
+        {
+            _log?.Invoke($"audio host send play generation={generation} file={_activeFileIdHex}");
+            await _process.SendAsync(IpcMessageTypes.Play, new EmptyPayload { Generation = generation }, CancellationToken.None).ConfigureAwait(false);
+        }, () => _fallback.Play());
     }
 
     public void Pause()
@@ -343,8 +346,10 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
             NormalizationGainDb = start.NormalizationGainDb,
             HeadBytesBase64 = Convert.ToBase64String(start.HeadBytes.Span),
         };
+        _log?.Invoke($"audio host send load_fast_start generation={generation} track={start.TrackUri} file={start.FileIdHex} fmt={start.Format} head={start.HeadBytes.Length}B dur={start.DurationMs}ms");
         await _process.RequestAsync(IpcMessageTypes.LoadFastStart, cmd, ParseCommandResult,
             TimeSpan.FromSeconds(30), CancellationToken.None).ConfigureAwait(false);
+        _log?.Invoke($"audio host ack load_fast_start generation={generation} file={start.FileIdHex}");
     }
 
     async Task SendSupplyBodyAsync(AudioStreamHandle body, long generation)
@@ -364,9 +369,12 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
             NativeCdnSeedBase64 = body.NativeCdnSeed.IsEmpty ? null : Convert.ToBase64String(body.NativeCdnSeed.Span),
             CdnUrls = urls,
             HeadBoundary = body.HeadBoundary,
+            SourceKind = (int)body.SourceKind,
         };
+        _log?.Invoke($"audio host send supply_body generation={generation} track={body.TrackUri} file={body.FileIdHex} fmt={body.Format} urls={urls.Length} headBoundary={body.HeadBoundary}B key={body.Key.Length}B nativeSeed={body.NativeCdnSeed.Length}B");
         await _process.RequestAsync(IpcMessageTypes.SupplyBody, cmd, ParseCommandResult,
             TimeSpan.FromSeconds(60), CancellationToken.None).ConfigureAwait(false);
+        _log?.Invoke($"audio host ack supply_body generation={generation} file={body.FileIdHex}");
     }
 
     static CommandResultMessage ParseCommandResult(JsonElement? payload)
@@ -521,7 +529,7 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
             breakCircuit = _faults.Count >= CrashLimit;
         }
 
-        _log?.Invoke("audio host fault: " + ex.Message);
+        _log?.Invoke("audio host fault: " + ex);
         if (breakCircuit)
         {
             _remoteDisabled = true;

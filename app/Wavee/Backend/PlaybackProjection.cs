@@ -21,7 +21,8 @@ public readonly record struct RemoteTrack(
     string AlbumName, string AlbumUri, string? ImageUrl, long DurationMs,
     // Context uid + provider ("queue" / "context") — carried so a forwarded set_queue can re-emit the active device's
     // own queue rows faithfully. Trailing defaults so display-only constructions are unaffected.
-    string Uid = "", string Provider = "");
+    string Uid = "", string Provider = "",
+    IReadOnlyDictionary<string, string>? Metadata = null);
 
 /// <summary>Proto-free row of the Connect device roster (volume in Spotify's 0..65535 range).</summary>
 public readonly record struct ConnectDeviceRow(string Id, string Name, DeviceKind Kind, bool IsActive, int Volume0_65535);
@@ -78,9 +79,12 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     }
     string? _resolvingUri;   // de-dupe: at most one in-flight resolve per uri (guarded by _gate)
     string? _contextUri;
+    bool _hasLocalContext;
+    IReadOnlyDictionary<string, string> _contextMetadata = new Dictionary<string, string>();
     string _activeDeviceId = "";
     string _queueRevision = "";
     bool _isPlaying, _isBuffering, _isPrebuffering, _shuffle;
+    public bool IsPrivateSession { get; set; }
     RepeatMode _repeat;
     double _volume = 0.7;
     long _posMs, _posAnchorWall, _durMs;
@@ -115,6 +119,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     /// ClusterPrevTracks = history.</summary>
     public IReadOnlyList<RemoteTrack> ClusterNextTracks { get { lock (_gate) return _clusterNext; } }
     public IReadOnlyList<RemoteTrack> ClusterPrevTracks { get { lock (_gate) return _clusterPrev; } }
+    public IReadOnlyDictionary<string, string> ContextMetadata { get { lock (_gate) return _contextMetadata; } }
 
     /// <summary>The controller calls this the instant it issues a local optimistic command, so a stale cluster echo
     /// arriving just after does not revert the optimistic play-state.</summary>
@@ -159,6 +164,19 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     /// we're active (local wins); a viewer's queue still comes from the cluster.</summary>
     public void SetLocalQueue(IReadOnlyList<QueueEntry> queue) { lock (_gate) _queue = queue; FireChanges(); }
 
+    public void SetLocalContext(string? contextUri, IReadOnlyDictionary<string, string>? metadata = null)
+    {
+        lock (_gate)
+        {
+            _contextUri = contextUri;
+            _hasLocalContext = !string.IsNullOrEmpty(contextUri);
+            _contextMetadata = metadata is { Count: > 0 }
+                ? new Dictionary<string, string>(metadata, StringComparer.Ordinal)
+                : new Dictionary<string, string>();
+        }
+        FireChanges();
+    }
+
     /// <summary>Controller pushes the local shuffle/repeat after a change so IPlaybackState + PutState reflect them while
     /// we're active (OnCluster won't overwrite them while active — local wins).</summary>
     public void SetLocalOptions(bool shuffle, RepeatMode repeat) { lock (_gate) { _shuffle = shuffle; _repeat = repeat; } FireChanges(); }
@@ -183,7 +201,12 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
             // Detect track change BEFORE merging — a fresh track's Timestamp can lag the prior track, so we must not age it.
             bool isNewTrack = c.HasTrack && (_track is null || !string.Equals(_track.Uri, c.Track.Uri, StringComparison.Ordinal));
             if (c.HasTrack) _track = MergeClusterTrack(_track, MapTrack(c.Track));
-            _contextUri = c.ContextUri;
+            if (!weActive || !_hasLocalContext)
+            {
+                _contextUri = c.ContextUri;
+                _hasLocalContext = false;
+                _contextMetadata = new Dictionary<string, string>();
+            }
             _durMs = c.DurationMs > 0 ? c.DurationMs : (c.HasTrack ? c.Track.DurationMs : _durMs);
             if (!suppressPlayState)
             {
@@ -265,7 +288,15 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     {
         lock (_gate)
         {
-            if (e.Track is not null) _track = e.Track;
+            if (e.Track is not null)
+            {
+                _track = e.Track;
+                // Local events are authoritative while we're the active device — fold the duration too. Without this,
+                // _durMs keeps the PREVIOUS track's length until a cluster echo arrives (never, when playing offline):
+                // the player-bar label shows the old duration AND the seek bar scales scrub fractions by the wrong
+                // length, so every committed seek targets the wrong millisecond.
+                if (e.Track.DurationMs > 0) _durMs = e.Track.DurationMs;
+            }
             switch (e.Kind)
             {
                 case EvKind.Started:
@@ -332,7 +363,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         var artists = new ArtistRef[] { new(IdFromUri(r.ArtistUri), r.ArtistUri, r.ArtistName) };
         var album = new AlbumRef(IdFromUri(r.AlbumUri), r.AlbumUri, r.AlbumName);
         Image? img = string.IsNullOrEmpty(r.ImageUrl) ? null : new Image(r.ImageUrl!);
-        return new Track(IdFromUri(r.Uri), r.Uri, r.Title, artists, album, r.DurationMs, false, img);
+        return new Track(IdFromUri(r.Uri), r.Uri, r.Title, artists, album, r.DurationMs, HasVideoMetadata(r), img);
     }
 
     // Cluster player_state often repeats a THIN copy of the same current track. Preserve the enriched TrackV4 fields
@@ -365,8 +396,22 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     {
         if (next.Count == 0) return Array.Empty<QueueEntry>();
         var list = new List<QueueEntry>(next.Count);
-        for (int i = 0; i < next.Count; i++) list.Add(new QueueEntry("n" + i, MapTrack(next[i]), QueueBucket.NextUp, false));
+        for (int i = 0; i < next.Count; i++)
+        {
+            string provider = string.IsNullOrEmpty(next[i].Provider) ? "context" : next[i].Provider;
+            list.Add(new QueueEntry("n" + i, MapTrack(next[i]), QueueBucket.NextUp,
+                provider == "autoplay", next[i].Uid, provider, next[i].Metadata));
+        }
         return list;
+    }
+
+    static bool HasVideoMetadata(in RemoteTrack r)
+    {
+        var metadata = r.Metadata;
+        if (metadata is null) return false;
+        if (metadata.TryGetValue("track_player", out var player) && player == "video") return true;
+        if (metadata.TryGetValue("media.type", out var media) && (media == "video" || media == "mixed")) return true;
+        return metadata.ContainsKey("media.manifest_id") || metadata.ContainsKey("save_track.uri");
     }
 
     static string IdFromUri(string uri)

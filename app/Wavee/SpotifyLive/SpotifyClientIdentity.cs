@@ -13,7 +13,7 @@ public static class SpotifyClientIdentity
     public static string AppVersionHeader => SpotifyRuntimeIdentity.DefaultAppVersion;
     public static string AppPlatform => SpotifyRuntimeIdentity.AppPlatform;
     public const string SpircVersion = "3.2.6";                                          // DeviceInfo.spirc_version
-    public const string XpuiSnapshotVersion = "xpui-snapshot_2026-05-06_1778061618835_fb3c63a";  // play_origin.feature_version
+    public const string XpuiSnapshotVersion = "xpui-snapshot_2026-07-01_1782890476915_7b5cc0c";  // play_origin.feature_version
 
     /// <summary>private_device_info.platform — the OS descriptor desktop sends.</summary>
     public static string GetPrivateDevicePlatform() => GetOsDescriptor();

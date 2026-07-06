@@ -20,8 +20,8 @@ public class ContextJsonTests
           "pages":[
             {"page_url":"hm://context/page/1","next_page_url":"hm://context/page/2",
              "tracks":[
-               {"uri":"spotify:track:a","uid":"uidA","metadata":{"k":"v"}},
-               {"uri":"spotify:track:b","uid":"uidB"}
+               {"uri":"spotify:track:a","uid":"uidA","provider":"context","metadata":{"k":"v"}},
+               {"uri":"spotify:track:b","uid":"uidB","provider":"autoplay","metadata":{"autoplay.is_autoplay":"true"}}
              ]}
           ]
         }
@@ -33,8 +33,12 @@ public class ContextJsonTests
         Assert.Equal(2, refs.Count);
         Assert.Equal("spotify:track:a", refs[0].Uri);
         Assert.Equal("uidA", refs[0].Uid);
+        Assert.Equal("context", refs[0].Provider);
+        Assert.Equal("v", refs[0].Metadata!["k"]);
         Assert.Equal("spotify:track:b", refs[1].Uri);
         Assert.Equal("uidB", refs[1].Uid);
+        Assert.Equal("autoplay", refs[1].Provider);
+        Assert.Equal("true", refs[1].Metadata!["autoplay.is_autoplay"]);
         Assert.Equal("added_at DESC", sorting);
         Assert.Equal("hm://context/page/2", next);
     }

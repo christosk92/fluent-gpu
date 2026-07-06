@@ -15,4 +15,5 @@ message StorageResolveResponse {
 
     repeated string cdnurl = 2;
     bytes fileid = 4;
+    optional int64 ttl_seconds = 5;
 }

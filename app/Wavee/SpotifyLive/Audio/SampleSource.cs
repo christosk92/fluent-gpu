@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using FlacBox;
+using NLayer;
 using NVorbis;
 
 namespace Wavee.SpotifyLive.Audio;
@@ -26,6 +27,23 @@ internal sealed class VorbisSampleSource : ISampleSource
     public int ReadSamples(float[] buffer, int offset, int count) => _reader.ReadSamples(buffer, offset, count);
     public void SeekTo(TimeSpan position) => _reader.SeekTo(position, SeekOrigin.Begin);
     public void Dispose() => _reader.Dispose();
+}
+
+/// <summary>MP3 via NLayer (external RSS episodes).</summary>
+internal sealed class Mp3SampleSource : ISampleSource
+{
+    readonly MpegFile _decoder;
+    public Mp3SampleSource(Stream stream) => _decoder = new MpegFile(stream);
+    public int SampleRate => _decoder.SampleRate;
+    public int Channels => _decoder.Channels;
+    public int ReadSamples(float[] buffer, int offset, int count) => _decoder.ReadSamples(buffer, offset, count);
+    public void SeekTo(TimeSpan position)
+    {
+        long samples = (long)(position.TotalSeconds * SampleRate * Channels);
+        if (samples < 0) samples = 0;
+        _decoder.Position = samples;
+    }
+    public void Dispose() => _decoder.Dispose();
 }
 
 /// <summary>FLAC (16/24-bit) via FlacBox. Record-pull reader: Read() → RecordType.Frame → GetValues() yields the frame's

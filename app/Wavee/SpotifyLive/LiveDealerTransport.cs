@@ -4,10 +4,12 @@ using System.IO;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using Google.Protobuf;
 using Wavee.Backend;
 using Wavee.Backend.Realtime;
 using Wavee.Backend.Spotify;
 using Wavee.Core;
+using P = Wavee.Protocol.Player;
 
 namespace Wavee.SpotifyLive;
 
@@ -61,7 +63,7 @@ public sealed class LiveDealerTransport : ITransport, IDisposable
     public async Task<Resp> Request(Channel ch, string route, ReadOnlyMemory<byte> body, CancellationToken ct = default,
         string? method = null, IReadOnlyDictionary<string, string>? headers = null)
     {
-        var url = _spclientBaseUrl() + route;
+        var url = (ch == Channel.SpclientWg ? "https://spclient.wg.spotify.com" : _spclientBaseUrl()) + route;
         var verb = method ?? (body.IsEmpty ? "GET" : "POST");
         var reqHeaders = headers is null
             ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -96,15 +98,29 @@ public sealed class LiveDealerTransport : ITransport, IDisposable
     public async Task<Resp> Publish(string deviceId, string connectionId, ReadOnlyMemory<byte> putState, CancellationToken ct = default)
     {
         var url = _spclientBaseUrl() + "/connect-state/v1/devices/" + deviceId;
+        var gzipped = HttpCompression.Gzip(putState.Span);
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["X-Spotify-Connection-Id"] = connectionId,
             ["Content-Type"] = "application/protobuf",
+            ["X-Transfer-Encoding"] = "gzip",
         };
-        using var resp = await _spclient.SendAsync(new HttpReq("PUT", url, headers, putState.ToArray()), ct).ConfigureAwait(false);
+        using var resp = await _spclient.SendAsync(new HttpReq("PUT", url, headers, gzipped), ct).ConfigureAwait(false);
         using var ms = new MemoryStream();
         await resp.Body.CopyToAsync(ms, ct).ConfigureAwait(false);
-        return new Resp(resp.Status is >= 200 and < 300, ms.ToArray(), resp.Status);
+        var body = ms.ToArray();
+        body = MaybeDecompressCluster(body);
+        return new Resp(resp.Status is >= 200 and < 300, body, resp.Status);
+    }
+
+    /// <summary>connect-state Cluster responses are brotli-compressed with no Content-Type — HttpClient won't auto-inflate.</summary>
+    static byte[] MaybeDecompressCluster(byte[] body)
+    {
+        if (body.Length == 0) return body;
+        try { P.Cluster.Parser.ParseFrom(body); return body; }
+        catch (InvalidProtocolBufferException) { }
+        try { return HttpCompression.BrotliDecompress(body); }
+        catch { return body; }
     }
 
     async Task RunAsync(CancellationToken ct)

@@ -3,6 +3,20 @@
 Guidance for AI agents (Codex, and others) working in this repo. Claude Code users also have `CLAUDE.md` (design-corpus
 discipline) and a `.claude/skills/fluentgpu` skill; the full human/agent guide is in `docs/guide/`.
 
+## Out-of-scope paths — do NOT read, search, edit, or summarize
+
+Agent scope in this repo is the **FluentGpu engine** (`src/`, `design/`, `docs/`) and app UI.
+The paths below are out of scope and belong to a separate workspace. Unless the user names a
+specific file below **and** confirms it for this session, do not read, grep, edit, or summarize:
+
+- `app/.native/**`, `app/Wavee.PlayPlay/**`, `private-runtimes/**`
+- `app/tmp_*`, `scripts/pyghidra*`
+- `app/docs/wavee-playplay*.md`, `app/docs/playplay-*.md`, `app/docs/spotiload-offline-path.md`
+- `**/playplay-runtime.json`
+
+If a request would require these paths, ask the user to move it to the dedicated workspace instead.
+(Also enforced by `.codex/config.toml` and `.codexignore`.)
+
 ## What this is
 
 FluentGpu is a from-scratch, near-zero-allocation, NativeAOT, Direct3D 12-rendered UI engine for .NET 10. The

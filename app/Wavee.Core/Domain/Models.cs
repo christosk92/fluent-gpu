@@ -209,8 +209,15 @@ public sealed record Playlist(
 /// framework-neutral; the app maps each to its renderer color (ColorF) at the UI boundary.</summary>
 public sealed record Palette(uint BackgroundDark, uint TintedDark, uint Light, uint Accent);
 
-public enum QueueBucket { NowPlaying, UserQueue, NextUp }
-public sealed record QueueEntry(string EntryId, Track Track, QueueBucket Bucket, bool IsAutoplay, string Uid = "");
+public enum QueueBucket { NowPlaying, UserQueue, NextUp, History }
+public sealed record QueueEntry(
+    string EntryId,
+    Track Track,
+    QueueBucket Bucket,
+    bool IsAutoplay,
+    string Uid = "",
+    string Provider = "",
+    System.Collections.Generic.IReadOnlyDictionary<string, string>? Metadata = null);
 
 // ── Podcasts (docs/architecture.md §2 "Podcasts / shows / episodes") ──────────────────────────────────────────────────
 /// <summary>A podcast episode. <paramref name="ProgressMs"/> is the resume position (0 = unplayed); a real source also

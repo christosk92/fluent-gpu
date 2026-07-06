@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Google.Protobuf;
 using Wavee.Backend;
 using Wavee.Core;
@@ -31,14 +32,17 @@ public sealed class ConnectStateBuilder
     readonly string _deviceId;
     readonly string _deviceName;
     readonly string _clientId;
+    readonly Func<bool> _isPrivateSession;
     int _volume;
 
-    public ConnectStateBuilder(string deviceId, string deviceName, string? clientId = null, int volume = MaxVolume / 2)
+    public ConnectStateBuilder(string deviceId, string deviceName, string? clientId = null, int volume = MaxVolume / 2,
+        Func<bool>? isPrivateSession = null)
     {
         _deviceId = deviceId;
         _deviceName = deviceName;
         _clientId = clientId ?? KeymasterClientId;
         _volume = Math.Clamp(volume, 0, MaxVolume);
+        _isPrivateSession = isPrivateSession ?? (() => false);
     }
 
     public string DeviceId => _deviceId;
@@ -60,7 +64,7 @@ public sealed class ConnectStateBuilder
             Brand = "spotify",
             Model = "PC laptop",
             License = "premium",          // Recently-Played / play-count eligibility — load-bearing
-            IsPrivateSession = false,
+            IsPrivateSession = _isPrivateSession(),
         };
         info.MetadataMap["debug_level"] = "1";
         info.MetadataMap["tier1_port"] = "0";
@@ -125,7 +129,6 @@ public sealed class ConnectStateBuilder
         };
         if (snap is { } s2)
         {
-            if (s2.HasBeenPlayingForMs > 0) req.HasBeenPlayingForMs = (ulong)s2.HasBeenPlayingForMs;
             if (s2.StartedPlayingAtMs > 0) req.StartedPlayingAt = (ulong)s2.StartedPlayingAtMs;
         }
         return req.ToByteArray();
@@ -133,25 +136,145 @@ public sealed class ConnectStateBuilder
 
     static ProtoPlayerState BuildPlayerState(LocalPlaybackSnapshot s, long ts)
     {
+        string contextUri = s.ContextUri ?? "";
+        string feature = FeatureOf(contextUri, s.ContextMetadata);
         var ps = new ProtoPlayerState
         {
             Timestamp = ts,
-            ContextUri = s.ContextUri ?? "",
+            ContextUri = contextUri,
+            ContextUrl = string.IsNullOrEmpty(contextUri) ? "" : "context://" + contextUri,
+            PlayOrigin = new PlayOrigin
+            {
+                FeatureIdentifier = feature,
+                FeatureVersion = SpotifyClientIdentity.XpuiSnapshotVersion,
+                ReferrerIdentifier = feature,
+            },
             PositionAsOfTimestamp = s.PositionMs,
             Duration = s.DurationMs,
-            IsPlaying = s.IsPlaying,
+            // Spotify desktop keeps is_playing=true while paused (transport engaged, audio frozen).
+            IsPlaying = s.IsPlaying || s.IsPaused,
             IsPaused = s.IsPaused,
+            PlaybackSpeed = s.IsPaused ? 0.0 : 1.0,
             PlaybackId = s.PlaybackId,
             SessionId = s.SessionId,
-            Track = new ProvidedTrack { Uri = s.TrackUri, Uid = s.TrackUid ?? "" },
+            QueueRevision = s.QueueRevision ?? "",
+            Track = ToProvided(s.Track, contextUri, s.InteractionId, s.PageInstanceId),
+            Index = new ContextIndex { Track = (uint)Math.Max(0, s.ContextIndex) },
             Options = new ContextPlayerOptions
             {
                 ShufflingContext = s.Shuffle,
                 RepeatingContext = s.Repeat == RepeatMode.Context,
                 RepeatingTrack = s.Repeat == RepeatMode.Track,
             },
+            Restrictions = new Restrictions(),
+            PlaybackQuality = new PlaybackQuality
+            {
+                BitrateLevel = BitrateLevel.High,
+                Strategy = BitrateStrategy.CachedFile,
+                TargetBitrateLevel = BitrateLevel.High,
+                TargetBitrateAvailable = true,
+                HifiStatus = HiFiStatus.Off,
+            },
         };
-        foreach (var u in s.NextUris) ps.NextTracks.Add(new ProvidedTrack { Uri = u });
+        foreach (var (k, v) in s.ContextMetadata)
+            if (!string.IsNullOrEmpty(k)) ps.ContextMetadata[k] = v ?? "";
+        ps.ContextMetadata["player.arch"] = "2";
+        if (s.IsPaused)
+        {
+            ps.Restrictions.DisallowPausingReasons.Add("already_paused");
+            if (s.ContextIndex <= 0 && s.PrevTracks.Count == 0)
+                ps.Restrictions.DisallowSkippingPrevReasons.Add("no_prev_track");
+        }
+        else if (s.IsPlaying)
+            ps.Restrictions.DisallowResumingReasons.Add("not_paused");
+        foreach (var t in s.PrevTracks) ps.PrevTracks.Add(ToProvided(t, contextUri, s.InteractionId, s.PageInstanceId));
+        foreach (var t in s.NextTracks) ps.NextTracks.Add(ToProvided(t, contextUri, s.InteractionId, s.PageInstanceId));
         return ps;
+    }
+
+    static ProvidedTrack ToProvided(in SnapshotTrack t, string contextUri, string interactionId, string pageInstanceId)
+    {
+        var pt = new ProvidedTrack
+        {
+            Uri = t.Uri,
+            Uid = t.Uid ?? "",
+            Provider = string.IsNullOrEmpty(t.Provider) ? "context" : t.Provider,
+        };
+        var meta = pt.Metadata;
+        if (t.Metadata is { Count: > 0 })
+            foreach (var (k, v) in t.Metadata)
+                if (!string.IsNullOrEmpty(k)) meta[k] = v ?? "";
+
+        AddIfMissing(meta, "title", t.Title);
+        AddIfMissing(meta, "artist_name", t.ArtistName);
+        AddIfMissing(meta, "album_title", t.AlbumTitle);
+        AddIfMissing(meta, "album_uri", t.AlbumUri);
+        AddIfMissing(meta, "artist_uri", t.ArtistUri);
+
+        bool isVideo = IsVideoTrack(t);
+        bool isAutoplay = pt.Provider == "autoplay";
+        bool isQueue = pt.Provider == "queue";
+        if (!string.IsNullOrEmpty(contextUri) && pt.Provider == "context")
+        {
+            AddIfMissing(meta, "context_uri", contextUri);
+            if (!isVideo) AddIfMissing(meta, "entity_uri", contextUri);
+        }
+        if (!string.IsNullOrEmpty(t.ImageUrl))
+        {
+            var image = SpotifyImage(t.ImageUrl);
+            AddIfMissing(meta, "image_url", image);
+            AddIfMissing(meta, "image_small_url", image);
+            AddIfMissing(meta, "image_large_url", image);
+            AddIfMissing(meta, "image_xlarge_url", image);
+        }
+        if (isQueue) meta["is_queued"] = "true";
+        if (isAutoplay) meta["autoplay.is_autoplay"] = "true";
+        if (!isAutoplay && !isQueue)
+        {
+            AddIfMissing(meta, "actions.skipping_prev_past_track", "resume");
+            AddIfMissing(meta, "actions.skipping_next_past_track", "resume");
+        }
+        AddIfMissing(meta, "track_player", "audio");
+        AddIfMissing(meta, "interaction_id", interactionId);
+        AddIfMissing(meta, "page_instance_id", pageInstanceId);
+        if (!isVideo && !isQueue && !isAutoplay)
+        {
+            if (t.ViewIndex >= 0) AddIfMissing(meta, "view_index", t.ViewIndex.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            AddIfMissing(meta, "iteration", "0");
+        }
+        return pt;
+    }
+
+    static void AddIfMissing(IDictionary<string, string> metadata, string key, string? value)
+    {
+        if (!string.IsNullOrEmpty(value) && !metadata.ContainsKey(key)) metadata[key] = value;
+    }
+
+    static bool IsVideoTrack(in SnapshotTrack t)
+    {
+        if (t.HasVideo) return true;
+        var metadata = t.Metadata;
+        if (metadata is null) return false;
+        if (metadata.TryGetValue("track_player", out var player) && player == "video") return true;
+        if (metadata.TryGetValue("media.type", out var media) && (media == "video" || media == "mixed")) return true;
+        return metadata.ContainsKey("media.manifest_id") || metadata.ContainsKey("save_track.uri");
+    }
+
+    static string FeatureOf(string contextUri, IReadOnlyDictionary<string, string> metadata)
+    {
+        if (metadata.TryGetValue("format_list_type", out var listType) && listType == "liked-songs") return "your_library";
+        if (metadata.ContainsKey("liked_songs_collection_uri")) return "your_library";
+        if (contextUri.Contains(":collection", StringComparison.Ordinal)) return "your_library";
+        if (contextUri.Contains(":album:", StringComparison.Ordinal)) return "album";
+        if (contextUri.Contains(":artist", StringComparison.Ordinal)) return "artist";
+        if (contextUri.Contains(":playlist:", StringComparison.Ordinal)) return "playlist";
+        if (contextUri.Contains(":episode:", StringComparison.Ordinal)) return "home";
+        return "harmony";
+    }
+
+    static string SpotifyImage(string url)
+    {
+        const string prefix = "https://i.scdn.co/image/";
+        return url.StartsWith(prefix, StringComparison.Ordinal) ? "spotify:image:" + url[prefix.Length..] : url;
     }
 }

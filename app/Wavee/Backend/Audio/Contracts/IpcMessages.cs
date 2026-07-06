@@ -12,7 +12,7 @@ public sealed class IpcEnvelope
 
 public static class AudioIpcContract
 {
-    public const int Version = 2;
+    public const int Version = 3;   // v3: SupplyBodyCommand.sourceKind (explicit Spotify-encrypted vs external-plain)
 }
 
 public static class IpcMessageTypes
@@ -191,6 +191,7 @@ public sealed class SupplyBodyCommand
     [JsonPropertyName("cdnUrls")] public required string[] CdnUrls { get; init; }
     [JsonPropertyName("headBoundary")] public int HeadBoundary { get; init; }
     [JsonPropertyName("sizeBytes")] public long? SizeBytes { get; init; }
+    [JsonPropertyName("sourceKind")] public int SourceKind { get; init; }   // 0 = SpotifyEncrypted (default), 1 = ExternalPlain
 }
 
 public sealed class CommandResultMessage

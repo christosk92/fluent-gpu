@@ -187,6 +187,31 @@ public class SpotifyAudioStreamTests
     }
 
     [Fact]
+    public async Task PausedReadAhead_DoesNotPrefetchFromProbeRead()
+    {
+        var key = A.Key16(27);
+        var plaintext = A.Bytes(151, 2_000_000);
+        var cdn = SpotifyAesCtr.Decrypt(plaintext, key, 0);
+        var handler = new RangeCdnHandler(cdn);
+        using var stream = SpotifyAudioStream.CreateHeadOnly(
+            new HttpClient(handler), ReadOnlyMemory<byte>.Empty, 0);
+        using var pause = stream.PauseReadAhead();
+
+        await stream.AttachBodyLazyAsync(key, new[] { "https://cdn/a" }, cdn.Length, CancellationToken.None);
+        stream.Position = 1_000_000;
+        var buf = new byte[32];
+
+        Assert.Equal(buf.Length, stream.Read(buf, 0, buf.Length));
+        await Task.Delay(150);
+
+        var ranges = handler.Ranges;
+        Assert.Single(ranges);
+        Assert.Equal(1_000_000, ranges[0].From);
+        Assert.Equal(1_000_000 + 64 * 1024 - 1, ranges[0].To);
+        Assert.Equal(plaintext.AsSpan(1_000_000, buf.Length).ToArray(), buf);
+    }
+
+    [Fact]
     public void RapidSeeksWithinClearHead_ReadImmediatelyWithoutCdn()
     {
         var plaintext = A.Bytes(23, 2_048);
@@ -248,7 +273,7 @@ public class SpotifyAudioStreamTests
 
         Assert.Equal(buf.Length, await readTask.WaitAsync(TimeSpan.FromSeconds(2)));
         Assert.Equal(plaintext.AsSpan(3_000, buf.Length).ToArray(), buf);
-        Assert.Contains(handler.Ranges, r => r.From == 3_000);
+        Assert.Contains(handler.Ranges, r => r.From <= 3_000 && r.To >= 3_000 + buf.Length - 1);
     }
 
     [Fact]
@@ -476,7 +501,7 @@ public class SpotifyAudioStreamTests
     }
 
     [Fact]
-    public async Task CanSeek_IsFalseDuringHeadOnlyPhase_ThenTrueAfterBodyAttaches()
+    public async Task CanSeek_IsTrueDuringHeadOnlyPhase_SoFastStartVorbisReaderIsSeekable()
     {
         var key = A.Key16(24);
         var plaintext = A.Bytes(121, 4_096);
@@ -484,7 +509,7 @@ public class SpotifyAudioStreamTests
         using var stream = SpotifyAudioStream.CreateHeadOnly(
             new HttpClient(new RangeCdnHandler(cdn)), plaintext.AsSpan(0, 256).ToArray(), 256);
 
-        Assert.False(stream.CanSeek);
+        Assert.True(stream.CanSeek);
 
         await stream.AttachBodyAsync(key, new[] { "https://cdn/a" }, cdn.Length, CancellationToken.None);
 

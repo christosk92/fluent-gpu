@@ -204,7 +204,7 @@ sealed class NowPlayingView : Component
         bool headerDone = false;
         foreach (var e in queue)
         {
-            if (e.Bucket == QueueBucket.NowPlaying) continue;
+            if (e.Bucket is QueueBucket.NowPlaying or QueueBucket.History) continue;
             if (!headerDone)
             {
                 items.Add(new QueueRailItem(Loc.Get(Strings.Player.Queue).ToUpperInvariant(), null));

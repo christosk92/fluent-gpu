@@ -167,6 +167,34 @@ public class ConnectProjectionTests
     }
 
     [Fact]
+    public void LocalEvent_FoldsTrackDuration()
+    {
+        var p = new NowPlayingProjection("us", () => 0);
+        var track = new Track("t", "spotify:track:t", "Local",
+            new[] { new ArtistRef("a", "spotify:artist:a", "A") }, new AlbumRef("al", "spotify:album:al", "Al"),
+            151000, false, null);
+        p.OnEvent(new PlaybackEvent(EvKind.Started, track, 0));
+        Assert.Equal(151000, p.DurationMs);   // the seek bar scales scrub fractions by this — must follow the local track
+    }
+
+    [Fact]
+    public void LocalTrackChange_ReplacesStaleDuration_FromPriorClusterTrack()
+    {
+        var p = new NowPlayingProjection("us", () => 0);
+        // remote plays a 3:34 track…
+        p.OnCluster(Cluster("us", playing: true, Trk("spotify:track:old", "Old", 214000)));
+        Assert.Equal(214000, p.DurationMs);
+        // …then LOCAL playback advances to a 2:31 track: duration must follow (no cluster echo needed —
+        // offline/PlayPlay-local playback never gets one, which froze the label AND corrupted seek targets).
+        var next = new Track("n", "spotify:track:new", "New",
+            new[] { new ArtistRef("a", "spotify:artist:a", "A") }, new AlbumRef("al", "spotify:album:al", "Al"),
+            151000, false, null);
+        p.OnEvent(new PlaybackEvent(EvKind.TrackChanged, next, 0));
+        Assert.Equal(151000, p.DurationMs);
+        Assert.Equal("spotify:track:new", p.CurrentTrack!.Uri);
+    }
+
+    [Fact]
     public void OnCluster_Restrictions_GateSkipAndSeek_AndVolumeFollowsActiveDevice()
     {
         var p = new NowPlayingProjection("us", () => 0);

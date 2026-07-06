@@ -180,6 +180,13 @@ static class Program
             Environment.Exit(code);
         }
 
+        if (StartupPreflight.TryGetBlockingIssue(out var startupIssueTitle, out var startupIssueBody))
+        {
+            WaveeLog.Instance.Critical("app", "startup preflight failed: " + startupIssueBody);
+            StartupNotice.Error(startupIssueTitle, startupIssueBody + Environment.NewLine + Environment.NewLine + "Log: " + logPath);
+            return;
+        }
+
         // Seed the theme BEFORE the window comes up (no startup flash): honor the persisted preference, falling back to
         // the live OS theme for a fresh install (mode == System). FluentApp.Run then applies the matching Mica material
         // and the in-app surfaces mount with the right tokens; the store is reused by the app so there's one instance.
