@@ -76,6 +76,9 @@ public static class FluentApp
                            bool mica = true, int frames = -1, string? screenshot = null, bool customFrame = false,
                            bool micaAlt = false, int ambientFps = 0)
     {
+        if (Array.IndexOf(Environment.GetCommandLineArgs(), "--audio-host") >= 0)
+            throw new InvalidOperationException("FluentApp.Run must not be reached in --audio-host child mode.");
+
         bool consoleDiagnostics = Diag.EnvFlag("FG_DIAG") || Diag.EnvFlag("FG_DIAG_CONSOLE");
         if (consoleDiagnostics)
         {

@@ -79,6 +79,7 @@
     <Compile Include="..\Wavee\SpotifyLive\Audio\AudioKeyResolver.cs" />
     <Compile Include="..\Wavee\SpotifyLive\Audio\PlayPlayLicenseClient.cs" />
     <Compile Include="..\Wavee\SpotifyLive\Audio\AudioFormatProbe.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\Audio\Host\Dsp\*.cs" />
     <Compile Include="..\Wavee\SpotifyLive\Audio\Runtime\*.cs" />
     <Compile Include="..\Wavee\SpotifyLive\Audio\PlayPlayRuntimeProvisioner.cs" />
     <!-- the track resolver (extended-metadata file discovery + Ogg/FLAC selection) — LiveTrackResolverTests drive it -->

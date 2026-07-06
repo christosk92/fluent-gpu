@@ -61,6 +61,12 @@ internal sealed unsafe class OpacityLayerCompositor : IDisposable
         public ulong PinHash;                  // 0 = transient slot; else the blur-cache content hash this slot retains
         public bool BlurReady;                 // (pins) the RT currently holds the FINAL blurred result for PinHash
         public int RegionX, RegionY;           // (pins) physical-px screen origin of the retained blur region (for the composite)
+        // What resource each parity bank's SRV descriptor for this slot currently DESCRIBES (null = never written).
+        // Lets Acquire/FindPin skip the per-frame CreateShaderResourceView when the slot's resource is unchanged —
+        // the descriptor write was pure per-acquire overhead. Every retire/recreate path clears the whole entry
+        // (`= default`), so a recreated resource can never alias stale tracking.
+        public ID3D12Resource* SrvResParity0;
+        public ID3D12Resource* SrvResParity1;
     }
     private readonly PoolEntry[] _pool = new PoolEntry[MaxPool];
 
@@ -459,6 +465,17 @@ float4 PSMain(V i) : SV_Target
         }
     }
 
+    /// <summary>Write the CURRENT parity bank's SRV for this slot only if that descriptor doesn't already describe the
+    /// slot's resource. Acquire/FindPin run per group per frame — for a stable slot the descriptor write is redundant
+    /// after the first two frames (one per parity bank), and on layer-heavy frames those writes were measurable.</summary>
+    private void EnsureParitySrv(ref PoolEntry e, int slot)
+    {
+        ref ID3D12Resource* described = ref (_parity == 0 ? ref e.SrvResParity0 : ref e.SrvResParity1);
+        if (described == e.Res) return;
+        CreateSrv(e.Res, SrvCpu(PoolSrvSlot(slot)));
+        described = e.Res;
+    }
+
     private D3D12_CPU_DESCRIPTOR_HANDLE Rtv(int slot) { var h = _rtvHeap->GetCPUDescriptorHandleForHeapStart(); h.ptr += (nuint)slot * _rtvInc; return h; }
     private D3D12_CPU_DESCRIPTOR_HANDLE SrvCpu(int slot) { var h = _srvHeap->GetCPUDescriptorHandleForHeapStart(); h.ptr += (nuint)slot * _srvInc; return h; }
     private D3D12_GPU_DESCRIPTOR_HANDLE SrvGpu(int slot) { var h = _srvHeap->GetGPUDescriptorHandleForHeapStart(); h.ptr += (ulong)slot * _srvInc; return h; }
@@ -548,7 +565,7 @@ float4 PSMain(V i) : SV_Target
         entry.InUse = true;
         entry.IdleFrames = 0;
         entry.LastUseFence = frameFence;
-        CreateSrv(entry.Res, SrvCpu(PoolSrvSlot(best)));   // refresh THIS frame's parity bank
+        EnsureParitySrv(ref entry, best);   // refresh THIS frame's parity bank (skipped when it already describes this resource)
 
         Barrier(cmd, entry.Res, ref entry.State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
         var rtv = Rtv(best);
@@ -664,7 +681,7 @@ float4 PSMain(V i) : SV_Target
             if (e.Res == null || e.InUse || e.PinHash != hash || !e.BlurReady || e.W != rw || e.H != rh) continue;
             e.IdleFrames = 0;
             e.LastUseFence = frameFence;                // G1: a hit makes the pin MRU
-            CreateSrv(e.Res, SrvCpu(PoolSrvSlot(i)));   // refresh THIS frame's parity bank for the composite
+            EnsureParitySrv(ref e, i);                  // refresh THIS frame's parity bank for the composite (deduped)
             return i;
         }
         return -1;

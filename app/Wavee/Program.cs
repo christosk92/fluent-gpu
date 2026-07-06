@@ -59,6 +59,9 @@ static class Program
             e.SetObserved();
         };
 
+        if (Array.IndexOf(args, "--audio-host") >= 0)
+            Environment.Exit(Wavee.SpotifyLive.Audio.Host.AudioHostChild.Run(args));
+
         int frames = -1;
         string? screenshot = null;
         for (int i = 0; i < args.Length; i++)

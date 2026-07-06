@@ -45,6 +45,10 @@ static class WaveeSettings
     // (debounced) as the user adjusts it.
     public static readonly SettingKey<bool> RememberVolume = new("playback.volume.remember", true);
     public static readonly SettingKey<float> SavedVolume = new("playback.volume", 0.7f);
+    public static readonly SettingKey<bool> EqualizerEnabled = new("playback.eq.enabled", false);
+    public static readonly SettingKey<string> EqualizerGains = new("playback.eq.gains", "0,0,0,0,0,0,0,0,0,0");
+    public static readonly SettingKey<bool> CrossfadeEnabled = new("playback.crossfade.enabled", false);
+    public static readonly SettingKey<int> CrossfadeMs = new("playback.crossfade.ms", 5000);
 }
 
 // IAppSettings backed by the engine's AppDataStore (HKCU registry, unpackaged). Every access is DEFENSIVE — a storage

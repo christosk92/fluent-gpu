@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Runtime.InteropServices;
 using Wavee.Backend;
 using Wavee.Backend.Audio;
+using Wavee.SpotifyLive.Audio.Host.Dsp;
 
 namespace Wavee.SpotifyLive.Audio;
 
@@ -20,6 +21,8 @@ internal sealed class AudioPlayEngine : IDisposable
     readonly Action<string> _log;
     readonly Func<string, byte[], CdnDecryptor?> _nativeDecryptorFactory;
     readonly WasapiRenderer _renderer = new();
+    readonly EqualizerProcessor _equalizer = new();
+    readonly Limiter _limiter = new();
     readonly object _gate = new();
     readonly Timer _tick;
 
@@ -228,6 +231,7 @@ internal sealed class AudioPlayEngine : IDisposable
     public void Stop() { _playing = false; StopDecode(); _seekBaseMs = 0; RaiseState(); }
     public void Seek(long ms) => Interlocked.Exchange(ref _pendingSeekMs, Math.Max(0, ms));
     public void SetVolume(double v) => _renderer.SetVolume((float)v);
+    public void SetEqualizer(EqualizerSettings settings) => _equalizer.Configure(settings);
 
     void StartDecode(SpotifyAudioStream stream, string fileIdHex, ReadOnlyMemory<byte> head, string format)
     {
@@ -340,6 +344,8 @@ internal sealed class AudioPlayEngine : IDisposable
                 long afterOffset = stream.CurrentOffset;
                 totalSamples += got;
                 if (_gainLinear != 1f) for (int i = 0; i < got; i++) buf[i] *= _gainLinear;
+                _equalizer.Process(buf.AsSpan(0, got), reader.SampleRate, reader.Channels);
+                _limiter.Process(buf.AsSpan(0, got));
                 _prebuffering = false; _buffering = false;
                 var writeStartTicks = Stopwatch.GetTimestamp();
                 _renderer.Write(buf.AsSpan(0, got), ct);

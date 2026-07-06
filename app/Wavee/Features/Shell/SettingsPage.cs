@@ -28,6 +28,7 @@ sealed class SettingsPage : Component
     static readonly string[] s_tabKeys = ["general", "playback", "storage", "diagnostics", "about"];
     static readonly string[] s_themeLabels = ["System", "Light", "Dark"];
     static readonly string[] s_densityLabels = ["Compact", "Default", "Cozy", "Comfortable"];
+    static readonly string[] s_eqBandLabels = ["31 Hz", "63 Hz", "125 Hz", "250 Hz", "500 Hz", "1 kHz", "2 kHz", "4 kHz", "8 kHz", "16 kHz"];
 
     const int MaxVisibleRows = 500;
     static readonly string[] s_levelLabels = ["All", "Info+", "Warnings", "Errors"];
@@ -412,6 +413,7 @@ sealed class SettingsPage : Component
                             settings.Set(WaveeSettings.RememberVolume, !settings.Get(WaveeSettings.RememberVolume));
                             Bump();
                         }))),
+                DspCard(svc),
                 Card(
                     CardHeader("Player bar", null),
                     RowDivider(),
@@ -425,6 +427,129 @@ sealed class SettingsPage : Component
                         }))),
             ],
         };
+    }
+
+    Element DspCard(Services? svc)
+    {
+        var settings = svc?.Settings;
+        bool eqOn = settings?.Get(WaveeSettings.EqualizerEnabled) ?? false;
+        bool crossOn = settings?.Get(WaveeSettings.CrossfadeEnabled) ?? false;
+        int crossMs = Math.Clamp(settings?.Get(WaveeSettings.CrossfadeMs) ?? 5000, 0, 30_000);
+        float[] gains = ReadEqGains(settings);
+
+        var eqRows = new Element[10];
+        for (int i = 0; i < eqRows.Length; i++)
+            eqRows[i] = EqBandRow(svc, settings, gains, i);
+
+        return Card(
+            CardHeader("Sound", "Equalizer and transition controls for local playback"),
+            RowDivider(),
+            SettingRow("Equalizer", "10-band graphic EQ, +/-12 dB",
+                ToggleSwitch.Create(eqOn, () =>
+                {
+                    if (settings is null) return;
+                    settings.Set(WaveeSettings.EqualizerEnabled, !settings.Get(WaveeSettings.EqualizerEnabled));
+                    PushDsp(svc);
+                    Bump();
+                })),
+            InnerPanel(eqRows),
+            RowDivider(),
+            SettingRow("Crossfade", "Natural transition at the end of a prepared track",
+                ToggleSwitch.Create(crossOn, () =>
+                {
+                    if (settings is null) return;
+                    settings.Set(WaveeSettings.CrossfadeEnabled, !settings.Get(WaveeSettings.CrossfadeEnabled));
+                    PushDsp(svc);
+                    Bump();
+                })),
+            RowDivider(),
+            SettingRow("Crossfade duration", (crossMs / 1000.0).ToString("0.#", CultureInfo.InvariantCulture) + " seconds",
+                new BoxEl
+                {
+                    Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S,
+                    Children =
+                    [
+                        Button.Standard("-1s", () => UpdateCrossfadeDuration(svc, settings, -1000), isEnabled: settings is not null),
+                        new TextEl(crossMs.ToString(CultureInfo.InvariantCulture) + " ms") { Size = 12f, Color = Tok.TextSecondary, Width = 68f },
+                        Button.Standard("+1s", () => UpdateCrossfadeDuration(svc, settings, 1000), isEnabled: settings is not null),
+                    ],
+                }));
+    }
+
+    Element EqBandRow(Services? svc, IAppSettings? settings, float[] gains, int band)
+    {
+        float gain = band >= 0 && band < gains.Length ? gains[band] : 0f;
+        return new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S,
+            Children =
+            [
+                new TextEl(s_eqBandLabels[band]) { Size = 12f, Color = Tok.TextSecondary, Width = 58f },
+                new TextEl(FormatDb(gain)) { Size = 12f, Weight = 600, Color = Tok.TextPrimary, Width = 54f },
+                Button.Standard("-1", () => UpdateEqBand(svc, settings, band, -1f), isEnabled: settings is not null),
+                Button.Standard("+1", () => UpdateEqBand(svc, settings, band, 1f), isEnabled: settings is not null),
+            ],
+        };
+    }
+
+    static string FormatDb(float gain) =>
+        gain.ToString("+0;-0;0", CultureInfo.InvariantCulture) + " dB";
+
+    static float[] ReadEqGains(IAppSettings? settings)
+    {
+        var gains = new float[10];
+        string raw = settings?.Get(WaveeSettings.EqualizerGains) ?? WaveeSettings.EqualizerGains.Default;
+        var parts = raw.Split(',', StringSplitOptions.TrimEntries);
+        for (int i = 0; i < gains.Length && i < parts.Length; i++)
+        {
+            if (float.TryParse(parts[i], NumberStyles.Float, CultureInfo.InvariantCulture, out float v))
+                gains[i] = Math.Clamp(v, -12f, 12f);
+        }
+
+        return gains;
+    }
+
+    static string SerializeEqGains(float[] gains)
+    {
+        var sb = new StringBuilder();
+        for (int i = 0; i < 10; i++)
+        {
+            if (i > 0) sb.Append(',');
+            float gain = i < gains.Length ? Math.Clamp(gains[i], -12f, 12f) : 0f;
+            sb.Append(gain.ToString("0.#", CultureInfo.InvariantCulture));
+        }
+
+        return sb.ToString();
+    }
+
+    void UpdateEqBand(Services? svc, IAppSettings? settings, int band, float delta)
+    {
+        if (settings is null || band < 0 || band >= 10) return;
+        var gains = ReadEqGains(settings);
+        gains[band] = Math.Clamp(gains[band] + delta, -12f, 12f);
+        settings.Set(WaveeSettings.EqualizerGains, SerializeEqGains(gains));
+        PushDsp(svc);
+        Bump();
+    }
+
+    void UpdateCrossfadeDuration(Services? svc, IAppSettings? settings, int deltaMs)
+    {
+        if (settings is null) return;
+        int next = Math.Clamp(settings.Get(WaveeSettings.CrossfadeMs) + deltaMs, 0, 30_000);
+        settings.Set(WaveeSettings.CrossfadeMs, next);
+        PushDsp(svc);
+        Bump();
+    }
+
+    static void PushDsp(Services? svc)
+    {
+        if (svc?.LiveHost?.Connect.Audio?.Host is not Wavee.Backend.IAudioDspControl dsp)
+            return;
+
+        var settings = svc.Settings;
+        dsp.SetEqualizer(settings.Get(WaveeSettings.EqualizerEnabled), ReadEqGains(settings));
+        dsp.SetCrossfade(settings.Get(WaveeSettings.CrossfadeEnabled),
+            Math.Clamp(settings.Get(WaveeSettings.CrossfadeMs), 0, 30_000));
     }
 
     Element RuntimeCard(Services? svc)

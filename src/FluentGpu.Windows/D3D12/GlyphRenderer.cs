@@ -1131,49 +1131,60 @@ float4 PSMain(VSOutG i) : SV_Target
         if ((_frame & stride) == 0) EvictStaleRuns();
     }
 
-    public void Record(ID3D12GraphicsCommandList* cmd, List<GlyphInstance> instances, float vpW, float vpH)
+    /// <summary>Record one glyph run; <paramref name="rebind"/> false skips the static state (heap, root signature,
+    /// PSO, viewport constants, atlas table, topology, quad VB — still bound from a previous glyph run this frame;
+    /// see RoundRectPipeline.Record). Returns false when full (state untouched).</summary>
+    public bool Record(ID3D12GraphicsCommandList* cmd, List<GlyphInstance> instances, float vpW, float vpH, bool rebind = true)
     {
         int start = _cursor;
         int count = Math.Min(instances.Count, MaxGlyphs - start);
-        if (count <= 0) return;
+        if (count <= 0) return false;
         for (int i = 0; i < count; i++) _mapped[_active][start + i] = instances[i];
         _cursor += count;
 
-        ID3D12DescriptorHeap* heap = _srvHeap;
-        cmd->SetDescriptorHeaps(1, &heap);
-        cmd->SetGraphicsRootSignature(_rootSig);
-        cmd->SetPipelineState(_pso);
-        float* vp = stackalloc float[2] { vpW, vpH };
-        cmd->SetGraphicsRoot32BitConstants(0, 2, vp, 0);
-        cmd->SetGraphicsRootDescriptorTable(1, _srvGpu);
+        if (rebind)
+        {
+            ID3D12DescriptorHeap* heap = _srvHeap;
+            cmd->SetDescriptorHeaps(1, &heap);
+            cmd->SetGraphicsRootSignature(_rootSig);
+            cmd->SetPipelineState(_pso);
+            float* vp = stackalloc float[2] { vpW, vpH };
+            cmd->SetGraphicsRoot32BitConstants(0, 2, vp, 0);
+            cmd->SetGraphicsRootDescriptorTable(1, _srvGpu);
+            cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+            fixed (D3D12_VERTEX_BUFFER_VIEW* qv = &_quadView) cmd->IASetVertexBuffers(0, 1, qv);
+        }
         cmd->SetGraphicsRootShaderResourceView(2, _instances[_active]->GetGPUVirtualAddress() + (ulong)(start * sizeof(GlyphInstance)));
-        cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-        fixed (D3D12_VERTEX_BUFFER_VIEW* qv = &_quadView) cmd->IASetVertexBuffers(0, 1, qv);
         cmd->DrawInstanced(4, (uint)count, 0, 0);
+        return true;
     }
 
     /// <summary>Draw the sub-glyph gradient-wipe instances (active lyric line + glow) with the gradient PSO — same atlas,
     /// viewport, quad and double-buffering as <see cref="Record"/>, into whatever RT is bound (so a blur layer captures the
     /// glow's gradient glyphs exactly like normal glyphs).</summary>
-    public void RecordGradient(ID3D12GraphicsCommandList* cmd, List<GradGlyphInstance> instances, float vpW, float vpH)
+    public bool RecordGradient(ID3D12GraphicsCommandList* cmd, List<GradGlyphInstance> instances, float vpW, float vpH, bool rebind = true)
     {
         int start = _gradCursor;
         int count = Math.Min(instances.Count, MaxGradGlyphs - start);
-        if (count <= 0) return;
+        if (count <= 0) return false;
         for (int i = 0; i < count; i++) _mappedGrad[_active][start + i] = instances[i];
         _gradCursor += count;
 
-        ID3D12DescriptorHeap* heap = _srvHeap;
-        cmd->SetDescriptorHeaps(1, &heap);
-        cmd->SetGraphicsRootSignature(_rootSig);
-        cmd->SetPipelineState(_psoGrad);
-        float* vp = stackalloc float[2] { vpW, vpH };
-        cmd->SetGraphicsRoot32BitConstants(0, 2, vp, 0);
-        cmd->SetGraphicsRootDescriptorTable(1, _srvGpu);
+        if (rebind)
+        {
+            ID3D12DescriptorHeap* heap = _srvHeap;
+            cmd->SetDescriptorHeaps(1, &heap);
+            cmd->SetGraphicsRootSignature(_rootSig);
+            cmd->SetPipelineState(_psoGrad);
+            float* vp = stackalloc float[2] { vpW, vpH };
+            cmd->SetGraphicsRoot32BitConstants(0, 2, vp, 0);
+            cmd->SetGraphicsRootDescriptorTable(1, _srvGpu);
+            cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+            fixed (D3D12_VERTEX_BUFFER_VIEW* qv = &_quadView) cmd->IASetVertexBuffers(0, 1, qv);
+        }
         cmd->SetGraphicsRootShaderResourceView(2, _gradInstances[_active]->GetGPUVirtualAddress() + (ulong)(start * sizeof(GradGlyphInstance)));
-        cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-        fixed (D3D12_VERTEX_BUFFER_VIEW* qv = &_quadView) cmd->IASetVertexBuffers(0, 1, qv);
         cmd->DrawInstanced(4, (uint)count, 0, 0);
+        return true;
     }
 
     private static ID3D12Resource* CreateUpload(ID3D12Device* device, uint bytes, string name)

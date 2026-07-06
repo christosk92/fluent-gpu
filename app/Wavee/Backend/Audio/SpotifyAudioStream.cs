@@ -19,6 +19,8 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable
     const int MaxReadAheadBytes = 256 * 1024;
     const int ProbeBytes = 0xc0;
     const int CdnChunkBytes = 64 * 1024;
+    static readonly bool RangeTrace = string.Equals(
+        Environment.GetEnvironmentVariable("WAVEE_AUDIO_RANGE_TRACE"), "1", StringComparison.Ordinal);
 
     readonly HttpClient _http;
     readonly string _name;
@@ -159,9 +161,9 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable
         if (_ranges.ContainsRange(start, end)) return;
 
         var sw = Stopwatch.StartNew();
-        _log?.Invoke($"stream {_name}: prefetch boundary start range=[{start},{end})");
+        if (RangeTrace) _log?.Invoke($"stream {_name}: prefetch boundary start range=[{start},{end})");
         await FetchRangeAsync(start, end, ct).ConfigureAwait(false);
-        _log?.Invoke($"stream {_name}: prefetch boundary ok bytes={end - start} elapsed={sw.ElapsedMilliseconds}ms");
+        if (RangeTrace) _log?.Invoke($"stream {_name}: prefetch boundary ok bytes={end - start} elapsed={sw.ElapsedMilliseconds}ms");
     }
 
     async Task ReadAheadLoopAsync()
@@ -285,9 +287,9 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable
         if (start >= end) return;
         if (_ranges.ContainsRange(start, end)) return;
         var sw = Stopwatch.StartNew();
-        _log?.Invoke($"stream {_name}: decode range miss range=[{start},{end}) requested={length}B pos={Volatile.Read(ref _pos)}");
+        if (RangeTrace) _log?.Invoke($"stream {_name}: decode range miss range=[{start},{end}) requested={length}B pos={Volatile.Read(ref _pos)}");
         FetchRangeAsync(start, end, _disposeCts.Token).GetAwaiter().GetResult();
-        _log?.Invoke($"stream {_name}: decode range ready range=[{start},{end}) elapsed={sw.ElapsedMilliseconds}ms");
+        if (RangeTrace) _log?.Invoke($"stream {_name}: decode range ready range=[{start},{end}) elapsed={sw.ElapsedMilliseconds}ms");
     }
 
     async Task FetchRangeAsync(long start, long end, CancellationToken ct)
@@ -329,7 +331,7 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable
         string[] urls;
         lock (_stateGate) urls = _cdnUrls;
         var sw = Stopwatch.StartNew();
-        _log?.Invoke($"stream {_name}: range fetch start range=[{start},{end}) bytes={end - start}");
+        if (RangeTrace) _log?.Invoke($"stream {_name}: range fetch start range=[{start},{end}) bytes={end - start}");
 
         foreach (var url in urls)
         {
@@ -377,7 +379,7 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable
                 WriteCdnBytes(start, buf, read);
                 _ranges.AddRange(start, start + read);
                 lock (_stateGate) Monitor.PulseAll(_stateGate);
-                _log?.Invoke($"stream {_name}: range fetch ok range=[{start},{start + read}) bytes={read} elapsed={sw.ElapsedMilliseconds}ms");
+                if (RangeTrace) _log?.Invoke($"stream {_name}: range fetch ok range=[{start},{start + read}) bytes={read} elapsed={sw.ElapsedMilliseconds}ms");
                 return;
             }
             catch (Exception ex) when (ex is HttpRequestException or IOException or TaskCanceledException)

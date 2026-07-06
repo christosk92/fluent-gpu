@@ -9,6 +9,7 @@ using Wavee.Backend.Audio;
 using Wavee.Backend.Metadata;
 using Wavee.Backend.Spotify;
 using Wavee.Core;
+using Wavee.SpotifyLive.Audio.Host;
 using Xm = Wavee.Protocol.ExtendedMetadata;
 
 namespace Wavee.SpotifyLive.Audio;
@@ -20,11 +21,13 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
     public PlayPlayRuntimeProvisioner Provisioner { get; }
     public AudioKeyResolver KeyResolver { get; }
     public HeadFileClient HeadClient { get; }
-    public InProcessAudioHost Host { get; }
+    public IAudioHost Host { get; }
     public LiveTrackResolver TrackResolver { get; }
     public RuntimeAsset? RuntimeAsset { get; private set; }
     readonly Action<string>? _log;
     readonly IWaveeLog? _structuredLog;
+    readonly bool _useOutOfProcessHost;
+    readonly SupervisedAudioHost? _supervisedHost;
 #if WAVEE_PLAYPLAY_LOCAL
     InProcessPlayPlayKeyDeriver? _playPlay;
 #endif
@@ -43,23 +46,42 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
         _structuredLog = structuredLog;
         Status = new AudioRuntimeStatusService();
         Provisioner = new PlayPlayRuntimeProvisioner(settings, Status, log, structuredLog: structuredLog);
+        _useOutOfProcessHost = Environment.GetEnvironmentVariable("WAVEE_AUDIO_INPROC") != "1"
+            && Environment.GetEnvironmentVariable("WAVEE_AUDIO_OOP") != "0";
+        if (_useOutOfProcessHost)
+        {
+            _supervisedHost = new SupervisedAudioHost(
 #if WAVEE_PLAYPLAY_LOCAL
-        Func<IPlayPlayKeyDeriver?> deriver = () => _playPlay;
+                () => _playPlay,
+                () => _playPlay,
 #else
-        Func<IPlayPlayKeyDeriver?> deriver = () => null;
+                () => null,
+                () => null,
+#endif
+                log);
+            _supervisedHost.CircuitBroken += OnAudioHostCircuitBroken;
+            Host = _supervisedHost;
+        }
+        else
+        {
+            Host = new InProcessAudioHost(
+#if WAVEE_PLAYPLAY_LOCAL
+                () => _playPlay,
+#else
+                () => null,
+#endif
+                log);
+        }
+#if WAVEE_PLAYPLAY_LOCAL
+        Func<IPlayPlayKeyDeriver?> deriver = () => _supervisedHost is not null ? _supervisedHost : _playPlay;
+#else
+        Func<IPlayPlayKeyDeriver?> deriver = () => _supervisedHost;
 #endif
         Func<RuntimeAsset?> runtime = () => RuntimeAsset;
         var license = new PlayPlayLicenseClient(transport, log, structuredLog);
         var apKeys = new LiveAudioKeySource(apChannel);
         KeyResolver = new AudioKeyResolver(apKeys, deriver, runtime, license, Status, session, log, structuredLog);
         HeadClient = new HeadFileClient(new HttpClientExchange(), session, log);
-        Host = new InProcessAudioHost(
-#if WAVEE_PLAYPLAY_LOCAL
-            () => _playPlay,
-#else
-            () => null,
-#endif
-            log);
         Func<string, CancellationToken, Task<ByteString?>> fetchTrackV4 = (uri, ct) => extendedMetadata.GetExtensionAsync(uri, Xm.ExtensionKind.TrackV4, ct);
         Func<string, CancellationToken, Task<ByteString?>> fetchAudioFilesV5 = (uri, ct) => extendedMetadata.GetExtensionAsync(uri, Xm.ExtensionKind.AudioFiles, ct);
         Func<string, Xm.ExtensionKind, CancellationToken, Task<ByteString?>> fetchAnyExtension =
@@ -73,7 +95,8 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
             quality: () => (AudioQualityPreference)Math.Clamp(settings.Get(WaveeSettings.PlaybackQuality), 0, 2));
         Log(WaveeLogLevel.Debug, "audio.stack.created", "Audio playback stack created",
             WaveeLogField.Of("playplayLocal", PlayPlayLocalCompiled),
-            WaveeLogField.Of("formatProbe", formatProbe is not null));
+            WaveeLogField.Of("formatProbe", formatProbe is not null),
+            WaveeLogField.Of("oop", _useOutOfProcessHost));
     }
 
     /// <summary>Background provision — off the startup path.</summary>
@@ -126,25 +149,18 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
             WaveeLogField.Of("version", asset.Config.Version),
             WaveeLogField.Of("arch", asset.Config.Arch.ToString()),
             WaveeLogField.Of("dll", asset.PackPath));
-#if WAVEE_PLAYPLAY_LOCAL
-        _playPlay?.Dispose();
-        _playPlay = InProcessPlayPlayKeyDeriver.TryCreate(asset, Status, _log);
-        Host.RebindPlayPlay(() => _playPlay);
-        if (_playPlay is null)
+        if (_supervisedHost is not null)
         {
-            Status.SetProvisioning(ProvisioningOutcome.RuntimeUnavailable, "PlayPlay native deriver init failed");
-            Log(WaveeLogLevel.Error, "playplay.bind.failed", "PlayPlay runtime pack is present but native deriver did not bind",
+            _supervisedHost.SetRuntimeAsset(asset);
+            Status.SetProvisioning(ProvisioningOutcome.Ready);
+            Log(WaveeLogLevel.Info, "playplay.bind.remote_ready", "PlayPlay runtime descriptor bound to audio child",
                 WaveeLogField.Of("pack", asset.PackId),
                 WaveeLogField.Of("version", asset.Config.Version),
                 WaveeLogField.Of("arch", asset.Config.Arch.ToString()));
-            return false;
+            return true;
         }
-        Status.SetProvisioning(ProvisioningOutcome.Ready);
-        Log(WaveeLogLevel.Info, "playplay.bind.ready", "PlayPlay native deriver bound",
-            WaveeLogField.Of("pack", asset.PackId),
-            WaveeLogField.Of("version", asset.Config.Version),
-            WaveeLogField.Of("arch", asset.Config.Arch.ToString()));
-        return true;
+#if WAVEE_PLAYPLAY_LOCAL
+        return EnsureInProcessPlayPlay(asset, reason);
 #else
         Status.SetProvisioning(ProvisioningOutcome.RuntimeUnavailable, "Wavee was built without WAVEE_PLAYPLAY_LOCAL");
         Log(WaveeLogLevel.Error, "playplay.bind.not_compiled", "PlayPlay runtime pack is present but local deriver code is not compiled",
@@ -155,8 +171,49 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
 #endif
     }
 
+    void OnAudioHostCircuitBroken()
+    {
+#if WAVEE_PLAYPLAY_LOCAL
+        if (RuntimeAsset is { } asset)
+        {
+            EnsureInProcessPlayPlay(asset, "circuit-breaker");
+            _supervisedHost?.RebindFallbackDecryptors(() => _playPlay);
+        }
+#endif
+    }
+
+#if WAVEE_PLAYPLAY_LOCAL
+    bool EnsureInProcessPlayPlay(RuntimeAsset asset, string reason)
+    {
+        _playPlay?.Dispose();
+        _playPlay = InProcessPlayPlayKeyDeriver.TryCreate(asset, Status, _log);
+        if (Host is InProcessAudioHost inProcess)
+            inProcess.RebindPlayPlay(() => _playPlay);
+        _supervisedHost?.RebindFallbackDecryptors(() => _playPlay);
+        if (_playPlay is null)
+        {
+            Status.SetProvisioning(ProvisioningOutcome.RuntimeUnavailable, "PlayPlay native deriver init failed");
+            Log(WaveeLogLevel.Error, "playplay.bind.failed", "PlayPlay runtime pack is present but native deriver did not bind",
+                WaveeLogField.Of("reason", reason),
+                WaveeLogField.Of("pack", asset.PackId),
+                WaveeLogField.Of("version", asset.Config.Version),
+                WaveeLogField.Of("arch", asset.Config.Arch.ToString()));
+            return false;
+        }
+        Status.SetProvisioning(ProvisioningOutcome.Ready);
+        Log(WaveeLogLevel.Info, "playplay.bind.ready", "PlayPlay native deriver bound in-process",
+            WaveeLogField.Of("reason", reason),
+            WaveeLogField.Of("pack", asset.PackId),
+            WaveeLogField.Of("version", asset.Config.Version),
+            WaveeLogField.Of("arch", asset.Config.Arch.ToString()));
+        return true;
+    }
+#endif
+
     public async ValueTask DisposeAsync()
     {
+        if (_supervisedHost is not null)
+            _supervisedHost.CircuitBroken -= OnAudioHostCircuitBroken;
         await Host.DisposeAsync().ConfigureAwait(false);
 #if WAVEE_PLAYPLAY_LOCAL
         _playPlay?.Dispose();

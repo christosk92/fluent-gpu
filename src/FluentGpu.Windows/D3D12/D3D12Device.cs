@@ -118,8 +118,29 @@ public sealed unsafe class D3D12Device : IGpuDevice
     private float _frameScale = 1f;
     private int _frameRectCount;
     private int _frameGlyphInstanceCount;
+    // ── Cross-segment command-list state cache ──
+    // FlushSegment fires on EVERY PushClip/PopClip/PushLayer/PopLayer, and each pipeline's Record used to fully rebind
+    // its static state (root signature + PSO + constants + topology + VB) per run — on a clip-heavy frame that was
+    // thousands of redundant command-list calls (the dominant CPU cost of a continuously-animating frame: the track-play
+    // freeze). The device tracks which pipeline's static state is currently bound on _cmdList and passes rebind:false
+    // to a run whose pipeline is already bound (that run then records only its per-run SRV offset + draw). The active
+    // scissor RECT is deduped the same way (ApplyCurrentScissor re-sets an unchanged rect constantly on the layered
+    // path). Both caches are invalidated on command-list Reset and after every compositor pass that binds its own
+    // PSO/heap/scissor outside this cache (opacity/acrylic composites + blurs) — see the InvalidateCmdState call sites.
+    // Barriers, OMSetRenderTargets and clears do NOT disturb these bindings, so the cache stays valid across opacity
+    // group Acquire/Bind/BeginRead.
+    private enum BoundPipe : byte { None, Rect, Shadow, Arc, Polyline, Gradient, Glyph, GradGlyph, Image }
+    private BoundPipe _boundPipe;
+    private RECT _lastScissor;
+    private bool _scissorValid;
+    private int _framePipeBinds, _framePipeBindsSkipped;      // full static rebinds vs runs that reused the bound state
+    private int _frameScissorSets, _frameScissorSkipped;      // RSSetScissorRects recorded vs deduped
+    private int _frameSegments, _frameRuns;                   // FlushSegment calls / painter-order runs replayed
+    private int _frameClipOps, _frameLayerOps;                // Push/PopClip and Push/PopLayer ops decoded
     private readonly StringTable _strings;
     private readonly bool _composited;
+
+    private void InvalidateCmdState() { _boundPipe = BoundPipe.None; _scissorValid = false; }
 
     // DirectComposition (Mica path): the swapchain is composed onto the HWND so DWM's Mica shows through transparent pixels.
     private IDCompositionDevice* _dcomp;
@@ -539,6 +560,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
         ID3D12CommandAllocator* allocator = _allocators[_frameIndex];
         Check(allocator->Reset(), "allocator.Reset");
         Check(_cmdList->Reset(allocator, null), "cmdList.Reset");
+        InvalidateCmdState();   // fresh command list — nothing is bound
         _imageTextures?.FlushUploads(_cmdList);
 
         ID3D12Resource* backBuffer = _backBuffers[_frameIndex];
@@ -554,6 +576,9 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _frameGlyphInstanceCount = 0;
         _frameImageCount = 0;
         _frameImageSkipped = 0;
+        _framePipeBinds = 0; _framePipeBindsSkipped = 0;
+        _frameScissorSets = 0; _frameScissorSkipped = 0;
+        _frameSegments = 0; _frameRuns = 0; _frameClipOps = 0; _frameLayerOps = 0;
         _blurCacheHit = 0; _blurCacheMiss = 0; _blurHoldHit = 0; _blurHoldFallback = 0;
         (_lastBlurHashes, _curBlurHashes) = (_curBlurHashes, _lastBlurHashes);   // rotate the blur-cache recurrence ring
         _lastBlurHashCount = _curBlurHashCount; _curBlurHashCount = 0;
@@ -613,6 +638,14 @@ public sealed unsafe class D3D12Device : IGpuDevice
         Diag.Set("d3d12", "blurCacheMiss", _blurCacheMiss);                   // blur layers re-rendered+re-blurred (content/position/σ changed)
         Diag.Set("d3d12", "blurHoldHit", _blurHoldHit);
         Diag.Set("d3d12", "blurHoldFallback", _blurHoldFallback);
+        Diag.Set("d3d12", "segments", _frameSegments);                        // FlushSegment calls (≈ 2·clips + 2·layers + 1)
+        Diag.Set("d3d12", "runs", _frameRuns);                                // painter-order runs replayed across all segments
+        Diag.Set("d3d12", "clipOps", _frameClipOps);                          // Push/PopClip ops decoded this frame
+        Diag.Set("d3d12", "layerOps", _frameLayerOps);                        // Push/PopLayer ops decoded this frame
+        Diag.Set("d3d12", "pipeBinds", _framePipeBinds);                      // full static pipeline rebinds recorded
+        Diag.Set("d3d12", "pipeBindsSkipped", _framePipeBindsSkipped);        // runs that reused the cross-segment bound state
+        Diag.Set("d3d12", "scissorSets", _frameScissorSets);                  // RSSetScissorRects recorded
+        Diag.Set("d3d12", "scissorSkipped", _frameScissorSkipped);            // scissor sets deduped (rect unchanged)
         Diag.Set("d3d12", "rects", _frameRectCount);
         Diag.Set("d3d12", "glyphInstances", _frameGlyphInstanceCount);
         Diag.Set("d3d12", "images", _frameImageCount);
@@ -926,9 +959,18 @@ public sealed unsafe class D3D12Device : IGpuDevice
     }
 
     private void SetFullScissor()
+        => SetScissorRect(new RECT { left = 0, top = 0, right = (int)_w, bottom = (int)_h });
+
+    // Single scissor chokepoint with dedup: an unchanged rect records nothing (valid because RSSetScissorRects is pure
+    // command-list state — only invalidated when a compositor pass sets its own scissor, via InvalidateCmdState).
+    private void SetScissorRect(RECT sc)
     {
-        RECT scd = new() { left = 0, top = 0, right = (int)_w, bottom = (int)_h };
-        _cmdList->RSSetScissorRects(1, &scd);
+        if (_scissorValid && sc.left == _lastScissor.left && sc.top == _lastScissor.top
+            && sc.right == _lastScissor.right && sc.bottom == _lastScissor.bottom) { _frameScissorSkipped++; return; }
+        _lastScissor = sc;
+        _scissorValid = true;
+        _frameScissorSets++;
+        _cmdList->RSSetScissorRects(1, &sc);
     }
 
     private RECT ToScissor(in RectF r)
@@ -947,11 +989,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
         return new RECT { left = left, top = top, right = right, bottom = bottom };
     }
 
-    private void SetScissor(in RectF r)
-    {
-        RECT sc = ToScissor(r);
-        _cmdList->RSSetScissorRects(1, &sc);
-    }
+    private void SetScissor(in RectF r) => SetScissorRect(ToScissor(r));
 
     private void PushScissor(in ClipCmd clip)
     {
@@ -988,11 +1026,22 @@ public sealed unsafe class D3D12Device : IGpuDevice
         else SetScissor(_clipStack[^1]);
     }
 
+    // Bookkeep a pipeline Record outcome: `recorded` = the run actually recorded (its state is now bound);
+    // `rb` = it was asked to fully rebind (a false rb that recorded reused the cross-segment bound state).
+    private void NotePipeBind(bool recorded, bool rb, BoundPipe pipe)
+    {
+        if (!recorded) return;
+        _boundPipe = pipe;
+        if (rb) _framePipeBinds++; else _framePipeBindsSkipped++;
+    }
+
     private void RecordAll(float lw, float lh)
     {
         // Replay non-glyph primitives in painter (stream) order so a shadow sits OVER the background drawn before it and
-        // UNDER its own element. Consecutive same-kind ops are still one batched draw (each pipeline's Record/Begin fully
-        // (re)binds its state, so interleaving pipelines is safe). Glyphs always render last — text on top within a z-context.
+        // UNDER its own element. Consecutive same-kind ops are still one batched draw. A run whose pipeline is ALREADY
+        // bound on the command list (tracked in _boundPipe across segment flushes) skips the static rebind and records
+        // only its SRV offset + draw — see the state-cache comment on _boundPipe. Glyphs always render last — text on
+        // top within a z-context.
         if (_runs.Count > 0)
         {
             var rectSpan = CollectionsMarshal.AsSpan(_rectInsts);
@@ -1001,21 +1050,44 @@ public sealed unsafe class D3D12Device : IGpuDevice
             var polylineSpan = CollectionsMarshal.AsSpan(_polylineInsts);
             var gradSpan = CollectionsMarshal.AsSpan(_gradInsts);
             int rc = 0, sc = 0, ac = 0, pc = 0, gc = 0, ic = 0;
+            _frameRuns += _runs.Count;
             foreach (var (kind, count) in _runs)
             {
+                bool rb;
                 switch (kind)
                 {
-                    case PrimKind.Shadow: _shadowPipe!.Record(_cmdList, shadowSpan.Slice(sc, count), lw, lh); sc += count; break;
-                    case PrimKind.Arc: _arcPipe!.Record(_cmdList, arcSpan.Slice(ac, count), lw, lh); ac += count; break;
-                    case PrimKind.Polyline: _polylinePipe!.Record(_cmdList, polylineSpan.Slice(pc, count), lw, lh); pc += count; break;
-                    case PrimKind.Gradient: _gradPipe!.Record(_cmdList, gradSpan.Slice(gc, count), lw, lh); gc += count; break;
-                    case PrimKind.Rect: _rectPipe!.Record(_cmdList, rectSpan.Slice(rc, count), lw, lh); rc += count; break;
+                    case PrimKind.Shadow:
+                        rb = _boundPipe != BoundPipe.Shadow;
+                        NotePipeBind(_shadowPipe!.Record(_cmdList, shadowSpan.Slice(sc, count), lw, lh, rb), rb, BoundPipe.Shadow);
+                        sc += count; break;
+                    case PrimKind.Arc:
+                        rb = _boundPipe != BoundPipe.Arc;
+                        NotePipeBind(_arcPipe!.Record(_cmdList, arcSpan.Slice(ac, count), lw, lh, rb), rb, BoundPipe.Arc);
+                        ac += count; break;
+                    case PrimKind.Polyline:
+                        rb = _boundPipe != BoundPipe.Polyline;
+                        NotePipeBind(_polylinePipe!.Record(_cmdList, polylineSpan.Slice(pc, count), lw, lh, rb), rb, BoundPipe.Polyline);
+                        pc += count; break;
+                    case PrimKind.Gradient:
+                        rb = _boundPipe != BoundPipe.Gradient;
+                        NotePipeBind(_gradPipe!.Record(_cmdList, gradSpan.Slice(gc, count), lw, lh, rb), rb, BoundPipe.Gradient);
+                        gc += count; break;
+                    case PrimKind.Rect:
+                        rb = _boundPipe != BoundPipe.Rect;
+                        NotePipeBind(_rectPipe!.Record(_cmdList, rectSpan.Slice(rc, count), lw, lh, rb), rb, BoundPipe.Rect);
+                        rc += count; break;
                     case PrimKind.Image:
-                        _imagePipe!.Begin(_cmdList, _imageTextures!.Heap, lw, lh);   // (re)bind heap/PSO/root-sig/VB for this image run
+                        if (_boundPipe != BoundPipe.Image)
+                        {
+                            _imagePipe!.Begin(_cmdList, _imageTextures!.Heap, lw, lh);   // (re)bind heap/PSO/root-sig/VB for this image run
+                            _boundPipe = BoundPipe.Image;
+                            _framePipeBinds++;
+                        }
+                        else _framePipeBindsSkipped++;
                         for (int k = 0; k < count; k++)
                         {
                             var (inst, id) = _imageDraws[ic + k];
-                            if (_imageTextures.TryGet(id, out var srv, out var uv))
+                            if (_imageTextures!.TryGet(id, out var srv, out var uv))
                             {
                                 var d = inst;
                                 // Compose the atlas cell (uv) with the content-fit sub-rect baked on the instance (inst.Uv*,
@@ -1023,7 +1095,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                                 // Whole-texture images (cell = 0,0,1,1) pass the content-fit rect through unchanged.
                                 d.UvX = uv.X + inst.UvX * uv.W; d.UvY = uv.Y + inst.UvY * uv.H;
                                 d.UvW = uv.W * inst.UvW; d.UvH = uv.H * inst.UvH;
-                                _imagePipe.Draw(_cmdList, srv, in d);
+                                _imagePipe!.Draw(_cmdList, srv, in d);
                             }
                             else _frameImageSkipped++;   // image recorded but its texture isn't live yet (diagnostic: should be 0 once loaded)
                         }
@@ -1032,12 +1104,21 @@ public sealed unsafe class D3D12Device : IGpuDevice
                 }
             }
         }
-        if (_glyphInsts.Count > 0) _glyphs!.Record(_cmdList, _glyphInsts, lw, lh);
-        if (_gradGlyphInsts.Count > 0) _glyphs!.RecordGradient(_cmdList, _gradGlyphInsts, lw, lh);   // sub-glyph wipe, same RT/z as glyphs
+        if (_glyphInsts.Count > 0)
+        {
+            bool rb = _boundPipe != BoundPipe.Glyph;
+            NotePipeBind(_glyphs!.Record(_cmdList, _glyphInsts, lw, lh, rb), rb, BoundPipe.Glyph);
+        }
+        if (_gradGlyphInsts.Count > 0)   // sub-glyph wipe, same RT/z as glyphs
+        {
+            bool rb = _boundPipe != BoundPipe.GradGlyph;
+            NotePipeBind(_glyphs!.RecordGradient(_cmdList, _gradGlyphInsts, lw, lh, rb), rb, BoundPipe.GradGlyph);
+        }
     }
 
     private void FlushSegment(float lw, float lh)
     {
+        _frameSegments++;
         _glyphs!.UploadIfDirty(_cmdList);
         RecordAll(lw, lh);
         ClearInsts();
@@ -1057,6 +1138,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                 pos += sizeof(int);
                 var clip = MemoryMarshal.Read<ClipCmd>(drawList.Slice(pos));
                 pos += Unsafe.SizeOf<ClipCmd>();
+                _frameClipOps++;
                 FlushSegment(lw, lh);
                 PushScissor(in clip);
                 continue;
@@ -1064,6 +1146,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
             if (op == DrawOp.PopClip)
             {
                 pos += sizeof(int);
+                _frameClipOps++;
                 FlushSegment(lw, lh);
                 PopScissor();
                 continue;
@@ -1099,6 +1182,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
         }
         else _acrylic!.BeginCanvas(_cmdList, ctx.Clear, completed, (int)(_frameIndex & 1));
         _opacity!.BeginFrame(completed, (int)(_frameIndex & 1));
+        InvalidateCmdState();   // canvas/back-buffer setup may have touched viewport/scissor outside the cache
         ClearInsts();
         _clipStack.Clear();
         _roundedClipStack.Clear();
@@ -1113,6 +1197,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                 pos += sizeof(int);
                 var clip = MemoryMarshal.Read<ClipCmd>(drawList.Slice(pos));
                 pos += Unsafe.SizeOf<ClipCmd>();
+                _frameClipOps++;
                 FlushSegment(lw, lh);
                 PushScissor(in clip);
                 continue;
@@ -1120,6 +1205,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
             if (op == DrawOp.PopClip)
             {
                 pos += sizeof(int);
+                _frameClipOps++;
                 FlushSegment(lw, lh);
                 PopScissor();
                 continue;
@@ -1129,6 +1215,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                 int p2 = pos + sizeof(int);
                 var L = MemoryMarshal.Read<PushLayerCmd>(drawList.Slice(p2));
                 pos = p2 + Unsafe.SizeOf<PushLayerCmd>();
+                _frameLayerOps++;
                 FlushSegment(lw, lh);                       // draw the backdrop-so-far into the current target
                 if (L.Kind == (int)LayerKind.Opacity || L.Kind == (int)LayerKind.Blur || L.Kind == (int)LayerKind.EdgeFade)
                 {
@@ -1154,6 +1241,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                             if (_opacityGroups.Count > 0) _opacity.Bind(_cmdList, _opacityGroups[^1].Slot);
                             else BindLayerTopTarget(directToBackBuffer, backRtv);
                             _opacity.CompositePinnedBlur(_cmdList, pin, L.GroupAlpha, in L, _frameScale);
+                            InvalidateCmdState();   // the composite bound its own PSO/heap + viewport/scissor
                             ApplyCurrentScissor();
                             _blurCacheHit++;
                             if (holdIfCached) _blurHoldHit++;
@@ -1211,6 +1299,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                     _acrylic.BlurAndComposite(_cmdList, L, lw, lh, _frameScale, _fenceValue + 1,
                         ctx.Damage.X * _frameScale, ctx.Damage.Y * _frameScale, ctx.Damage.W * _frameScale, ctx.Damage.H * _frameScale,
                         directToBackBuffer ? _backBuffers[_frameIndex] : null, directToBackBuffer ? backRtv : default);
+                    InvalidateCmdState();   // the acrylic passes bound their own PSOs/heap + viewport/scissor
                     if (_opacityGroups.Count > 0) _opacity.Bind(_cmdList, _opacityGroups[^1].Slot);   // back to the open group RT
                     ApplyCurrentScissor();
                     _layerKinds.Add((int)LayerKind.Acrylic);
@@ -1220,6 +1309,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
             if (op == DrawOp.PopLayer)
             {
                 pos += sizeof(int) + Unsafe.SizeOf<PopLayerCmd>();
+                _frameLayerOps++;
                 int kind = _layerKinds.Count > 0 ? _layerKinds[^1] : (int)LayerKind.Acrylic;
                 if (_layerKinds.Count > 0) _layerKinds.RemoveAt(_layerKinds.Count - 1);
                 if ((kind == (int)LayerKind.Opacity || kind == (int)LayerKind.Blur || kind == (int)LayerKind.EdgeFade) && _opacityGroups.Count > 0)
@@ -1231,6 +1321,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                     if ((kind == (int)LayerKind.Blur || kind == (int)LayerKind.EdgeFade) && gl.BlurSigma > 0f)
                         _opacity.BlurInPlace(_cmdList, slot, gl.BlurSigma, _fenceValue + 1, in gl, _frameScale);
                     else _opacity.BeginRead(_cmdList, slot);
+                    InvalidateCmdState();   // BlurInPlace set its own scissor/PSO — MUST invalidate before BindLayerTopTarget's SetFullViewport dedup
                     // Composite over the UNDERLYING target: the enclosing group's RT, or the top-level target (canvas, or
                     // the back buffer directly on the FG_BACKBUFFER_LAYERS path).
                     if (_opacityGroups.Count > 0) _opacity.Bind(_cmdList, _opacityGroups[^1].Slot);
@@ -1241,6 +1332,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                     // retained pin for next frame's FindPin. The scratch is ALWAYS released (the pin is a separate small RT).
                     if (pinHash != 0) _opacity.RetainPinFromScratch(_cmdList, slot, pinHash, in gl, _frameScale, _fenceValue + 1);
                     _opacity.Release(slot);
+                    InvalidateCmdState();   // BlurInPlace/Composite/EdgeFadeComposite bound their own PSOs/heap + scissor
                     ApplyCurrentScissor();
                 }
                 continue;
@@ -1255,6 +1347,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
             _opacityGroups.RemoveAt(_opacityGroups.Count - 1);
             if (gl.BlurSigma > 0f) _opacity.BlurInPlace(_cmdList, slot, gl.BlurSigma, _fenceValue + 1, in gl, _frameScale);
             else _opacity.BeginRead(_cmdList, slot);
+            InvalidateCmdState();   // as in the main PopLayer branch: BlurInPlace bypassed the scissor cache
             if (_opacityGroups.Count > 0) _opacity.Bind(_cmdList, _opacityGroups[^1].Slot);
             else BindLayerTopTarget(directToBackBuffer, backRtv);
             if (gl.Kind == (int)LayerKind.EdgeFade) _opacity.EdgeFadeComposite(_cmdList, slot, in gl, _frameScale);
