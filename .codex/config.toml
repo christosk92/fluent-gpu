@@ -18,9 +18,14 @@ default_permissions = "fluentgpu"
 "app/Wavee.PlayPlay/**" = "deny"
 "private-runtimes/**" = "deny"
 
-# --- Scratch scripts ---
+# --- Scratch scripts + RE dumps ---
 "app/tmp_*" = "deny"
 "scripts/pyghidra*" = "deny"
+"tools/pyghidra*" = "deny"
+"tools/playplay_*" = "deny"
+"tools/x64_*" = "deny"
+"tools/fill_random_sweep.py" = "deny"
+"playplay-probe-out*.txt" = "deny"
 
 # --- Out-of-scope docs ---
 "app/docs/wavee-playplay*.md" = "deny"

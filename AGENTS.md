@@ -10,12 +10,13 @@ The paths below are out of scope and belong to a separate workspace. Unless the 
 specific file below **and** confirms it for this session, do not read, grep, edit, or summarize:
 
 - `app/.native/**`, `app/Wavee.PlayPlay/**`, `private-runtimes/**`
-- `app/tmp_*`, `scripts/pyghidra*`
+- `app/tmp_*`, `scripts/pyghidra*`, `tools/pyghidra*`, `tools/playplay_*`, `tools/x64_*`
 - `app/docs/wavee-playplay*.md`, `app/docs/playplay-*.md`, `app/docs/spotiload-offline-path.md`
 - `**/playplay-runtime.json`
 
-If a request would require these paths, ask the user to move it to the dedicated workspace instead.
-(Also enforced by `.codex/config.toml` and `.codexignore`.)
+These live in the separate `wavee-playplay-private` repo (see `docs/guide/playplay-private-split.md`).
+If a request would require these paths, ask the user to work in that repo instead.
+(Also enforced by `.codex/config.toml`, `.codexignore`, and `.githooks/pre-commit`.)
 
 ## What this is
 

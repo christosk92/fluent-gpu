@@ -49,3 +49,23 @@ app/audio-runtime/
 # Local PlayPlay native-derivation package. This contains version/arch-specific
 # reverse-engineering glue and is intentionally kept out of source control.
 app/Wavee.PlayPlay/
+
+# Out-of-scope native/derivation material — lives in the separate private
+# workspace (wavee-playplay-private), junctioned in on demand. Never commit here.
+app/.native/
+app/tmp_*
+scripts/pyghidra*
+tools/pyghidra*
+tools/playplay_*
+tools/x64_*
+tools/fill_random_sweep.py
+tools/*_decomp.json
+tools/*_derive_*.json
+playplay-probe-out*.txt
+app/docs/spotiload-offline-path.md
+app/docs/playplay-*.md
+app/docs/wavee-playplay-*.md
+
+# On-demand junction helper for the private package (machine-local).
+link-playplay.ps1
+.playplay-link

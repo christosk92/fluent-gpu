@@ -68,7 +68,7 @@ sealed class PlaybackRuntimeSetupModel
     readonly Services _services;
     readonly IAppSettings _settings;
     readonly PlaybackBridge _bridge;
-    readonly PlayPlayRuntimeProvisioner? _provisioner;
+    readonly IPlayPlayProvisioner? _provisioner;
     readonly Action<Action> _post;
 
     CancellationTokenSource? _cts;
@@ -76,7 +76,7 @@ sealed class PlaybackRuntimeSetupModel
     string? _untrustedDir;
 
     public PlaybackRuntimeSetupModel(Services services, IAppSettings settings, PlaybackBridge bridge,
-        PlayPlayRuntimeProvisioner? provisioner, Action<Action> post)
+        IPlayPlayProvisioner? provisioner, Action<Action> post)
     {
         _services = services;
         _settings = settings;
@@ -317,10 +317,14 @@ sealed class PlaybackRuntimeSetupModel
 
     public void UseInstalled()
     {
+#if WAVEE_PLAYPLAY_LOCAL
         var dll = PlayPlayRuntimePaths.InstalledSpotifyDll;
         if (!File.Exists(dll)) { Fail("Installed Spotify.dll not found."); return; }
         // No sibling manifest required — the store recognizes a supported build by the DLL's hash and synthesizes it.
         RegisterDir(Path.GetDirectoryName(dll)!, allowUntrusted: false);
+#else
+        Fail("Local audio is not active.");
+#endif
     }
 
     void RegisterDir(string dir, bool allowUntrusted)
@@ -342,7 +346,7 @@ sealed class PlaybackRuntimeSetupModel
     public void Remove()
     {
         Log(WaveeLogLevel.Warning, "runtime.setup.remove", "Removing active PlayPlay runtime pointer");
-        _provisioner?.Store.ClearPointer();
+        _provisioner?.ClearActivePointer();
         _settings.Set(WaveeSettings.PlaybackRuntimeSetupDismissed, false);
         PlaybackRuntimeBannerState.Bump();
         _bridge.UpdateRuntimeStatus(new PlaybackRuntimeStatus(ProvisioningOutcome.RuntimeUnavailable));

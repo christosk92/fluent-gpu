@@ -227,7 +227,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
         };
         svc.GoLive(connect.Controller, connect.Devices, liveSession, connectivity, lyrics);
         // Diagnostic one-shot: WAVEE_PLAYPLAY_PROBE=1 (or a file-id hex) fetches that file's PlayPlay obf+aes on the LIVE
-        // session and compares to the unplayplay ogg-vorbis-160 golden vector — isolates "is our live obf the vector's value".
+        // session and compares to the reference ogg-vorbis-160 golden vector — isolates "is our live obf the vector's value".
         if (audio is not null && Environment.GetEnvironmentVariable("WAVEE_PLAYPLAY_PROBE") is { Length: > 0 } probe)
             _ = ProbePlayPlayAsync(audio, probe, audioLog, cts.Token);
         // Diagnostic one-shot: WAVEE_AUDIO_FORMAT_PROBE=1 plus WAVEE_AUDIO_FORMAT_PROBE_TRACK=<track-uri-or-base62>
@@ -416,7 +416,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
     }
 
     // Diagnostic one-shot (WAVEE_PLAYPLAY_PROBE): fetch a file's PlayPlay obf+aes on the LIVE session and compare to the
-    // unplayplay ogg-vorbis-160 golden vector. Confirms whether the obf Spotify returns for OUR (bumped-version) request is
+    // reference ogg-vorbis-160 golden vector. Confirms whether the obf Spotify returns for OUR (bumped-version) request is
     // the vector's value — i.e. whether the existing 1.2.88.483 emulator derives the right key on a non-403 request.
     static readonly (string File, string HarObf)[] PlayPlayHarVectors =
     [
